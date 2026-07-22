@@ -96,6 +96,9 @@ async function main() {
   // remove them when those features are off.
   if (!editionFlags.studServices) document.querySelector('.seg-tab[href="stud-services.html"]')?.remove();
   if (!editionFlags.contracts) document.querySelector('.seg-tab[href="contracts.html"]')?.remove();
+  // Lite: Puppy Record is Pro-only (the page itself is excluded from the build) —
+  // remove the button that opens it.
+  if (!editionFlags.puppyRecord) document.getElementById('btn-print-puppy-record')?.remove();
   const [sales, dogs, contacts, contracts, litters] = await Promise.all([
     saleRepo.getAll({ includeArchived: false }),
     dogRepo.getAll({ includeArchived: true }),

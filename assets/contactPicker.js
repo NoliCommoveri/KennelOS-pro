@@ -8,6 +8,7 @@
 import { contactRepo } from '../data/contactRepo.js';
 import { CONTACT_TYPE } from '../data/vocab.js';
 import { esc } from './ui.js';
+import { editionFlags } from '../data/editionConfig.js';
 
 // Inserts a "＋ New" button right after `selectEl`. `onCreated(contact)`
 // fires after the new option is appended+selected and a native `change`
@@ -51,7 +52,7 @@ function openNewContactModal(onCreate) {
       <div class="field"><label>Contact type</label>
         <select id="ncp-type">
           <option value="">— none —</option>
-          ${CONTACT_TYPE.map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}
+          ${(editionFlags.contactsSection ? CONTACT_TYPE : CONTACT_TYPE.filter((t) => t.value === 'buyer')).map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}
         </select></div>
     </div>
     <div id="ncp-error"></div>

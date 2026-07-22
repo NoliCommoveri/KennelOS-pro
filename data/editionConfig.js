@@ -45,10 +45,17 @@ export async function enforceLitterCap(/* { candidate } */) {
   // no-op: Pro is unlimited.
 }
 
+// Read by dog.js's "New Dog" page for its cap-status banner. Null means
+// uncapped, so Pro shows nothing.
+export async function dogCapStatus() {
+  return null;
+}
+
 export const editionFlags = {
   manualDogArchive: true,
   includeArchivedToggles: true,
   archivedDogLinks: true,
+  fullDogStatuses: true,
   licenseGate: true, // read by license.js — Pro is the ONLY edition that gates on a key
   // Pro-only feature gates — all on in Pro.
   contactsSection: true,
@@ -58,6 +65,8 @@ export const editionFlags = {
   companion: true,
   reports: true,
   invoicing: true,
+  puppyRecord: true,
+  fosterArrangement: true,
   receiptAttach: true,
   externalOwnership: true,
   assistant: true,

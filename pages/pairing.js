@@ -131,9 +131,9 @@ function renderEdit() {
       ${field('Planned first date', `<input id="f-planned_date" type="date" value="${esc(p.planned_date)}">`)}
       ${field('Last observed date', `<input id="f-last_observed_date" type="date" value="${esc(p.last_observed_date)}">`)}
       ${field('Expected due date', `<input id="f-expected_due_date" type="date" value="${esc(p.expected_due_date)}">`, { hint: 'Defaults to 63 days after the planned first date. Still editable.' })}
-      <div class="field field-wide">
+      ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs in the pickers above</label>
-      </div>
+      </div>` : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(p.notes)}</textarea>`, { wide: true })}
     </div>
     <div id="form-warn"></div>`;
@@ -141,7 +141,7 @@ function renderEdit() {
   const form = document.getElementById('pairing-form');
   form.addEventListener('input', updateWarnings);
   form.addEventListener('change', updateWarnings);
-  document.getElementById('picker-archived').addEventListener('change', (e) => {
+  document.getElementById('picker-archived')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
     renderEdit();
@@ -207,15 +207,19 @@ async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
   if (ctx.mode === 'new' || !ctx.original) return;
   const p = ctx.original;
-  const archiveLabel = p.is_archived ? 'Unarchive' : 'Archive';
   const blockers = await pairingRepo.getDeleteBlockers(p.id);
   const delTitle = blockers.length
     ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
     : 'Permanently delete this record.';
+  // Archive control. Lite hides the archive machinery (cap spec §5/§7) — no
+  // manual pairing-archive at all (pairings have no "departure" substitute).
+  const archiveBtn = editionFlags.manualDogArchive
+    ? `<button class="btn btn-sm" id="btn-archive">${p.is_archived ? 'Unarchive' : 'Archive'}</button>`
+    : '';
   els.headerActions.innerHTML = `
-    <button class="btn btn-sm" id="btn-archive">${archiveLabel}</button>
+    ${archiveBtn}
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
-  document.getElementById('btn-archive').onclick = toggleArchive;
+  document.getElementById('btn-archive')?.addEventListener('click', toggleArchive);
   const del = document.getElementById('btn-delete');
   if (!blockers.length) del.onclick = doDelete;
 }

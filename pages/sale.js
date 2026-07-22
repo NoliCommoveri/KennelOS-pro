@@ -141,9 +141,9 @@ function renderView() {
       ${row('Balance due date', s.balance_due_date ? esc(fmtDate(s.balance_due_date)) : '')}
       ${row('Balance paid date', s.balance_paid_date ? esc(fmtDate(s.balance_paid_date)) : '')}
       ${row('Lead source', esc(s.lead_source))}
-      ${row('Referred by', s.referred_by_contact_id ? (editionFlags.contactsSection
+      ${editionFlags.contactsSection ? row('Referred by', s.referred_by_contact_id
         ? `<a href="contact.html?id=${encodeURIComponent(s.referred_by_contact_id)}">${esc(contactName(s.referred_by_contact_id) || '—')}</a>`
-        : esc(contactName(s.referred_by_contact_id) || '—')) : '')}
+        : '') : ''}
       ${row('Notes', s.notes ? esc(s.notes).replace(/\n/g, '<br>') : '')}
     </dl>`;
 }
@@ -181,14 +181,14 @@ function renderEdit() {
       ${field('Balance due date', `<input id="f-balance_due_date" type="date" value="${esc(s.balance_due_date)}">`)}
       ${field('Balance paid date', `<input id="f-balance_paid_date" type="date" value="${esc(s.balance_paid_date)}">`)}
       ${field('Lead source', `<input id="f-lead_source" type="text" list="lead-source-list" value="${esc(s.lead_source)}"><datalist id="lead-source-list">${sourceList}</datalist>`, { hint: 'How this specific sale came in. Prefills from the buyer, but may differ.' })}
-      ${field('Referred by', `<select id="f-referred_by_contact_id">${contactOptions(s.referred_by_contact_id)}</select>`, { hint: 'The contact who referred this buyer. Tags them as a Buyer referrer automatically.' })}
-      <div class="field field-wide">
+      ${editionFlags.contactsSection ? field('Referred by', `<select id="f-referred_by_contact_id">${contactOptions(s.referred_by_contact_id)}</select>`, { hint: 'The contact who referred this buyer. Tags them as a Buyer referrer automatically.' }) : ''}
+      ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/contacts in the pickers above</label>
-      </div>
+      </div>` : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(s.notes)}</textarea>`, { wide: true })}
     </div>`;
 
-  document.getElementById('picker-archived').addEventListener('change', (e) => {
+  document.getElementById('picker-archived')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
     renderEdit();
@@ -216,7 +216,8 @@ function renderEdit() {
     ctx.contactsById.set(contact.id, contact);
   };
   attachNewContactButton(document.getElementById('f-buyer_contact_id'), { onCreated: onNewContact });
-  attachNewContactButton(document.getElementById('f-referred_by_contact_id'), { onCreated: onNewContact });
+  const referredByEl = document.getElementById('f-referred_by_contact_id');
+  if (referredByEl) attachNewContactButton(referredByEl, { onCreated: onNewContact });
 }
 
 function readForm() {
@@ -277,8 +278,11 @@ async function renderHeaderActions() {
   const delTitle = blockers.length
     ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
     : 'Permanently delete this record.';
+  const puppyRecordBtn = editionFlags.puppyRecord
+    ? `<a class="btn btn-sm" id="btn-puppy-record" href="puppy-record.html?sale=${encodeURIComponent(s.id)}">Puppy Record (PDF)</a>`
+    : '';
   els.headerActions.innerHTML = `
-    <a class="btn btn-sm" id="btn-puppy-record" href="puppy-record.html?sale=${encodeURIComponent(s.id)}">Puppy Record (PDF)</a>
+    ${puppyRecordBtn}
     <button class="btn btn-sm" id="btn-archive">${archiveLabel}</button>
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
   document.getElementById('btn-archive').onclick = toggleArchive;

@@ -14,7 +14,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { getMyContactId } from '../data/kennelSetup.js';
-import { editionFlags } from '../data/editionConfig.js';
+import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
 import {
   SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, PAIRING_TYPE, PAIRING_STATUS,
   PLACEMENT_TYPE, SALE_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS,
@@ -32,6 +32,7 @@ const OWNER_REQUIRED = ['external', 'leased_in'];
 const els = {
   title: document.getElementById('dog-title'),
   subtitle: document.getElementById('dog-subtitle'),
+  capBanner: document.getElementById('dog-cap-banner'),
   headerActions: document.getElementById('header-actions'),
   profileActions: document.getElementById('profile-actions'),
   body: document.getElementById('profile-body'),
@@ -323,7 +324,7 @@ function renderEdit() {
       ${field('Microchip', `<input id="f-microchip_id" type="text" value="${esc(d.microchip_id)}">`)}
       ${field('URL', `<input id="f-url" type="url" value="${esc(d.url || '')}" placeholder="https://…">`)}
       ${field('Ownership', `<select id="f-ownership_type">${vocabOptions(editionFlags.externalOwnership ? OWNERSHIP_TYPE : OWNERSHIP_TYPE.filter((o) => ['owned', 'co_owned'].includes(o.value)), d.ownership_type, 'Select…')}</select>`, { required: true })}
-      ${field('Status', `<select id="f-status">${vocabOptions(DOG_STATUS, d.status, 'Select…')}</select>`, { required: true })}
+      ${field('Status', `<select id="f-status">${vocabOptions(editionFlags.fullDogStatuses ? DOG_STATUS : DOG_STATUS.filter((o) => ['puppy', 'active_breeding', 'retired_breeding', 'deceased'].includes(o.value)), d.status, 'Select…')}</select>`, { required: true })}
       ${d.status === 'puppy' ? field('Disposition', `<select id="f-disposition">${vocabOptions(DISPOSITION, d.disposition || 'undecided')}</select>`, { hint: 'Keeping this puppy or offering it? Drives the prospective-families view. Puppy-only — clears when Status moves past Puppy.' }) : ''}
       ${field('Sire', `<select id="f-sire_id">${dogOptions(d.sire_id, ctx.original?.id, 'male')}</select>`)}
       ${field('Dam', `<select id="f-dam_id">${dogOptions(d.dam_id, ctx.original?.id, 'female')}</select>`)}
@@ -680,6 +681,16 @@ function renderTitle() {
   const d = ctx.original;
   els.title.innerHTML = esc(d.call_name) + (d.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
   els.subtitle.innerHTML = d.registered_name ? esc(d.registered_name) : '';
+}
+
+// New-dog-only cap counter (cap spec §6): a plain read of the same counting
+// predicate the repo enforces, so the number shown here always matches what
+// would actually block a save. Pro/Demo's dogCapStatus() resolves null (no
+// cap), so this renders nothing there.
+async function renderCapBanner() {
+  if (!els.capBanner) return;
+  const status = await dogCapStatus();
+  els.capBanner.textContent = status ? `Creating ${status.current}/${status.cap} available dogs` : '';
 }
 
 // Event History only makes sense for a saved dog; hide it while creating/editing
@@ -1143,6 +1154,7 @@ async function main() {
     ctx.mode = 'new';
     ctx.draft = blankDog();
     renderTitle();
+    renderCapBanner();
     renderEdit();
     renderProfileActions();
     renderHeaderActions();

@@ -60,7 +60,7 @@ async function main() {
   const statusTiles = DOG_STATUS
     .filter((s) => (byStatus.get(s.value) || 0) > 0 || ['active_breeding', 'retired_breeding', 'puppy', 'pet_home', 'deceased'].includes(s.value))
     .map((s) => stat(byStatus.get(s.value) || 0, s.label, { href: 'dogs.html' }))
-    .join('') + stat(archivedCount, 'Archived (any status)', { href: 'dogs.html', tone: 'zero' });
+    .join('') + (editionFlags.includeArchivedToggles ? stat(archivedCount, 'Archived (any status)', { href: 'dogs.html', tone: 'zero' }) : '');
 
   // This year: date-filtered tallies over non-archived records (whelp/planned/sale
   // dates are YYYY-MM-DD, compared by year prefix).

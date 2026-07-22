@@ -27,6 +27,8 @@ export const PRO_ONLY_PAGES = [
   'documents.html',
   // Invoice / receipt generation (print doc)
   'invoice.html',
+  // Puppy Record generation (print doc)
+  'puppy-record.html',
 ];
 
 // Standalone Pro files that live outside pages/ (no nav entry) — also excluded from
