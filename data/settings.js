@@ -321,3 +321,30 @@ export function setAssistantLastSync(iso = new Date().toISOString()) {
 export function clearAllSettings() {
   for (const key of Object.values(KEYS)) localStorage.removeItem(key);
 }
+
+// --- Pro license (Pro edition license gate — data/license.js) ----------------
+// The cached Lemon Squeezy activation record (key, instance id, status, expiry,
+// billing interval, last-validated timestamp) that lets Pro run offline within a
+// grace window without re-hitting the network every launch.
+//
+// Deliberately NOT in KEYS above, so clearAllSettings() (Reset App to Start) does
+// NOT drop it: a data reset wipes the kennel program, but paid entitlement isn't
+// program data — de-activating Pro on a reset would be a hostile surprise, and the
+// key would just re-validate anyway. It's cleared explicitly only when the owner
+// chooses "use a different key" (clearProLicense), never by Reset App.
+const PRO_LICENSE_KEY = 'kennelOS.proLicense';
+
+export function getProLicense() {
+  const raw = localStorage.getItem(PRO_LICENSE_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+export function setProLicense(record) {
+  localStorage.setItem(PRO_LICENSE_KEY, JSON.stringify(record));
+  return record;
+}
+
+export function clearProLicense() {
+  localStorage.removeItem(PRO_LICENSE_KEY);
+}

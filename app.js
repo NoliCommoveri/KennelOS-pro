@@ -13,6 +13,7 @@ import { renderWizardMenuEntry, runWizardStep } from './assets/wizardUI.js';
 import { runFirstRunOnboarding } from './assets/onboardingUI.js';
 import { isDemo, withSeedAllowed } from './data/demoMode.js';
 import { seedSampleData } from './data/editionTour.js';
+import { isLicenseGated, ensureLicensed } from './assets/licenseGate.js';
 
 async function firstRunPersistence() {
   if (wasPersistRequested()) return;
@@ -69,6 +70,26 @@ function renderDemoBanner() {
 }
 
 async function boot() {
+  // Pro license gate (editions plan §Licensing): before rendering the app, make
+  // sure this device has an active subscription. A painted wall (no key yet, or
+  // lapsed past the grace window) returns false and boot stops. Active only in the
+  // Pro edition (isLicenseGated) — Lite is free and Demo is a public showcase, so
+  // this is a no-op there. Runs before the demo branch, but Demo never sets the
+  // gate flag so it's skipped there regardless.
+  if (isLicenseGated()) {
+    let licensed = false;
+    try {
+      licensed = await ensureLicensed();
+    } catch (e) {
+      // A gate failure must not silently unlock Pro — but it also shouldn't brick
+      // the app on an unexpected error. Log and fall through to render; the next
+      // online load re-evaluates. (The gate is a soft check by design.)
+      console.warn('KennelOS: license gate error', e);
+      licensed = true;
+    }
+    if (!licensed) return;
+  }
+
   // Demo: seed-then-(maybe)-reload before anything renders, then show the full
   // app read-only. It deliberately skips the first-run / kennel-setup / sample-
   // data UI — the demo is always seeded and never prompts the visitor to set up.

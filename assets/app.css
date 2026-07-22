@@ -432,6 +432,56 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 }
 .demo-banner strong { color: #fff; }
 
+/* --- Pro license gate (assets/licenseGate.js) --------------------------- */
+/* Full-screen, non-dismissible wall shown in the Pro edition before the app
+   renders when there's no active subscription (activation wall) or it lapsed
+   past its grace window (renewal wall). Reuses the .modal card look; the overlay
+   sits above every other layer (wizard 10000, onboarding 200) since the app must
+   not be usable underneath it. */
+.license-wall-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  background: rgba(18, 26, 38, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  overflow-y: auto;
+}
+.license-wall { max-width: 460px; }
+.license-title { margin: 0 0 6px; }
+.license-lead { margin: 0 0 16px; color: var(--text-muted); }
+.license-label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 5px; }
+.license-input {
+  width: 100%;
+  font: inherit;
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+}
+.license-error { color: var(--danger); font-size: 13px; min-height: 18px; margin: 8px 0 0; }
+.license-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+.license-secondary { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 16px; }
+.license-note { margin: 16px 0 0; font-size: 13px; color: var(--text-muted); }
+.license-link {
+  background: none; border: 0; padding: 0; font: inherit; font-size: 13px;
+  color: var(--accent); font-weight: 600; cursor: pointer; text-decoration: underline;
+}
+/* Grace-period strip (validated but past printed expiry, or offline within the
+   grace window): the app stays usable, this just nudges to reconnect/renew. */
+.license-grace-banner {
+  background: #3a2a12;
+  color: #ffe6b0;
+  border-bottom: 1px solid #5a441d;
+  text-align: center;
+  padding: 7px 16px;
+  font-size: 13px;
+}
+.license-grace-banner strong { color: #fff; }
+.license-grace-banner a { color: #ffd88a; font-weight: 600; }
+
 /* On Today: a centered footer strip below the last card. */
 .edition-footer:empty { display: none; }
 .edition-footer { max-width: var(--maxw); margin: 0 auto; padding: 8px 16px 48px; }

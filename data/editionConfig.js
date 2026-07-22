@@ -16,6 +16,27 @@ export const upgradeUrl = null;
 // hasEditionLinks() is false and the nav/Today footer render nothing.
 export const demoUrl = null;
 
+// --- License gate (editions plan §Licensing) -------------------------------
+// Pro is a Lemon Squeezy subscription unlocked by a browser-validated license
+// key (data/license.js + assets/licenseGate.js). This config is read only when
+// editionFlags.licenseGate is true — which it is ONLY here, in Pro. Lite/Demo
+// export a null config (their import must resolve) but never run the gate.
+export const licenseConfig = {
+  // The Lemon Squeezy checkout URL for buying / renewing Pro, shown on the
+  // activation and renewal walls. Set the store checkout's post-purchase redirect
+  // to this Pro origin so an upgrader lands here to activate + import.
+  // PLACEHOLDER — swap for the real Lemon Squeezy checkout link at launch.
+  checkoutUrl: 'https://kennelos.lemonsqueezy.com/buy/kennelos-pro',
+  // Optional Lemon Squeezy customer-portal URL ("Manage subscription") shown on
+  // the renewal wall. Null hides that link. PLACEHOLDER — set at launch if used.
+  portalUrl: null,
+  // The billing interval drives the offline grace window (yearly ~30d, monthly
+  // ~7d). Lemon Squeezy returns the variant NAME, not a clean interval, so we
+  // match it against this pattern (case-insensitive) → yearly; anything else →
+  // monthly (the shorter, stricter window). Tune to the store's variant names.
+  yearlyVariantPattern: 'year|annual',
+};
+
 export async function enforceDogCap(/* { candidate, existing, id } */) {
   // no-op: Pro is unlimited.
 }
@@ -28,6 +49,7 @@ export const editionFlags = {
   manualDogArchive: true,
   includeArchivedToggles: true,
   archivedDogLinks: true,
+  licenseGate: true, // read by license.js — Pro is the ONLY edition that gates on a key
   // Pro-only feature gates — all on in Pro.
   contactsSection: true,
   studServices: true,
