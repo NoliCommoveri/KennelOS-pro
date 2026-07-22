@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dog — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <a class="muted" href="dogs.html">← All dogs</a>
+        <h1 id="dog-title">Dog</h1>
+        <div id="dog-subtitle" class="page-subtitle"></div>
+      </div>
+      <div id="header-actions" class="pill-row"></div>
+    </div>
+
+    <div id="page-error"></div>
+
+    <section class="card" id="profile-section">
+      <div class="row-between">
+        <h2 style="margin:0;">Profile</h2>
+        <div id="profile-actions" class="pill-row"></div>
+      </div>
+      <div id="profile-body"></div>
+    </section>
+
+    <!-- Recorded COI (Stage 5) — user-attested, never computed -->
+    <section id="recorded-coi-section"></section>
+    <!-- Planned Tests + advisory completeness (Test Planning Addendum) -->
+    <section id="planned-tests-section"></section>
+    <!-- Health-test summary (Stage 5) — read-only view of recorded genetic/health-test events -->
+    <section id="health-tests-section"></section>
+    <!-- Event History (added in the Events step) -->
+    <section id="timeline-section"></section>
+
+    <section id="expenses-section"></section>
+    <!-- Pairings this dog appears in (Stage 3) -->
+    <section id="pairings-section"></section>
+    <!-- Sales / placements for this dog (Stage 4) -->
+    <section id="sales-section"></section>
+    <!-- Stud services this dog appears in (Stage 4) -->
+    <section id="stud-services-section"></section>
+    <!-- Lease/co-own/other contracts naming this dog directly -->
+    <section id="contracts-section"></section>
+    <!-- Litters where this dog is sire or dam -->
+    <section id="litters-section"></section>
+    <!-- Pedigree (added in the Pedigree step) -->
+    <section id="pedigree-section"></section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./dog.js"></script>
+</body>
+</html>

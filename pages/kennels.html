@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kennels — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <a class="muted" href="contacts.html">← Contacts</a>
+        <h1>Kennels</h1>
+        <p class="page-subtitle">Lightweight list for cleanup and renaming. Kennels are usually added inline from a contact.</p>
+      </div>
+      <div class="pill-row"><button class="btn btn-primary" id="add-toggle">+ Add New Kennel</button></div>
+    </div>
+
+    <div id="page-error"></div>
+
+    <section class="card" id="add-section" hidden>
+      <h2 style="margin-top:0;">Add a kennel</h2>
+      <div class="form-grid">
+        <div class="field"><label>Kennel name <span class="req">*</span></label><input id="k-name" type="text"></div>
+        <div class="field"><label>Prefix</label><input id="k-prefix" type="text"></div>
+        <div class="field"><label>Location</label><input id="k-location" type="text"></div>
+        <div class="field"><label>Website</label><input id="k-website" type="url" placeholder="https://…"></div>
+        <div class="field field-wide"><label class="check-inline"><input id="k-own" type="checkbox"> This is one of my own kennels</label></div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="k-add">Add kennel</button>
+        <button class="btn" id="k-add-cancel">Cancel</button>
+      </div>
+    </section>
+
+    <div id="kennel-list" style="margin-top:16px;"></div>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./kennels.js"></script>
+</body>
+</html>

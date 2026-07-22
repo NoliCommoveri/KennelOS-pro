@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Import Kennel Tests — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <a class="muted" href="import-export.html">← Import / Export</a>
+        <h1>Import Kennel Tests</h1>
+        <p class="page-subtitle">Optional seed — pick the breed(s) you work with and pull their common tests into your kennel checklist. Everything is prunable afterward; breed and test both stay free text.</p>
+      </div>
+    </div>
+
+    <div class="card" style="border-color:#d9c48a; background:var(--accent-soft, #fbf7ea);">
+      <p class="muted" style="margin:0;"><strong>Illustrative starter — not veterinary guidance.</strong> Health-testing recommendations change over time and vary by registry and region. Verify any panel against the authoritative source for your breed (the OFA CHIC requirements and your breed parent club). This is a convenience to copy, edit, and grow — never a standard of care.</p>
+    </div>
+
+    <div id="import-root" style="margin-top:16px;"></div>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./kennel-tests-import.js"></script>
+</body>
+</html>

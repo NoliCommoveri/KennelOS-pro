@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Import / Export — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Import / Export</h1>
+        <p class="page-subtitle">Back up your records, restore from a file, or import CSV data.</p>
+      </div>
+    </div>
+
+    <div id="page-msg"></div>
+
+    <section class="card">
+      <h2 style="margin-top:0;">Backup &amp; restore</h2>
+      <div class="seg-tabs" id="br-tabs" role="tablist">
+        <button class="seg-tab active" type="button" data-mode="backup">Back up</button>
+        <button class="seg-tab" type="button" data-mode="restore">Restore</button>
+      </div>
+
+      <div id="br-backup">
+        <p class="muted">Downloads every record as one JSON file — also the migration path if the app ever moves to a new web address (your data doesn't follow automatically).</p>
+        <p class="muted">Last backup: <strong id="last-backup">—</strong></p>
+        <button class="btn btn-primary" id="btn-backup">⬇ Download backup</button>
+      </div>
+
+      <div id="br-restore" hidden>
+        <p class="muted">Load records from a backup file. <strong>Merge</strong> adds/updates by id and keeps everything else; <strong>Replace</strong> wipes current records first.</p>
+        <input type="file" id="restore-file" accept="application/json,.json">
+        <div id="restore-preview" style="margin-top:14px;"></div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:16px;" id="dropbox-section">
+      <h2 style="margin-top:0;">KennelAssistant</h2>
+      <p class="muted">Connect Dropbox to enable <a href="../assistant.html">KennelAssistant</a> and log events on a second device.</p>
+      <div id="dropbox-body"><p class="muted">Checking…</p></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+      <h2 style="margin-top:0;">CSV import</h2>
+      <p class="muted">Match-or-create with a dry-run preview before anything is written.</p>
+      <div class="field field-wide">
+        <label for="csv-import-select">Choose what to import</label>
+        <select id="csv-import-select">
+          <option value="" selected>Select data type…</option>
+          <option value="dog-import.html">Dogs</option>
+          <option value="contact-import.html">Contacts</option>
+          <option value="pairing-import.html">Pairings</option>
+          <option value="litter-import.html">Litters</option>
+          <option value="sale-import.html">Sales</option>
+          <option value="event-import.html">Events</option>
+          <option value="stud-service-import.html">Stud services</option>
+          <option value="expense-import.html">Expenses</option>
+          <option value="kennel-tests-import.html">Kennel tests</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:16px;" id="tour-section">
+      <h2 style="margin-top:0;">Guided tour</h2>
+      <p class="muted" id="tour-status">Checking…</p>
+      <button class="btn" id="btn-tour" style="display:none;">🧭 Restart the guided tour</button>
+    </section>
+
+    <section class="card" style="margin-top:16px;" id="kennel-setup-section">
+      <h2 style="margin-top:0;">Your kennel</h2>
+      <p class="muted" id="kennel-setup-status">Checking…</p>
+      <button class="btn" id="btn-kennel-setup">Set up your kennel</button>
+    </section>
+
+    <section class="card" style="margin-top:16px; border-color:#e0a0a0;" id="danger-zone-section">
+      <h2 style="margin-top:0;">Danger zone</h2>
+      <p class="muted" id="reset-app-status">Checking…</p>
+      <p class="muted">Permanently deletes every dog, contact, kennel, and event, plus all app settings (kennel setup, sample-data status, last backup date) — landing back on the first-run setup screen, like a browser that has never opened this app. There is no undo. Download a backup first if you might want this data again.</p>
+      <button class="btn btn-danger" id="btn-reset-app">Reset app to start…</button>
+    </section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./import-export.js"></script>
+</body>
+</html>

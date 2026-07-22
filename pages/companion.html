@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Companion Messaging — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Companion Messaging</h1>
+        <p class="page-subtitle">Share a read-only, point-in-time snapshot of a family's or partner's own data as a no-account link. Pick a package type below to work one audience at a time: set its header copy, add a personal note per recipient, then build &amp; send. Nothing is live — each link is a snapshot as of when you sent it.</p>
+      </div>
+    </div>
+
+    <nav class="seg-tabs" id="companion-type-tabs" aria-label="Package types">
+      <a class="seg-tab" href="companion.html?type=prospective">Prospective families</a>
+      <a class="seg-tab" href="companion.html?type=family">Current families</a>
+      <a class="seg-tab" href="companion.html?type=partner">Partners</a>
+    </nav>
+
+    <div id="page-error"></div>
+
+    <div id="filter-blurb"></div>
+
+    <section class="card">
+      <h2 style="margin-top:0;">Message template</h2>
+      <p class="muted" style="margin-top:0;">Kennel identity and intro/announcement copy for this package type. Copied into every bundle at send time, so updates here apply to the next link you send without touching anything else. A recipient's personal note (below) shows alongside the announcement for that one person.</p>
+      <div id="templates"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+      <div class="row-between">
+        <h2 style="margin:0;">Recipients</h2>
+        <label class="check-inline"><input id="show-archived" type="checkbox"> Show archived contacts</label>
+      </div>
+      <p class="muted" style="margin:8px 0 0;">Add an optional personal note, then <strong>Prepare link</strong> to build a fresh snapshot and hand off a real email / SMS you tap to send.</p>
+      <div id="recipients"></div>
+    </section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./companion.js"></script>
+</body>
+</html>

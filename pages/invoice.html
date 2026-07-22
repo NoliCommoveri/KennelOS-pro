@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoice — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+  <style>
+    /* invoice.js's own layout — a printable financial document (invoice or
+       receipt), not a data-entry screen. Deliberately close to puppy-record's
+       tight one-page style, with a line-item table for the money. */
+    .inv-wrap { max-width: 780px; margin: 0 auto; }
+
+    .inv-top { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; margin-bottom: 18px; }
+    .inv-issuer { display: flex; gap: 14px; align-items: flex-start; }
+    .inv-logo { max-width: 96px; max-height: 96px; object-fit: contain; }
+    .inv-issuer h1 { margin: 0; font-size: 22px; }
+    .inv-issuer .inv-sub { color: var(--text-muted); font-size: 13px; margin-top: 2px; white-space: pre-line; }
+
+    .inv-meta { text-align: right; }
+    .inv-doctype { font-size: 26px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+    .inv-meta .inv-line { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+    .inv-meta .inv-line strong { color: var(--text); }
+
+    .inv-paid-stamp {
+      display: inline-block; margin-top: 6px; padding: 3px 12px; border: 2px solid var(--success);
+      color: var(--success); border-radius: var(--radius); font-weight: 800; letter-spacing: 0.08em;
+      text-transform: uppercase; font-size: 13px;
+    }
+
+    .inv-parties { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+    .inv-party {
+      flex: 1 1 240px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 12px;
+    }
+    .inv-party-role { text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 3px; }
+    .inv-party .inv-name { font-weight: 700; }
+    .inv-party .inv-detail { font-size: 13px; color: var(--text-muted); white-space: pre-line; }
+
+    .inv-re { font-size: 13px; color: var(--text-muted); margin: 0 0 10px; }
+
+    table.inv-items { width: 100%; border-collapse: collapse; margin: 6px 0 0; }
+    table.inv-items th, table.inv-items td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+    table.inv-items th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+    table.inv-items td.num, table.inv-items th.num { text-align: right; white-space: nowrap; }
+    table.inv-items tfoot td { border-bottom: 0; padding: 5px 10px; }
+    table.inv-items tfoot tr.total td { border-top: 2px solid var(--border); font-size: 17px; font-weight: 800; padding-top: 8px; }
+
+    .inv-status-paid { color: var(--success); }
+    .inv-status-due { color: var(--warning); }
+
+    .inv-pay { margin-top: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+    .inv-pay h3 { margin: 0 0 4px; font-size: 13px; }
+    .inv-pay .inv-row { display: flex; gap: 8px; font-size: 14px; padding: 1px 0; }
+    .inv-pay .inv-k { color: var(--text-muted); flex: 0 0 160px; }
+    .inv-methods { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 4px; }
+    .inv-method { font-size: 14px; }
+
+    .inv-notes { margin-top: 14px; font-size: 13px; white-space: pre-line; }
+    .inv-footnotes { margin-top: 12px; font-size: 11px; color: var(--text-muted); line-height: 1.45; }
+    .inv-footnotes > div { margin-top: 3px; }
+    .inv-footnotes sup { margin-right: 1px; }
+    .inv-generated { text-align: center; color: var(--text-faint); font-size: 11px; margin-top: 18px; }
+    .inv-empty { color: var(--text-faint); font-style: italic; font-size: 13px; }
+
+    .inv-actions { display: flex; justify-content: center; gap: 10px; margin-bottom: 14px; }
+
+    @media print {
+      #app-nav, .no-print { display: none !important; }
+      body { background: #fff; }
+      .inv-party, .inv-pay { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app-nav" class="no-print"></div>
+  <main class="inv-wrap">
+    <div class="inv-actions no-print">
+      <a class="btn btn-sm" id="inv-back" href="financials.html?view=income">← Back to Financials</a>
+      <button class="btn btn-primary btn-sm" id="inv-print">Print / Save as PDF</button>
+    </div>
+    <div id="inv-root"><p class="inv-empty">Loading…</p></div>
+  </main>
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="invoice.js"></script>
+</body>
+</html>

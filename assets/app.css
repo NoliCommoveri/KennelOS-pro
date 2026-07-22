@@ -1,0 +1,632 @@
+/* app.css — shared design system for the whole app. Loaded by every page.
+   Plain CSS, no build step. Establishes the visual language (badges, list
+   screens, edit-in-place, forms, buttons) reused across every stage. */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #d9dee5;
+  --border-strong: #b8c0cc;
+  --text: #1c2430;
+  --text-muted: #5c6773;
+  --text-faint: #8a94a1;
+  --accent: #2f6f4f;      /* kennel green */
+  --accent-dark: #245740;
+  --accent-soft: #e5f0ea;
+  --danger: #b23b3b;
+  --danger-soft: #f6e3e3;
+  --warn: #9a6b1e;
+  --warn-soft: #f6eddc;
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow: 0 1px 3px rgba(20, 30, 45, 0.08), 0 1px 2px rgba(20, 30, 45, 0.06);
+  --maxw: 1080px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.45;
+  font-size: 15px;
+}
+
+/* --- Top navigation ----------------------------------------------------- */
+#app-nav { background: var(--accent-dark); color: #fff; box-shadow: var(--shadow); }
+.nav-inner {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+  min-height: 52px;
+  flex-wrap: wrap;
+}
+.nav-brand {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  margin-right: 18px;
+  color: #fff;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nav-brand .paw { font-size: 18px; }
+.nav-kennel { font-weight: 500; color: #d7e6de; margin-left: 2px; }
+.nav-link {
+  color: #d7e6de;
+  text-decoration: none;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+.nav-link:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.nav-link.active { background: rgba(255, 255, 255, 0.18); color: #fff; }
+
+/* --- "More" corner menu -------------------------------------------------- */
+.nav-more { position: relative; margin-left: auto; }
+.nav-more-btn {
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.nav-more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 168px;
+  background: var(--accent-dark);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 6px;
+  display: none;
+  z-index: 40;
+}
+.nav-more.open .nav-more-menu { display: block; }
+.nav-more-menu .nav-link { display: block; padding: 8px 10px; }
+
+/* Wide screens: links inline, hamburger hidden. */
+.nav-links { display: flex; align-items: center; gap: 4px; flex: 1; }
+.nav-toggle {
+  display: none;
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+/* Phone: collapse the links behind the hamburger. */
+@media (max-width: 860px) {
+  /* brand + hamburger share row 1; the links (flex-basis:100%) wrap to row 2. */
+  .nav-toggle { display: inline-flex; }
+  .nav-toggle:hover { background: rgba(255, 255, 255, 0.12); }
+  .nav-links {
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    flex-basis: 100%;
+    gap: 2px;
+    padding-bottom: 8px;
+  }
+  .nav-inner.nav-open .nav-links { display: flex; }
+  .nav-links .nav-link { padding: 11px 12px; border-radius: var(--radius-sm); }
+  /* The "More" group flattens into the stack — its two links show inline, no
+     nested dropdown to fish for on a touch screen. */
+  .nav-more { position: static; margin-left: 0; width: 100%; }
+  .nav-more-btn { display: none; }
+  .nav-more-menu {
+    position: static;
+    display: block;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    min-width: 0;
+  }
+  .nav-more-menu::before {
+    content: "";
+    display: block;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.14);
+    margin: 4px 0;
+  }
+}
+
+/* --- Expandable table rows ---------------------------------------------- */
+/* Key columns stay in the row; a tap opens the rest as label/value pairs
+   below (phone-first pattern). Used by the Today board and reusable elsewhere. */
+.expand-summary { cursor: pointer; }
+.expand-summary > td { vertical-align: middle; }
+.expand-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: var(--text-muted);
+  width: 1em;
+  text-align: center;
+}
+.expand-summary.open .expand-chevron { transform: rotate(90deg); }
+.expand-panel > td { background: var(--surface-2); padding: 0; }
+.expand-detail {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  padding: 12px 14px;
+}
+.expand-detail .k { color: var(--text-muted); font-size: 13px; }
+.expand-detail .v { font-size: 14px; }
+.expand-actions { grid-column: 1 / -1; margin-top: 8px; }
+
+/* --- Sample data banner -------------------------------------------------- */
+.sample-banner {
+  background: var(--warn-soft);
+  border-bottom: 1px solid #e6d5ad;
+  color: var(--warn);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* --- Page layout -------------------------------------------------------- */
+main { max-width: var(--maxw); margin: 0 auto; padding: 24px 16px 64px; }
+.page-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+.page-header h1 { font-size: 24px; margin: 0; }
+.page-subtitle { color: var(--text-muted); margin: 4px 0 0; }
+h2 { font-size: 18px; margin: 28px 0 12px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+.card + .card { margin-top: 16px; }
+
+/* --- Collapsible home cards (Today page) --------------------------------- */
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.card-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.card-toggle-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px;
+  transition: transform 0.15s ease;
+}
+.card-toggle-btn:hover { color: var(--text); }
+.card-toggle-btn[aria-expanded="false"] { transform: rotate(-90deg); }
+.card-body { margin-top: 12px; }
+.card-body[hidden] { display: none; }
+
+.grid-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.tile {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.tile:hover { border-color: var(--accent); transform: translateY(-2px); }
+.tile h3 { margin: 0 0 6px; font-size: 17px; }
+.tile p { margin: 0; color: var(--text-muted); font-size: 14px; }
+.tile .tile-icon { font-size: 26px; display: block; margin-bottom: 10px; }
+
+/* --- Dashboard stat tiles (Stage 5) ------------------------------------- */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+.stat {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+a.stat { transition: border-color 0.12s, transform 0.12s; }
+a.stat:hover { border-color: var(--accent); transform: translateY(-2px); }
+.stat-num { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.stat-label { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+.stat.stat-alert .stat-num { color: var(--danger); }
+.stat.stat-warn .stat-num { color: var(--warn); }
+.stat.stat-zero .stat-num { color: var(--text-faint); font-weight: 600; }
+
+/* --- Buttons ------------------------------------------------------------ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.2;
+  /* Never wrap a button label. In flex rows (e.g. the breeding / placement hub
+     cards' "Open pairing" / "Open litter" / "Open sale" actions) a wrappable
+     label lets the button shrink and re-flow, so its size shifts row to row;
+     nowrap keeps each action a fixed width, anchored right by the row's
+     space-between. */
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.btn:hover { background: var(--surface-2); }
+.btn-primary { background: var(--accent); border-color: var(--accent-dark); color: #fff; }
+.btn-primary:hover { background: var(--accent-dark); }
+.btn-danger { color: var(--danger); border-color: var(--danger); background: var(--surface); }
+.btn-danger:hover { background: var(--danger-soft); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { padding: 5px 10px; font-size: 13px; }
+
+/* --- Badges (status / type values) -------------------------------------- */
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge-neutral { background: var(--surface-2); color: var(--text-muted); border-color: var(--border); }
+.badge-green   { background: var(--accent-soft); color: var(--accent-dark); border-color: #bfe0cd; }
+.badge-blue    { background: #e3edf7; color: #275580; border-color: #c3d7ea; }
+.badge-amber   { background: var(--warn-soft); color: var(--warn); border-color: #e6d5ad; }
+.badge-red     { background: var(--danger-soft); color: var(--danger); border-color: #e6c3c3; }
+.badge-purple  { background: #efe6f6; color: #6a3d90; border-color: #dbc7ea; }
+.badge-gray    { background: #e7e9ec; color: #55606c; border-color: #d3d8de; }
+
+/* --- Tables / list screens --------------------------------------------- */
+.list-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.list-toolbar input[type="search"], .list-toolbar select {
+  font: inherit;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.list-toolbar input[type="search"] { min-width: 200px; flex: 1 1 220px; }
+.toolbar-spacer { flex: 1 1 auto; }
+.check-inline { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 14px; }
+/* Keep the checkbox/radio a fixed little box — flex layouts (esp. multi-line
+   labels) otherwise stretch the native control to different sizes. */
+.check-inline input[type="checkbox"], .check-inline input[type="radio"] { flex: 0 0 auto; }
+/* A three-column grid of check-inline options (Contact "Type"). Equal-width
+   columns keep every checkbox on a shared row and column line instead of the
+   ragged staircase a flex-wrap produces; the checkbox top-aligns so a label
+   that wraps on a narrow screen still lines up with its box. */
+.check-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
+.check-group .check-inline { align-items: start; }
+
+table.data { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+table.data th, table.data td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+table.data th { background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); }
+table.data tbody tr:last-child td { border-bottom: none; }
+table.data tbody tr.clickable { cursor: pointer; }
+table.data tbody tr.clickable:hover { background: var(--accent-soft); }
+.row-archived { opacity: 0.55; }
+table.data tbody tr.row-review { background: var(--warn-soft); }
+table.data tbody tr.row-review td { border-bottom-color: #e6d5ad; }
+
+/* --- Sortable columns (clickable headers) -------------------------------- */
+table.data th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+table.data th.sortable:hover { background: var(--border); color: var(--text); }
+
+/* --- Responsive column collapse (listView.js `collapse` columns) -------- */
+.col-toggle { width: 32px; text-align: center; }
+.row-toggle-btn { background: none; border: none; cursor: pointer; font-size: 14px; line-height: 1; padding: 6px; color: var(--text-muted); }
+table.data tr.row-detail[hidden] { display: none; }
+table.data tr.row-detail td { background: var(--surface-2); padding: 10px 14px; }
+table.data tr.row-detail .dl-meta { margin: 0; }
+@media (min-width: 641px) {
+  .col-toggle { display: none; }
+  table.data tr.row-detail { display: none; }
+}
+@media (max-width: 640px) {
+  table.data th.col-collapse, table.data td.col-collapse { display: none; }
+  /* Four always-visible dog-list columns (call name, sex, status, disposition)
+     need tighter spacing than the desktop table, and badges need to be able
+     to wrap to a second line (e.g. "External reference"), so the row never
+     forces horizontal scroll. */
+  table.data th, table.data td { padding: 8px 5px; font-size: 13px; overflow-wrap: break-word; }
+  table.data th { font-size: 10px; letter-spacing: 0.2px; hyphens: auto; }
+  table.data .badge { padding: 2px 6px; white-space: normal; }
+  .col-toggle { width: 20px; }
+}
+
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.empty-state { text-align: center; color: var(--text-muted); padding: 40px 20px; }
+
+/* --- Forms / edit-in-place --------------------------------------------- */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 20px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.field .req { color: var(--danger); }
+.field input:not([type="checkbox"]):not([type="radio"]), .field select, .field textarea {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  width: 100%;
+}
+.field input:disabled, .field select:disabled, .field textarea:disabled {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border);
+  -webkit-text-fill-color: var(--text); /* keep readable on Safari */
+  opacity: 1;
+}
+.field textarea { min-height: 72px; resize: vertical; }
+.field-hint { font-size: 12px; color: var(--text-faint); }
+.field-wide { grid-column: 1 / -1; }
+
+.form-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.inline-warn { color: var(--warn); background: var(--warn-soft); border: 1px solid #e6d5ad; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
+.inline-error { color: var(--danger); background: var(--danger-soft); border: 1px solid #e6c3c3; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
+
+/* Lite cap upgrade nudge (cap spec §6) — a friendly prompt, not an error. */
+.upgrade-nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--accent-soft); border: 1px solid #bfe0cd; color: var(--accent-dark); padding: 12px 14px; border-radius: var(--radius-sm); margin-top: 10px; }
+.upgrade-nudge-body { flex: 1 1 240px; }
+.upgrade-nudge-detail { font-size: 13px; margin-top: 3px; color: var(--text); }
+.upgrade-nudge .btn-primary { flex: 0 0 auto; }
+
+/* A departed (archived) dog reference that renders as plain text, not a link
+   (Lite — cap spec §7). Kept visually like body text so lineage still reads. */
+.dog-name-static { color: var(--text); }
+
+/* --- Modal -------------------------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 26, 38, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.modal {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(15, 25, 40, 0.28);
+  padding: 22px;
+  width: 100%;
+  max-width: 640px;
+}
+
+/* --- Timeline ----------------------------------------------------------- */
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline-item {
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
+  gap: 14px;
+  align-items: start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-item:last-child { border-bottom: none; }
+.timeline-date { color: var(--text-muted); font-size: 14px; }
+.timeline-main { min-width: 0; }
+.timeline-main > div:first-child { margin-bottom: 2px; }
+.timeline-actions { align-self: center; }
+.event-upcoming { background: var(--warn-soft); border-radius: var(--radius-sm); padding-left: 10px; padding-right: 10px; }
+@media (max-width: 640px) {
+  .timeline-item { grid-template-columns: 1fr; }
+  .timeline-actions { justify-self: start; }
+}
+
+/* --- Pedigree ----------------------------------------------------------- */
+.ped-scroll { overflow-x: auto; overflow-y: hidden; padding: 4px; }
+.ped-canvas { position: relative; }
+.ped-lines { position: absolute; inset: 0; pointer-events: none; }
+.ped-pos { position: absolute; }
+.ped-node {
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 6px 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.ped-node .ped-main { display: flex; align-items: center; gap: 6px; }
+.ped-name { font-weight: 700; color: var(--text); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ped-name:hover { color: var(--accent); text-decoration: underline; }
+/* Departed (archived) dog in Lite: name renders but isn't a link (cap spec §7). */
+.ped-name-static, .ped-name-static:hover { color: var(--text); text-decoration: none; cursor: default; }
+.ped-open { margin-left: auto; color: var(--text-faint); text-decoration: none; font-size: 13px; }
+.ped-open:hover { color: var(--accent); }
+.ped-arch { font-size: 10px; padding: 0 6px; }
+.ped-reg { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ped-dob { font-size: 12px; }
+.ped-node.ped-unknown {
+  border-style: dashed;
+  border-left-color: var(--border-strong);
+  background: var(--surface-2);
+  align-items: center;
+  box-shadow: none;
+}
+
+/* --- Small utilities ---------------------------------------------------- */
+.muted { color: var(--text-muted); }
+.faint { color: var(--text-faint); }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+.row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.stack-sm > * + * { margin-top: 8px; }
+.pill-row { display: flex; gap: 6px; flex-wrap: wrap; }
+/* An author `display` beats the UA `[hidden]{display:none}`, so a `.pill-row`
+   toggled via the `hidden` attribute/property (e.g. the photo-vs-PDF source
+   switch on the receipt-capture and Documents forms) needs this to actually
+   hide — same idiom as `.card-body[hidden]` / `tr.row-detail[hidden]`. */
+.pill-row[hidden] { display: none; }
+/* Trailing action button(s) in a row-between header/row: pin them to the row's
+   right edge even when the outer flex-wrap pushes them onto their own line
+   (narrow viewport) — otherwise a wrapped line's item defaults to the left.
+   A pill-row also grows to fill that line so its own internal wrapping (when
+   the button group itself is too wide) right-aligns each sub-line in turn. */
+.row-between > .pill-row { flex: 1 1 auto; justify-content: flex-end; }
+.row-between > .btn:last-child { margin-left: auto; }
+
+/* --- Hub segment tabs (Navigation Consolidation Plan v1 §6: People, Placements
+   & Contracts) — small pill row switching between the pages folded into a hub. */
+.seg-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.seg-tab {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+}
+.seg-tab:hover { background: var(--accent-soft); }
+.seg-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.dl-meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+.dl-meta dt { color: var(--text-muted); font-size: 13px; }
+/* Long unbroken values (a URL, a registration string) must wrap inside the 1fr
+   column instead of running off the right edge on narrow screens. min-width:0
+   lets the grid cell shrink below its content's intrinsic width. */
+.dl-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* --- Guided tour (Wizard Runtime Spec v1 §9) -----------------------------
+   Spotlight coach-marks: a transparent full-viewport click-blocker plus a
+   box-shadow "cutout" applied to the real target element itself — no mask,
+   no cutout-geometry math. The overlay sits below the target's own stacking
+   context (z-index 10001 > 10000) so the target stays clickable through it. */
+.wizard-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: transparent;
+}
+/* Intro cards and the missing-target fallback have nothing spotlit, so the dim
+   comes from the overlay itself rather than a target's box-shadow. */
+.wizard-overlay-dim { background: rgba(0, 0, 0, 0.6); }
+.wizard-spotlight-target {
+  position: relative;
+  z-index: 10001;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6), 0 0 0 3px var(--accent) inset;
+  border-radius: var(--radius-sm);
+}
+/* The card shell: a header (step count + title), a scrollable body, and the
+   action row. Kept compact and — for highlight steps — pinned to the top so it
+   never covers the feature it describes (the target is scrolled just below it). */
+.wizard-card {
+  z-index: 10002;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+}
+.wizard-card-top {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(760px, calc(100vw - 24px));
+  max-height: 60vh;
+}
+/* Flip to the bottom for targets pinned so high on the page that the top card
+   would otherwise cover them (see scrollTargetBelowCard in wizardUI.js). */
+.wizard-card-top.wizard-card-bottom {
+  top: auto;
+  bottom: 12px;
+}
+.wizard-card-centered {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 24px));
+  max-height: 80vh;
+}
+.wizard-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.wizard-step-count { color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.wizard-tooltip-title { margin: 4px 0 8px; }
+.wizard-tooltip-body { margin: 0 0 14px; color: var(--text); }
+.wizard-tooltip-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.wizard-resume-pill {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10002;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-dark);
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.wizard-resume-pill:hover { background: var(--accent-dark); }
+
+/* --- First-run onboarding cards (assets/onboardingUI.js) -----------------
+   A dimmed, non-dismissible overlay (no backdrop close) stacked above the modal
+   layer, reusing the modal look. Shown once on a fresh install. */
+.onboard-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(18, 26, 38, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+.onboard-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(15, 25, 40, 0.28);
+  padding: 24px;
+  width: 100%;
+  max-width: 520px;
+}
+.onboard-title { margin: 0 0 12px; }
+.onboard-subtitle { margin: 0 0 8px; }
+.onboard-body p { color: var(--text); }
+.onboard-list { margin: 12px 0; padding-left: 20px; }
+.onboard-list li { margin: 6px 0; }
+.onboard-rule { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+.onboard-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 18px; }

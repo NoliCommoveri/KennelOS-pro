@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Puppy Record — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+  <style>
+    /* puppy-record.js's own layout — a printable record, not a data-entry
+       screen, so it doesn't reuse the app's dl-meta/form-grid patterns.
+       Deliberately tight: this is meant to read as a dense one-page handout,
+       not a spaced-out app screen. */
+    .pr-wrap { max-width: 820px; margin: 0 auto; }
+    .pr-header { text-align: center; margin-bottom: 10px; }
+    .pr-header h1 { margin: 0; font-size: 24px; }
+    .pr-header .pr-kennel { color: var(--text-muted); font-size: 16px; font-weight: 700; }
+    .pr-header .pr-generated { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+
+    /* Shared "pulled out of the box" section title — centered, plain, the
+       same size everywhere (Puppy Information / Parents / Health History /
+       Buyer) so the page reads as a sequence of labeled blocks. */
+    .pr-section-label { text-align: center; font-size: 15px; font-weight: 700; margin: 14px 0 6px; }
+    .pr-section-label:first-of-type { margin-top: 8px; }
+
+    .pr-parents { display: flex; gap: 12px; margin-bottom: 8px; }
+    .pr-parent {
+      flex: 1 1 0; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 8px 12px;
+    }
+    .pr-parent-role {
+      text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px;
+      color: var(--text-muted); font-weight: 600; margin-bottom: 2px;
+    }
+    .pr-tests { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
+
+    .pr-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 8px 12px; margin-bottom: 8px;
+    }
+
+    /* Puppy Information's rows split into columns of up to 5 present rows
+       each, so a puppy with a lot of recorded fields flows sideways instead
+       of stretching the card tall. */
+    .pr-info-columns { display: flex; gap: 0 20px; flex-wrap: wrap; }
+    .pr-info-col { flex: 1 1 220px; min-width: 220px; }
+
+    .pr-row { display: flex; gap: 6px; padding: 1px 0; font-size: 14px; }
+    .pr-row .pr-k { flex: 0 0 auto; white-space: nowrap; color: var(--text-muted); }
+    .pr-row .pr-v { flex: 1; }
+
+    .pr-health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+    .pr-health-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 6px 12px; break-inside: avoid;
+    }
+    .pr-health-card h3 { margin: 0 0 2px; font-size: 13px; }
+    .pr-health-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+    .pr-health-list li { padding: 3px 0; border-top: 1px solid var(--border); }
+    .pr-health-list li:first-child { border-top: 0; }
+    .pr-hdate { color: var(--text-muted); margin-right: 6px; }
+    .pr-hnotes { color: var(--text-muted); margin-top: 1px; }
+
+    .pr-empty { color: var(--text-faint); font-style: italic; font-size: 13px; }
+
+    .pr-actions { display: flex; justify-content: center; gap: 10px; margin-bottom: 14px; }
+
+    @media print {
+      #app-nav, .no-print { display: none !important; }
+      body { background: #fff; }
+      .pr-card, .pr-parent, .pr-health-card { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app-nav" class="no-print"></div>
+  <main class="pr-wrap">
+    <div class="pr-actions no-print">
+      <a class="btn btn-sm" id="pr-back" href="sales.html">← Back to sale</a>
+      <button class="btn btn-primary btn-sm" id="pr-print">Print / Save as PDF</button>
+    </div>
+    <div id="pr-root"><p class="pr-empty">Loading…</p></div>
+  </main>
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="puppy-record.js"></script>
+</body>
+</html>

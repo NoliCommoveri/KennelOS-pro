@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pedigree — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Pedigree</h1>
+        <p class="page-subtitle">Family tree built from sire/dam links. Click a dog to re-center; use ↗ to open its record.</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="list-toolbar" style="margin-bottom:0;">
+        <label class="check-inline" style="color:var(--text);font-weight:600;">Dog
+          <select id="ped-root" style="min-width:220px;"></select>
+        </label>
+        <label class="check-inline" style="color:var(--text);font-weight:600;">Generations
+          <select id="ped-gens">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </label>
+        <div class="toolbar-spacer"></div>
+        <a class="btn btn-sm" id="ped-open-record" href="#">Open record ↗</a>
+      </div>
+    </section>
+
+    <div id="page-msg"></div>
+    <section class="card" style="margin-top:16px; padding:12px;">
+      <div id="pedigree-mount"><div class="empty-state">Choose a dog to view its pedigree.</div></div>
+    </section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./pedigree.js"></script>
+</body>
+</html>

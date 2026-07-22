@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Import Events (CSV) — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <a class="muted" href="import-export.html">← Import / Export</a>
+        <h1>Import Events (CSV)</h1>
+        <p class="page-subtitle">Dog-subject events only. Matched on dog + event type + event date (title breaks ties). The dog must already exist; an unmatched related contact is flagged for review, never auto-created.</p>
+      </div>
+    </div>
+    <div id="import-root"></div>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./event-import.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kennel — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <a class="muted" href="kennels.html">← All kennels</a>
+        <h1 id="kennel-title">Kennel</h1>
+        <div id="kennel-subtitle" class="page-subtitle"></div>
+      </div>
+    </div>
+
+    <div id="page-error"></div>
+
+    <!-- Kennel logo: a stored image (data URL on the Kennel record) shown on
+         this kennel's invoices, receipts, and puppy records. Any kennel may
+         carry one; rendered into a card from JS. -->
+    <div id="logo-section"></div>
+
+    <section class="card" id="profile-section">
+      <div class="row-between">
+        <h2 style="margin:0;">Profile</h2>
+        <div id="profile-actions" class="pill-row"></div>
+      </div>
+      <div id="profile-body"></div>
+    </section>
+
+    <!-- Own-kennel program configuration: lifecycle nudges + preferred tests.
+         Rendered (into cards) only for is_own_kennel kennels; empty otherwise. -->
+    <div id="kennel-config"></div>
+
+    <!-- Kennel-wide expenses (subject_type='kennel') — overhead not tied to one
+         dog/litter: facility, bulk food, registration dues, marketing, etc. -->
+    <section id="expenses-section"></section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./kennel.js"></script>
+</body>
+</html>

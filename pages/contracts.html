@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Other contracts — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Other contracts</h1>
+        <p class="page-subtitle">Co-ownership, lease, and any agreement not tied to a specific sale or stud service. Sale and stud-service contracts live on their Sales and Stud Services cards.</p>
+      </div>
+      <a class="btn btn-primary" href="contract.html?new=1">+ Add Contract</a>
+    </div>
+    <nav class="seg-tabs" aria-label="Placements & Contracts">
+      <a class="seg-tab" href="sales.html">Sales</a>
+      <a class="seg-tab" href="stud-services.html">Stud Services</a>
+      <span class="seg-tab active" aria-current="page">Other contracts</span>
+    </nav>
+    <div id="contract-list"></div>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./contracts.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KennelOS</title>
+  <!-- The app opens on Today (Navigation Consolidation Plan v1 §2). This root
+       page is a thin redirect so the PWA start_url and any old bookmark to the
+       app root land on the Today hub. -->
+  <meta http-equiv="refresh" content="0; url=pages/today.html">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <script>location.replace('pages/today.html');</script>
+</head>
+<body>
+  <p style="font-family:system-ui,sans-serif; padding:24px;">
+    Opening <a href="pages/today.html">Today</a>…
+  </p>
+</body>
+</html>

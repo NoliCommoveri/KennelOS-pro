@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documents — KennelOS</title>
+  <!--
+    documents.html — local document storage: upload a PDF, or take/choose a
+    photo or screenshot (converted to a compressed PDF), and file it as a
+    pedigree, health test, registration, contract, or other document against
+    a dog. Everything lives in this browser's IndexedDB (data/fileRepo.js +
+    data/documentRepo.js) — no external app, no Dropbox connection.
+  -->
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Documents</h1>
+        <p class="page-subtitle">Pedigrees, health tests, registrations, and other files — filed per dog, stored on this device.</p>
+      </div>
+      <div class="pill-row">
+        <button class="btn btn-primary" id="btn-add-document">+ Add Document</button>
+      </div>
+    </div>
+
+    <div id="page-msg"></div>
+
+    <section class="card" style="margin-top:16px;">
+      <nav class="seg-tabs" id="type-chips" aria-label="Document types"></nav>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+        <div class="field" style="flex:1;min-width:180px;">
+          <label>Search</label>
+          <input id="search" type="search" placeholder="Title, dog, issuer, notes…">
+        </div>
+        <div class="field" style="min-width:180px;">
+          <label>Dog</label>
+          <select id="dog-filter"><option value="">All dogs</option></select>
+        </div>
+      </div>
+    </section>
+
+    <section id="list" style="margin-top:16px;"></section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./documents.js"></script>
+</body>
+</html>

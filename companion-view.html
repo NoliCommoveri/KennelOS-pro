@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your Update</title>
+  <!--
+    companion-view.html — the recipient-facing Companion shell. A single,
+    self-contained, read-only static file. It decodes a bundle from the URL hash
+    and renders it; it makes NO network calls after load and has no backend.
+
+    INFRASTRUCTURE CONTRACT (brief §6.3): this file must stay backward-compatible
+    with every bundleVersion ever sent. Bundle evolution is additive — the render
+    branches on bundleType and bundleVersion, and unknown-but-additive fields must
+    never hard-fail the render. A fix here must not break links sent last month.
+
+    lz-string is inlined (below) and version-locked to the app's vendored copy
+    (vendor/lz-string.min.mjs, v1.5.0) so decode always matches encode, offline.
+  -->
+  <style>
+    :root {
+      --bg: #f6f7f9; --card: #ffffff; --ink: #1a2233; --muted: #5b6577;
+      --border: #e2e6ec; --accent: #2f6f5f; --chip: #eef2f0;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f141c; --card: #161d28; --ink: #e7ecf3; --muted: #9aa6b6;
+        --border: #26303d; --accent: #6bbfa8; --chip: #1c2731;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f7f9; --card: #ffffff; --ink: #1a2233; --muted: #5b6577;
+      --border: #e2e6ec; --accent: #2f6f5f; --chip: #eef2f0;
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f141c; --card: #161d28; --ink: #e7ecf3; --muted: #9aa6b6;
+      --border: #26303d; --accent: #6bbfa8; --chip: #1c2731;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--ink);
+      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 24px 16px 64px;
+    }
+    .wrap { max-width: 680px; margin: 0 auto; }
+    header.kennel { text-align: center; margin-bottom: 20px; }
+    header.kennel h1 { margin: 0 0 4px; font-size: 1.7rem; }
+    header.kennel .tagline { color: var(--muted); margin: 0; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 18px 18px; margin-top: 16px;
+    }
+    .card h2 { margin: 0 0 10px; font-size: 1.15rem; }
+    .intro { color: var(--muted); }
+    .announcement {
+      background: var(--chip); border-left: 3px solid var(--accent);
+      border-radius: 8px; padding: 12px 14px; margin-top: 14px; white-space: pre-wrap;
+    }
+    .updated { text-align: center; color: var(--muted); font-size: 0.85rem; margin-top: 18px; }
+    .row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .row:first-child { border-top: 0; }
+    .row .k { color: var(--muted); }
+    .row .v { text-align: right; font-weight: 600; }
+    .row .v .subnote { display: block; font-weight: 400; font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    .section-label { color: var(--muted); font-size: 0.9rem; font-weight: 600; margin: 14px 0 6px; }
+    ul.clean { list-style: none; margin: 0; padding: 0; }
+    ul.clean li { padding: 8px 0; border-top: 1px solid var(--border); }
+    ul.clean li:first-child { border-top: 0; }
+    .chip { display: inline-block; background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 0.85rem; margin: 2px 4px 2px 0; }
+    a.doc { color: var(--accent); font-weight: 600; }
+    .empty { color: var(--muted); font-style: italic; }
+    .theme-toggle {
+      position: fixed; top: 12px; right: 12px; background: var(--card); color: var(--ink);
+      border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem;
+    }
+    .fatal { text-align: center; color: var(--muted); margin-top: 40px; }
+    .disclaimer { color: var(--muted); font-size: 0.82rem; font-style: italic; margin-top: 6px; }
+    .parents { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    .parent { flex: 1 1 220px; background: var(--chip); border-radius: 10px; padding: 10px 12px; }
+    .parent .role { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .parent .pname { font-weight: 600; margin: 2px 0; }
+    .parent .callname { font-weight: 400; color: var(--muted); }
+    .pup { padding: 12px 0; border-top: 1px solid var(--border); }
+    .pup:first-child { border-top: 0; }
+    .pup .pname { font-weight: 600; font-size: 1.02rem; }
+    .subhead { color: var(--muted); font-size: 0.9rem; margin: 2px 0 8px; }
+    .evt-group { margin-top: 14px; }
+    .evt-group h3 { margin: 0 0 4px; font-size: 0.98rem; }
+    .tests { margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">◑ Theme</button>
+  <div class="wrap" id="root"><p class="fatal">Loading…</p></div>
+
+  <!-- lz-string 1.5.0 (github.com/pieroxy/lz-string) — MIT. Inlined, version-locked to vendor/lz-string.min.mjs. -->
+  <script>
+  var LZString=function(){var r=String.fromCharCode,o="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",n="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-$",e={};function t(r,o){if(!e[r]){e[r]={};for(var n=0;n<r.length;n++)e[r][r.charAt(n)]=n}return e[r][o]}var i={compressToBase64:function(r){if(null==r)return"";var n=i._compress(r,6,function(r){return o.charAt(r)});switch(n.length%4){default:case 0:return n;case 1:return n+"===";case 2:return n+"==";case 3:return n+"="}},decompressFromBase64:function(r){return null==r?"":""==r?null:i._decompress(r.length,32,function(n){return t(o,r.charAt(n))})},compressToUTF16:function(o){return null==o?"":i._compress(o,15,function(o){return r(o+32)})+" "},decompressFromUTF16:function(r){return null==r?"":""==r?null:i._decompress(r.length,16384,function(o){return r.charCodeAt(o)-32})},compressToUint8Array:function(r){for(var o=i.compress(r),n=new Uint8Array(2*o.length),e=0,t=o.length;e<t;e++){var s=o.charCodeAt(e);n[2*e]=s>>>8,n[2*e+1]=s%256}return n},decompressFromUint8Array:function(o){if(null==o)return i.decompress(o);for(var n=new Array(o.length/2),e=0,t=n.length;e<t;e++)n[e]=256*o[2*e]+o[2*e+1];var s=[];return n.forEach(function(o){s.push(r(o))}),i.decompress(s.join(""))},compressToEncodedURIComponent:function(r){return null==r?"":i._compress(r,6,function(r){return n.charAt(r)})},decompressFromEncodedURIComponent:function(r){return null==r?"":""==r?null:(r=r.replace(/ /g,"+"),i._decompress(r.length,32,function(o){return t(n,r.charAt(o))}))},compress:function(o){return i._compress(o,16,function(o){return r(o)})},_compress:function(r,o,n){if(null==r)return"";var e,t,i,s={},u={},a="",p="",c="",l=2,f=3,h=2,d=[],m=0,v=0;for(i=0;i<r.length;i+=1)if(a=r.charAt(i),Object.prototype.hasOwnProperty.call(s,a)||(s[a]=f++,u[a]=!0),p=c+a,Object.prototype.hasOwnProperty.call(s,p))c=p;else{if(Object.prototype.hasOwnProperty.call(u,c)){if(c.charCodeAt(0)<256){for(e=0;e<h;e++)m<<=1,v==o-1?(v=0,d.push(n(m)),m=0):v++;for(t=c.charCodeAt(0),e=0;e<8;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}else{for(t=1,e=0;e<h;e++)m=m<<1|t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t=0;for(t=c.charCodeAt(0),e=0;e<16;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}0==--l&&(l=Math.pow(2,h),h++),delete u[c]}else for(t=s[c],e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;0==--l&&(l=Math.pow(2,h),h++),s[p]=f++,c=String(a)}if(""!==c){if(Object.prototype.hasOwnProperty.call(u,c)){if(c.charCodeAt(0)<256){for(e=0;e<h;e++)m<<=1,v==o-1?(v=0,d.push(n(m)),m=0):v++;for(t=c.charCodeAt(0),e=0;e<8;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}else{for(t=1,e=0;e<h;e++)m=m<<1|t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t=0;for(t=c.charCodeAt(0),e=0;e<16;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}0==--l&&(l=Math.pow(2,h),h++),delete u[c]}else for(t=s[c],e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;0==--l&&(l=Math.pow(2,h),h++)}for(t=2,e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;for(;;){if(m<<=1,v==o-1){d.push(n(m));break}v++}return d.join("")},decompress:function(r){return null==r?"":""==r?null:i._decompress(r.length,32768,function(o){return r.charCodeAt(o)})},_decompress:function(o,n,e){var t,i,s,u,a,p,c,l=[],f=4,h=4,d=3,m="",v=[],g={val:e(0),position:n,index:1};for(t=0;t<3;t+=1)l[t]=t;for(s=0,a=Math.pow(2,2),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;switch(s){case 0:for(s=0,a=Math.pow(2,8),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;c=r(s);break;case 1:for(s=0,a=Math.pow(2,16),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;c=r(s);break;case 2:return""}for(l[3]=c,i=c,v.push(c);;){if(g.index>o)return"";for(s=0,a=Math.pow(2,d),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;switch(c=s){case 0:for(s=0,a=Math.pow(2,8),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;l[h++]=r(s),c=h-1,f--;break;case 1:for(s=0,a=Math.pow(2,16),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;l[h++]=r(s),c=h-1,f--;break;case 2:return v.join("")}if(0==f&&(f=Math.pow(2,d),d++),l[c])m=l[c];else{if(c!==h)return null;m=i+i.charAt(0)}v.push(m),l[h++]=i+m.charAt(0),i=m,0==--f&&(f=Math.pow(2,d),d++)}}};return i}();"function"==typeof define&&define.amd?define(function(){return LZString}):"undefined"!=typeof module&&null!=module?module.exports=LZString:"undefined"!=typeof angular&&null!=angular&&angular.module("LZString",[]).factory("LZString",function(){return LZString});
+  </script>
+
+  <script>
+  (function () {
+    var root = document.getElementById('root');
+
+    // --- helpers -----------------------------------------------------------
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function fmtDate(d) {
+      if (!d) return '';
+      // Date-only YYYY-MM-DD → localized; anything else shown as-is.
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+      if (m) { try { return new Date(d + 'T00:00:00').toLocaleDateString(); } catch (e) { return d; } }
+      try { return new Date(d).toLocaleString(); } catch (e) { return d; }
+    }
+    function money(v) {
+      if (v == null || v === '') return '';
+      var n = Number(v);
+      return isNaN(n) ? esc(v) : '$' + n.toFixed(2);
+    }
+    var FEE_LABELS = {
+      flat_fee: 'Flat fee', pick_of_litter: 'Pick of litter',
+      flat_plus_pick: 'Flat + pick', other: 'Other'
+    };
+    // Which fee structures "include" a flat fee vs. a pick of litter — drives
+    // whether the partner Agreement Details shows the fee amount, the pick status,
+    // or both.
+    var FEE_HAS_FLAT = { flat_fee: true, flat_plus_pick: true };
+    var FEE_HAS_PICK = { pick_of_litter: true, flat_plus_pick: true };
+    // Value→label maps mirroring vocab.js, so raw record values render with proper
+    // capitalization. Kept in the shell (not the bundle) so backward-compat links
+    // that carry raw values still read correctly; labelFor() falls back to a
+    // prettified value for anything unmapped.
+    var STUD_TYPE_LABELS = { in_person: 'In person', ai: 'AI / shipped' };
+    var PLACEMENT_LABELS = {
+      pet: 'Pet', show: 'Show', breeding_rights: 'Breeding rights', co_own: 'Co-own'
+    };
+    var SALE_STATUS_LABELS = {
+      reserved: 'Reserved', deposit_paid: 'Deposit paid', paid_in_full: 'Paid in full',
+      delivered: 'Delivered', returned: 'Returned', cancelled: 'Cancelled'
+    };
+    // Per-contract-type labels: the entry title fallback, and the section heading
+    // when the whole Contracts card is a single type (mixed types stay "Contracts").
+    var CONTRACT_TYPE_LABELS = {
+      sale: 'Sale', stud_service: 'Stud service', co_own: 'Co-ownership', lease: 'Lease', other: 'Contract'
+    };
+    var CONTRACT_SECTION_LABELS = {
+      lease: 'Lease agreement', co_own: 'Co-ownership', other: 'Contracts'
+    };
+    function labelFor(map, v) {
+      if (v == null || v === '') return '';
+      if (map[v]) return map[v];
+      var s = String(v).replace(/_/g, ' ');
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    function sexLabel(s) { return s === 'male' ? '♂' : s === 'female' ? '♀' : ''; }
+    // A lease/co-own dog's identity: registered name with the call name quoted
+    // when both are present, else whichever exists.
+    function dogLabel(d) {
+      if (!d) return '';
+      var reg = d.registeredName || '', call = d.callName || '';
+      if (reg && call) return reg + ' "' + call + '"';
+      return reg || call || '';
+    }
+
+    // Hardcoded disclaimer copy (brief §3/§5 — lives in the shell, never the bundle).
+    var READY_DISCLAIMER = 'This is an estimate and may be subject to change depending on veterinary status.';
+    var DEPOSIT_DISCLAIMER = "Deposits must be received and cleared through the seller's financial institution before puppies will be updated to a reserved status. All puppies are considered available until then. Deposits are first come, first serve.";
+
+    function has(o, k) { return o && Object.prototype.hasOwnProperty.call(o, k); }
+
+    function renderTests(tests) {
+      if (!Array.isArray(tests) || !tests.length) return '';
+      var h = '<div class="tests">';
+      for (var i = 0; i < tests.length; i++) {
+        var t = tests[i];
+        var name = t.name ? esc(t.name) : '';
+        var res = t.result ? esc(t.result) : '';
+        h += '<span class="chip">' + (name ? name + ': ' : '') + res + '</span>';
+      }
+      return h + '</div>';
+    }
+
+    // A parent/dog card: registered name, call name, a photos link, and any
+    // completed tests. Used by prospective litters and partner stud services.
+    function renderDogCard(role, dc, photosLabel) {
+      if (!dc) return '';
+      var name = dc.registeredName ? esc(dc.registeredName) : '';
+      var call = dc.callName ? esc(dc.callName) : '';
+      var line = name;
+      if (call) line += (name ? ' ' : '') + '<span class="callname">“' + call + '”</span>';
+      if (!line) line = '<span class="callname">—</span>';
+      var h = '<div class="parent">';
+      h += '<div class="role">' + esc(role) + '</div>';
+      h += '<div class="pname">' + line + '</div>';
+      if (dc.photosUrl) h += '<a class="doc" href="' + esc(dc.photosUrl) + '" target="_blank" rel="noopener noreferrer">' + esc(photosLabel || 'See photos here') + ' →</a>';
+      h += renderTests(dc.tests);
+      return h + '</div>';
+    }
+
+    function row(k, v) {
+      if (v == null || v === '') return '';
+      return '<div class="row"><span class="k">' + esc(k) + '</span><span class="v">' + v + '</span></div>';
+    }
+    function fatal(msg) {
+      root.innerHTML = '<p class="fatal">' + esc(msg) + '</p>';
+    }
+
+    // --- header (shared) ---------------------------------------------------
+    function renderHeader(b) {
+      var h = '';
+      h += '<header class="kennel">';
+      h += '<h1>' + esc(b.kennelName || 'Your Update') + '</h1>';
+      if (b.tagline) h += '<p class="tagline">' + esc(b.tagline) + '</p>';
+      h += '</header>';
+
+      // Intro card: the intro text with the recipient's name prepended, plus the
+      // per-recipient personal message (companion_note) in the accent box when set.
+      var name = esc(b.familyName || b.partnerName || '');
+      var intro = '';
+      if (b.introText) intro += '<p class="intro">' + (name ? 'Hi ' + name + ' — ' : '') + esc(b.introText) + '</p>';
+      else if (name) intro += '<p class="intro">Hi ' + name + '</p>';
+      if (b.personalNote) intro += '<div class="announcement">' + esc(b.personalNote) + '</div>';
+      if (intro) h += '<div class="card">' + intro + '</div>';
+
+      // Announcement card: the broadcast line in its own card — shown alongside the
+      // personal note above, never overridden by it.
+      if (b.announcement) h += '<div class="card"><p class="intro" style="margin-top:0;">' + esc(b.announcement) + '</p></div>';
+      return h;
+    }
+    function renderUpdated(b) {
+      return b.updatedAt ? '<p class="updated">Snapshot as of ' + esc(fmtDate(b.updatedAt)) + ' · not a live view</p>' : '';
+    }
+    // Footer: the per-type closer (sign-off) card, then the snapshot date. Every
+    // package ends with renderFooter so the closer always sits just above the date.
+    function renderFooter(b) {
+      var h = '';
+      if (b.closer) h += '<div class="card"><p class="intro" style="margin:0;">' + esc(b.closer) + '</p></div>';
+      return h + renderUpdated(b);
+    }
+
+    // --- prospective -------------------------------------------------------
+    function renderProspective(b) {
+      var h = renderHeader(b);
+      var litters = Array.isArray(b.litters) ? b.litters : [];
+      // Legacy links carry a flat availablePups list; new links nest pups inside
+      // each litter. Fall back to the old flat layout when no litter has pups.
+      if (Array.isArray(b.availablePups)) return h + renderProspectiveLegacy(b, litters);
+
+      if (!litters.length) {
+        h += '<div class="card"><p class="empty">No puppies are marked available at the moment.</p></div>';
+        return h + renderFooter(b);
+      }
+
+      for (var j = 0; j < litters.length; j++) {
+        var l = litters[j];
+        var title = l.nickname ? '“' + esc(l.nickname) + '” Litter' : (l.breed ? esc(l.breed) + ' Litter' : 'Litter');
+        h += '<div class="card"><h2>' + title + '</h2>';
+        if (l.breed) h += '<span class="chip">' + esc(l.breed) + '</span>';
+        var meta = '';
+        meta += row('Born', l.whelpDate ? esc(fmtDate(l.whelpDate)) : '');
+        meta += row('Accepting deposits', l.acceptDepositsDate ? esc(fmtDate(l.acceptDepositsDate)) : '');
+        meta += row('Estimated ready', l.readyDate ? esc(fmtDate(l.readyDate)) : '');
+        // Owner/breeder kennel — present only on a foster litter when the owner
+        // opted to reveal it (additive field; older bundles simply omit it).
+        meta += row('Bred by', l.breederKennel ? esc(l.breederKennel) : '');
+        if (meta) h += '<div style="margin-top:8px;">' + meta + '</div>';
+        if (l.readyDate) h += '<p class="disclaimer">*' + esc(READY_DISCLAIMER) + '</p>';
+
+        if (l.sire || l.dam) {
+          h += '<div class="parents">';
+          h += renderDogCard('Sire', l.sire, 'See photos here');
+          h += renderDogCard('Dam', l.dam, 'See photos here');
+          h += '</div>';
+        }
+
+        var pups = Array.isArray(l.pups) ? l.pups : [];
+        if (pups.length) {
+          h += '<div style="margin-top:14px;"><div class="subhead">Available puppies</div>';
+          var anyMoney = false;
+          for (var i = 0; i < pups.length; i++) {
+            var p = pups[i];
+            h += '<div class="pup">';
+            h += '<div class="pname">' + esc(sexLabel(p.sex)) + ' ' + (p.callName ? esc(p.callName) : 'Puppy') + (p.markings ? ' <span class="chip">' + esc(p.markings) + '</span>' : '') + '</div>';
+            var pm = '';
+            pm += row('Price', money(p.price) ? esc(money(p.price)) : '');
+            pm += row('Deposit', money(p.deposit) ? esc(money(p.deposit)) : '');
+            if (pm) { h += pm; anyMoney = true; }
+            h += '</div>';
+          }
+          // The deposit disclaimer only reads as coherent when a price/deposit is
+          // actually shown — omit it when the owner has turned pricing off.
+          if (anyMoney) h += '<p class="disclaimer">' + esc(DEPOSIT_DISCLAIMER) + '</p>';
+          h += '</div>';
+        }
+        h += '</div>';
+      }
+      h += renderFooter(b);
+      return h;
+    }
+
+    // Legacy prospective layout (bundleVersion 1 links sent before the packages
+    // enhancement): flat availablePups + a flat litters list.
+    function renderProspectiveLegacy(b, litters) {
+      var h = '<div class="card"><h2>Available puppies</h2>';
+      var pups = Array.isArray(b.availablePups) ? b.availablePups : [];
+      if (!pups.length) h += '<p class="empty">No puppies are marked available at the moment.</p>';
+      else {
+        h += '<ul class="clean">';
+        for (var i = 0; i < pups.length; i++) {
+          var p = pups[i];
+          h += '<li><strong>' + esc(p.name) + '</strong> ' + esc(sexLabel(p.sex)) + (p.breed ? ' <span class="chip">' + esc(p.breed) + '</span>' : '') + '</li>';
+        }
+        h += '</ul>';
+      }
+      h += '</div>';
+      if (litters.length) {
+        h += '<div class="card"><h2>Litters</h2><ul class="clean">';
+        for (var j = 0; j < litters.length; j++) {
+          var l = litters[j];
+          var label = l.whelpDate ? 'Born ' + esc(fmtDate(l.whelpDate)) : 'Litter';
+          h += '<li>' + label + (l.availableCount != null ? ' <span class="chip">' + esc(l.availableCount) + ' available</span>' : '') + '</li>';
+        }
+        h += '</ul></div>';
+      }
+      return h + renderFooter(b);
+    }
+
+    // --- family ------------------------------------------------------------
+    var FAMILY_EVENT_LABELS = {
+      vaccination: 'Vaccinations', preventative: 'Preventatives',
+      weight_check: 'Weight checks', milestone: 'Milestones', note: 'Notes'
+    };
+
+    function renderContractLinks(b) {
+      // New links carry rich contract objects ({signedDate, documentUrl}); legacy
+      // links carry a flat contractUrls list. Prefer the rich form when present.
+      if (Array.isArray(b.contracts)) {
+        if (!b.contracts.length) return '';
+        var h = '<div class="card"><h2>Your contract</h2>';
+        for (var i = 0; i < b.contracts.length; i++) {
+          var c = b.contracts[i];
+          h += '<div style="padding:10px 0; border-top:1px solid var(--border);">';
+          h += row('Signed', c.signedDate ? esc(fmtDate(c.signedDate)) : 'Not Signed');
+          if (c.documentUrl) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(c.documentUrl) + '" target="_blank" rel="noopener noreferrer">View/sign contract here →</a></p>';
+          h += '</div>';
+        }
+        return h + '</div>';
+      }
+      var urls = Array.isArray(b.contractUrls) ? b.contractUrls : [];
+      if (!urls.length) return '';
+      var h2 = '<div class="card"><h2>Your contract</h2>';
+      for (var u = 0; u < urls.length; u++) {
+        h2 += '<p><a class="doc" href="' + esc(urls[u]) + '" target="_blank" rel="noopener noreferrer">View your signed contract →</a></p>';
+      }
+      return h2 + '</div>';
+    }
+
+    function renderFamily(b) {
+      var h = renderHeader(b);
+      var pups = Array.isArray(b.pups) ? b.pups : [];
+      // Legacy links carry {name, breed, sex} pups + flat litters/pickup/vet
+      // lists; new links carry rich per-pup cards. Fall back when none is rich.
+      var isNew = pups.some(function (p) { return has(p, 'callName'); });
+      if (!isNew) return h + renderFamilyLegacy(b, pups);
+
+      if (!pups.length) {
+        h += '<div class="card"><p class="empty">No puppies linked yet.</p></div>';
+        return h + renderFooter(b);
+      }
+
+      // Age was computed as-of the generation date (the day portion of
+      // updatedAt), so show that same date — not the full timestamp.
+      var asOf = b.updatedAt ? fmtDate(String(b.updatedAt).slice(0, 10)) : '';
+      for (var i = 0; i < pups.length; i++) {
+        var p = pups[i];
+        h += '<div class="card">';
+        h += '<h2>' + esc(sexLabel(p.sex)) + ' ' + (p.callName ? esc(p.callName) : 'Your puppy') + '</h2>';
+        if (p.litterNickname) h += '<p class="subhead">From the ' + esc(p.litterNickname) + ' litter</p>';
+        // Owner/breeder kennel — present only for a foster-litter pup the owner
+        // opted to reveal (additive; older bundles omit it).
+        if (p.breederKennel) h += '<p class="subhead">Bred by ' + esc(p.breederKennel) + '</p>';
+
+        var sireCall = p.sire && p.sire.callName ? esc(p.sire.callName) : '';
+        var damCall = p.dam && p.dam.callName ? esc(p.dam.callName) : '';
+        if (sireCall || damCall) {
+          h += '<p class="subhead">Sire ' + (sireCall ? '“' + sireCall + '”' : '—') + ' × Dam ' + (damCall ? '“' + damCall + '”' : '—') + '</p>';
+        }
+        if (p.photosUrl) h += '<p><a class="doc" href="' + esc(p.photosUrl) + '" target="_blank" rel="noopener noreferrer">View pictures here →</a></p>';
+
+        if (p.age && p.age.ageWeeks != null) {
+          h += '<p class="intro" style="margin:8px 0 0;">As of ' + esc(asOf) + ', your puppy is ' + esc(p.age.ageWeeks) + ' weeks, ' + esc(p.age.ageDays) + ' days.</p>';
+        }
+
+        var ready = '';
+        if (p.placement) {
+          ready += row('Ready / drop-off', p.placement.date ? esc(fmtDate(p.placement.date)) : '');
+          ready += row('Time', p.placement.time ? esc(p.placement.time) : '');
+          ready += row('Method', p.placement.method ? esc(p.placement.method) : '');
+        } else if (p.estimatedReadyDate) {
+          ready += row('Estimated ready date', esc(fmtDate(p.estimatedReadyDate)));
+        }
+        if (ready) {
+          h += '<div style="margin-top:10px;">' + ready + '</div>';
+          h += '<p class="disclaimer">*' + esc(READY_DISCLAIMER) + '</p>';
+        }
+
+        var facts = '';
+        facts += row('Placement type', p.placementType ? esc(labelFor(PLACEMENT_LABELS, p.placementType)) : '');
+        facts += row('Status', p.saleStatus ? esc(labelFor(SALE_STATUS_LABELS, p.saleStatus)) : '');
+        facts += row('Price', money(p.price) ? esc(money(p.price)) : '');
+        facts += row('Deposit', money(p.deposit) ? esc(money(p.deposit)) : '');
+        if (p.transportFee != null && p.transportFee !== '') facts += row('Transport fee', esc(money(p.transportFee)));
+        if (p.deferredPickup) {
+          // Big value = computed total; small sub-line = the rate breakdown
+          // ("$20.00 per Week × 2") straight from the sale.
+          var dp = p.deferredPickup;
+          var sub = esc(money(dp.amount));
+          if (dp.frequency) sub += ' per ' + esc(dp.frequency);
+          if (dp.duration) sub += ' × ' + esc(dp.duration);
+          facts += '<div class="row"><span class="k">Deferred pickup</span><span class="v">' + esc(money(dp.total)) + '<span class="subnote">' + sub + '</span></span></div>';
+        }
+        facts += row('Remaining balance', money(p.remainingBalance) ? esc(money(p.remainingBalance)) : '');
+        if (p.balanceDueDate) facts += row('Balance due', esc(fmtDate(p.balanceDueDate)));
+        if (facts) h += '<div style="margin-top:10px;">' + facts + '</div>';
+
+        var sections = Array.isArray(p.eventSections) ? p.eventSections : [];
+        for (var s = 0; s < sections.length; s++) {
+          var sec = sections[s];
+          var items = Array.isArray(sec.items) ? sec.items : [];
+          if (!items.length) continue;
+          // Deferred Pickup Boarding — scheduled date ranges, not dated log entries.
+          if (sec.type === 'deferred_pickup_boarding') {
+            h += '<div class="evt-group"><h3>Deferred Pickup Boarding</h3><ul class="clean">';
+            for (var bi = 0; bi < items.length; bi++) {
+              var bev = items[bi];
+              var range = esc(fmtDate(bev.startDate));
+              if (bev.endDate) range += '–' + esc(fmtDate(bev.endDate));
+              h += '<li><span class="k">Scheduled Dates</span> ' + range + '</li>';
+            }
+            h += '</ul></div>';
+            continue;
+          }
+          h += '<div class="evt-group"><h3>' + esc(FAMILY_EVENT_LABELS[sec.type] || String(sec.type).replace(/_/g, ' ')) + '</h3><ul class="clean">';
+          for (var it = 0; it < items.length; it++) {
+            var e = items[it];
+            var main = e.title || e.detail || '';
+            var extra = e.title && e.detail ? ' — ' + esc(e.detail) : '';
+            h += '<li><span class="k">' + esc(fmtDate(e.date)) + '</span> ' + esc(main) + extra + '</li>';
+          }
+          h += '</ul></div>';
+        }
+        h += '</div>';
+      }
+
+      h += renderContractLinks(b);
+      h += renderFooter(b);
+      return h;
+    }
+
+    // Legacy family layout (links sent before the packages enhancement).
+    function renderFamilyLegacy(b, pups) {
+      var h = '<div class="card"><h2>Your puppies</h2>';
+      if (!pups.length) h += '<p class="empty">No puppies linked yet.</p>';
+      else {
+        h += '<ul class="clean">';
+        for (var i = 0; i < pups.length; i++) {
+          var p = pups[i];
+          h += '<li><strong>' + esc(p.name) + '</strong> ' + esc(sexLabel(p.sex)) + (p.breed ? ' <span class="chip">' + esc(p.breed) + '</span>' : '') + '</li>';
+        }
+        h += '</ul>';
+      }
+      var litters = Array.isArray(b.litters) ? b.litters : [];
+      for (var j = 0; j < litters.length; j++) {
+        if (litters[j].whelpDate) h += '<p class="intro" style="margin:8px 0 0;">Born ' + esc(fmtDate(litters[j].whelpDate)) + '</p>';
+      }
+      var pickups = Array.isArray(b.pickupDates) ? b.pickupDates : [];
+      if (pickups.length) {
+        h += '<div style="margin-top:10px;">';
+        for (var k = 0; k < pickups.length; k++) h += row('Pick-up', esc(fmtDate(pickups[k])));
+        h += '</div>';
+      }
+      h += '</div>';
+
+      var visits = Array.isArray(b.vetVisits) ? b.vetVisits : [];
+      if (visits.length) {
+        h += '<div class="card"><h2>Health record</h2><ul class="clean">';
+        for (var v = 0; v < visits.length; v++) {
+          h += '<li><span class="k">' + esc(fmtDate(visits[v].date)) + '</span> — ' + esc(visits[v].label) + '</li>';
+        }
+        h += '</ul></div>';
+      }
+      h += renderContractLinks(b);
+      return h + renderFooter(b);
+    }
+
+    // --- partner -----------------------------------------------------------
+    function pairLabel(a, b2) {
+      var an = a && a.name ? esc(a.name) : '—';
+      var bn = b2 && b2.name ? esc(b2.name) : '—';
+      return an + ' × ' + bn;
+    }
+    function renderPartner(b) {
+      var h = renderHeader(b);
+      var services = Array.isArray(b.studServices) ? b.studServices : [];
+      if (services.length) {
+        h += '<div class="card"><h2>Stud services</h2>';
+        for (var i = 0; i < services.length; i++) {
+          var s = services[i];
+          h += '<div style="padding:12px 0; border-top:1px solid var(--border);">';
+          // New links carry dogCards (Stud/Dam labeled blocks with tests); legacy
+          // links carry flat minis — fall back to the pair label.
+          if (has(s.studDog, 'callName') || has(s.damDog, 'callName')) {
+            h += '<div class="parents" style="margin-top:0;">';
+            h += renderDogCard('Stud', s.studDog, 'See photos here');
+            h += renderDogCard('Dam', s.damDog, 'See photos here');
+            h += '</div>';
+          } else if (s.studDog || s.damDog) {
+            // Legacy flat minis (carry a .name); new bundles null both cards when
+            // the owner hides dog profiles, so render nothing in that case.
+            h += '<div style="font-weight:600;">' + pairLabel(s.studDog, s.damDog) + '</div>';
+          }
+          // Agreement Details — directly under the dog info. Type, the Begins/Ends
+          // window, the fee terms, and (conditionally) the fee amount and/or pick
+          // status depending on which the fee structure includes.
+          var comp = s.compensation || {};
+          var ad = '';
+          if (s.type) ad += row('Type', esc(labelFor(STUD_TYPE_LABELS, s.type)));
+          if (comp.sentDate) ad += row('Begins', esc(fmtDate(comp.sentDate)));
+          if (comp.returnedDate) ad += row('Ends', esc(fmtDate(comp.returnedDate)));
+          if (comp.fee_structure) ad += row('Terms', esc(FEE_LABELS[comp.fee_structure] || comp.fee_structure));
+          if (FEE_HAS_FLAT[comp.fee_structure] && comp.fee_amount != null) ad += row('Fee amount', esc(money(comp.fee_amount)));
+          if (FEE_HAS_PICK[comp.fee_structure] && comp.pick_status) ad += row('Pick status', esc(comp.pick_status));
+          if (ad) h += '<div class="section-label">Agreement Details</div>' + ad;
+
+          // Contract — signed date (or "Not Signed") + a view/sign link.
+          if (s.contract) {
+            h += '<div class="section-label">Contract</div>';
+            h += row('Signed', s.contract.signedDate ? esc(fmtDate(s.contract.signedDate)) : 'Not Signed');
+            if (s.contract.documentUrl) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(s.contract.documentUrl) + '" target="_blank" rel="noopener noreferrer">View/sign contract here →</a></p>';
+          }
+          h += '</div>';
+        }
+        h += '</div>';
+      }
+
+      var contracts = Array.isArray(b.contracts) ? b.contracts : [];
+      if (contracts.length) {
+        // Section heading follows the contents: a single-type card reads as its
+        // type ("Lease agreement" / "Co-ownership"); a mixed card stays "Contracts".
+        var only = null, mixed = false;
+        for (var t = 0; t < contracts.length; t++) {
+          if (only === null) only = contracts[t].type;
+          else if (only !== contracts[t].type) { mixed = true; break; }
+        }
+        var sectionTitle = (!mixed && CONTRACT_SECTION_LABELS[only]) ? CONTRACT_SECTION_LABELS[only] : 'Contracts';
+        h += '<div class="card"><h2>' + esc(sectionTitle) + '</h2>';
+        for (var c = 0; c < contracts.length; c++) {
+          var ct = contracts[c];
+          var title = ct.title || labelFor(CONTRACT_TYPE_LABELS, ct.type) || 'Contract';
+          h += '<div style="padding:10px 0; border-top:1px solid var(--border);">';
+          h += '<div><strong>' + esc(title) + '</strong>' + (ct.status ? ' <span class="chip">' + esc(String(ct.status).replace(/_/g, ' ')) + '</span>' : '') + '</div>';
+          // Type-specific rows: the leased/co-owned dog, and a lease's window.
+          var dn = dogLabel(ct.dog);
+          if (dn) h += row('Dog', esc(dn));
+          if (ct.type === 'lease') {
+            if (ct.startDate) h += row('Begins', esc(fmtDate(ct.startDate)));
+            if (ct.endDate) h += row('Ends', esc(fmtDate(ct.endDate)));
+          }
+          // signedDate is present only on new links; show "Not Signed" when null.
+          if (has(ct, 'signedDate')) h += row('Signed', ct.signedDate ? esc(fmtDate(ct.signedDate)) : 'Not Signed');
+          if (ct.terms) h += row('Terms', esc(ct.terms));
+          if (ct.document_url) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(ct.document_url) + '" target="_blank" rel="noopener noreferrer">View contract here →</a></p>';
+          h += '</div>';
+        }
+        h += '</div>';
+      }
+      h += renderFooter(b);
+      return h;
+    }
+
+    // --- decode + dispatch -------------------------------------------------
+    function decode() {
+      var hash = location.hash ? location.hash.slice(1) : '';
+      if (!hash) { fatal('This link is missing its data. Please ask for a fresh link.'); return; }
+      var json;
+      try {
+        json = LZString.decompressFromEncodedURIComponent(hash);
+      } catch (e) { json = null; }
+      if (!json) { fatal('This link could not be read — it may have been truncated. Please ask for a fresh link.'); return; }
+      var b;
+      try { b = JSON.parse(json); } catch (e) { fatal('This link could not be read. Please ask for a fresh link.'); return; }
+      if (!b || typeof b !== 'object') { fatal('This link could not be read. Please ask for a fresh link.'); return; }
+
+      // Backward-compat: render whatever bundleType we recognize; additive fields
+      // are simply ignored by the per-type renderers above, never a hard fail.
+      var html;
+      if (b.bundleType === 'prospective') html = renderProspective(b);
+      else if (b.bundleType === 'family') html = renderFamily(b);
+      else if (b.bundleType === 'partner') html = renderPartner(b);
+      else { fatal('This link is from a newer version than this page can show. Please ask for a fresh link.'); return; }
+
+      root.innerHTML = html;
+      if (b.kennelName) document.title = b.kennelName;
+    }
+
+    // Theme toggle — stamps data-theme so the viewer can flip light/dark.
+    document.getElementById('theme-toggle').addEventListener('click', function () {
+      var el = document.documentElement;
+      var cur = el.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark'
+        : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+      el.setAttribute('data-theme', next);
+    });
+
+    window.addEventListener('hashchange', decode);
+    decode();
+  })();
+  </script>
+</body>
+</html>

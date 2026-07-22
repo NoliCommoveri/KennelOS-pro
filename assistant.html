@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KennelAssistant</title>
+  <!--
+    assistant.html — the KennelAssistant shell: a deliberately tiny, standalone
+    sibling of the main app for a junior helper's phone. It shares the app's CSS,
+    vocab, and Dropbox client, but runs against its OWN small database
+    (data/assistantStore.js) that only ever holds the assistant feed — basic dog
+    info plus dog events. Contacts, sales, financials, and the rest of the main
+    database never reach this page or its device. No nav.js/app.js boot — this
+    page IS the whole assistant app.
+  -->
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="icon" href="assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelAssistant">
+</head>
+<body>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>🐾 KennelAssistant</h1>
+        <p class="page-subtitle">Sync in the dogs, log what you did, send it back.</p>
+      </div>
+    </div>
+
+    <div id="page-msg"></div>
+
+    <section class="card" id="connect-card" style="display:none;">
+      <h2 style="margin-top:0;">Connect to Dropbox</h2>
+      <p class="muted">Sign in with the kennel's Dropbox account to get the dog list and send back your updates.</p>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="dbx-connect">Connect Dropbox</button>
+      </div>
+    </section>
+
+    <section class="card" id="sync-card" style="display:none;">
+      <p class="muted" id="sync-status">—</p>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="btn-sync">⬇ Get latest dogs</button>
+        <button class="btn" id="btn-send" style="display:none;">⬆ Send my updates</button>
+      </div>
+    </section>
+
+    <section class="card" id="pending-card" style="display:none; margin-top:16px;">
+      <h2 style="margin-top:0;">Waiting to send</h2>
+      <div id="pending-list"></div>
+    </section>
+
+    <section class="card" id="dogs-card" style="display:none; margin-top:16px;">
+      <h2 style="margin-top:0;">Dogs</h2>
+      <p class="muted">Tap a dog to log something.</p>
+      <div id="dog-list"></div>
+    </section>
+  </main>
+
+  <script type="module" src="./assistant.js"></script>
+</body>
+</html>

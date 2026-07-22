@@ -1,0 +1,35 @@
+# ILLUSTRATIVE STARTER TEMPLATE - NOT VETERINARY GUIDANCE.
+# Health-testing recommendations change over time and vary by registry and region.
+# Before relying on any panel, verify against the authoritative source for your
+# breed: the OFA CHIC requirements (ofa.org) and your breed parent club.
+# This file is a convenience to copy, edit, and grow - never a standard of care.
+#
+# HOW TO USE: In the app, go to Import/Export -> Import Kennel Tests. Pick the
+# breed(s) you work with; only those rows are pulled into your kennel checklist.
+# Then uncheck any test you don't want. You are not expected to keep every test
+# for your breed - trim it to your own program.
+#
+# FORMAT: one row per (breed, test). The breed column only selects which rows you
+# import; it is not stored. Delete these comment lines first if your CSV tool does
+# not skip lines beginning with '#'.
+breed,test_name
+Boston Terrier,OFA Patella
+Boston Terrier,OFA Cardiac (Advanced)
+Boston Terrier,BAER Hearing
+Boston Terrier,Companion Animal Eye Exam (CAER)
+Boston Terrier,Juvenile Hereditary Cataract (DNA)
+Boston Terrier,Degenerative Myelopathy (DNA)
+Labrador Retriever,OFA Hips
+Labrador Retriever,OFA Elbows
+Labrador Retriever,Companion Animal Eye Exam (CAER)
+Labrador Retriever,Exercise-Induced Collapse (DNA)
+Labrador Retriever,PRA - prcd (DNA)
+Labrador Retriever,Centronuclear Myopathy (DNA)
+French Bulldog,OFA Patella
+French Bulldog,OFA Hips
+French Bulldog,OFA Cardiac
+French Bulldog,BAER Hearing
+French Bulldog,Companion Animal Eye Exam (CAER)
+French Bulldog,Tracheal Hypoplasia Screen
+French Bulldog,Juvenile Hereditary Cataract (DNA)
+French Bulldog,Degenerative Myelopathy (DNA)
