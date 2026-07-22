@@ -9,7 +9,8 @@
 //                        reload so the destination page's runWizardStep picks it up.
 //   "No thanks…"       → no sample data (declineSampleData), show backups/install,
 //                        then the New Kennel modal — a blank kennel of the user's own.
-import { shouldOfferFirstRunPrompt, seedSampleData, declineSampleData } from '../data/sampleData.js';
+import { shouldOfferFirstRunPrompt, declineSampleData } from '../data/sampleData.js';
+import { seedSampleData } from '../data/editionTour.js';
 import { startWizard } from '../data/wizardState.js';
 import { showKennelSetupModal } from './kennelSetupUI.js';
 

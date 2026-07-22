@@ -12,7 +12,7 @@ import {
   startWizard, advanceWizard, retreatWizard, dismissWizard,
   isIntroStep, HIGHLIGHT_STEPS
 } from '../data/wizardState.js';
-import { WIZARD_STEPS } from '../data/wizardSteps.js';
+import { WIZARD_STEPS } from '../data/editionTour.js';
 import { getSampleDataManifest } from '../data/settings.js';
 import { clearSampleData } from '../data/sampleData.js';
 import { showKennelSetupModal } from './kennelSetupUI.js';
@@ -163,7 +163,7 @@ function skip() {
 // the missing-target fallback for a highlight step (Back / Skip / Next).
 function mountCenteredCard(step) {
   const card = document.createElement('div');
-  card.className = 'wizard-card wizard-card-centered';
+  card.className = 'wizard-card wizard-card-centered' + (step.kind === 'pro-promo' ? ' wizard-card-promo' : '');
   card.innerHTML = cardInner(step);
   document.body.appendChild(card);
   mountedNodes.push(card);
@@ -240,7 +240,10 @@ function observeReflow(card, target, token) {
 // steps show the step counter and Back / Skip tour / Next (Finish on the last).
 function cardInner(step) {
   if (isIntroStep(step)) {
+    const eyebrow = step.kind === 'pro-promo'
+      ? '<div class="wizard-promo-eyebrow">✨ KennelOS Pro</div>' : '';
     return `
+      ${eyebrow}
       <h3 class="wizard-tooltip-title">${esc(step.title)}</h3>
       <div class="wizard-tooltip-body wizard-scroll">${esc(step.body)}</div>
       <div class="wizard-tooltip-actions">

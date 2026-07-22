@@ -3,7 +3,7 @@
 // split between state (here) and UI (assets/wizardUI.js). The step catalog itself
 // lives in the sibling data/wizardSteps.js — kept separate so this file stays a
 // handful of state functions, not buried under the (long, mechanical) step array.
-import { WIZARD_STEPS } from './wizardSteps.js';
+import { WIZARD_STEPS } from './editionTour.js';
 import {
   getWizardStatusRaw, setWizardStatusRaw,
   getWizardStepIndexRaw, setWizardStepIndexRaw,
@@ -30,10 +30,12 @@ export function currentStep() {
   return WIZARD_STEPS[getWizardStepIndex()] || null;
 }
 
-// An intro step (tour-intro / hub-intro) is a centered, page-agnostic card with a
-// single forward button; a highlight step spotlights a real element on its page.
+// A centered, page-agnostic card with a single forward button (as opposed to a
+// highlight step, which spotlights a real element on its page): the tour-intro,
+// each hub-intro, and — in the Lite tour — the 'pro-promo' upgrade cards. All
+// three render the same way and are excluded from the "Step n of N" count.
 export function isIntroStep(step) {
-  return step?.kind === 'tour-intro' || step?.kind === 'hub-intro';
+  return step?.kind === 'tour-intro' || step?.kind === 'hub-intro' || step?.kind === 'pro-promo';
 }
 
 // The highlight steps in order — used for the "Step n of N" counter, which counts

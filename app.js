@@ -12,7 +12,7 @@ import { maybeShowKennelSetupPrompt, renderKennelBanner } from './assets/kennelS
 import { renderWizardMenuEntry, runWizardStep } from './assets/wizardUI.js';
 import { runFirstRunOnboarding } from './assets/onboardingUI.js';
 import { isDemo, withSeedAllowed } from './data/demoMode.js';
-import { seedSampleData } from './data/sampleData.js';
+import { seedSampleData } from './data/editionTour.js';
 
 async function firstRunPersistence() {
   if (wasPersistRequested()) return;

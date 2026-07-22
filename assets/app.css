@@ -611,6 +611,11 @@ table.data tr.row-detail .dl-meta { margin: 0; }
   width: min(520px, calc(100vw - 24px));
   max-height: 80vh;
 }
+/* Lite's 'pro-promo' upgrade card (assets/wizardUI.js): a centered card with an
+   accent top edge and a small "KennelOS Pro" eyebrow, so the pitch reads as
+   intentional rather than a normal tour stop. */
+.wizard-card-promo { border-color: var(--accent); border-top: 3px solid var(--accent); }
+.wizard-promo-eyebrow { color: var(--accent-dark); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
 .wizard-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .wizard-step-count { color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .wizard-tooltip-title { margin: 4px 0 8px; }
