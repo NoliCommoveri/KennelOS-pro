@@ -4,13 +4,15 @@
 // Imports here resolve relative to THIS module's URL (the app root), so they are
 // correct no matter which page (root or /pages/) pulls app.js in.
 import { renderNav } from './nav.js';
-import { requestPersistentStorage } from './data/db.js';
+import { db, requestPersistentStorage } from './data/db.js';
 import { wasPersistRequested, markPersistRequested } from './data/settings.js';
 import { expenseRepo } from './data/expenseRepo.js';
 import { renderSampleBanner } from './assets/sampleDataUI.js';
 import { maybeShowKennelSetupPrompt, renderKennelBanner } from './assets/kennelSetupUI.js';
 import { renderWizardMenuEntry, runWizardStep } from './assets/wizardUI.js';
 import { runFirstRunOnboarding } from './assets/onboardingUI.js';
+import { isDemo, withSeedAllowed } from './data/demoMode.js';
+import { seedSampleData } from './data/sampleData.js';
 
 async function firstRunPersistence() {
   if (wasPersistRequested()) return;
@@ -37,7 +39,49 @@ async function firstRunFlow() {
   if (!handled) maybeShowKennelSetupPrompt();
 }
 
-function boot() {
+// --- Demo edition (editions plan §"The Demo edition") ----------------------
+// Auto-seed on load: the demo is a seeded, read-only showcase. Seed only when the
+// DB is empty — every write is blocked in demo (demoMode.js), so once seeded it
+// stays pristine across visits without re-wiping. On a genuinely empty load we
+// seed (through the same repo layer real data uses, via the seed window) and then
+// reload so the page scripts render against the seeded DB instead of an empty
+// first paint. A sessionStorage guard caps this at one seed+reload per session,
+// so a persistence hiccup can never spin a reload loop. Returns true if a reload
+// is in flight (boot then skips rendering this doomed paint).
+async function ensureDemoSeed() {
+  const KEY = 'kennelos-demo-seed-attempted';
+  if (sessionStorage.getItem(KEY)) return false;
+  if ((await db.dogs.count()) > 0) return false; // already seeded from a prior visit
+  sessionStorage.setItem(KEY, '1');
+  await withSeedAllowed(() => seedSampleData());
+  location.reload();
+  return true;
+}
+
+// A persistent "this is a read-only demo" strip at the top of every page, so a
+// blocked write is expected, not a surprise. Rendered only in the demo build.
+function renderDemoBanner() {
+  const bar = document.createElement('div');
+  bar.className = 'demo-banner';
+  bar.setAttribute('role', 'status');
+  bar.innerHTML = "🔒 <strong>Demo</strong> — a read-only tour with sample data. Changes aren't saved.";
+  document.body.insertBefore(bar, document.body.firstChild);
+}
+
+async function boot() {
+  // Demo: seed-then-(maybe)-reload before anything renders, then show the full
+  // app read-only. It deliberately skips the first-run / kennel-setup / sample-
+  // data UI — the demo is always seeded and never prompts the visitor to set up.
+  if (isDemo()) {
+    let reloading = false;
+    try { reloading = await ensureDemoSeed(); } catch (e) { console.warn('KennelOS: demo seed failed', e); }
+    if (reloading) return;
+    renderNav();
+    registerServiceWorker();
+    renderDemoBanner();
+    return;
+  }
+
   renderNav();
   registerServiceWorker();
   firstRunPersistence();

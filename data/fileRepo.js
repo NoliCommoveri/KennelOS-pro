@@ -4,11 +4,15 @@
 // reach here, so viewing/downloading a document treats every file identically
 // regardless of whether it started as an upload or a camera capture.
 import { db } from './db.js';
+import { assertWritable } from './demoMode.js';
 
+// fileRepo bypasses repoBase (it stores blobs, not the standard record shape), so
+// it carries the demo write-guard itself — same lever as the entity repos.
 export const fileRepo = {
   // blob: the PDF bytes. opts.thumbnail: a data-URL, present for photo-sourced
   // docs (blank for uploaded PDFs, which show a doc-type icon instead).
   async create(blob, { filename = '', thumbnail = '' } = {}) {
+    assertWritable(); // Demo edition: file writes are a no-op (throws)
     const id = crypto.randomUUID();
     await db.files.put({
       id,
@@ -40,6 +44,7 @@ export const fileRepo = {
   },
 
   async remove(id) {
+    assertWritable();
     if (id) await db.files.delete(id);
   },
 
@@ -53,6 +58,7 @@ export const fileRepo = {
   // Restore only — upserts a full row as-is (id, blob, mime, filename, size,
   // thumbnail, created_at).
   async putRaw(record) {
+    assertWritable(); // restore path; never runs in demo (import is stripped there)
     await db.files.put(record);
   }
 };

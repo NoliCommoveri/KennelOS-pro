@@ -6,6 +6,7 @@
 // as later stages add tables — no hardcoded table list (Data Model doc §9).
 import { db } from './db.js';
 import { setLastBackupDate } from './settings.js';
+import { assertWritable } from './demoMode.js';
 
 // Bumped only when the on-disk backup shape changes in a way that needs a
 // migration. Tied to the Dexie schema version so an older file can be detected.
@@ -133,6 +134,8 @@ export function inspectBackup(obj) {
 //   mode 'merge'   — upsert the file's rows by id, leaving other records intact.
 // Unknown collections (tables not in this schema version) are skipped, not an error.
 export async function restoreBackup(obj, mode) {
+  assertWritable(); // restore is a full-DB write — inert in demo (defense-in-depth;
+                    // the Import/Export page is also excluded from the demo build)
   inspectBackup(obj);
   const known = new Set(db.tables.map((t) => t.name));
   const entries = Object.entries(obj.collections).filter(([name]) => known.has(name));

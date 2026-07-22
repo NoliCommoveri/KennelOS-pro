@@ -11,6 +11,10 @@
 // this renderer stays edition-agnostic. Aliased to the original names to keep
 // the rest of this file unchanged.
 import { navItems as NAV_ITEMS, moreItems as MORE_ITEMS } from './data/editionConfig.js';
+// Lite's outbound "See the full app ↗" / "Upgrade to Pro →" links live at the
+// foot of the More menu (and on Today). Edition-agnostic: no-ops in Pro/Demo,
+// where hasEditionLinks() is false (editions plan §"In-Lite links to Demo/Pro").
+import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from './assets/editionLinks.js';
 
 // Pages live one directory deep (/pages/*.html); index.html sits at the app root.
 // Links are stored app-root-relative and prefixed at render time so they resolve
@@ -56,6 +60,9 @@ export function renderNav(targetId = 'app-nav') {
     const active = isActive(item, here) ? ' active' : '';
     return `<a class="nav-link${active}" href="${prefix}${item.path}">${item.label}</a>`;
   }).join('');
+  // Lite appends its outbound edition links to the bottom of the menu; Pro/Demo
+  // add nothing (hasEditionLinks() false).
+  const editionExtra = hasEditionLinks() ? editionLinksHtml({ variant: 'nav' }) : '';
 
   host.innerHTML = `
     <nav class="nav-inner">
@@ -65,13 +72,14 @@ export function renderNav(targetId = 'app-nav') {
         ${links}
         <div class="nav-more">
           <button type="button" class="nav-link nav-more-btn${moreActive}" aria-haspopup="true" aria-expanded="false">More ▾</button>
-          <div class="nav-more-menu">${moreLinks}</div>
+          <div class="nav-more-menu">${moreLinks}${editionExtra}</div>
         </div>
       </div>
     </nav>`;
 
   wireToggle(host);
   wireMoreMenu(host);
+  wireEditionLinks(host);
 }
 
 // Hamburger toggle for narrow (phone) widths: reveals the stacked links. On wide

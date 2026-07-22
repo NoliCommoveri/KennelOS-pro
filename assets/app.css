@@ -402,6 +402,37 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 .upgrade-nudge-detail { font-size: 13px; margin-top: 3px; color: var(--text); }
 .upgrade-nudge .btn-primary { flex: 0 0 auto; }
 
+/* Lite's outbound edition links (editionLinks.js) — "See the full app ↗" /
+   "Upgrade to Pro →". Two renders: as items at the foot of the nav More menu,
+   and as a footer on Today. Absent in Pro/Demo (nothing rendered). */
+/* In the (dark) More menu: a divider, then the links styled as menu entries.
+   The Upgrade CTA is a <button>, so reset it to match the anchor menu items. */
+.edition-links-nav { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.14); }
+.nav-more-menu .edition-link { display: block; padding: 8px 10px; width: 100%; text-align: left; }
+.edition-link-upgrade { background: none; border: 0; font: inherit; cursor: pointer; }
+.edition-links-nav .edition-link-upgrade { color: #ffd88a; font-weight: 600; }
+.edition-links-nav .edition-links-note { margin: 4px 10px 0; font-size: 12px; color: #d7e6de; }
+
+/* Demo edition read-only banner (app.js renderDemoBanner) — a persistent strip
+   at the very top of every page so a blocked write is expected, not a surprise. */
+.demo-banner {
+  background: #3a2a12;
+  color: #ffe6b0;
+  border-bottom: 1px solid #5a441d;
+  text-align: center;
+  padding: 7px 16px;
+  font-size: 13px;
+}
+.demo-banner strong { color: #fff; }
+
+/* On Today: a centered footer strip below the last card. */
+.edition-footer:empty { display: none; }
+.edition-footer { max-width: var(--maxw); margin: 0 auto; padding: 8px 16px 48px; }
+.edition-links-footer { text-align: center; border-top: 1px solid var(--border); padding-top: 20px; }
+.edition-links-lead { margin: 0 0 12px; color: var(--text-muted); }
+.edition-links-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.edition-links-footer .edition-links-note { margin: 12px 0 0; font-size: 13px; color: var(--text-muted); }
+
 /* A departed (archived) dog reference that renders as plain text, not a link
    (Lite — cap spec §7). Kept visually like body text so lineage still reads. */
 .dog-name-static { color: var(--text); }

@@ -12,6 +12,10 @@ export const edition = 'pro';
 // read-only showcase). Exported so shared code that reads it always resolves.
 export const upgradeUrl = null;
 
+// No outbound edition links from Pro (Lite is the hub that links out). Null so
+// hasEditionLinks() is false and the nav/Today footer render nothing.
+export const demoUrl = null;
+
 export async function enforceDogCap(/* { candidate, existing, id } */) {
   // no-op: Pro is unlimited.
 }

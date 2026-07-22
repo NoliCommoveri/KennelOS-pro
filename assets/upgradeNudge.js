@@ -5,14 +5,12 @@
 // raw error — with the "Upgrade to Pro →" CTA wired to the export→checkout→
 // import bridge (editions plan §"Converting Lite → Pro").
 //
-// This is shared code, so it must stay edition-agnostic: it reads the upgrade
-// target from editionConfig (null in Pro/Demo, where this nudge never renders
-// anyway because their cap hooks are no-ops). The one CTA click runs the real
-// first step of the bridge — trigger the existing JSON backup export — before
-// sending the owner to checkout, so their data is in Downloads before they leave.
+// This is shared code, so it must stay edition-agnostic. The one CTA click runs
+// the shared export-first bridge (runUpgradeBridge in editionLinks.js) — trigger
+// the existing JSON backup export, then send the owner to checkout — so this
+// nudge and Lite's standing "Upgrade to Pro →" links run the identical sequence.
 import { esc } from './ui.js';
-import { upgradeUrl } from '../data/editionConfig.js';
-import { downloadBackup } from '../data/importExport.js';
+import { runUpgradeBridge } from './editionLinks.js';
 
 // Human wording per the CapExceededError's kind + the caller's context.
 //   err.kind === 'dogs'    → context 'create' (adding an adult) | 'mature' (a kept
@@ -55,8 +53,16 @@ export function renderUpgradeNudge(container, err, context = 'create') {
     cta.disabled = true;
     cta.textContent = 'Exporting your backup…';
     try {
-      // Step 1 of the bridge: get the owner's data into Downloads before they go.
-      await downloadBackup();
+      // The bridge exports the owner's data into Downloads, then heads to checkout
+      // (which redirects into Pro post-purchase to import it). If no checkout URL
+      // is configured yet it returns 'exported' — leave them on the backup they
+      // just got, with a plain instruction.
+      const result = await runUpgradeBridge();
+      if (result === 'exported') {
+        cta.textContent = 'Backup exported ✓';
+        container.querySelector('.upgrade-nudge-detail').textContent =
+          'Backup exported. Continue to Pro and import this file to finish upgrading.';
+      }
     } catch (e) {
       // If the export somehow fails we still don't want to strand them mid-flow;
       // surface it and let them retry rather than silently sending them to buy.
@@ -64,17 +70,6 @@ export function renderUpgradeNudge(container, err, context = 'create') {
       cta.textContent = 'Upgrade to Pro →';
       container.querySelector('.upgrade-nudge-detail').textContent =
         `Couldn't export your backup (${e.message || e}). Try again before upgrading.`;
-      return;
-    }
-    // Step 2: off to checkout (which redirects into Pro post-purchase, where the
-    // owner imports the backup they just downloaded). No URL configured yet →
-    // leave them on the export they just got, with a plain instruction.
-    if (upgradeUrl) {
-      window.location.assign(upgradeUrl);
-    } else {
-      cta.textContent = 'Backup exported ✓';
-      container.querySelector('.upgrade-nudge-detail').textContent =
-        'Backup exported. Continue to Pro and import this file to finish upgrading.';
     }
   });
 }

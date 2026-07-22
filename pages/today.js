@@ -23,6 +23,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { EVENT_TYPES, DOG_STATUS, DISPOSITION } from '../data/vocab.js';
 import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
+import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/editionLinks.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { todayYMD, daysFromToday } from '../data/dateUtils.js';
 
@@ -35,6 +36,7 @@ const boardEl = document.getElementById('today-board');
 const availableEl = document.getElementById('today-available');
 const nudgesEl = document.getElementById('today-nudges');
 const overviewEl = document.getElementById('today-overview');
+const editionsEl = document.getElementById('today-editions');
 
 // Subject-resolution context, loaded once. Shared by every section.
 const ctx = { dogsById: new Map(), pairingsById: new Map(), littersById: new Map(), contactsById: new Map() };
@@ -378,7 +380,19 @@ function renderOverview({ allDogs, litters, pairings, sales }) {
       { key: 'this-year', isEmpty: yearLitters === 0 && yearPairings === 0 && yearSales === 0, marginTop: true });
 }
 
+// --- Edition footer (Lite only) --------------------------------------------
+// The "See the full app ↗" / "Upgrade to Pro →" links (editions plan §"In-Lite
+// links to Demo and Pro"). Edition-static, so it's rendered once up front and
+// never touches the loaded data. No-op in Pro/Demo (hasEditionLinks() false).
+function renderEditionFooter() {
+  if (!editionsEl || !hasEditionLinks()) return;
+  editionsEl.innerHTML = editionLinksHtml({ variant: 'footer' });
+  wireEditionLinks(editionsEl);
+}
+
 async function main() {
+  renderEditionFooter();
+
   const [allDogs, litters, pairings, sales, contacts, upcoming, boardRows] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: false }),

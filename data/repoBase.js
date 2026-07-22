@@ -6,6 +6,7 @@
 // only code that touches Dexie (see CLAUDE.md layering rule).
 import { db } from './db.js';
 import { findBlockingReferences } from './referenceRegistry.js';
+import { assertWritable } from './demoMode.js';
 
 export function newId() {
   return crypto.randomUUID();
@@ -64,6 +65,7 @@ export function makeRepo(tableName, references = null) {
     },
 
     async create(data) {
+      assertWritable(); // Demo edition: user writes are a friendly no-op (throws)
       const now = nowIso();
       const record = {
         ...data,
@@ -77,6 +79,7 @@ export function makeRepo(tableName, references = null) {
     },
 
     async update(id, changes) {
+      assertWritable(); // Demo: also covers archive()/unarchive(), which call update
       const existing = await table().get(id);
       if (!existing) throw new Error(`${tableName}: no record with id ${id}`);
       const record = {
@@ -110,6 +113,7 @@ export function makeRepo(tableName, references = null) {
     // Hard delete — the rare "fix a data-entry mistake" action. Blocked whenever
     // any reference exists (only archive is allowed then).
     async hardDelete(id) {
+      assertWritable(); // Demo: no destructive writes either
       if (references) {
         const blockers = await findBlockingReferences(references, id);
         if (blockers.length > 0) throw new ReferenceBlockedError(tableName, blockers);
