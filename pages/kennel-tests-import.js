@@ -12,6 +12,7 @@
 import { kennelRepo } from '../data/kennelRepo.js';
 import { ci, groupsFromFile, applySeedToKennel } from '../data/seedImport.js';
 import { esc } from '../assets/ui.js';
+import { renderBreedPicker } from '../assets/breedTestPicker.js';
 
 const root = document.getElementById('import-root');
 
@@ -78,7 +79,7 @@ function render() {
     <div class="card">
       <h2 style="margin-top:0;">1. Choose your kennel &amp; file</h2>
       ${targetPicker}
-      <p class="muted" style="margin-bottom:6px;">Pick a <code>breed,test_name</code> CSV. A starter file is bundled — <a href="../resources/common_tests_by_breed_seed.csv" download>download the sample</a> to edit and grow, or use your own.</p>
+      <p class="muted" style="margin-bottom:6px;">Pick a <code>Breed Group,breed,test_name</code> CSV. A starter file is bundled — <a href="../resources/common_tests_by_breed_seed.csv" download>download the sample</a> to edit and grow, or use your own.</p>
       <input type="file" id="seed-file" accept=".csv,text/csv"${state.targetId ? '' : ' disabled'}>
       ${state.targetId ? '' : '<p class="field-hint">Choose a kennel above to enable the file picker.</p>'}
     </div>
@@ -103,7 +104,7 @@ async function onFile(e) {
   state.result = null;
   try {
     state.groups = await groupsFromFile(file);
-    state.selected = new Set(state.groups.map((g) => g.key)); // default: all breeds checked
+    state.selected = new Set(); // nothing added until you search or browse a breed group
     state.fileName = file.name;
     if (!state.groups.length) {
       document.getElementById('seed-body').innerHTML = `<div class="card"><div class="inline-error">No usable rows found. The file needs a <code>breed</code> column and a <code>test_name</code> column.</div></div>`;
@@ -138,11 +139,27 @@ function renderBody() {
 
   if (!state.groups.length) { body.innerHTML = ''; return; }
 
-  const breedRows = state.groups.map((g) => `
-    <label class="check-inline" style="display:block; margin:5px 0;">
-      <input type="checkbox" data-breed="${esc(g.key)}"${state.selected.has(g.key) ? ' checked' : ''}>
-      <strong>${esc(g.display)}</strong> <span class="faint">— ${g.tests.length} test${g.tests.length === 1 ? '' : 's'}</span>
-    </label>`).join('');
+  body.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0;">2. Pick breeds — <span class="faint" style="font-weight:normal;">${esc(state.fileName)}</span></h2>
+      <p class="field-hint">Search for a breed or browse by breed group. Only the breeds checked below are pulled in — uncheck to skip one without losing your place, and prune individual tests later on the Kennels page.</p>
+      <div id="breed-picker-host"></div>
+    </div>
+    <div class="card" style="margin-top:16px;">
+      <h2 style="margin-top:0;">3. Preview &amp; import</h2>
+      <div id="seed-preview-host"></div>
+    </div>`;
+
+  // Mounted once per file load — renderPreview() (the onChange callback)
+  // only touches #seed-preview-host, so the picker's own search text/toast
+  // survive every selection change instead of being wiped by a full re-render.
+  renderBreedPicker(document.getElementById('breed-picker-host'), state.groups, state.selected, renderPreview);
+  renderPreview();
+}
+
+function renderPreview() {
+  const host = document.getElementById('seed-preview-host');
+  if (!host) return;
 
   const pv = computePreview();
   const anySelected = state.selected.size > 0;
@@ -150,29 +167,15 @@ function renderBody() {
     ? `<p class="muted">Will add <strong>${pv.testsNew.length}</strong> new test(s)${pv.breedsNew.length ? ` and <strong>${pv.breedsNew.length}</strong> new breed suggestion(s)` : ''}.
          ${(pv.testsDup.length || pv.breedsDup.length) ? `<span class="faint">Already present: ${pv.testsDup.length} test(s)${pv.breedsDup.length ? `, ${pv.breedsDup.length} breed(s)` : ''} (skipped).</span>` : ''}</p>
        ${pv.testsNew.length ? `<p class="field-hint">New tests: ${pv.testsNew.map((t) => esc(t)).join(', ')}.</p>` : ''}`
-    : `<p class="faint">Select at least one breed to import.</p>`;
+    : `<p class="faint">Add at least one breed above to import.</p>`;
 
-  body.innerHTML = `
-    <div class="card">
-      <h2 style="margin-top:0;">2. Pick breeds — <span class="faint" style="font-weight:normal;">${esc(state.fileName)}</span></h2>
-      <p class="field-hint">Only the breeds you check are pulled in. You can uncheck individual tests later on the Kennels page.</p>
-      <div>${breedRows}</div>
+  host.innerHTML = `
+    ${previewHtml}
+    <div class="form-actions">
+      <button class="btn btn-primary" id="seed-commit"${anySelected ? '' : ' disabled'}>Import to kennel</button>
     </div>
-    <div class="card" style="margin-top:16px;">
-      <h2 style="margin-top:0;">3. Preview &amp; import</h2>
-      ${previewHtml}
-      <div class="form-actions">
-        <button class="btn btn-primary" id="seed-commit"${anySelected ? '' : ' disabled'}>Import to kennel</button>
-      </div>
-      <div id="seed-msg"></div>
-    </div>`;
+    <div id="seed-msg"></div>`;
 
-  body.querySelectorAll('[data-breed]').forEach((cb) => {
-    cb.addEventListener('change', () => {
-      cb.checked ? state.selected.add(cb.dataset.breed) : state.selected.delete(cb.dataset.breed);
-      renderBody();
-    });
-  });
   const commit = document.getElementById('seed-commit');
   if (commit) commit.addEventListener('click', doCommit);
 }

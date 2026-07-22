@@ -156,8 +156,13 @@ function nudgeCard(k) {
       <p class="field-hint">Opt-in reminders to promote kept puppies to active breeding once they're old enough.</p>
       <div class="form-grid">
         <div class="field field-wide"><label class="check-inline"><input id="e-promote-enabled" type="checkbox"${k.promote_nudge_enabled ? ' checked' : ''}> Nudge me to promote kept puppies to active breeding once they're old enough</label></div>
-        <div class="field"><label>Promote age — males (months)</label><input id="e-promote-male" type="number" min="0" step="1" value="${esc(k.promote_age_male_months ?? 6)}"></div>
-        <div class="field"><label>Promote age — females (months)</label><input id="e-promote-female" type="number" min="0" step="1" value="${esc(k.promote_age_female_months ?? 12)}"></div>
+        <div class="field field-wide">
+          <label>Promote age (months)</label>
+          <div class="promote-age-row">
+            <div class="field"><label>Male</label><input id="e-promote-male" type="number" min="0" step="1" value="${esc(k.promote_age_male_months ?? 6)}"></div>
+            <div class="field"><label>Female</label><input id="e-promote-female" type="number" min="0" step="1" value="${esc(k.promote_age_female_months ?? 12)}"></div>
+          </div>
+        </div>
       </div>
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-nudges">Save</button></div>
     </section>`;
@@ -165,15 +170,37 @@ function nudgeCard(k) {
 
 // Preferred-tests editor (Test Planning Addendum §6.1). The checkbox list
 // reflects current panel membership; unchecking removes panel membership going
-// forward only, never the vocabulary token itself.
+// forward only, never the vocabulary token itself. Listed alphabetically; a
+// test pulled in via the breed-seed import shows the breed(s) that tagged it
+// in parentheses (kennelRepo.testBreedsFor) — that's what keeps two
+// same-named tests imported for different breeds reading as one unambiguous
+// row instead of looking like an accidental duplicate.
 function testsCard(k) {
-  const tests = k.preferred_tests || [];
+  const tests = [...(k.preferred_tests || [])].sort((a, b) => a.localeCompare(b));
   const checklist = tests.length
-    ? tests.map((t) => `
+    ? tests.map((t) => {
+        const breeds = kennelRepo.testBreedsFor(k, t);
+        const suffix = breeds.length ? ` <span class="faint">(${breeds.map((b) => esc(b)).join(', ')})</span>` : '';
+        return `
         <label class="check-inline" style="display:block; margin:4px 0;">
-          <input type="checkbox" data-remove-test="${esc(t)}" checked> ${esc(t)}
-        </label>`).join('')
+          <input type="checkbox" data-remove-test="${esc(t)}" checked> ${esc(t)}${suffix}
+        </label>`;
+      }).join('')
     : `<p class="faint" style="margin:4px 0;">No preferred tests yet.</p>`;
+  const breedOptions = [...(k.preferred_breeds || [])].sort((a, b) => a.localeCompare(b));
+  // Tagging a manually-typed test to breed(s) is optional (Test Planning
+  // Addendum §8) — leave every box unchecked and it stays breed-agnostic,
+  // same as before breed-scoping existed. Sourced from this kennel's own
+  // breed pool (preferred_breeds); hidden entirely if that pool is empty,
+  // since there'd be nothing to pick from.
+  const breedPicker = breedOptions.length
+    ? `<div class="field" style="margin-top:8px;">
+        <label>Tag to breed(s) <span class="faint" style="font-weight:normal;">— optional, leave unchecked to apply to every breed</span></label>
+        <div class="check-group">
+          ${breedOptions.map((b) => `<label class="check-inline"><input type="checkbox" data-tp-breed="${esc(b)}"> ${esc(b)}</label>`).join('')}
+        </div>
+      </div>`
+    : '';
   return `
     <section class="card">
       <h2 style="margin-top:0;">Preferred tests</h2>
@@ -184,6 +211,7 @@ function testsCard(k) {
           <input id="tp-new" type="text" placeholder="Type a test, then press Enter">
         </div>
       </div>
+      ${breedPicker}
       <div class="form-actions">
         <button class="btn btn-sm" data-act="tp-add">Add</button>
         <button class="btn btn-sm" data-act="tp-apply">Apply to dogs…</button>
@@ -192,9 +220,11 @@ function testsCard(k) {
     </section>`;
 }
 
-// "Apply to dogs" (Test Planning Addendum §5) — additive: adds every test
-// currently in the panel to each selected owned/co-owned dog's plan. Never
-// removes a test the breeder pruned from an individual dog; adding an
+// "Apply to dogs" (Test Planning Addendum §5) — additive: adds the panel's
+// tests to each selected owned/co-owned dog's plan, scoped per dog to its own
+// breed (kennelRepo.testsForBreed — a breed-tagged test only lands on a dog of
+// that breed; an untagged/breed-agnostic test lands on every dog, as before).
+// Never removes a test the breeder pruned from an individual dog; adding an
 // already-present token is a no-op.
 function applyToDogsPanel() {
   const eligible = allDogs.filter((d) => ['owned', 'co_owned'].includes(d.ownership_type));
@@ -247,8 +277,13 @@ async function addTest(inputEl) {
   const val = inputEl.value.trim();
   if (!val) return;
   clearError();
+  const breeds = [...els.config.querySelectorAll('[data-tp-breed]:checked')].map((cb) => cb.dataset.tpBreed);
   try {
-    await kennelRepo.addPreferredTest(kennel.id, val);
+    if (breeds.length) {
+      for (const breed of breeds) await kennelRepo.addPreferredTest(kennel.id, val, breed);
+    } else {
+      await kennelRepo.addPreferredTest(kennel.id, val);
+    }
     await reloadKennel();
     renderConfig();
   } catch (err) { showError(err.message || String(err)); }
@@ -259,7 +294,10 @@ async function onApplyConfirm() {
   if (!checked.length) return;
   clearError();
   try {
-    await Promise.all(checked.map((dogId) => dogRepo.addPlannedTests(dogId, kennel.preferred_tests || [])));
+    await Promise.all(checked.map((dogId) => {
+      const dog = allDogs.find((d) => d.id === dogId);
+      return dogRepo.addPlannedTests(dogId, kennelRepo.testsForBreed(kennel, dog?.breed));
+    }));
     applyOpen = false;
     renderConfig();
   } catch (err) { showError(err.message || String(err)); }

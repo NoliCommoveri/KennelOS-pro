@@ -9,27 +9,162 @@
 # Then uncheck any test you don't want. You are not expected to keep every test
 # for your breed - trim it to your own program.
 #
-# FORMAT: one row per (breed, test). The breed column only selects which rows you
-# import; it is not stored. Delete these comment lines first if your CSV tool does
-# not skip lines beginning with '#'.
-breed,test_name
-Boston Terrier,OFA Patella
-Boston Terrier,OFA Cardiac (Advanced)
-Boston Terrier,BAER Hearing
-Boston Terrier,Companion Animal Eye Exam (CAER)
-Boston Terrier,Juvenile Hereditary Cataract (DNA)
-Boston Terrier,Degenerative Myelopathy (DNA)
-Labrador Retriever,OFA Hips
-Labrador Retriever,OFA Elbows
-Labrador Retriever,Companion Animal Eye Exam (CAER)
-Labrador Retriever,Exercise-Induced Collapse (DNA)
-Labrador Retriever,PRA - prcd (DNA)
-Labrador Retriever,Centronuclear Myopathy (DNA)
-French Bulldog,OFA Patella
-French Bulldog,OFA Hips
-French Bulldog,OFA Cardiac
-French Bulldog,BAER Hearing
-French Bulldog,Companion Animal Eye Exam (CAER)
-French Bulldog,Tracheal Hypoplasia Screen
-French Bulldog,Juvenile Hereditary Cataract (DNA)
-French Bulldog,Degenerative Myelopathy (DNA)
+# FORMAT: one row per (breed group, breed, test). The breed column only selects
+# which rows you import; Breed Group is for sorting/filtering and is not stored.
+# Delete these comment lines first if your CSV tool does not skip lines
+# beginning with '#'.
+# NOTE: breeds added 2026-07-22 sourced from AKC's 2025 registration-based
+# popularity ranking (akc.org/most-popular-breeds). All 7 current AKC groups
+# (Herding, Hound, Non-Sporting, Sporting, Terrier, Toy, Working) have at
+# least 2 breeds represented.
+Breed Group,breed,test_name
+Herding,Australian Shepherd,OFA Hips
+Herding,Australian Shepherd,OFA Elbows
+Herding,Australian Shepherd,Companion Animal Eye Exam (CAER)
+Herding,Australian Shepherd,MDR1 (DNA)
+Herding,Australian Shepherd,Hereditary Cataract - HSF4 (DNA)
+Herding,Australian Shepherd,Collie Eye Anomaly (DNA)
+Herding,Border Collie,OFA Hips
+Herding,Border Collie,Companion Animal Eye Exam (CAER)
+Herding,Border Collie,Collie Eye Anomaly / CH (DNA)
+Herding,Border Collie,Trapped Neutrophil Syndrome (DNA)
+Herding,Border Collie,NCL (DNA)
+Herding,Border Collie,MDR1 (DNA)
+Herding,German Shepherd Dog,OFA Hips
+Herding,German Shepherd Dog,OFA Elbows
+Herding,German Shepherd Dog,Degenerative Myelopathy (DNA)
+Herding,German Shepherd Dog,OFA Cardiac
+Herding,German Shepherd Dog,Companion Animal Eye Exam (CAER)
+Herding,Pembroke Welsh Corgi,OFA Hips
+Herding,Pembroke Welsh Corgi,Degenerative Myelopathy (DNA)
+Herding,Pembroke Welsh Corgi,Companion Animal Eye Exam (CAER)
+Herding,Pembroke Welsh Corgi,OFA Cardiac
+Herding,Shetland Sheepdog,OFA Hips
+Herding,Shetland Sheepdog,Companion Animal Eye Exam (CAER)
+Herding,Shetland Sheepdog,Collie Eye Anomaly (DNA)
+Herding,Shetland Sheepdog,MDR1 (DNA)
+Herding,Shetland Sheepdog,von Willebrand Disease (DNA)
+Hound,Basset Hound,OFA Hips
+Hound,Basset Hound,Companion Animal Eye Exam (CAER)
+Hound,Basset Hound,OFA Patella
+Hound,Basset Hound,Thrombopathia (DNA)
+Hound,Beagle,OFA Hips
+Hound,Beagle,Companion Animal Eye Exam (CAER)
+Hound,Beagle,OFA Patella
+Hound,Beagle,Musladin-Lueke Syndrome (DNA)
+Hound,Beagle,Factor VII Deficiency (DNA)
+Hound,Dachshund,Companion Animal Eye Exam (CAER)
+Hound,Dachshund,OFA Patella
+Hound,Dachshund,OFA Cardiac
+Non-Sporting,Boston Terrier,OFA Patella
+Non-Sporting,Boston Terrier,OFA Cardiac (Advanced)
+Non-Sporting,Boston Terrier,BAER Hearing
+Non-Sporting,Boston Terrier,Companion Animal Eye Exam (CAER)
+Non-Sporting,Boston Terrier,Juvenile Hereditary Cataract (DNA)
+Non-Sporting,Boston Terrier,Degenerative Myelopathy (DNA)
+Non-Sporting,Bulldog,OFA Hips
+Non-Sporting,Bulldog,OFA Patella
+Non-Sporting,Bulldog,Tracheal Hypoplasia Screen
+Non-Sporting,Bulldog,OFA Cardiac
+Non-Sporting,Bulldog,BAER Hearing
+Non-Sporting,Bulldog,Companion Animal Eye Exam (CAER)
+Non-Sporting,French Bulldog,OFA Patella
+Non-Sporting,French Bulldog,OFA Hips
+Non-Sporting,French Bulldog,OFA Cardiac
+Non-Sporting,French Bulldog,BAER Hearing
+Non-Sporting,French Bulldog,Companion Animal Eye Exam (CAER)
+Non-Sporting,French Bulldog,Tracheal Hypoplasia Screen
+Non-Sporting,French Bulldog,Juvenile Hereditary Cataract (DNA)
+Non-Sporting,French Bulldog,Degenerative Myelopathy (DNA)
+Non-Sporting,Poodle (Standard),OFA Hips
+Non-Sporting,Poodle (Standard),Companion Animal Eye Exam (CAER)
+Non-Sporting,Poodle (Standard),Sebaceous Adenitis (Skin Biopsy)
+Non-Sporting,Poodle (Standard),von Willebrand Disease Type I (DNA)
+Non-Sporting,Poodle (Standard),Neonatal Encephalopathy (DNA)
+Non-Sporting,Poodle (Standard),OFA Thyroid
+Sporting,English Springer Spaniel,OFA Hips
+Sporting,English Springer Spaniel,OFA Elbows
+Sporting,English Springer Spaniel,Companion Animal Eye Exam (CAER)
+Sporting,English Springer Spaniel,OFA Thyroid
+Sporting,English Springer Spaniel,Phosphofructokinase Deficiency (DNA)
+Sporting,German Shorthaired Pointer,OFA Hips
+Sporting,German Shorthaired Pointer,OFA Elbows
+Sporting,German Shorthaired Pointer,OFA Cardiac
+Sporting,German Shorthaired Pointer,Companion Animal Eye Exam (CAER)
+Sporting,German Shorthaired Pointer,Cone Degeneration (DNA)
+Sporting,Golden Retriever,OFA Hips
+Sporting,Golden Retriever,OFA Elbows
+Sporting,Golden Retriever,OFA Cardiac
+Sporting,Golden Retriever,Companion Animal Eye Exam (CAER)
+Sporting,Golden Retriever,NCL (DNA)
+Sporting,Golden Retriever,Ichthyosis (DNA)
+Sporting,Golden Retriever,GR-PRA1 (DNA)
+Sporting,Labrador Retriever,OFA Hips
+Sporting,Labrador Retriever,OFA Elbows
+Sporting,Labrador Retriever,Companion Animal Eye Exam (CAER)
+Sporting,Labrador Retriever,Exercise-Induced Collapse (DNA)
+Sporting,Labrador Retriever,PRA - prcd (DNA)
+Sporting,Labrador Retriever,Centronuclear Myopathy (DNA)
+Terrier,Miniature Schnauzer,Companion Animal Eye Exam (CAER)
+Terrier,Miniature Schnauzer,OFA Cardiac
+Terrier,Miniature Schnauzer,Myotonia Congenita (DNA)
+Terrier,Miniature Schnauzer,Urinary Stone Risk Screen
+Terrier,West Highland White Terrier,OFA Patella
+Terrier,West Highland White Terrier,Companion Animal Eye Exam (CAER)
+Terrier,West Highland White Terrier,OFA Hips
+Terrier,West Highland White Terrier,Craniomandibular Osteopathy (DNA)
+Toy,Cavalier King Charles Spaniel,OFA Cardiac (Advanced)
+Toy,Cavalier King Charles Spaniel,OFA Patella
+Toy,Cavalier King Charles Spaniel,Companion Animal Eye Exam (CAER)
+Toy,Cavalier King Charles Spaniel,Episodic Falling Syndrome (DNA)
+Toy,Cavalier King Charles Spaniel,Dry Eye Curly Coat Syndrome (DNA)
+Toy,Chihuahua,OFA Patella
+Toy,Chihuahua,OFA Cardiac
+Toy,Chihuahua,Companion Animal Eye Exam (CAER)
+Toy,Pomeranian,OFA Patella
+Toy,Pomeranian,Companion Animal Eye Exam (CAER)
+Toy,Pomeranian,OFA Thyroid
+Toy,Pug,OFA Patella
+Toy,Pug,OFA Hips
+Toy,Pug,Companion Animal Eye Exam (CAER)
+Toy,Pug,BAER Hearing
+Toy,Shih Tzu,OFA Patella
+Toy,Shih Tzu,Companion Animal Eye Exam (CAER)
+Toy,Shih Tzu,OFA Hips
+Toy,Shih Tzu,Renal Dysplasia Screen
+Toy,Yorkshire Terrier,OFA Patella
+Toy,Yorkshire Terrier,Companion Animal Eye Exam (CAER)
+Toy,Yorkshire Terrier,OFA Cardiac
+Working,Bernese Mountain Dog,OFA Hips
+Working,Bernese Mountain Dog,OFA Elbows
+Working,Bernese Mountain Dog,OFA Cardiac
+Working,Bernese Mountain Dog,Companion Animal Eye Exam (CAER)
+Working,Bernese Mountain Dog,OFA Thyroid
+Working,Boxer,OFA Cardiac (Advanced)
+Working,Boxer,ARVC / Boxer Cardiomyopathy (DNA)
+Working,Boxer,OFA Hips
+Working,Boxer,OFA Thyroid
+Working,Boxer,Companion Animal Eye Exam (CAER)
+Working,Boxer,Degenerative Myelopathy (DNA)
+Working,Cane Corso,OFA Hips
+Working,Cane Corso,OFA Elbows
+Working,Cane Corso,OFA Cardiac
+Working,Cane Corso,Companion Animal Eye Exam (CAER)
+Working,Doberman Pinscher,OFA Hips
+Working,Doberman Pinscher,OFA Cardiac (Advanced)
+Working,Doberman Pinscher,DCM1 (DNA)
+Working,Doberman Pinscher,von Willebrand Disease (DNA)
+Working,Doberman Pinscher,Companion Animal Eye Exam (CAER)
+Working,Doberman Pinscher,Degenerative Myelopathy (DNA)
+Working,Great Dane,OFA Hips
+Working,Great Dane,OFA Cardiac
+Working,Great Dane,OFA Thyroid
+Working,Great Dane,Companion Animal Eye Exam (CAER)
+Working,Rottweiler,OFA Hips
+Working,Rottweiler,OFA Elbows
+Working,Rottweiler,OFA Cardiac
+Working,Rottweiler,Companion Animal Eye Exam (CAER)
+Working,Rottweiler,JLPP (DNA)
+Working,Siberian Husky,OFA Hips
+Working,Siberian Husky,Companion Animal Eye Exam (CAER)
+Working,Siberian Husky,Juvenile Cataracts (DNA)

@@ -602,9 +602,11 @@ async function save() {
     if (ctx.mode === 'new') {
       // Seeding-on-create is a one-time copy of the panel as it stood at this
       // moment (Test Planning Addendum §4) — forward-only, never re-checked
-      // against the panel again after this.
+      // against the panel again after this. Scoped to this dog's own breed
+      // (§8): a breed-tagged test only carries over for a matching breed; an
+      // untagged/breed-agnostic test still carries over to every new dog.
       const seedKennel = resolveSeedKennel(candidate);
-      if (seedKennel) candidate.planned_tests = [...(seedKennel.preferred_tests || [])];
+      if (seedKennel) candidate.planned_tests = kennelRepo.testsForBreed(seedKennel, candidate.breed);
       saved = await dogRepo.create(candidate);
       location.href = `dog.html?id=${encodeURIComponent(saved.id)}`;
       return;
@@ -875,7 +877,9 @@ async function renderPlannedTestsSection(eventsP = null) {
       }).join('') + `</ul>`
     : `<p class="muted" style="margin:14px 0 0;">${planned.length ? 'All planned tests logged.' : 'No tests planned yet.'}</p>`;
 
-  // Copy-plan-from sources (§5): other dogs' plans, and kennel panels.
+  // Copy-plan-from sources (§5): other dogs' plans, and kennel panels (a
+  // kennel source is scoped to this dog's own breed at copy time — see the
+  // pt-copy handler below).
   const dogSources = ctx.allDogs.filter((o) => o.id !== d.id && (o.planned_tests || []).length);
   const kennelSources = ctx.allKennels.filter((k) => (k.preferred_tests || []).length);
   const sourceOptions = [
@@ -942,7 +946,7 @@ async function renderPlannedTestsSection(eventsP = null) {
     if (!val) return;
     const [kind, srcId] = val.split(':');
     const tokens = kind === 'kennel'
-      ? (ctx.kennelsById.get(srcId)?.preferred_tests || [])
+      ? kennelRepo.testsForBreed(ctx.kennelsById.get(srcId), d.breed)
       : (ctx.dogsById.get(srcId)?.planned_tests || []);
     try {
       ctx.original = await dogRepo.addPlannedTests(d.id, tokens);

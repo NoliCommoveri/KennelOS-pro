@@ -23,7 +23,9 @@ function rootPrefix() {
 }
 
 // Parse a CSV file or text blob into raw rows. `comments: '#'` skips the
-// disclaimer/how-to header the shipped file carries; header is `breed,test_name`.
+// disclaimer/how-to header the shipped file carries; header is
+// `Breed Group,breed,test_name` (col A, "Breed Group", is optional — an older
+// two-column `breed,test_name` file still parses, just with an empty group).
 export function parseSeedCsv(fileOrText) {
   return new Promise((resolve, reject) => {
     Papa.parse(fileOrText, {
@@ -39,23 +41,34 @@ export function parseSeedCsv(fileOrText) {
 }
 
 // Group rows by breed, preserving first-seen display casing for both breed and
-// test, and de-duplicating tests within a breed (case-insensitive). Returns
-// [{ key, display, tests: [{ key, display }] }], sorted by breed name.
+// test, and de-duplicating tests within a breed (case-insensitive). Each group
+// also carries `breedGroup` — the col-A "Breed Group" value (e.g. "Sporting"),
+// used to power the breed-group browse dropdown in the picker UI; '' if the
+// file has no Breed Group column. Returns
+// [{ key, display, breedGroup, tests: [{ key, display }] }], sorted by breed name.
 export function buildSeedGroups(rows) {
   const byBreed = new Map();
   for (const row of rows) {
     const breed = String(row.breed ?? '').trim();
     const test = String(row.test_name ?? row.test ?? '').trim();
+    const breedGroup = String(row.breed_group ?? '').trim();
     if (!breed || !test) continue;
     const bKey = ci(breed);
-    if (!byBreed.has(bKey)) byBreed.set(bKey, { key: bKey, display: breed, tests: new Map() });
+    if (!byBreed.has(bKey)) byBreed.set(bKey, { key: bKey, display: breed, breedGroup, tests: new Map() });
     const g = byBreed.get(bKey);
+    if (!g.breedGroup && breedGroup) g.breedGroup = breedGroup;
     const tKey = ci(test);
     if (!g.tests.has(tKey)) g.tests.set(tKey, { key: tKey, display: test });
   }
   return [...byBreed.values()]
-    .map((g) => ({ key: g.key, display: g.display, tests: [...g.tests.values()] }))
+    .map((g) => ({ key: g.key, display: g.display, breedGroup: g.breedGroup, tests: [...g.tests.values()] }))
     .sort((a, b) => a.display.localeCompare(b.display));
+}
+
+// Unique, sorted breed-group names present across a set of groups (empty
+// values excluded) — powers the "browse by breed group" dropdown.
+export function listBreedGroups(groups) {
+  return [...new Set(groups.map((g) => g.breedGroup).filter(Boolean))].sort();
 }
 
 // Convenience: parse a picked File into groups.
@@ -77,8 +90,13 @@ export async function fetchBundledSeedGroups() {
 }
 
 // Append the selected breeds (and their tests) to a kennel's vocabularies.
-// Dedupe lives in the repo (case-insensitive); this only tallies what was
-// genuinely new so callers can report accurate counts. Add-only, never wipes.
+// Each test is tagged with the breed(s) it was imported for
+// (kennelRepo.addPreferredTest's third arg -> preferred_test_breeds), which is
+// what lets the kennel detail page show "(Breed1, Breed2)" after a test name
+// and lets new-dog auto-fill scope the panel to one dog's own breed
+// (kennelRepo.testsForBreed). Dedupe lives in the repo (case-insensitive);
+// this only tallies what was genuinely new so callers can report accurate
+// counts. Add-only, never wipes.
 export async function applySeedToKennel(kennelId, groups, selectedKeys) {
   const selected = selectedKeys instanceof Set ? selectedKeys : new Set(selectedKeys);
   const before = await kennelRepo.getById(kennelId);
@@ -92,7 +110,7 @@ export async function applySeedToKennel(kennelId, groups, selectedKeys) {
     await kennelRepo.addPreferredBreed(kennelId, g.display);
     if (!haveBreeds.has(g.key)) { haveBreeds.add(g.key); breedsAdded++; }
     for (const t of g.tests) {
-      await kennelRepo.addPreferredTest(kennelId, t.display);
+      await kennelRepo.addPreferredTest(kennelId, t.display, g.display);
       if (!haveTests.has(t.key) && !countedTests.has(t.key)) { countedTests.add(t.key); testsAdded++; }
     }
   }

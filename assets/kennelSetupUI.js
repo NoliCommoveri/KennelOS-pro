@@ -8,6 +8,7 @@ import {
 } from '../data/kennelSetup.js';
 import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js';
 import { esc } from './ui.js';
+import { renderBreedPicker } from './breedTestPicker.js';
 
 export function maybeShowKennelSetupPrompt() {
   if (!shouldOfferKennelSetupPrompt()) return;
@@ -61,22 +62,13 @@ export async function showKennelSetupModal({ skippable, onDone } = {}) {
     seedGroups = groups;
     const host = overlay.querySelector('#ks-seed');
     if (!host || !groups.length) return;
-    const breedRows = groups.map((g) => `
-      <label class="check-inline" style="display:block; margin:4px 0;">
-        <input type="checkbox" data-seed-breed="${esc(g.key)}"> ${esc(g.display)}
-        <span class="faint">— ${g.tests.length} test${g.tests.length === 1 ? '' : 's'}</span>
-      </label>`).join('');
     host.innerHTML = `
       <div style="border-top:1px solid var(--border); margin-top:12px; padding-top:12px;">
         <label style="font-weight:600;">Prefill common health tests <span class="faint" style="font-weight:normal;">— optional</span></label>
-        <p class="field-hint" style="margin:4px 0 8px;">Check the breed(s) you work with to seed their commonly-cited tests into your kennel checklist (prunable later). Illustrative starter, not veterinary guidance — verify against your breed's OFA CHIC / parent-club requirements.</p>
-        ${breedRows}
+        <p class="field-hint" style="margin:4px 0 8px;">Search for the breed(s) you work with, or browse by breed group, to seed their commonly-cited tests into your kennel checklist (prunable later). Illustrative starter, not veterinary guidance — verify against your breed's OFA CHIC / parent-club requirements.</p>
+        <div id="ks-breed-picker"></div>
       </div>`;
-    host.querySelectorAll('[data-seed-breed]').forEach((cb) => {
-      cb.addEventListener('change', () => {
-        cb.checked ? selectedBreeds.add(cb.dataset.seedBreed) : selectedBreeds.delete(cb.dataset.seedBreed);
-      });
-    });
+    renderBreedPicker(host.querySelector('#ks-breed-picker'), groups, selectedBreeds);
   });
 
   const errorBox = overlay.querySelector('#ks-error');

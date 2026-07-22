@@ -392,6 +392,13 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 .field-hint { font-size: 12px; color: var(--text-faint); }
 .field-wide { grid-column: 1 / -1; }
 
+/* A fixed-2-up sub-row inside a .field-wide (kennel.js's Lifecycle-nudges
+   Male/Female promote-age pair) — flex instead of .form-grid's auto-fit
+   minmax(240px,1fr), which collapses to one column well before phone width.
+   Stays side-by-side down to the narrowest supported viewport. */
+.promote-age-row { display: flex; gap: 10px; margin-top: 4px; }
+.promote-age-row .field { flex: 1 1 0; min-width: 0; }
+
 .form-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .inline-warn { color: var(--warn); background: var(--warn-soft); border: 1px solid #e6d5ad; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
 .inline-error { color: var(--danger); background: var(--danger-soft); border: 1px solid #e6c3c3; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
@@ -436,6 +443,62 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 /* A departed (archived) dog reference that renders as plain text, not a link
    (Lite — cap spec §7). Kept visually like body text so lineage still reads. */
 .dog-name-static { color: var(--text); }
+
+/* --- Breed test picker (assets/breedTestPicker.js) ----------------------
+   Shared by both seed-import wizards: the standalone Import Kennel Tests
+   page and the first-run kennel-setup modal. Search-as-you-type suggestions,
+   a "browse by breed group" dropdown, and a checked list of added breeds. */
+.breed-picker-toast {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  border: 1px solid #bfe0cd;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+.breed-picker-search-wrap { position: relative; }
+.breed-picker-suggestions {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.breed-picker-suggestion {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.breed-picker-suggestion:last-child { border-bottom: 0; }
+.breed-picker-suggestion:hover { background: var(--accent-soft); }
+.breed-picker-group-field { margin-top: 14px; }
+.breed-picker-selected { margin-top: 14px; }
+.breed-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.breed-picker-row:last-child { border-bottom: none; }
+.breed-picker-row input[type="checkbox"] { flex: 0 0 auto; }
+.breed-picker-modal-list { max-height: 320px; overflow-y: auto; margin: 12px 0; }
 
 /* --- Modal -------------------------------------------------------------- */
 .modal-overlay {
