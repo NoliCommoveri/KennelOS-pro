@@ -76,6 +76,14 @@
       body { background: #fff; }
       .pr-card, .pr-parent, .pr-health-card { break-inside: avoid; }
     }
+
+    /* On a narrow phone, two side-by-side parent cards squeeze each
+       .pr-row's nowrap label (e.g. "Registered name") past its shrink
+       limit, pushing the pair wider than the viewport. Stack them instead
+       — same content, one column, no horizontal overflow. */
+    @media (max-width: 640px) {
+      .pr-parents { flex-direction: column; }
+    }
   </style>
 </head>
 <body>

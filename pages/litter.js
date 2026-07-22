@@ -101,10 +101,22 @@ function vocabOptions(vocab, current, placeholder) {
   ).join('');
 }
 
+// Statuses eligible as a litter's dam/sire: our own active breeding stock,
+// plus external dogs (outside studs, foster dams) — those carry
+// 'external_reference' rather than 'active_breeding' since they aren't our own
+// breeding stock, but they're still valid breeding partners.
+const BREEDING_ELIGIBLE_STATUS = ['active_breeding', 'external_reference'];
+
+// Dam/sire picker: excludes archived by default, limited to the matching sex
+// plus "unknown", and scoped to breeding-eligible dogs (a
+// retired/deceased/pet-home/puppy dog isn't a breeding candidate) — the
+// current selection always stays listed so a mismatched legacy record is
+// still editable (warned, not hidden).
 function dogOptions(current, sex) {
   const opts = ctx.allDogs
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
     .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
+    .filter((d) => d.id === current || BREEDING_ELIGIBLE_STATUS.includes(d.status))
     .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
   return `<option value="">— select —</option>` + opts;

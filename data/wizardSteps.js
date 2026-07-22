@@ -153,7 +153,7 @@ export const WIZARD_STEPS = [
   },
   {
     id: 'dog-add-event', hub: 'Dogs', page: 'dog.html', anchor: 'percy',
-    selector: '#timeline-section',
+    selector: '#tl-add',
     title: 'Adding new events',
     body: 'Event fields adapt to the event type: some offer helpful dropdowns or auto-filled values, others suggest entries as you type (a health test offers your planned test suite). You can also log the cost of an event straight to your Expenses table from here.'
   },
@@ -207,10 +207,16 @@ export const WIZARD_STEPS = [
     body: 'The puppies produced in this litter. Adding puppies creates new dog records — quick-add several at once with “Add N Puppies”, record details like sex and nicknames, and log an event across multiple pups (vaccinations, weight checks) so it lands in every selected pup’s history from one screen.'
   },
   {
+    id: 'litter-expenses', hub: 'Breeding', page: 'litter.html', anchor: 'autumnLitter',
+    selector: '#expenses-section',
+    title: 'Expenses & receipts',
+    body: 'Log a litter’s costs here — vet visits, supplies, stud fees. Snap a photo of a paper receipt or attach a PDF when you add or edit an expense, and KennelOS stores it right alongside the entry so you can pull it up again later.'
+  },
+  {
     id: 'litter-income', hub: 'Breeding', page: 'litter.html', anchor: 'autumnLitter',
     selector: '#income-section',
-    title: 'Expenses & income',
-    body: 'A quick view of the expenses and income a litter has accrued, so you can see the profit you’re making. For the full breakdown — calculations and income split out by type (deposit, purchase price, transport) — head to the Financials hub.'
+    title: 'Sales & income',
+    body: 'A quick view of a litter’s sales income against what you’ve spent, so you can see the profit you’re making. For the full breakdown — calculations and income split out by type (deposit, purchase price, transport) — head to the Financials hub.'
   },
 
   // --- People ------------------------------------------------------------
@@ -321,14 +327,20 @@ export const WIZARD_STEPS = [
   // --- More: Reports / Companion / Import-Export --------------------------
   {
     id: 'more-intro', kind: 'hub-intro', hub: 'More', button: 'Explore More Hub →',
-    title: 'Reports, Companion & Backups',
-    body: 'Behind the More menu: analytics Reports, read-only Companion share-outs for buyers and partners, and Import / Export for backups and spreadsheet import.'
+    title: 'Reports, Documents, Companion & Backups',
+    body: 'Behind the More menu: analytics Reports, Documents for filing a dog’s paperwork, read-only Companion share-outs for buyers and partners, and Import / Export for backups and spreadsheet import.'
   },
   {
     id: 'reports', hub: 'More', page: 'reports.html',
     selector: 'main',
     title: 'Reports',
     body: 'The analytics — reports you can generate from information stored across the app and download as spreadsheets for your physical files.'
+  },
+  {
+    id: 'documents', hub: 'More', page: 'documents.html',
+    selector: '#btn-add-document',
+    title: 'Documents',
+    body: 'File a dog’s pedigree, registration, health-test results, or other paperwork here — upload a PDF, or take/choose a photo and KennelOS turns it into a compressed PDF automatically. Everything is grouped by dog and stored right on this device.'
   },
   {
     id: 'companion', hub: 'More', page: 'companion.html',
