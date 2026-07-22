@@ -29,26 +29,36 @@ import { getProLicense, setProLicense, clearProLicense } from './settings.js';
 const API = 'https://api.lemonsqueezy.com/v1';
 
 // Grace window scales with the billing interval (plan §Licensing): a once-a-year
-// renewal warrants a long buffer so a breeder off the grid for weeks keeps Pro; a
-// monthly cycle renews 12× as often, so a month-long buffer would swallow whole
-// periods — a shorter buffer keeps the "don't lock me out for a blip" spirit
-// proportioned to the shorter cycle. Unknown interval defaults to the shorter one.
+// renewal warrants a longer buffer so a breeder off the grid for a week keeps Pro;
+// a monthly cycle renews 12× as often, so a proportionally shorter buffer keeps the
+// "don't lock me out for a blip" spirit without swallowing a chunk of the period.
+// Unknown interval defaults to the shorter one.
 const DAY_MS = 24 * 60 * 60 * 1000;
-const GRACE_MS = { yearly: 30 * DAY_MS, monthly: 7 * DAY_MS };
+const GRACE_MS = { yearly: 7 * DAY_MS, monthly: 3 * DAY_MS };
 const graceFor = (record) => (record?.interval === 'yearly' ? GRACE_MS.yearly : GRACE_MS.monthly);
 
 // True only in the Pro edition (its editionConfig sets editionFlags.licenseGate).
 export const isLicenseGated = () => Boolean(editionFlags.licenseGate);
 
-// Lemon Squeezy returns the variant NAME, not a clean "monthly/yearly" field, so
-// we infer the interval from it against a configurable pattern (licenseConfig
-// carries it so it can be tuned to the store's actual variant names without a code
-// change). Anything that isn't clearly yearly falls back to monthly — the shorter,
-// stricter grace window, per the plan's "unknown → shorter" rule.
+// Lemon Squeezy returns the variant NAME, not a clean interval field, so we infer
+// the interval from it against configurable patterns (licenseConfig carries them so
+// they can be tuned to the store's actual variant names without a code change):
+//   • lifetime  — a one-time, PERPETUAL purchase (no subscription, no expiry). Its
+//                 verdict never expires and it's exempt from the offline re-validation
+//                 requirement below, because there's no subscription that could lapse.
+//   • yearly    — annual subscription (longer grace window).
+//   • monthly   — the fallback for anything not clearly lifetime or yearly, and the
+//                 shorter/stricter grace window, per the plan's "unknown → shorter" rule.
+// Lifetime is checked first so a hypothetical "lifetime annual"-style name can't be
+// misread as a renewing yearly sub.
 function detectInterval(variantName) {
-  const pattern = licenseConfig?.yearlyVariantPattern || 'year|annual';
+  const lifetimePattern = licenseConfig?.lifetimeVariantPattern || 'lifetime|perpetual';
+  const yearlyPattern = licenseConfig?.yearlyVariantPattern || 'year|annual';
   try {
-    if (variantName && new RegExp(pattern, 'i').test(variantName)) return 'yearly';
+    if (variantName && new RegExp(lifetimePattern, 'i').test(variantName)) return 'lifetime';
+  } catch { /* a bad custom pattern just means "not lifetime" */ }
+  try {
+    if (variantName && new RegExp(yearlyPattern, 'i').test(variantName)) return 'yearly';
   } catch { /* a bad custom pattern just means "not yearly" */ }
   return 'monthly';
 }
@@ -135,6 +145,12 @@ export function resetLicense() {
 //   'wall'  → blocked (renewal wall)
 function onlineVerdict(record) {
   if (!record) return 'wall';
+  // Perpetual (lifetime) purchase: no subscription, no expiry. Active is full
+  // access, full stop; anything else (a refund/chargeback flips the key to
+  // disabled/inactive) walls. We never consult expiry or grace for these.
+  if (record.interval === 'lifetime') {
+    return record.status === 'active' ? 'valid' : 'wall';
+  }
   const now = Date.now();
   const exp = record.expiresAt ? Date.parse(record.expiresAt) : null;
   const grace = graceFor(record);
@@ -156,6 +172,11 @@ function onlineVerdict(record) {
 function offlineVerdict(record) {
   const base = onlineVerdict(record);
   if (base === 'wall') return 'wall';
+  // Perpetual licenses need no periodic re-validation — there's no subscription
+  // to lapse, so a lifetime buyer stays licensed offline indefinitely after the
+  // one online activation. (The rare refunded-lifetime case is an accepted gap,
+  // per the honest caveat — not worth locking every off-grid owner out over.)
+  if (record.interval === 'lifetime') return base;
   const since = Date.now() - Date.parse(record.lastValidated || 0);
   if (!Number.isFinite(since) || since > graceFor(record)) return 'wall';
   return base;

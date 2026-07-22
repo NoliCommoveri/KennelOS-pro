@@ -25,16 +25,19 @@ export const licenseConfig = {
   // The Lemon Squeezy checkout URL for buying / renewing Pro, shown on the
   // activation and renewal walls. Set the store checkout's post-purchase redirect
   // to this Pro origin so an upgrader lands here to activate + import.
-  // PLACEHOLDER — swap for the real Lemon Squeezy checkout link at launch.
-  checkoutUrl: 'https://kennelos.lemonsqueezy.com/buy/kennelos-pro',
+  checkoutUrl: 'https://kennelos.lemonsqueezy.com/checkout',
   // Optional Lemon Squeezy customer-portal URL ("Manage subscription") shown on
   // the renewal wall. Null hides that link. PLACEHOLDER — set at launch if used.
   portalUrl: null,
-  // The billing interval drives the offline grace window (yearly ~30d, monthly
-  // ~7d). Lemon Squeezy returns the variant NAME, not a clean interval, so we
-  // match it against this pattern (case-insensitive) → yearly; anything else →
-  // monthly (the shorter, stricter window). Tune to the store's variant names.
+  // The billing interval drives the offline grace window (yearly 7d, monthly 3d).
+  // Lemon Squeezy returns the variant NAME, not a clean interval, so we match it
+  // against this pattern (case-insensitive) → yearly; anything else → monthly (the
+  // shorter, stricter window). Tune to the store's variant names.
   yearlyVariantPattern: 'year|annual',
+  // A one-time Lifetime purchase is PERPETUAL — matched by name against this
+  // pattern → a license that never expires and never needs online re-validation
+  // (no subscription to lapse). Tune to the store's variant name for that tier.
+  lifetimeVariantPattern: 'lifetime|perpetual',
 };
 
 export async function enforceDogCap(/* { candidate, existing, id } */) {
