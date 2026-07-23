@@ -24,6 +24,10 @@
 //              the link can only be resolved per-seed; manifest.named is the
 //              map the seed writes for exactly this (spec §3.2, reconciled to
 //              the actual seed).
+//   idParam    (detail pages only, optional) overrides the query key the
+//              resolved anchor id is written to — defaults to 'id'. A couple
+//              of print-doc pages read a different key (puppy-record.html
+//              reads `?sale=`); anchor still resolves the same way.
 //   selector   CSS selector for the coach-mark target on that page. Container
 //              ids (`#…-section`, `[data-card="…"]`) are stable mount points
 //              that always resolve; a step whose selector matches nothing
@@ -32,6 +36,13 @@
 //              that may start collapsed — reuses the delegated card-toggle
 //              listener. dog/litter/etc. sections default to expanded when the
 //              seed populates them, so they need no reveal.
+//              { click: '<selector>' } clicks a trigger button to open a modal
+//              form (Add Event, Add Document, …) before spotlighting it — pair
+//              with a `selector` matching the modal itself (its root carries a
+//              stable id, e.g. `#ef-modal`), not the trigger. wizardUI.js
+//              clicks once per step render (its target-poll otherwise fires
+//              repeatedly while the modal's async setup is still in flight)
+//              and closes the modal via Escape when the step tears down.
 //   title/body one idea per stop, from the Tour Guide copy.
 
 export const WIZARD_STEPS = [
@@ -153,7 +164,7 @@ export const WIZARD_STEPS = [
   },
   {
     id: 'dog-add-event', hub: 'Dogs', page: 'dog.html', anchor: 'percy',
-    selector: '#tl-add',
+    selector: '#ef-modal', beforeShow: { click: '#tl-add' },
     title: 'Adding new events',
     body: 'Event fields adapt to the event type: some offer helpful dropdowns or auto-filled values, others suggest entries as you type (a health test offers your planned test suite). You can also log the cost of an event straight to your Expenses table from here.'
   },
@@ -275,6 +286,12 @@ export const WIZARD_STEPS = [
     body: 'The details of a sale for a particular puppy — sale type (show or pet), a price prefilled from the litter and editable, any transport or deferred pick-up boarding charge, and a status tracking where the sale is in its lifecycle. You can also create or link a contract specific to the sale here.'
   },
   {
+    id: 'puppy-record', hub: 'Placements', page: 'puppy-record.html', anchor: 'cedarSale', idParam: 'sale',
+    selector: '#pr-root',
+    title: 'Puppy Record',
+    body: 'A printable handout for the buyer — the puppy’s identity, its sire and dam with their own health testing, the puppy’s own health history, and the buyer’s contact details, all on one page. Reach it from “Print Puppy Record” on the Sales list or from a sale’s own page, then Print / Save as PDF to hand it over or email it.'
+  },
+  {
     id: 'stud-list', hub: 'Placements', page: 'stud-services.html',
     selector: '#stud-service-list',
     title: 'Stud services',
@@ -323,6 +340,12 @@ export const WIZARD_STEPS = [
     title: 'Invoices & receipts',
     body: 'Generate invoices (for money owed) and receipts (for money paid) right in the app, pre-filled from your existing sales and stud services. Choose full or partial amounts, decide which payment methods you’ll accept, and set due dates easily. Click Print to save a PDF to email or hand over in person.'
   },
+  {
+    id: 'invoice-doc', hub: 'Financials', page: 'invoice.html', anchor: 'cedarSale',
+    selector: '#inv-root',
+    title: 'A generated invoice',
+    body: 'What comes out of the generator: an itemized bill with due dates, a running balance, and the payment methods you accept — ready to Print / Save as PDF. Switch the doc type in the generator to produce a receipt the same way, for money already collected.'
+  },
 
   // --- More: Reports / Companion / Import-Export --------------------------
   {
@@ -338,7 +361,7 @@ export const WIZARD_STEPS = [
   },
   {
     id: 'documents', hub: 'More', page: 'documents.html',
-    selector: '#btn-add-document',
+    selector: '#doc-form-modal', beforeShow: { click: '#btn-add-document' },
     title: 'Documents',
     body: 'File a dog’s pedigree, registration, health-test results, or other paperwork here — upload a PDF, or take/choose a photo and KennelOS turns it into a compressed PDF automatically. Everything is grouped by dog and stored right on this device.'
   },

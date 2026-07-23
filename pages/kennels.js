@@ -131,7 +131,12 @@ document.getElementById('add-toggle').addEventListener('click', () => {
 });
 document.getElementById('k-add-cancel').addEventListener('click', closeAddForm);
 
-document.getElementById('k-add').addEventListener('click', async () => {
+document.getElementById('k-add').addEventListener('click', async (e) => {
+  // Guards against a rapid double-tap/double-click creating two kennels from
+  // one "Add" tap — each call would otherwise run to completion independently.
+  const btn = e.currentTarget;
+  if (btn.disabled) return;
+  btn.disabled = true;
   clearError();
   const name = document.getElementById('k-name').value.trim();
   const prefix = document.getElementById('k-prefix').value.trim();
@@ -144,6 +149,8 @@ document.getElementById('k-add').addEventListener('click', async () => {
     render();
   } catch (e) {
     showError(e.message || String(e));
+  } finally {
+    btn.disabled = false;
   }
 });
 

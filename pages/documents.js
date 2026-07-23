@@ -174,7 +174,7 @@ function openAddEditModal(existingId, defaultDogId) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
-      <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal" id="doc-form-modal" role="dialog" aria-modal="true">
         <div class="row-between" style="margin-bottom:12px;">
           <h2 style="margin:0;">${isEdit ? 'Edit document' : 'Add document'}</h2>
           <button class="btn btn-sm" data-act="cancel" type="button">✕</button>

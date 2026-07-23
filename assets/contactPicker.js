@@ -68,19 +68,25 @@ function openNewContactModal(onCreate) {
   document.addEventListener('keydown', onKey);
 
   overlay.querySelector('#ncp-cancel').addEventListener('click', close);
-  overlay.querySelector('#ncp-save').addEventListener('click', async () => {
+  // Guards against a rapid double-tap/double-click creating two contacts from
+  // one "Create" tap — each call would otherwise run to completion independently.
+  overlay.querySelector('#ncp-save').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
     const name = overlay.querySelector('#ncp-name').value.trim();
     const type = overlay.querySelector('#ncp-type').value;
     if (!name) {
       overlay.querySelector('#ncp-error').innerHTML = `<div class="inline-error">Name is required.</div>`;
       return;
     }
+    btn.disabled = true;
     try {
       const contact = await contactRepo.create({ name, contact_type: type ? [type] : [] });
       close();
       await onCreate(contact);
     } catch (e) {
       overlay.querySelector('#ncp-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
+      btn.disabled = false;
     }
   });
   overlay.querySelector('#ncp-name').focus();

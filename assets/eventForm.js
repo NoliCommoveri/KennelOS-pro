@@ -140,7 +140,7 @@ export async function openEventForm(opts) {
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true"></div>`;
+  overlay.innerHTML = `<div class="modal" id="ef-modal" role="dialog" aria-modal="true"></div>`;
   const modal = overlay.querySelector('.modal');
   document.body.appendChild(overlay);
 
@@ -315,7 +315,22 @@ export async function openEventForm(opts) {
     modal.querySelector('#ef-error').innerHTML = `<div class="inline-error">${esc(msg)}</div>`;
   }
 
+  // Guards against a rapid double-tap/double-click firing save() twice before
+  // the first call's await chain has a chance to disable anything itself —
+  // each call would otherwise run to completion independently, e.g. creating
+  // two events (or, on a litter-wide cascade, two per puppy) from one tap.
   async function save() {
+    const btn = modal.querySelector('[data-act="save"]');
+    if (btn?.disabled) return;
+    if (btn) btn.disabled = true;
+    try {
+      await doSave();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function doSave() {
     captureInputs();
     if (isCascade && !cascadeChecked.size) {
       showError('Select at least one puppy to apply this event to.');

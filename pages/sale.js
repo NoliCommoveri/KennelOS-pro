@@ -431,7 +431,22 @@ async function promptDisposition(sale, { title, message, defaultValue }) {
   if (choice && choice !== dog.disposition) await dogRepo.update(dog.id, { disposition: choice });
 }
 
+// Guards against a rapid double-tap/double-click firing save() twice before
+// the first call's await chain has a chance to disable anything itself —
+// each call would otherwise run to completion independently, e.g. creating
+// two sales from one "Save" tap.
 async function save() {
+  const btn = document.getElementById('btn-save');
+  if (btn?.disabled) return;
+  if (btn) btn.disabled = true;
+  try {
+    await doSave();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function doSave() {
   clearError();
   const candidate = normalizeMoney(readForm());
   const isNew = ctx.mode === 'new';

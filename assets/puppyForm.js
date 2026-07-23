@@ -90,7 +90,22 @@ export function openAddPuppyForm({ litter, dam, onSaved }) {
 
   modal.querySelectorAll('[data-act="cancel"]').forEach((b) => b.addEventListener('click', close));
 
+  // Guards against a rapid double-tap/double-click (either button, or one
+  // then the other) firing save() twice before the first call's await chain
+  // has a chance to disable anything itself — each call would otherwise run
+  // to completion independently, creating two puppy records from one tap.
   async function save(openAfter) {
+    const btns = [modal.querySelector('[data-act="save"]'), modal.querySelector('[data-act="save-open"]')].filter(Boolean);
+    if (btns.some((b) => b.disabled)) return;
+    btns.forEach((b) => { b.disabled = true; });
+    try {
+      await doSave(openAfter);
+    } finally {
+      btns.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  async function doSave(openAfter) {
     const call_name = modal.querySelector('#pf-call_name').value.trim();
     const sex = modal.querySelector('#pf-sex').value;
     const disposition = modal.querySelector('#pf-disposition').value;
@@ -147,13 +162,20 @@ export function openAddPuppiesForm({ litter, dam, existingCount = 0, onSaved }) 
 
   modal.querySelectorAll('[data-act="cancel"]').forEach((b) => b.addEventListener('click', close));
 
-  modal.querySelector('[data-act="save"]').addEventListener('click', async () => {
+  // Guards against a rapid double-tap/double-click running this whole batch
+  // twice before the first call's await chain has a chance to disable
+  // anything itself — each call would otherwise run to completion
+  // independently, creating two full batches of placeholder puppies.
+  modal.querySelector('[data-act="save"]').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
     const n = Number(modal.querySelector('#pf-count').value);
     const disposition = modal.querySelector('#pf-disposition').value;
     if (!Number.isInteger(n) || n < 1 || n > 20) {
       modal.querySelector('#pf-error').innerHTML = `<div class="inline-error">Enter a whole number from 1 to 20.</div>`;
       return;
     }
+    btn.disabled = true;
     try {
       // Number the placeholders continuing past any puppies already on the roster.
       for (let i = 0; i < n; i++) {
@@ -163,6 +185,8 @@ export function openAddPuppiesForm({ litter, dam, existingCount = 0, onSaved }) 
       onSaved?.();
     } catch (e) {
       modal.querySelector('#pf-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
+    } finally {
+      btn.disabled = false;
     }
   });
 }
