@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v14';
+const CACHE_NAME = 'kennelos-pro-shell-v17';
 
 const PRECACHE_URLS = [
   './',
@@ -20,6 +20,7 @@ const PRECACHE_URLS = [
   'assets/app.css',
   'assets/breedTestPicker.js',
   'assets/contactPicker.js',
+  'assets/documentModal.js',
   'assets/editionLinks.js',
   'assets/eventForm.js',
   'assets/expensePanel.js',
@@ -61,6 +62,7 @@ const PRECACHE_URLS = [
   'data/eventRepo.js',
   'data/expenseRepo.js',
   'data/fileRepo.js',
+  'data/fureverSeedExport.js',
   'data/importExport.js',
   'data/license.js',
   'data/incomeView.js',
@@ -76,6 +78,7 @@ const PRECACHE_URLS = [
   'data/proPages.js',
   'data/referenceRegistry.js',
   'data/repoBase.js',
+  'data/rosterCount.js',
   'data/saleRepo.js',
   'data/sampleData.js',
   'data/seedImport.js',
@@ -118,6 +121,8 @@ const PRECACHE_URLS = [
   'pages/expense-import.js',
   'pages/financials.html',
   'pages/financials.js',
+  'pages/furever.html',
+  'pages/furever.js',
   'pages/health-tests-report.html',
   'pages/health-tests-report.js',
   'pages/import-export.html',
@@ -207,20 +212,29 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Cache-first for same-origin GET requests, with runtime caching of anything
-// not already in the precache list; falls through to the network untouched
-// for everything else (cross-origin, non-GET).
+// Cache-first for same-origin GET requests; falls through to the network
+// untouched for everything else (cross-origin, non-GET).
+//
+// Query strings are ignored for BOTH the lookup and the write. A record URL like
+// `pages/dog.html?id=<uuid>` is the same static shell as the precached
+// `pages/dog.html` — the page reads its id from the query at runtime — so:
+//   - matching with { ignoreSearch: true } serves the precached shell for any id,
+//     which also makes a never-before-visited record open offline; and
+//   - runtime-caching only query-less responses stops the cache from growing one
+//     entry per visited record (the old handler `cache.put`-ed every distinct
+//     `?id=…`, an unbounded leak that only a CACHE_NAME rollover ever cleared).
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) {
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin) {
     return;
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => {
+    caches.match(request, { ignoreSearch: true }).then((cached) => {
       if (cached) return cached;
       return fetch(request).then((response) => {
-        if (response.ok) {
+        if (response.ok && !url.search) {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }

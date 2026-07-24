@@ -8,8 +8,10 @@ import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
+import { documentRepo } from '../data/documentRepo.js';
 import { CONTRACT_TYPE, CONTRACT_STATUS, SEX, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate, param, confirmModal } from '../assets/ui.js';
+import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 
 const els = {
   title: document.getElementById('contract-title'),
@@ -124,7 +126,75 @@ function renderView() {
       ${row('Document link', c.document_url ? `<a href="${esc(c.document_url)}" target="_blank" rel="noopener noreferrer">${esc(c.document_url)}</a>` : '')}
       ${row('Terms summary', c.terms_summary ? esc(c.terms_summary).replace(/\n/g, '<br>') : '')}
       ${row('Notes', c.notes ? esc(c.notes).replace(/\n/g, '<br>') : '')}
-    </dl>`;
+    </dl>
+    <div id="contract-docs" style="margin-top:18px;"></div>`;
+  renderContractDocs();
+}
+
+// --- Signed-document attachment (§26.1) ------------------------------------
+// The dog a filed contract document is stored under: the contract's own
+// related_dog_id when it has one (lease/co_own/foster/other), else the dog
+// reached through its linked Sale, else the (our, then partner) dog of its
+// linked StudService. Empty string when none is reachable — the attach modal
+// then simply opens with no dog preselected for the user to pick.
+function resolveDogId(c) {
+  if (c.related_dog_id) return c.related_dog_id;
+  const sale = ctx.allSales.find((s) => s.id === c.related_sale_id);
+  if (sale?.dog_id) return sale.dog_id;
+  const ss = ctx.allStudServices.find((s) => s.id === c.related_stud_service_id);
+  return ss?.our_dog_id || ss?.partner_dog_id || '';
+}
+
+// Render the contract's filed documents (documentRepo.getByContract — the
+// reverse of the unindexed contract_id back-link) with inline view/download,
+// plus the "Attach signed contract" button that opens the shared Add Document
+// modal pre-filled with the resolved dog and Type = Contract.
+async function renderContractDocs() {
+  const host = document.getElementById('contract-docs');
+  if (!host || ctx.mode !== 'view' || !ctx.original) return;
+  const c = ctx.original;
+  const docs = await documentRepo.getByContract(c.id);
+
+  const rows = docs.map((d) => {
+    const meta = [d.doc_date ? fmtDate(d.doc_date) : '', d.issuer_or_lab].filter(Boolean).join(' • ');
+    return `
+      <div class="row-between" data-doc="${esc(d.id)}"
+           style="align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border,#e2e6ec);">
+        <div style="min-width:0;">
+          <strong>${esc(d.title || 'Contract document')}</strong>
+          ${meta ? `<div class="muted" style="font-size:13px;">${esc(meta)}</div>` : ''}
+        </div>
+        <div class="pill-row" style="flex:none;">
+          <button class="btn btn-sm" data-act="view" data-doc="${esc(d.id)}">View / Download</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  host.innerHTML = `
+    <div class="card">
+      <div class="row-between" style="align-items:baseline;">
+        <h2 style="margin:0;font-size:17px;">Signed document${docs.length > 1 ? 's' : ''}</h2>
+        <button class="btn btn-sm" id="btn-attach-contract">+ Attach signed contract</button>
+      </div>
+      ${docs.length
+        ? rows
+        : '<p class="faint" style="margin:10px 0 0;">No signed document filed yet. Click “Attach signed contract” to upload one.</p>'}
+    </div>`;
+
+  document.getElementById('btn-attach-contract').onclick = () => {
+    openDocumentModal({
+      defaultDogId: resolveDogId(c),
+      defaultType: 'contract',
+      contractId: c.id,
+      onSaved: () => renderContractDocs()
+    });
+  };
+  for (const btn of host.querySelectorAll('[data-act="view"]')) {
+    btn.onclick = () => openDocumentViewModal({
+      docId: btn.dataset.doc,
+      onEdit: (id) => openDocumentModal({ existingId: id, contractId: c.id, onSaved: () => renderContractDocs() })
+    });
+  }
 }
 
 // --- Edit form ---------------------------------------------------------

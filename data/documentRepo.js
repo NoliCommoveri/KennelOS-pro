@@ -6,6 +6,17 @@
 //
 // A Document is a leaf entity (DOCUMENT_REFERENCES is empty — nothing points
 // at one); its own dog_id FK is guarded on Dog via DOG_REFERENCES.
+//
+// `contract_id` is an OPTIONAL back-link to a Contract (contractRepo.js): a
+// document filed *for* a contract (typically a signed PDF, doc_type 'contract')
+// carries the contract's id so the Contract detail page can surface it inline
+// for view/download. It is a PLAIN, UNINDEXED field — the same posture as
+// `expenses.receipt_file_id` — so it is deliberately NOT a referenceRegistry
+// entry and needs no schema/index change. The reverse query is getByContract
+// (a small in-memory scan); the contract clears the link on its own hardDelete
+// (contractRepo.unlinkContract via documentRepo.unlinkContract) so no document
+// is ever left pointing at a deleted contract. The document itself always
+// stays filed on its dog.
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { DOCUMENT_REFERENCES } from './referenceRegistry.js';
@@ -30,6 +41,9 @@ function normalize(data) {
     registry: String(data.registry || '').trim(),
     registration_number: String(data.registration_number || '').trim(),
     notes: String(data.notes || '').trim(),
+    // Optional back-link to a Contract — plain, unindexed (see header). Preserved
+    // across edits because update() re-normalizes { ...existing, ...changes }.
+    contract_id: data.contract_id || null,
     file_id: data.file_id
   };
 }
@@ -56,6 +70,29 @@ export const documentRepo = {
     const rows = await db.documents.where('dog_id').equals(dogId).toArray();
     const visible = includeArchived ? rows : rows.filter((r) => !r.is_archived);
     return visible.sort((a, b) => (a.doc_date || '') < (b.doc_date || '') ? 1 : -1);
+  },
+
+  // Documents filed for a given contract — the reverse of the unindexed
+  // contract_id back-link (see header). contract_id has no index, so this is an
+  // in-memory scan (documents stay at kennel scale), not an index probe. Powers
+  // the Contract detail page's inline view/download.
+  async getByContract(contractId, { includeArchived = false } = {}) {
+    if (!contractId) return [];
+    const rows = await db.documents.toArray();
+    const visible = rows.filter((r) =>
+      r.contract_id === contractId && (includeArchived || !r.is_archived));
+    return visible.sort((a, b) => (a.doc_date || '') < (b.doc_date || '') ? 1 : -1);
+  },
+
+  // Clear the contract_id on every document filed for this contract. Called by
+  // contractRepo.hardDelete so a deleted contract never leaves a document
+  // pointing at it — the document stays filed on its dog, just unlinked.
+  async unlinkContract(contractId) {
+    if (!contractId) return;
+    const rows = await db.documents.toArray();
+    for (const r of rows) {
+      if (r.contract_id === contractId) await base.update(r.id, { contract_id: null });
+    }
   },
 
   // Hard delete also removes the linked file — a file is owned by exactly one

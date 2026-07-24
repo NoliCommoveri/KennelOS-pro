@@ -7,6 +7,7 @@
 import { db } from './db.js';
 import { setLastBackupDate } from './settings.js';
 import { assertWritable } from './demoMode.js';
+import { enforceImportDogCap } from './editionConfig.js';
 
 // Bumped only when the on-disk backup shape changes in a way that needs a
 // migration. Tied to the Dexie schema version so an older file can be detected.
@@ -27,7 +28,7 @@ function isBlobMarker(v) {
   return !!v && typeof v === 'object' && v[BLOB_TAG] === true && typeof v.data === 'string';
 }
 
-async function blobToMarker(blob) {
+export async function blobToMarker(blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   // Chunked to avoid blowing the argument limit of String.fromCharCode on big files.
   let binary = '';
@@ -38,7 +39,7 @@ async function blobToMarker(blob) {
   return { [BLOB_TAG]: true, mime: blob.type || 'application/octet-stream', data: btoa(binary) };
 }
 
-function markerToBlob(marker) {
+export function markerToBlob(marker) {
   const binary = atob(marker.data);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -115,6 +116,17 @@ export function inspectBackup(obj) {
   if (!obj || typeof obj !== 'object' || !obj.collections || typeof obj.collections !== 'object') {
     throw new Error('This does not look like a valid backup file (missing "collections").');
   }
+  // Forward-compat guard: refuse a file whose on-disk format is NEWER than this
+  // build understands — its blob encoding or shape may have changed (that's the
+  // whole reason BACKUP_FORMAT_VERSION exists). Older/equal/absent is fine: a v1
+  // file predates the field entirely (undefined) and carries no encoded blobs.
+  const fmt = obj.format_version;
+  if (typeof fmt === 'number' && fmt > BACKUP_FORMAT_VERSION) {
+    throw new Error(
+      `This backup was made by a newer version of KennelOS (backup format v${fmt}; ` +
+      `this app understands up to v${BACKUP_FORMAT_VERSION}). Update the app, then restore.`
+    );
+  }
   const known = new Set(db.tables.map((t) => t.name));
   const counts = {};
   const unknownTables = [];
@@ -139,6 +151,17 @@ export async function restoreBackup(obj, mode) {
   inspectBackup(obj);
   const known = new Set(db.tables.map((t) => t.name));
   const entries = Object.entries(obj.collections).filter(([name]) => known.has(name));
+
+  // Edition bulk-import cap (cap spec §9). No-op in Pro/Demo; in Lite it throws a
+  // CapExceededError when this restore would leave more than the allowed number of
+  // active dogs. Runs BEFORE the transaction so a rejected restore writes nothing —
+  // all-or-nothing, unlike the per-row CSV import (which lands the first N and
+  // fails the rest). Dog rows carry no Blobs, so the raw backup rows classify fine
+  // without decoding. `.filter(Boolean)` drops a null/hole from a hand-edited file.
+  const incomingDogs = known.has('dogs')
+    ? (obj.collections.dogs || []).filter(Boolean)
+    : [];
+  await enforceImportDogCap({ incomingDogs, mode });
 
   await db.transaction('rw', db.tables, async () => {
     // Replace is a full swap: clear every known table first so tables the backup

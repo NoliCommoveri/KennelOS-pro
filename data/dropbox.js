@@ -60,15 +60,21 @@ export function isDropboxConnected() {
 // with ?code=.
 export async function beginDropboxAuth() {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+  // CSRF nonce: a random value round-tripped through Dropbox and checked on the
+  // way back, so a `?code=` we didn't initiate (a forged redirect to this page)
+  // is rejected rather than exchanged. Stored beside the PKCE verifier and cleared
+  // the same way once the round-trip completes.
+  const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-  setDropboxSettings({ pkceVerifier: verifier });
+  setDropboxSettings({ pkceVerifier: verifier, oauthState: state });
   const params = new URLSearchParams({
     client_id: APP_KEY,
     response_type: 'code',
     code_challenge: b64url(new Uint8Array(digest)),
     code_challenge_method: 'S256',
     redirect_uri: dropboxRedirectUri(),
-    token_access_type: 'offline'
+    token_access_type: 'offline',
+    state
   });
   location.assign(`${AUTHORIZE_URL}?${params}`);
 }
@@ -81,6 +87,7 @@ export async function completeDropboxAuth() {
   const url = new URL(location.href);
   const code = url.searchParams.get('code');
   if (!code) return false;
+  const returnedState = url.searchParams.get('state');
   url.searchParams.delete('code');
   url.searchParams.delete('state');
   history.replaceState(null, '', url.toString());
@@ -88,6 +95,13 @@ export async function completeDropboxAuth() {
   const s = getDropboxSettings();
   if (!s.pkceVerifier) {
     throw new Error('Dropbox sent back an authorization code, but no connection attempt is in progress. Try Connect again.');
+  }
+  // Reject a code whose state doesn't match the one we sent (CSRF). Guarded on
+  // `s.oauthState` being present so a redirect from an auth started before this
+  // check existed isn't spuriously refused; new flows always set it.
+  if (s.oauthState && returnedState !== s.oauthState) {
+    setDropboxSettings({ pkceVerifier: null, oauthState: null });
+    throw new Error('Dropbox sign-in could not be verified (state mismatch). Please try Connect again.');
   }
   const tokens = await tokenRequest({
     code,
@@ -100,7 +114,8 @@ export async function completeDropboxAuth() {
     refreshToken: tokens.refresh_token,
     accessToken: tokens.access_token,
     accessTokenExpiresAt: Date.now() + (tokens.expires_in - 60) * 1000,
-    pkceVerifier: null
+    pkceVerifier: null,
+    oauthState: null
   });
   return true;
 }

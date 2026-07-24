@@ -17,7 +17,8 @@ const KEYS = {
   wizardStatus: 'kennelOS.wizardStatus',
   wizardStepIndex: 'kennelOS.wizardStepIndex',
   dropbox: 'kennelOS.dropbox',
-  assistantLastSync: 'kennelOS.assistantLastSync'
+  assistantLastSync: 'kennelOS.assistantLastSync',
+  furever: 'kennelOS.furever'
 };
 
 export function getLastBackupDate() {
@@ -201,6 +202,52 @@ export function setCompanionSettings(type, values) {
   store[type] = merged;
   localStorage.setItem(KEYS.companion, JSON.stringify(store));
   return getCompanionSettings(type);
+}
+
+// --- Furever seed-link identity ---------------------------------------------
+// The Furever seed-link generator's kennel-wide identity block: the fields the
+// brief calls "inherently yours, never generic" — kennel name/tagline, the
+// breeder's own contact, and their vet's contact. Filled in once (Furever
+// console, "Kennel identity" card) and copied into every seed packet sent from
+// then on. `breederKey` is a stable id generated on first read so every pup from
+// this kennel dedupes into ONE `breeders` row in Furever — deliberately NOT tied
+// to "My Kennel" (settings' myKennelId): Furever should work even if Kennel Setup
+// was skipped.
+const FUREVER_DEFAULTS = {
+  breederKey: '',
+  kennelName: '', tagline: '',
+  breederContact: { name: '', phone: '', email: '' },
+  breederVet: { name: '', phone: '', address: '' }
+};
+
+function readFureverStore() {
+  const raw = localStorage.getItem(KEYS.furever);
+  if (!raw) return {};
+  try { return JSON.parse(raw) || {}; } catch { return {}; }
+}
+
+export function getFureverSettings() {
+  const stored = readFureverStore();
+  if (!stored.breederKey) {
+    stored.breederKey = crypto.randomUUID();
+    localStorage.setItem(KEYS.furever, JSON.stringify(stored));
+  }
+  return {
+    ...FUREVER_DEFAULTS,
+    ...stored,
+    breederContact: { ...FUREVER_DEFAULTS.breederContact, ...(stored.breederContact || {}) },
+    breederVet: { ...FUREVER_DEFAULTS.breederVet, ...(stored.breederVet || {}) }
+  };
+}
+
+export function setFureverSettings(values) {
+  const stored = readFureverStore();
+  const merged = { ...stored, ...values };
+  if (values.breederContact) merged.breederContact = { ...(stored.breederContact || {}), ...values.breederContact };
+  if (values.breederVet) merged.breederVet = { ...(stored.breederVet || {}), ...values.breederVet };
+  if (!merged.breederKey) merged.breederKey = crypto.randomUUID();
+  localStorage.setItem(KEYS.furever, JSON.stringify(merged));
+  return getFureverSettings();
 }
 
 // --- Invoice / receipt defaults (§24) --------------------------------------

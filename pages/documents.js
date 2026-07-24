@@ -1,15 +1,15 @@
 // documents.js — the Documents controller (see documents.html). Local
 // storage: a document row (data/documentRepo.js) belongs to exactly one dog
-// and points at exactly one stored file (data/fileRepo.js). Uploading a PDF
-// stores it as-is; taking/choosing photo(s) — including a screenshot picked
-// from the library — runs them through data/pdfBuild.js first, which
-// downscales and re-encodes each page as JPEG to keep the stored file small.
-import { esc, fmtDate, param, confirmModal } from '../assets/ui.js';
+// and points at exactly one stored file (data/fileRepo.js). The add/edit and
+// view dialogs live in the shared assets/documentModal.js so this page and the
+// Contract detail page drive the same modal; this controller only owns the
+// grouped list, filters, and refresh.
+import { esc, fmtDate, param } from '../assets/ui.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { documentRepo } from '../data/documentRepo.js';
 import { fileRepo } from '../data/fileRepo.js';
-import { photosToPdf } from '../data/pdfBuild.js';
-import { DOC_TYPES, documentFieldsFor, docTypeIcon } from '../data/vocab.js';
+import { DOC_TYPES, docTypeIcon } from '../data/vocab.js';
+import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 
 // --- View state -------------------------------------------------------------
 let dogsById = new Map();            // dogs by id, for names + the add-form select
@@ -23,12 +23,6 @@ function flash(text, kind = 'ok') {
     ? `<div class="${kind === 'ok' ? 'inline-warn' : 'inline-error'}" style="${kind === 'ok' ? 'color:var(--accent-dark);background:var(--accent-soft);border-color:#bfe0cd;' : ''}">${esc(text)}</div>`
     : '';
   if (text) msg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-function fmtBytes(n) {
-  if (!n) return '0 KB';
-  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 const dogName = (d) => (d && (d.call_name || d.registered_name)) || '(unnamed dog)';
@@ -120,7 +114,7 @@ function renderList() {
     </div>`).join('');
 
   for (const row of host.querySelectorAll('.doc-row[data-doc]')) {
-    const open = () => openViewModal(row.dataset.doc);
+    const open = () => openView(row.dataset.doc);
     row.addEventListener('click', open);
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
   }
@@ -143,254 +137,25 @@ async function refresh() {
   renderList();
 }
 
-// --- Add / edit modal ---------------------------------------------------
+// --- Modals (shared implementation in assets/documentModal.js) --------------
 
-function extraFieldsHtml(docType, existing) {
-  const FIELD_DEFS = {
-    issuer_or_lab: { label: 'Registry / vet / lab' },
-    result: { label: 'Result' },
-    registry: { label: 'Registry' },
-    registration_number: { label: 'Registration #' }
-  };
-  return documentFieldsFor(docType).map((f) => {
-    const def = FIELD_DEFS[f];
-    const val = esc(existing?.[f] || '');
-    return `<div class="field"><label>${esc(def.label)}</label><input type="text" id="doc-field-${f}" value="${val}"></div>`;
-  }).join('');
+const onSaved = async ({ isEdit }) => { flash(isEdit ? 'Document updated.' : 'Document added.'); await refresh(); };
+const onDeleted = async () => { flash('Document deleted.'); await refresh(); };
+
+function openAdd(defaultDogId) {
+  openDocumentModal({ defaultDogId: defaultDogId || filters.dog || '', onSaved, onDeleted });
 }
-
-function openAddEditModal(existingId, defaultDogId) {
-  (async () => {
-    const isEdit = !!existingId;
-    const existing = isEdit ? await documentRepo.getById(existingId) : null;
-    const currentFile = existing ? await fileRepo.get(existing.file_id) : null;
-    const dogs_ = [...dogsById.values()].filter((d) => !d.is_archived)
-      .sort((a, b) => dogName(a).localeCompare(dogName(b), undefined, { sensitivity: 'base' }));
-    let pendingFiles = null; // { kind: 'pdf'|'photo', files: File[] }
-
-    const selectedDogId = existing?.dog_id || defaultDogId || '';
-    const initialType = existing?.doc_type || 'pedigree';
-
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal" id="doc-form-modal" role="dialog" aria-modal="true">
-        <div class="row-between" style="margin-bottom:12px;">
-          <h2 style="margin:0;">${isEdit ? 'Edit document' : 'Add document'}</h2>
-          <button class="btn btn-sm" data-act="cancel" type="button">✕</button>
-        </div>
-        <form id="doc-form">
-          <div class="field">
-            <label>Source</label>
-            <label class="check-inline"><input type="radio" name="doc-source" value="pdf" checked> Upload PDF</label>
-            <label class="check-inline"><input type="radio" name="doc-source" value="photo"> Take / choose photo or screenshot</label>
-          </div>
-          ${isEdit ? `<p class="muted" style="font-size:13px;">Current file: ${esc(currentFile?.filename || 'unknown')} (${fmtBytes(currentFile?.size)}) — pick a new one below to replace it, or leave as-is.</p>` : ''}
-          <div class="field">
-            <input type="file" id="doc-file-pdf" accept="application/pdf">
-            <div id="doc-photo-buttons" class="pill-row" hidden>
-              <label class="btn btn-sm">📷 Take Photo<input type="file" id="doc-file-camera" accept="image/*" capture="environment" multiple hidden></label>
-              <label class="btn btn-sm">🖼 Choose from Library<input type="file" id="doc-file-library" accept="image/*" multiple hidden></label>
-            </div>
-            <div id="doc-file-preview" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"></div>
-          </div>
-
-          <div class="form-grid" style="margin-top:12px;">
-            <div class="field"><label>Dog <span class="req">*</span></label>
-              <select id="doc-dog" required>
-                <option value="" disabled${selectedDogId ? '' : ' selected'}>Choose a dog…</option>
-                ${dogs_.map((d) => `<option value="${esc(d.id)}"${d.id === selectedDogId ? ' selected' : ''}>${esc(dogName(d))}</option>`).join('')}
-              </select></div>
-            <div class="field"><label>Type</label>
-              <select id="doc-type">${DOC_TYPES.map((t) => `<option value="${t.value}"${t.value === initialType ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}</select></div>
-            <div class="field"><label>Title</label>
-              <input type="text" id="doc-title" value="${esc(existing?.title || '')}" placeholder="e.g. Willow's OFA hips"></div>
-            <div class="field"><label>Date</label>
-              <input type="date" id="doc-date" value="${esc(existing?.doc_date || '')}"></div>
-            <div id="doc-extra-fields" style="display:contents;">${extraFieldsHtml(initialType, existing)}</div>
-            <div class="field field-wide"><label>Notes</label><textarea id="doc-notes" rows="2">${esc(existing?.notes || '')}</textarea></div>
-          </div>
-
-          <div id="doc-form-error"></div>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary">${isEdit ? 'Save changes' : 'Add document'}</button>
-            <button type="button" class="btn" data-act="cancel">Cancel</button>
-            <span class="spacer"></span>
-            ${isEdit ? '<button type="button" class="btn btn-danger" id="btn-doc-delete">Delete</button>' : ''}
-          </div>
-        </form>
-      </div>`;
-    document.body.appendChild(overlay);
-    const modal = overlay.querySelector('.modal');
-
-    function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
-    function onKey(e) { if (e.key === 'Escape') close(); }
-    document.addEventListener('keydown', onKey);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    modal.querySelectorAll('[data-act="cancel"]').forEach((b) => b.addEventListener('click', close));
-
-    // Type -> extra fields.
-    modal.querySelector('#doc-type').addEventListener('change', (e) => {
-      modal.querySelector('#doc-extra-fields').innerHTML = extraFieldsHtml(e.target.value, null);
-    });
-
-    // Source radio -> which file control shows. Camera and library are two
-    // SEPARATE inputs (not one input with `capture`) because `capture` forces
-    // a direct camera launch with no gallery option on Android/Chrome — the
-    // only way to offer both "take a photo" and "pick an existing photo or
-    // screenshot" is two buttons, each feeding the same pendingFiles variable
-    // so Save doesn't care which path was used.
-    const pdfInput = modal.querySelector('#doc-file-pdf');
-    const photoButtons = modal.querySelector('#doc-photo-buttons');
-    const cameraInput = modal.querySelector('#doc-file-camera');
-    const libraryInput = modal.querySelector('#doc-file-library');
-    const preview = modal.querySelector('#doc-file-preview');
-
-    function syncSourceUI() {
-      const source = modal.querySelector('input[name="doc-source"]:checked').value;
-      pdfInput.hidden = source !== 'pdf';
-      photoButtons.hidden = source !== 'photo';
-    }
-    modal.querySelectorAll('input[name="doc-source"]').forEach((r) => r.addEventListener('change', syncSourceUI));
-    syncSourceUI();
-
-    function renderFilePreview() {
-      preview.innerHTML = '';
-      if (!pendingFiles) return;
-      if (pendingFiles.kind === 'pdf') {
-        const f = pendingFiles.files[0];
-        const chip = document.createElement('div');
-        chip.className = 'badge badge-neutral';
-        chip.textContent = `📎 ${f.name} (${fmtBytes(f.size)})`;
-        preview.appendChild(chip);
-      } else {
-        for (const f of pendingFiles.files) {
-          const url = URL.createObjectURL(f);
-          const img = document.createElement('img');
-          img.src = url;
-          img.alt = '';
-          img.style.cssText = 'width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--border,#e2e6ec);';
-          preview.appendChild(img);
-        }
-      }
-    }
-    pdfInput.addEventListener('change', () => {
-      pendingFiles = pdfInput.files[0] ? { kind: 'pdf', files: [pdfInput.files[0]] } : null;
-      renderFilePreview();
-    });
-    function onPhotoPicked(input) {
-      pendingFiles = input.files.length ? { kind: 'photo', files: Array.from(input.files) } : null;
-      renderFilePreview();
-    }
-    cameraInput.addEventListener('change', () => onPhotoPicked(cameraInput));
-    libraryInput.addEventListener('change', () => onPhotoPicked(libraryInput));
-
-    modal.querySelector('#doc-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const dogId = modal.querySelector('#doc-dog').value;
-      const docType = modal.querySelector('#doc-type').value;
-      const title = modal.querySelector('#doc-title').value.trim();
-      const docDate = modal.querySelector('#doc-date').value;
-      const notes = modal.querySelector('#doc-notes').value;
-      const extras = {};
-      for (const f of documentFieldsFor(docType)) {
-        extras[f] = modal.querySelector(`#doc-field-${f}`)?.value.trim() || '';
-      }
-
-      const submitBtn = modal.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      const errBox = modal.querySelector('#doc-form-error');
-      errBox.innerHTML = '';
-      try {
-        if (!dogId) throw new Error('Choose a dog first.');
-
-        let fileId = existing?.file_id || null;
-        if (pendingFiles) {
-          if (pendingFiles.kind === 'pdf') {
-            const f = pendingFiles.files[0];
-            fileId = await fileRepo.create(f, { filename: f.name, thumbnail: '' });
-          } else {
-            const built = await photosToPdf(pendingFiles.files, { title: title || docType });
-            fileId = await fileRepo.create(built.blob, { filename: built.filename, thumbnail: built.thumbnail });
-          }
-          if (isEdit && existing.file_id && existing.file_id !== fileId) {
-            await fileRepo.remove(existing.file_id);
-          }
-        }
-        if (!fileId) throw new Error('Choose a PDF or photo(s) first.');
-
-        const payload = { dog_id: dogId, doc_type: docType, title, doc_date: docDate, notes, file_id: fileId, ...extras };
-        if (isEdit) await documentRepo.update(existing.id, payload);
-        else await documentRepo.create(payload);
-
-        close();
-        flash(isEdit ? 'Document updated.' : 'Document added.');
-        await refresh();
-      } catch (err) {
-        errBox.innerHTML = `<div class="inline-error">${esc(err.message || String(err))}</div>`;
-      } finally {
-        submitBtn.disabled = false;
-      }
-    });
-
-    if (isEdit) {
-      modal.querySelector('#btn-doc-delete').addEventListener('click', async () => {
-        if (!(await confirmModal({ title: 'Delete this document?', message: 'This also removes its stored file. This can’t be undone.', confirmLabel: 'Delete', danger: true }))) return;
-        await documentRepo.hardDelete(existing.id);
-        close();
-        flash('Document deleted.');
-        await refresh();
-      });
-    }
-  })();
+function openEdit(docId) {
+  openDocumentModal({ existingId: docId, onSaved, onDeleted });
 }
-
-// --- View modal ---------------------------------------------------------
-
-async function openViewModal(docId) {
-  const doc = docs.find((d) => d.id === docId);
-  if (!doc) return;
-  const dog = dogsById.get(doc.dog_id);
-  const fileRow = await fileRepo.get(doc.file_id);
-  const objUrl = fileRow ? URL.createObjectURL(fileRow.blob) : '';
-  const t = DOC_TYPES.find((d) => d.value === doc.doc_type) || DOC_TYPES.at(-1);
-
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" style="max-width:900px;width:96vw;">
-      <div class="row-between" style="align-items:center;">
-        <h2 style="margin:0;font-size:17px;">${esc(doc.title || t.label)}${dog ? ` — ${esc(dogName(dog))}` : ''}</h2>
-        <div class="form-actions" style="margin:0;">
-          <button class="btn" data-act="edit">Edit</button>
-          <button class="btn" data-act="download">Download</button>
-          <button class="btn" data-act="close">Close</button>
-        </div>
-      </div>
-      ${objUrl
-        ? `<embed src="${objUrl}" type="application/pdf" style="width:100%;height:70vh;margin-top:12px;border:1px solid var(--border,#e2e6ec);border-radius:6px;">`
-        : '<p class="muted">That file is missing.</p>'}
-    </div>`;
-  document.body.appendChild(overlay);
-
-  const cleanup = () => { overlay.remove(); if (objUrl) setTimeout(() => URL.revokeObjectURL(objUrl), 500); };
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(); });
-  overlay.querySelector('[data-act="close"]').addEventListener('click', cleanup);
-  overlay.querySelector('[data-act="edit"]').addEventListener('click', () => { cleanup(); openAddEditModal(doc.id); });
-  overlay.querySelector('[data-act="download"]').addEventListener('click', () => {
-    const a = document.createElement('a');
-    a.href = objUrl;
-    a.download = fileRow?.filename || `${doc.title || 'document'}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  });
+function openView(docId) {
+  openDocumentViewModal({ docId, onEdit: openEdit });
 }
 
 // --- Boot -------------------------------------------------------------------
 
 function wireEvents() {
-  document.getElementById('btn-add-document').addEventListener('click', () => openAddEditModal(null, filters.dog));
+  document.getElementById('btn-add-document').addEventListener('click', () => openAdd());
   document.getElementById('type-chips').addEventListener('click', (e) => {
     const a = e.target.closest('[data-type]');
     if (!a) return;

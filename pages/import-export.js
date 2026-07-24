@@ -90,7 +90,15 @@ async function doRestore(mode) {
     flash(`Restore complete (${mode}) — ${total} record(s) loaded. Reloading…`);
     setTimeout(() => location.reload(), 1200);
   } catch (e) {
-    flash(e.message || String(e), 'err');
+    // The Lite import cap (cap spec §9) throws a CapExceededError before writing
+    // anything, so spell out what happened and what to do rather than showing the
+    // terse repo message — nothing was changed, so the user can act and retry.
+    if (e && e.name === 'CapExceededError') {
+      flash(`This backup would leave ${e.current} active dogs — KennelOS Lite keeps up to ${e.limit}. `
+        + `Nothing was changed. Trim the file to ${e.limit} or fewer active dogs, or upgrade to Pro, then import again.`, 'err');
+    } else {
+      flash(e.message || String(e), 'err');
+    }
   }
 }
 

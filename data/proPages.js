@@ -23,6 +23,8 @@ export const PRO_ONLY_PAGES = [
   'litter-finances-report.html', 'placements-report.html', 'stud-services-report.html',
   // Companion share-out
   'companion.html',
+  // Furever seed-link generator
+  'furever.html',
   // Documents + file storage
   'documents.html',
   // Invoice / receipt generation (print doc)
@@ -32,8 +34,10 @@ export const PRO_ONLY_PAGES = [
 ];
 
 // Standalone Pro files that live outside pages/ (no nav entry) — also excluded from
-// the Lite build.
-export const PRO_ONLY_STANDALONE = ['companion-view.html', 'assistant.html', 'assistant.js'];
+// the Lite build. `assets/documentModal.js` is the shared Documents add/edit + view
+// modal, imported only by the Pro-only Documents and Contract pages, so Lite (which
+// ships neither) doesn't need it — keep it out so no Pro-only code lands in Lite.
+export const PRO_ONLY_STANDALONE = ['companion-view.html', 'assistant.html', 'assistant.js', 'assets/documentModal.js'];
 
 // True when a link target (an href like "contact-import.html" or with a query string)
 // points at a Pro-only page. Used by runtime gating in Lite-kept pages.

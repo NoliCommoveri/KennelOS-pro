@@ -51,7 +51,7 @@ export const isLicenseGated = () => Boolean(editionFlags.licenseGate);
 //                 shorter/stricter grace window, per the plan's "unknown → shorter" rule.
 // Lifetime is checked first so a hypothetical "lifetime annual"-style name can't be
 // misread as a renewing yearly sub.
-function detectInterval(variantName) {
+export function detectInterval(variantName) {
   const lifetimePattern = licenseConfig?.lifetimeVariantPattern || 'lifetime|perpetual';
   const yearlyPattern = licenseConfig?.yearlyVariantPattern || 'year|annual';
   try {
@@ -143,7 +143,7 @@ export function resetLicense() {
 //   'valid' → full access
 //   'grace' → access, but show a "renew / reconnect" banner
 //   'wall'  → blocked (renewal wall)
-function onlineVerdict(record) {
+export function onlineVerdict(record) {
   if (!record) return 'wall';
   // Perpetual (lifetime) purchase: no subscription, no expiry. Active is full
   // access, full stop; anything else (a refund/chargeback flips the key to
@@ -169,7 +169,7 @@ function onlineVerdict(record) {
 // decided from the cache alone. Same base status check, but additionally requires
 // that we validated recently enough — within the grace window of lastValidated —
 // so a cancelled subscription can't ride a stale cached 'active' forever offline.
-function offlineVerdict(record) {
+export function offlineVerdict(record) {
   const base = onlineVerdict(record);
   if (base === 'wall') return 'wall';
   // Perpetual licenses need no periodic re-validation — there's no subscription

@@ -1,7 +1,10 @@
 // contractRepo.js — all Dexie access for the Contract table. Generic enough to
 // cover sale, stud service, co-ownership, and lease agreements — one table
-// instead of four (Data Model v3 §5.7). A LEAF entity: nothing points at a
-// Contract, so it is always hard-deletable (CONTRACT_REFERENCES is empty).
+// instead of four (Data Model v3 §5.7). A LEAF entity for referential integrity:
+// nothing in the registry points at a Contract, so it is always hard-deletable
+// (CONTRACT_REFERENCES is empty). The one thing that can reference a Contract is
+// a Document's UNINDEXED contract_id back-link (§26.1) — not a registry entry
+// and never a delete blocker; hardDelete just clears it (see below).
 //
 // Owns all four canonical links: related_sale_id, related_stud_service_id,
 // related_dog_id, and related_contact_id (the last two for lease/co_own/other,
@@ -13,6 +16,7 @@
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { CONTRACT_REFERENCES } from './referenceRegistry.js';
+import { documentRepo } from './documentRepo.js';
 
 const base = makeRepo('contracts', CONTRACT_REFERENCES);
 
@@ -77,6 +81,18 @@ export const contractRepo = {
       related_dog_id: merged.related_dog_id,
       related_contact_id: merged.related_contact_id
     });
+  },
+
+  // Contract is a leaf (CONTRACT_REFERENCES is empty), so base.hardDelete never
+  // blocks. But a Document may carry an UNINDEXED contract_id back-link to it
+  // (documents.contract_id — a signed-contract PDF filed for this contract,
+  // §26.1). That link isn't a referenceRegistry entry, so nothing would clear it
+  // automatically: unlink it here first (the document stays filed on its dog),
+  // then delete. Same "owner cleans up its unregistered back-link on delete"
+  // shape as documentRepo/expenseRepo removing their file on hardDelete.
+  async hardDelete(id) {
+    await documentRepo.unlinkContract(id);
+    return base.hardDelete(id);
   },
 
   // Derived reverse lookups — the sale/stud-service side never stores a pointer

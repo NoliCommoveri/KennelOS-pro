@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Furever — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Furever</h1>
+        <p class="page-subtitle">Send a family their pup's own free care app — KennelOS Furever — seeded with its name, birthday, your contact, and a lifelong vaccine/care schedule. One tap opens the app already set up; a resend (say the pickup date slips) just updates it in place.</p>
+      </div>
+    </div>
+
+    <div id="page-error"></div>
+
+    <section class="card">
+      <h2 style="margin-top:0;">Kennel identity</h2>
+      <p class="muted" style="margin-top:0;">Copied into every seed link you send — your kennel name, your own contact, and your vet's contact (a referral for the family before they have their own). Edit any time; it applies to the next link you send.</p>
+      <div id="identity"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+      <h2 style="margin:0;">Pups to send</h2>
+      <p class="muted" style="margin:8px 0 0;">One entry per pup with an open sale. Add an optional personal note and pickup details, then <strong>Prepare link</strong> to build the seed link and hand off a real email / SMS you tap to send.</p>
+      <div id="recipients"></div>
+    </section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./furever.js"></script>
+</body>
+</html>
