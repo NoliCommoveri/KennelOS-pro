@@ -11,7 +11,8 @@
 import { saleRepo } from '../data/saleRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
-import { getFureverSettings, setFureverSettings } from '../data/settings.js';
+import { kennelRepo } from '../data/kennelRepo.js';
+import { getFureverSettings, setFureverSettings, getMyKennelId, getMyContactId } from '../data/settings.js';
 import { buildSeedPacket, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
 import { compressToEncodedURIComponent } from '../vendor/lz-string.min.mjs';
 import { esc } from '../assets/ui.js';
@@ -32,7 +33,55 @@ function showError(msg) { els.error.innerHTML = `<div class="inline-error">${esc
 function clearError() { els.error.innerHTML = ''; }
 
 // --- Kennel identity card ----------------------------------------------------
-function identityCardHtml(s) {
+// The identity is entered once and copied into every seed packet. Most of it is
+// already in the breeder's KennelOS records (My Kennel, their owner Contact, their
+// vet Contacts), so we PREFILL from there rather than making them retype it. This
+// stays non-binding to that data (settings.js note: Furever must work even if
+// Kennel Setup was skipped) — prefill only fills blanks, and everything stays
+// editable and saved in Furever's own settings block.
+
+// A vet Contact flattened to the three fields the identity card holds. The
+// multi-line contact address collapses to one line (the card's a single input).
+function vetToFields(v) {
+  return {
+    name: v.name || '',
+    phone: v.phone || '',
+    address: (v.address || '').replace(/\s*\n+\s*/g, ', ').trim()
+  };
+}
+
+// Values already on file elsewhere in KennelOS, offered as prefill defaults + the
+// vet-picker list. `getMyKennelId`/`getMyContactId` are the same records Kennel
+// Setup manages; vets are any Contact tagged with the 'vet' role.
+async function loadIdentityContext() {
+  const kennelId = getMyKennelId();
+  const contactId = getMyContactId();
+  const [kennel, owner, allContacts] = await Promise.all([
+    kennelId ? kennelRepo.getById(kennelId) : null,
+    contactId ? contactRepo.getById(contactId) : null,
+    contactRepo.getAll()
+  ]);
+  const vets = allContacts.filter((c) => (c.contact_type || []).includes('vet'));
+  return {
+    defaults: {
+      kennelName: (kennel && kennel.kennel_name) || '',
+      breederContact: {
+        name: (owner && owner.name) || '',
+        phone: (owner && owner.phone) || '',
+        email: (owner && owner.email) || ''
+      }
+    },
+    vets
+  };
+}
+
+function identityCardHtml(s, vets, selectedVetId) {
+  const vetOptions = [`<option value="">— Enter manually —</option>`]
+    .concat(vets.map((v) => `<option value="${esc(v.id)}"${v.id === selectedVetId ? ' selected' : ''}>${esc(v.name || 'Unnamed vet')}</option>`))
+    .join('');
+  const vetPicker = vets.length
+    ? `<div class="field field-wide"><label>Pick from your vet contacts</label><select class="id-bv-picker">${vetOptions}</select></div>`
+    : '';
   return `
     <div class="form-grid">
       <div class="field"><label>Kennel name</label><input class="id-kennelName" type="text" value="${esc(s.kennelName)}"></div>
@@ -40,6 +89,7 @@ function identityCardHtml(s) {
       <div class="field"><label>Your name</label><input class="id-bc-name" type="text" value="${esc(s.breederContact.name)}"></div>
       <div class="field"><label>Your phone</label><input class="id-bc-phone" type="text" value="${esc(s.breederContact.phone)}"></div>
       <div class="field field-wide"><label>Your email</label><input class="id-bc-email" type="email" value="${esc(s.breederContact.email)}"></div>
+      ${vetPicker}
       <div class="field"><label>Your vet's name</label><input class="id-bv-name" type="text" value="${esc(s.breederVet.name)}"></div>
       <div class="field"><label>Your vet's phone</label><input class="id-bv-phone" type="text" value="${esc(s.breederVet.phone)}"></div>
       <div class="field field-wide"><label>Your vet's address</label><input class="id-bv-address" type="text" value="${esc(s.breederVet.address)}"></div>
@@ -47,9 +97,54 @@ function identityCardHtml(s) {
     <div style="margin-top:8px;"><button class="btn btn-primary btn-sm" id="id-save">Save kennel identity</button> <span class="muted" id="id-saved"></span></div>`;
 }
 
-function renderIdentity() {
-  const s = getFureverSettings();
-  els.identity.innerHTML = identityCardHtml(s);
+// Match a saved vet name back to a Contact so re-opening the console re-selects it
+// in the picker (best-effort, case-insensitive on name — the identity block stores
+// no contact id, deliberately).
+function matchVetId(vets, vetName) {
+  const key = (vetName || '').trim().toLowerCase();
+  if (!key) return '';
+  const hit = vets.find((v) => (v.name || '').trim().toLowerCase() === key);
+  return hit ? hit.id : '';
+}
+
+async function renderIdentity() {
+  const { defaults, vets } = await loadIdentityContext();
+  let s = getFureverSettings();
+
+  // Seed blanks from the breeder's records once, and persist so Prepare link works
+  // without a manual save. Non-destructive: only empty fields are filled.
+  const prefill = {};
+  if (!s.kennelName && defaults.kennelName) prefill.kennelName = defaults.kennelName;
+  const bc = {};
+  if (!s.breederContact.name && defaults.breederContact.name) bc.name = defaults.breederContact.name;
+  if (!s.breederContact.phone && defaults.breederContact.phone) bc.phone = defaults.breederContact.phone;
+  if (!s.breederContact.email && defaults.breederContact.email) bc.email = defaults.breederContact.email;
+  if (Object.keys(bc).length) prefill.breederContact = bc;
+  if (!s.breederVet.name && vets.length === 1) prefill.breederVet = vetToFields(vets[0]);
+  const didPrefill = Object.keys(prefill).length > 0;
+  if (didPrefill) s = setFureverSettings(prefill);
+
+  const selectedVetId = matchVetId(vets, s.breederVet.name);
+  els.identity.innerHTML = identityCardHtml(s, vets, selectedVetId);
+  wireIdentity(vets);
+  if (didPrefill) {
+    const saved = document.getElementById('id-saved');
+    saved.textContent = 'Prefilled from your kennel records — review and Save.';
+  }
+}
+
+function wireIdentity(vets) {
+  const picker = els.identity.querySelector('.id-bv-picker');
+  if (picker) {
+    picker.addEventListener('change', () => {
+      const v = vets.find((x) => x.id === picker.value);
+      if (!v) return; // "Enter manually" — leave the fields as the breeder left them
+      const f = vetToFields(v);
+      els.identity.querySelector('.id-bv-name').value = f.name;
+      els.identity.querySelector('.id-bv-phone').value = f.phone;
+      els.identity.querySelector('.id-bv-address').value = f.address;
+    });
+  }
   document.getElementById('id-save').addEventListener('click', () => {
     setFureverSettings({
       kennelName: els.identity.querySelector('.id-kennelName').value.trim(),
@@ -225,7 +320,7 @@ async function prepareLink(row, entry) {
 }
 
 async function main() {
-  renderIdentity();
+  await renderIdentity();
   await loadData();
   renderRecipients();
 }
