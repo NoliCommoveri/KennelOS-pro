@@ -203,6 +203,21 @@ export async function uploadFile({ folderId, name, blob, existingFileId = null }
   });
 }
 
+// Trash a file this app created (drive.file scope covers it — the app can
+// manage anything it uploaded). Used when a breeder removes a previously-
+// published document/upload from a pack: Drive's trash also drops "anyone
+// with the link" access for everyone but the owner, so the file actually
+// stops being reachable — not just unlisted in pack.json while still sitting
+// shared in the folder. It's Drive's own Trash (owner-recoverable for a
+// window), not an instant permanent delete.
+export async function trashFile(fileId) {
+  await driveJson(`${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trashed: true })
+  });
+}
+
 // Write (or overwrite) the pack.json manifest — a thin, named wrapper over
 // uploadFile so callers don't have to remember the mime/name convention.
 export async function writeManifestFile({ folderId, manifest, existingFileId = null }) {

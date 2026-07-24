@@ -357,10 +357,16 @@ async function prepareLink(row, entry) {
 // --- Content packages: "Publish to Furever" (Content Package Fetch Mechanism
 // §4.1/§4.2) -------------------------------------------------------------
 // KennelOS does as much as possible from in here: connect Drive once, then
-// publish a kennel-wide pack (any dog's documents + kennel-level uploads) and one
-// pack per litter (that litter's pups + sire + dam's documents). The picker is a
-// bulk-add over documents already filed on dogs — no new document store.
+// publish a kennel-wide pack (kennel-level uploads only — not filed on any
+// dog, since that's dog/litter-scoped material and belongs in a litter pack
+// instead) and one pack per litter (that litter's pups + sire + dam's
+// documents). The litter picker is a bulk-add over documents already filed
+// on dogs — no new document store.
 let kennelUploads = []; // [{ id, title, docType, blob }] — pending "Upload new" items, kennel pack only
+// Ids from settings.contentPack.selection.uploads staged for removal on the
+// next kennel publish (toggled by the "Remove"/"Undo" button on an
+// already-published upload row) — cleared once that publish lands.
+let removedKennelUploadIds = new Set();
 
 function driveConnectHtml() {
   const connected = isDriveConnectedThisSession();
@@ -421,9 +427,33 @@ function uploadRowHtml(u) {
     </div>`;
 }
 
-function uploadsHtml() {
+// A kennel-wide upload from a PRIOR publish (settings.contentPack.selection.
+// uploads) — the file already lives in Drive; this row is what makes it
+// visible in the console again instead of vanishing once `kennelUploads`
+// (the pending-upload staging list) gets cleared after Publish.
+function publishedUploadRowHtml(u) {
+  const removed = removedKennelUploadIds.has(u.id);
+  const driveLink = u.drive_file_id
+    ? `https://drive.google.com/file/d/${encodeURIComponent(u.drive_file_id)}/view`
+    : null;
   return `
-    <div class="cp-uploads" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
+    <div class="list-row" data-published-upload="${esc(u.id)}" style="display:flex; align-items:center; gap:8px;${removed ? ' opacity:.5;' : ''}">
+      <span aria-hidden="true">${docTypeIcon(u.docType)}</span>
+      <span class="grow">${esc(u.title)}${removed ? ' <span class="muted">(trashed in Drive on next publish)</span>' : ''}</span>
+      ${badge(DOC_TYPES, u.docType)}
+      ${driveLink ? `<a href="${esc(driveLink)}" target="_blank" rel="noopener" class="muted" style="font-size:.85rem;">View in Drive</a>` : ''}
+      <button type="button" class="btn btn-sm cp-published-upload-remove" data-published-upload="${esc(u.id)}">${removed ? 'Undo' : 'Remove'}</button>
+    </div>`;
+}
+
+function uploadsHtml(publishedUploads) {
+  return `
+    <div class="cp-uploads" data-scope="kennel" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
+      ${publishedUploads.length ? `
+        <h4 style="margin:0 0 6px;">Already published</h4>
+        <div id="cp-published-upload-list">${publishedUploads.map(publishedUploadRowHtml).join('')}</div>
+        <div style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
+      ` : ''}
       <h4 style="margin:0 0 6px;">Upload new (not filed on a dog)</h4>
       <p class="muted" style="margin:0 0 8px;">A care guide, poison list, or blank guarantee template — kennel-level files, published straight to Drive.</p>
       <div id="cp-upload-list">${kennelUploads.map(uploadRowHtml).join('')}</div>
@@ -433,13 +463,14 @@ function uploadsHtml() {
         <div class="field"><label>Type</label><select class="cp-upload-type">${DOC_TYPES.map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}</select></div>
       </div>
       <button type="button" class="btn btn-sm cp-upload-add" style="margin-top:6px;">Add file</button>
+      ${publishedUploads.length ? `</div>` : ''}
     </div>`;
 }
 
-// `parentIds` ({sireId, damId}, litter picker only) drives the "(Sire)"/"(Dam)"
-// role labels — absent for the kennel-wide picker, where every row is just a
-// dog with no litter role to call out.
-function pickerHtml({ prefix, rows, selectedIds, showUploads, parentIds }) {
+// `parentIds` ({sireId, damId}) drives the "(Sire)"/"(Dam)" role labels —
+// this picker is litter-only now (the kennel-wide pack is uploads-only, see
+// uploadsHtml/kennelSectionHtml), so every row always has a role to call out.
+function pickerHtml({ prefix, rows, selectedIds, parentIds }) {
   const types = docTypesIn(rows);
   const typeToggles = types.map((t) =>
     `<label style="margin-right:10px;"><input type="checkbox" class="cp-type-all" data-type="${esc(t.value)}"> All ${esc(t.label.toLowerCase())}s</label>`
@@ -457,7 +488,6 @@ function pickerHtml({ prefix, rows, selectedIds, showUploads, parentIds }) {
         ${typeToggles}
       </div>` : ''}
       ${rows.length ? rows.map((r) => dogGroupHtml(r, selectedIds, roleFor(r.dog))).join('') : '<p class="muted">No documents filed on any connected dog yet.</p>'}
-      ${showUploads ? uploadsHtml() : ''}
     </div>`;
 }
 
@@ -517,7 +547,21 @@ function wirePicker(root) {
   });
 }
 
-function wireUploads(root) {
+function wireUploads(root, publishedUploads) {
+  const wirePublishedRemove = () => {
+    root.querySelectorAll('.cp-published-upload-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-published-upload');
+        if (removedKennelUploadIds.has(id)) removedKennelUploadIds.delete(id);
+        else removedKennelUploadIds.add(id);
+        const list = root.querySelector('#cp-published-upload-list');
+        if (list) list.innerHTML = publishedUploads.map(publishedUploadRowHtml).join('');
+        wirePublishedRemove();
+      });
+    });
+  };
+  wirePublishedRemove();
+
   const addBtn = root.querySelector('.cp-upload-add');
   if (!addBtn) return;
   const refreshList = () => {
@@ -575,21 +619,30 @@ function wireConnect(root) {
   });
 }
 
-async function doKennelPublish(kennelRows) {
-  const root = els.contentPackages.querySelector('.cp-picker[data-prefix="kennel"]');
-  const docsById = flattenDocs(kennelRows);
-  const selectedDocs = collectSelectedIds(root).map((id) => docsById.get(id)).filter(Boolean);
-  // "Upload new" items carry their own doc_type too (a breeder could tag one
-  // 'contract') — the sensitive-doc guard has to cover them, not just the
-  // dog-scoped picker (§4.2 step 2's warning applies to anything about to
-  // become public, regardless of source).
-  const sensitive = [...selectedDocs, ...kennelUploads.map((u) => ({ title: u.title, doc_type: u.docType }))]
-    .filter((d) => isSensitiveDocType(d.doc_type));
+async function doKennelPublish() {
+  const settings = getFureverSettings();
+  // Every publish re-sends the FULL upload set — previously-published items
+  // (no blob this session, carried by id/metadata only) plus anything newly
+  // staged — so a republish doesn't silently drop earlier uploads from the
+  // manifest (fureverContentPack.js's publishPack carries a blob-less entry
+  // forward by its existing Drive file id rather than re-uploading it).
+  const publishedUploads = settings.contentPack.selection.uploads || [];
+  const carryForward = publishedUploads.filter((u) => !removedKennelUploadIds.has(u.id));
+  const allUploads = [...carryForward, ...kennelUploads];
+  // Anything the breeder marked Remove gets its Drive file trashed as part of
+  // this publish (fureverContentPack.js's publishPack, step 0) — not just
+  // dropped from the new manifest.
+  const removedKeys = Array.from(removedKennelUploadIds, (id) => `upload:${id}`);
+
+  // Only the newly staged items need the "about to become public" warning —
+  // a carried-forward upload was already published (and already confirmed,
+  // if it needed one) in an earlier publish.
+  const sensitive = kennelUploads.filter((u) => isSensitiveDocType(u.docType));
 
   const confirmBox = document.getElementById('cp-kennel-confirm');
   if (sensitive.length && !confirmBox.dataset.confirmed) {
-    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive);
-    wireSensitiveConfirm(confirmBox, () => { confirmBox.dataset.confirmed = '1'; doKennelPublish(kennelRows); });
+    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive.map((u) => ({ title: u.title, doc_type: u.docType })));
+    wireSensitiveConfirm(confirmBox, () => { confirmBox.dataset.confirmed = '1'; doKennelPublish(); });
     return;
   }
   confirmBox.innerHTML = '';
@@ -601,16 +654,17 @@ async function doKennelPublish(kennelRows) {
   btn.disabled = true;
   statusEl.textContent = 'Publishing…';
   try {
-    const settings = getFureverSettings();
     const pointer = await publishPack({
       scope: 'kennel',
       kennelName: settings.kennelName,
       pointer: settings.contentPack,
-      documents: selectedDocs,
-      uploads: kennelUploads
+      documents: [],
+      uploads: allUploads,
+      removedKeys
     });
     setFureverSettings({ contentPack: pointer, driveConnected: true });
     kennelUploads = [];
+    removedKennelUploadIds.clear();
     statusEl.textContent = 'Published.';
     await renderContentPackages();
   } catch (e) {
@@ -643,6 +697,13 @@ async function doLitterPublish(litter, rows) {
   statusEl.textContent = 'Publishing…';
   try {
     const settings = getFureverSettings();
+    // Any document that WAS in the last-published selection but isn't checked
+    // now got un-ticked — trash its Drive file as part of this publish rather
+    // than just dropping it from the new manifest (fureverContentPack.js's
+    // publishPack, step 0).
+    const prevSelectedIds = (litter.furever_pack && litter.furever_pack.selection && litter.furever_pack.selection.documentIds) || [];
+    const nowSelectedIds = new Set(selectedDocs.map((d) => d.id));
+    const removedKeys = prevSelectedIds.filter((id) => !nowSelectedIds.has(id)).map((id) => `doc:${id}`);
     const pointer = await publishPack({
       scope: 'litter',
       kennelName: settings.kennelName,
@@ -650,6 +711,7 @@ async function doLitterPublish(litter, rows) {
       pointer: litter.furever_pack || {},
       documents: selectedDocs,
       uploads: [],
+      removedKeys,
       // The litter's parents' documents go to every pup's family in the
       // litter; each pup's own documents go only to that pup's family
       // (contentPackFetch.js's per-pup filter reads this back).
@@ -666,14 +728,13 @@ async function doLitterPublish(litter, rows) {
   }
 }
 
-function kennelSectionHtml(settings, kennelRows) {
-  const selectedIds = new Set(settings.contentPack.selection.documentIds || []);
+function kennelSectionHtml(settings) {
   return `
     <div class="card" style="margin-top:16px;">
       <h2 style="margin:0;">Kennel-wide pack</h2>
       <p class="muted" style="margin:6px 0 0;">Reusable material every family gets — a breed care guide, a blank guarantee template. ${packStatusLine(settings.contentPack)}</p>
       <div style="margin-top:10px;">
-        ${pickerHtml({ prefix: 'kennel', rows: kennelRows, selectedIds, showUploads: true })}
+        ${uploadsHtml(settings.contentPack.selection.uploads || [])}
       </div>
       <div id="cp-kennel-confirm"></div>
       <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
@@ -696,8 +757,8 @@ function litterSectionHtml(litter, rows) {
         </div>
       </div>
       <div class="r-body" style="display:none; margin-top:10px;">
-        <p class="muted" style="margin:0 0 8px; font-size:.85rem;">Sire/dam documents go to every family in this litter. A pup's own documents go only to that pup's family — check just that pup's box to send something to one family alone.</p>
-        ${pickerHtml({ prefix: `litter-${litter.id}`, rows, selectedIds, showUploads: false, parentIds: { sireId: litter.sire_id, damId: litter.dam_id } })}
+        <p class="muted" style="margin:0 0 8px; font-size:.85rem;">Sire/dam documents go to every family in this litter. A pup's own documents go only to that pup's family — check just that pup's box to send something to one family alone. Unchecking something that was already published trashes its Drive copy on the next publish — it isn't just removed from the list.</p>
+        ${pickerHtml({ prefix: `litter-${litter.id}`, rows, selectedIds, parentIds: { sireId: litter.sire_id, damId: litter.dam_id } })}
         <div class="cp-litter-confirm"></div>
         <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
           <button type="button" class="btn btn-primary btn-sm cp-litter-publish">Publish this litter's pack</button>
@@ -709,11 +770,6 @@ function litterSectionHtml(litter, rows) {
 
 async function loadContentPackagesData() {
   const allDogs = await dogRepo.getAll();
-  const kennelRows = (await Promise.all(allDogs.map(async (dog) => {
-    const docs = await documentRepo.getByDog(dog.id);
-    return docs.length ? { dog, docs } : null;
-  }))).filter(Boolean);
-
   const allLitters = await litterRepo.getAll();
   const litterEntries = [];
   for (const litter of allLitters) {
@@ -730,16 +786,19 @@ async function loadContentPackagesData() {
     }
     litterEntries.push({ litter, rows });
   }
-  return { kennelRows, litterEntries };
+  return { litterEntries };
 }
 
-function wireContentPackages(kennelRows, litterEntries) {
+function wireContentPackages(litterEntries) {
   wireConnect(els.contentPackages);
 
-  const kennelRoot = els.contentPackages.querySelector('.cp-picker[data-prefix="kennel"]');
-  if (kennelRoot) { wirePicker(kennelRoot); wireUploads(kennelRoot); }
+  const kennelUploadsRoot = els.contentPackages.querySelector('.cp-uploads[data-scope="kennel"]');
+  if (kennelUploadsRoot) {
+    const settings = getFureverSettings();
+    wireUploads(kennelUploadsRoot, settings.contentPack.selection.uploads || []);
+  }
   const kennelBtn = document.getElementById('cp-kennel-publish');
-  if (kennelBtn) kennelBtn.addEventListener('click', () => doKennelPublish(kennelRows));
+  if (kennelBtn) kennelBtn.addEventListener('click', () => doKennelPublish());
 
   litterEntries.forEach(({ litter, rows }) => {
     const card = els.contentPackages.querySelector(`[data-litter="${CSS.escape(litter.id)}"]`);
@@ -760,16 +819,16 @@ function wireContentPackages(kennelRows, litterEntries) {
 
 async function renderContentPackages() {
   const settings = getFureverSettings();
-  const { kennelRows, litterEntries } = await loadContentPackagesData();
+  const { litterEntries } = await loadContentPackagesData();
 
   els.contentPackages.innerHTML = `
     ${driveConnectHtml()}
-    ${kennelSectionHtml(settings, kennelRows)}
+    ${kennelSectionHtml(settings)}
     ${litterEntries.length
       ? litterEntries.map(({ litter, rows }) => litterSectionHtml(litter, rows)).join('')
       : '<p class="muted" style="margin-top:12px;">No litters yet.</p>'}
   `;
-  wireContentPackages(kennelRows, litterEntries);
+  wireContentPackages(litterEntries);
 }
 
 async function main() {

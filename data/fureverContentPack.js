@@ -7,7 +7,7 @@
 // and flow this implements. The Furever console (pages/furever.*) is the only
 // caller — it owns picking WHICH documents/uploads go in; this module only knows
 // how to publish whatever it's handed.
-import { ensureFolder, shareFolderPublic, uploadFile, writeManifestFile } from './googleDrive.js';
+import { ensureFolder, shareFolderPublic, uploadFile, writeManifestFile, trashFile } from './googleDrive.js';
 import { fileRepo } from './fileRepo.js';
 
 const ROOT_FOLDER_NAME = 'KennelOS Furever';
@@ -98,6 +98,11 @@ function loadUploadSource(upload) {
 //   litterNickname  only used for scope:'litter' (the Drive folder name)
 //   documents       KennelOS Document rows the breeder ticked (dog-scoped)
 //   uploads         [{ id, title, docType, blob }] kennel-scope "Upload new" items
+//   removedKeys     driveFileIds keys (`doc:<id>` / `upload:<id>`) the breeder
+//                    un-ticked/removed since the last publish — their Drive
+//                    files get trashed (§below) instead of just quietly
+//                    dropping out of the manifest while still sitting shared
+//                    in the folder
 //   sireId, damId   only used for scope:'litter' — the litter's parents, whose
 //                   documents are shared with every pup's family in the litter
 //                   (unlike an individual pup's own documents, which are not)
@@ -105,9 +110,20 @@ function loadUploadSource(upload) {
 // Returns the new pointer to persist (settings.js's contentPack, or the litter's
 // furever_pack field) — this module never writes those itself, so it stays
 // agnostic to which scope it's publishing.
-export async function publishPack({ scope, kennelName, litterNickname, pointer = {}, documents = [], uploads = [], sireId = null, damId = null }) {
+export async function publishPack({ scope, kennelName, litterNickname, pointer = {}, documents = [], uploads = [], removedKeys = [], sireId = null, damId = null }) {
   const packKey = pointer.packKey || crypto.randomUUID();
   const driveFileIds = { ...((pointer.selection && pointer.selection.driveFileIds) || {}) };
+
+  // 0. Trash whatever the breeder removed since the last publish, so a
+  // "removed" doc/upload actually stops being reachable instead of just
+  // dropping out of the new manifest while its file (and the folder's
+  // "anyone with the link" share) stays live in Drive.
+  for (const key of removedKeys) {
+    const existing = driveFileIds[key];
+    if (!existing) continue;
+    await trashFile(existing.fileId);
+    delete driveFileIds[key];
+  }
 
   // 1. Ensure folders (reuse the cached id — the common case on a republish).
   let folderId = pointer.folderId || null;
@@ -117,10 +133,15 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
     folderId = await ensureFolder(name, rootId);
   }
 
-  // 2. Load every chosen source's bytes.
+  // 2. Load every chosen source's bytes. A kennel upload only carries a blob
+  // when it's new/changed this session — an upload carried forward from a
+  // prior publish (the console re-sends its metadata every publish so it
+  // isn't silently dropped from the manifest) has none and is handled in 3b.
   const sources = [];
   for (const doc of documents) sources.push(await loadDocumentSource(doc));
-  for (const upload of uploads) sources.push(loadUploadSource(upload));
+  for (const upload of uploads) {
+    if (upload.blob) sources.push(loadUploadSource(upload));
+  }
 
   // 3. Upload each — PATCHing the same Drive file id when we've published this
   // exact source before (by its stable key), so a republish doesn't pile up
@@ -137,6 +158,21 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
       fileId: uploaded.id, resourceKey: uploaded.resourceKey || null,
       title: src.title, docType: src.docType, mime: src.mime, size: src.blob.size || 0,
       dogId: src.dogId || null
+    });
+  }
+
+  // 3b. Carry forward kennel uploads that weren't re-sent this publish (no
+  // blob this session, but a Drive file id from a previous one) — otherwise
+  // a republish would silently drop them from the manifest even though the
+  // Drive file is still sitting in the folder.
+  for (const upload of uploads) {
+    if (upload.blob) continue;
+    const existing = driveFileIds[`upload:${upload.id}`];
+    if (!existing) continue;
+    files.push({
+      fileId: existing.fileId, resourceKey: existing.resourceKey || null,
+      title: upload.title || 'File', docType: upload.docType || 'other',
+      mime: upload.mime || '', size: upload.size || 0, dogId: null
     });
   }
 
@@ -161,13 +197,18 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
     version,
     selection: {
       documentIds: documents.map((d) => d.id),
-      uploads: uploads.map((u) => ({
-        id: u.id,
-        title: u.title,
-        docType: u.docType,
-        drive_file_id: (driveFileIds[`upload:${u.id}`] || {}).fileId || null,
-        resourceKey: (driveFileIds[`upload:${u.id}`] || {}).resourceKey || null
-      })),
+      uploads: uploads.map((u) => {
+        const uploaded = driveFileIds[`upload:${u.id}`] || {};
+        return {
+          id: u.id,
+          title: u.title,
+          docType: u.docType,
+          mime: (u.blob && u.blob.type) || u.mime || '',
+          size: u.blob ? (u.blob.size || 0) : (u.size || 0),
+          drive_file_id: uploaded.fileId || null,
+          resourceKey: uploaded.resourceKey || null
+        };
+      }),
       driveFileIds
     }
   };
