@@ -59,7 +59,12 @@ export const editionFlags = {
   includeArchivedToggles: true,
   archivedDogLinks: true,
   fullDogStatuses: true,
-  licenseGate: true, // read by license.js — Pro is the ONLY edition that gates on a key
+  // TEMPORARY: off so pro.kennelos.app is browsable for live testing before a real
+  // Lemon Squeezy store/license exists — with it on, every visitor hits the
+  // activation wall before the app (nav included) ever renders. Flip back to
+  // `true` once the store's live (docs/LAUNCH_CHECKLIST.md §1/§2) — until then
+  // this ships Pro fully unlocked to anyone who visits.
+  licenseGate: false,
   // Pro-only feature gates — all on in Pro.
   contactsSection: true,
   studServices: true,
