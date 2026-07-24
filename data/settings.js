@@ -213,11 +213,26 @@ export function setCompanionSettings(type, values) {
 // this kennel dedupes into ONE `breeders` row in Furever — deliberately NOT tied
 // to "My Kennel" (settings' myKennelId): Furever should work even if Kennel Setup
 // was skipped.
+//
+// Also holds the KENNEL-WIDE content-pack pointer (Content Package Fetch
+// Mechanism §3.4): `packKey`/`folderId`/`manifestFileId`/`manifestResourceKey`/
+// `version` are the Drive-side pointers a "Publish" run persists so a republish
+// reuses the same folder/file instead of creating new ones; `selection` is the
+// cached bulk-add-picker state (`{ documentIds, uploads }`) so the picker reopens
+// pre-checked. The per-litter equivalent lives on the litter record itself
+// (`litterRepo`'s `furever_pack` field), not here. `driveConnected` is UI-only
+// state — whether Connect has ever succeeded — never the access token itself
+// (googleDrive.js holds that in memory only, per its own §4.1 discipline).
 const FUREVER_DEFAULTS = {
   breederKey: '',
   kennelName: '', tagline: '',
   breederContact: { name: '', phone: '', email: '' },
-  breederVet: { name: '', phone: '', address: '' }
+  breederVet: { name: '', phone: '', address: '' },
+  driveConnected: false,
+  contentPack: {
+    packKey: null, folderId: null, manifestFileId: null, manifestResourceKey: null,
+    version: 0, selection: { documentIds: [], uploads: [] }
+  }
 };
 
 function readFureverStore() {
@@ -236,7 +251,15 @@ export function getFureverSettings() {
     ...FUREVER_DEFAULTS,
     ...stored,
     breederContact: { ...FUREVER_DEFAULTS.breederContact, ...(stored.breederContact || {}) },
-    breederVet: { ...FUREVER_DEFAULTS.breederVet, ...(stored.breederVet || {}) }
+    breederVet: { ...FUREVER_DEFAULTS.breederVet, ...(stored.breederVet || {}) },
+    contentPack: {
+      ...FUREVER_DEFAULTS.contentPack,
+      ...(stored.contentPack || {}),
+      selection: {
+        ...FUREVER_DEFAULTS.contentPack.selection,
+        ...((stored.contentPack && stored.contentPack.selection) || {})
+      }
+    }
   };
 }
 
@@ -245,6 +268,12 @@ export function setFureverSettings(values) {
   const merged = { ...stored, ...values };
   if (values.breederContact) merged.breederContact = { ...(stored.breederContact || {}), ...values.breederContact };
   if (values.breederVet) merged.breederVet = { ...(stored.breederVet || {}), ...values.breederVet };
+  if (values.contentPack) {
+    merged.contentPack = { ...(stored.contentPack || {}), ...values.contentPack };
+    if (values.contentPack.selection) {
+      merged.contentPack.selection = { ...((stored.contentPack || {}).selection || {}), ...values.contentPack.selection };
+    }
+  }
   if (!merged.breederKey) merged.breederKey = crypto.randomUUID();
   localStorage.setItem(KEYS.furever, JSON.stringify(merged));
   return getFureverSettings();

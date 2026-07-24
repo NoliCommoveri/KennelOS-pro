@@ -12,10 +12,15 @@ import { saleRepo } from '../data/saleRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { documentRepo } from '../data/documentRepo.js';
 import { getFureverSettings, setFureverSettings, getMyKennelId, getMyContactId } from '../data/settings.js';
 import { buildSeedPacket, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
+import { connectDrive, isDriveConnectedThisSession } from '../data/googleDrive.js';
+import { publishPack, isSensitiveDocType } from '../data/fureverContentPack.js';
+import { DOC_TYPES, descriptor, docTypeIcon } from '../data/vocab.js';
 import { compressToEncodedURIComponent } from '../vendor/lz-string.min.mjs';
-import { esc } from '../assets/ui.js';
+import { esc, badge } from '../assets/ui.js';
 
 // Same payload ceilings Companion uses (brief §6.1) — SMS gateways are the weak
 // link; a seed packet (~1.7K per the schema doc's own measurement) sits well
@@ -26,7 +31,8 @@ const MAX_EMAIL_HASH_LEN = 12000;
 const els = {
   error: document.getElementById('page-error'),
   identity: document.getElementById('identity'),
-  recipients: document.getElementById('recipients')
+  recipients: document.getElementById('recipients'),
+  contentPackages: document.getElementById('content-packages-body')
 };
 
 function showError(msg) { els.error.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; }
@@ -269,7 +275,7 @@ async function prepareLink(row, entry) {
     const changes = readDetails(row);
     entry.sale = await saleRepo.update(entry.sale.id, changes);
 
-    const packet = buildSeedPacket(entry.dog, entry.sale);
+    const packet = await buildSeedPacket(entry.dog, entry.sale);
     const hash = compressToEncodedURIComponent(JSON.stringify(packet));
     const url = `${FUREVER_APP_URL}#seed=${hash}`;
     const bodyText = channelBody(packet.kennelName, url);
@@ -319,10 +325,411 @@ async function prepareLink(row, entry) {
   }
 }
 
+// --- Content packages: "Publish to Furever" (Content Package Fetch Mechanism
+// §4.1/§4.2) -------------------------------------------------------------
+// KennelOS does as much as possible from in here: connect Drive once, then
+// publish a kennel-wide pack (any dog's documents + kennel-level uploads) and one
+// pack per litter (that litter's pups + sire + dam's documents). The picker is a
+// bulk-add over documents already filed on dogs — no new document store.
+let kennelUploads = []; // [{ id, title, docType, blob }] — pending "Upload new" items, kennel pack only
+
+function driveConnectHtml() {
+  const connected = isDriveConnectedThisSession();
+  return `
+    <div class="card" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <button type="button" class="btn ${connected ? '' : 'btn-primary'} btn-sm" id="cp-connect-drive">${connected ? 'Reconnect Google Drive' : 'Connect Google Drive'}</button>
+      <span class="muted" id="cp-connect-status">${connected ? 'Connected for this session.' : 'Not connected yet — Publish will ask you to connect.'}</span>
+      <span class="muted" style="font-size:.85rem;">KennelOS can only ever see files it creates in your Drive — nothing else in your account.</span>
+    </div>`;
+}
+
+function packStatusLine(pack) {
+  if (!pack || !pack.packKey || !pack.manifestFileId) return `<span class="muted">Not published yet.</span>`;
+  return `<span class="muted">Published — version ${esc(String(pack.version || 1))}.</span>`;
+}
+
+function docTypesIn(rows) {
+  const present = new Set();
+  rows.forEach((r) => r.docs.forEach((d) => present.add(d.doc_type)));
+  return DOC_TYPES.filter((t) => present.has(t.value));
+}
+
+function docCheckboxHtml(doc, selectedIds) {
+  const checked = selectedIds.has(doc.id) ? ' checked' : '';
+  const sensitive = isSensitiveDocType(doc.doc_type)
+    ? ` <span class="muted" style="font-size:.8rem;">— public by link if included</span>`
+    : '';
+  return `
+    <label class="cp-doc-row" style="display:flex; align-items:center; gap:6px; margin:4px 0;">
+      <input type="checkbox" class="cp-doc" value="${esc(doc.id)}" data-type="${esc(doc.doc_type)}"${checked}>
+      <span aria-hidden="true">${docTypeIcon(doc.doc_type)}</span>
+      <span>${esc(doc.title || descriptor(DOC_TYPES, doc.doc_type).label)}</span>
+      ${badge(DOC_TYPES, doc.doc_type)}${sensitive}
+    </label>`;
+}
+
+function dogGroupHtml(row, selectedIds) {
+  return `
+    <div class="cp-dog-group" style="margin:8px 0; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);">
+      <label style="font-weight:600; display:flex; align-items:center; gap:6px;">
+        <input type="checkbox" class="cp-dog-all">
+        ${esc(row.dog.call_name || 'Dog')}
+      </label>
+      <div class="cp-dog-docs" style="margin-left:22px;">${row.docs.map((d) => docCheckboxHtml(d, selectedIds)).join('')}</div>
+    </div>`;
+}
+
+function uploadRowHtml(u) {
+  return `
+    <div class="list-row" data-upload="${esc(u.id)}" style="display:flex; align-items:center; gap:8px;">
+      <span aria-hidden="true">${docTypeIcon(u.docType)}</span>
+      <span class="grow">${esc(u.title)}</span>
+      ${badge(DOC_TYPES, u.docType)}
+      <button type="button" class="btn btn-sm cp-upload-remove" data-upload="${esc(u.id)}">Remove</button>
+    </div>`;
+}
+
+function uploadsHtml() {
+  return `
+    <div class="cp-uploads" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
+      <h4 style="margin:0 0 6px;">Upload new (not filed on a dog)</h4>
+      <p class="muted" style="margin:0 0 8px;">A care guide, poison list, or blank guarantee template — kennel-level files, published straight to Drive.</p>
+      <div id="cp-upload-list">${kennelUploads.map(uploadRowHtml).join('')}</div>
+      <div class="form-grid" style="margin-top:8px;">
+        <div class="field"><label>File</label><input type="file" class="cp-upload-file"></div>
+        <div class="field"><label>Title</label><input type="text" class="cp-upload-title" placeholder="e.g. Care guide"></div>
+        <div class="field"><label>Type</label><select class="cp-upload-type">${DOC_TYPES.map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}</select></div>
+      </div>
+      <button type="button" class="btn btn-sm cp-upload-add" style="margin-top:6px;">Add file</button>
+    </div>`;
+}
+
+function pickerHtml({ prefix, rows, selectedIds, showUploads }) {
+  const types = docTypesIn(rows);
+  const typeToggles = types.map((t) =>
+    `<label style="margin-right:10px;"><input type="checkbox" class="cp-type-all" data-type="${esc(t.value)}"> All ${esc(t.label.toLowerCase())}s</label>`
+  ).join('');
+  return `
+    <div class="cp-picker" data-prefix="${esc(prefix)}">
+      ${rows.length ? `<div class="cp-picker-controls" style="margin-bottom:8px;">
+        <label style="margin-right:10px;"><input type="checkbox" class="cp-select-all"> Select all</label>
+        ${typeToggles}
+      </div>` : ''}
+      ${rows.length ? rows.map((r) => dogGroupHtml(r, selectedIds)).join('') : '<p class="muted">No documents filed on any connected dog yet.</p>'}
+      ${showUploads ? uploadsHtml() : ''}
+    </div>`;
+}
+
+function sensitiveConfirmHtml(sensitiveDocs) {
+  const list = sensitiveDocs.map((d) => `<li>${esc(d.title || descriptor(DOC_TYPES, d.doc_type).label)}</li>`).join('');
+  return `
+    <div class="inline-warn">
+      <strong>This will become publicly readable by anyone with the link:</strong>
+      <ul style="margin:6px 0;">${list}</ul>
+      <p style="margin:6px 0;">A contract often carries the buyer's name and address — only include it if you're sure.</p>
+      <button type="button" class="btn btn-sm cp-confirm-yes">Yes, publish anyway</button>
+      <button type="button" class="btn btn-sm cp-confirm-no">Cancel</button>
+    </div>`;
+}
+
+function wireSensitiveConfirm(box, onConfirm) {
+  box.querySelector('.cp-confirm-yes').addEventListener('click', onConfirm);
+  box.querySelector('.cp-confirm-no').addEventListener('click', () => { box.innerHTML = ''; });
+}
+
+function flattenDocs(rows) {
+  const map = new Map();
+  rows.forEach((r) => r.docs.forEach((d) => map.set(d.id, d)));
+  return map;
+}
+
+function collectSelectedIds(root) {
+  return Array.from(root.querySelectorAll('.cp-doc:checked')).map((el) => el.value);
+}
+
+// Bulk selectors: select-all, per-type, and per-dog "select all" all just check/
+// uncheck the underlying boxes — the DOM is the state while the panel is open,
+// so no separate selection model has to be kept in sync with it.
+function wirePicker(root) {
+  const boxes = () => Array.from(root.querySelectorAll('.cp-doc'));
+  const selectAll = root.querySelector('.cp-select-all');
+  if (selectAll) {
+    selectAll.addEventListener('change', () => {
+      boxes().forEach((b) => { b.checked = selectAll.checked; });
+      root.querySelectorAll('.cp-dog-all').forEach((d) => { d.checked = selectAll.checked; });
+    });
+  }
+  root.querySelectorAll('.cp-type-all').forEach((t) => {
+    t.addEventListener('change', () => {
+      boxes().filter((b) => b.dataset.type === t.dataset.type).forEach((b) => { b.checked = t.checked; });
+    });
+  });
+  root.querySelectorAll('.cp-dog-group').forEach((group) => {
+    const allBox = group.querySelector('.cp-dog-all');
+    const docBoxes = () => Array.from(group.querySelectorAll('.cp-doc'));
+    allBox.addEventListener('change', () => {
+      docBoxes().forEach((b) => { b.checked = allBox.checked; });
+    });
+    docBoxes().forEach((b) => b.addEventListener('change', () => {
+      allBox.checked = docBoxes().every((x) => x.checked);
+    }));
+  });
+}
+
+function wireUploads(root) {
+  const addBtn = root.querySelector('.cp-upload-add');
+  if (!addBtn) return;
+  const refreshList = () => {
+    const list = root.querySelector('#cp-upload-list');
+    if (list) list.innerHTML = kennelUploads.map(uploadRowHtml).join('');
+    wireUploadRemove();
+  };
+  const wireUploadRemove = () => {
+    root.querySelectorAll('.cp-upload-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        kennelUploads = kennelUploads.filter((u) => u.id !== btn.getAttribute('data-upload'));
+        refreshList();
+      });
+    });
+  };
+  wireUploadRemove();
+  addBtn.addEventListener('click', () => {
+    const fileInput = root.querySelector('.cp-upload-file');
+    const titleInput = root.querySelector('.cp-upload-title');
+    const typeSelect = root.querySelector('.cp-upload-type');
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) { showError('Choose a file to upload.'); return; }
+    clearError();
+    kennelUploads.push({
+      id: crypto.randomUUID(),
+      title: (titleInput.value || file.name).trim(),
+      docType: typeSelect.value,
+      blob: file
+    });
+    fileInput.value = '';
+    titleInput.value = '';
+    refreshList();
+  });
+}
+
+function wireConnect(root) {
+  const btn = root.querySelector('#cp-connect-drive');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const statusEl = document.getElementById('cp-connect-status');
+    clearError();
+    btn.disabled = true;
+    statusEl.textContent = 'Connecting…';
+    try {
+      await connectDrive();
+      setFureverSettings({ driveConnected: true });
+      statusEl.textContent = 'Connected for this session.';
+      btn.textContent = 'Reconnect Google Drive';
+    } catch (e) {
+      statusEl.textContent = 'Not connected yet — Publish will ask you to connect.';
+      showError(e.message || String(e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+async function doKennelPublish(kennelRows) {
+  const root = els.contentPackages.querySelector('.cp-picker[data-prefix="kennel"]');
+  const docsById = flattenDocs(kennelRows);
+  const selectedDocs = collectSelectedIds(root).map((id) => docsById.get(id)).filter(Boolean);
+  // "Upload new" items carry their own doc_type too (a breeder could tag one
+  // 'contract') — the sensitive-doc guard has to cover them, not just the
+  // dog-scoped picker (§4.2 step 2's warning applies to anything about to
+  // become public, regardless of source).
+  const sensitive = [...selectedDocs, ...kennelUploads.map((u) => ({ title: u.title, doc_type: u.docType }))]
+    .filter((d) => isSensitiveDocType(d.doc_type));
+
+  const confirmBox = document.getElementById('cp-kennel-confirm');
+  if (sensitive.length && !confirmBox.dataset.confirmed) {
+    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive);
+    wireSensitiveConfirm(confirmBox, () => { confirmBox.dataset.confirmed = '1'; doKennelPublish(kennelRows); });
+    return;
+  }
+  confirmBox.innerHTML = '';
+  delete confirmBox.dataset.confirmed;
+
+  const btn = document.getElementById('cp-kennel-publish');
+  const statusEl = document.getElementById('cp-kennel-status');
+  clearError();
+  btn.disabled = true;
+  statusEl.textContent = 'Publishing…';
+  try {
+    const settings = getFureverSettings();
+    const pointer = await publishPack({
+      scope: 'kennel',
+      kennelName: settings.kennelName,
+      pointer: settings.contentPack,
+      documents: selectedDocs,
+      uploads: kennelUploads
+    });
+    setFureverSettings({ contentPack: pointer, driveConnected: true });
+    kennelUploads = [];
+    statusEl.textContent = 'Published.';
+    await renderContentPackages();
+  } catch (e) {
+    statusEl.textContent = '';
+    showError(e.message || String(e));
+    btn.disabled = false;
+  }
+}
+
+async function doLitterPublish(litter, rows) {
+  const card = els.contentPackages.querySelector(`[data-litter="${CSS.escape(litter.id)}"]`);
+  const root = card.querySelector('.cp-picker');
+  const docsById = flattenDocs(rows);
+  const selectedDocs = collectSelectedIds(root).map((id) => docsById.get(id)).filter(Boolean);
+  const sensitive = selectedDocs.filter((d) => isSensitiveDocType(d.doc_type));
+
+  const confirmBox = card.querySelector('.cp-litter-confirm');
+  if (sensitive.length && !confirmBox.dataset.confirmed) {
+    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive);
+    wireSensitiveConfirm(confirmBox, () => { confirmBox.dataset.confirmed = '1'; doLitterPublish(litter, rows); });
+    return;
+  }
+  confirmBox.innerHTML = '';
+  delete confirmBox.dataset.confirmed;
+
+  const btn = card.querySelector('.cp-litter-publish');
+  const statusEl = card.querySelector('.cp-litter-status');
+  clearError();
+  btn.disabled = true;
+  statusEl.textContent = 'Publishing…';
+  try {
+    const settings = getFureverSettings();
+    const pointer = await publishPack({
+      scope: 'litter',
+      kennelName: settings.kennelName,
+      litterNickname: litter.nickname,
+      pointer: litter.furever_pack || {},
+      documents: selectedDocs,
+      uploads: []
+    });
+    await litterRepo.update(litter.id, { furever_pack: pointer });
+    statusEl.textContent = 'Published.';
+    await renderContentPackages();
+  } catch (e) {
+    statusEl.textContent = '';
+    showError(e.message || String(e));
+    btn.disabled = false;
+  }
+}
+
+function kennelSectionHtml(settings, kennelRows) {
+  const selectedIds = new Set(settings.contentPack.selection.documentIds || []);
+  return `
+    <div class="card" style="margin-top:16px;">
+      <h2 style="margin:0;">Kennel-wide pack</h2>
+      <p class="muted" style="margin:6px 0 0;">Reusable material every family gets — a breed care guide, a blank guarantee template. ${packStatusLine(settings.contentPack)}</p>
+      <div style="margin-top:10px;">
+        ${pickerHtml({ prefix: 'kennel', rows: kennelRows, selectedIds, showUploads: true })}
+      </div>
+      <div id="cp-kennel-confirm"></div>
+      <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+        <button type="button" class="btn btn-primary btn-sm" id="cp-kennel-publish">Publish kennel-wide pack</button>
+        <span class="muted" id="cp-kennel-status"></span>
+      </div>
+    </div>`;
+}
+
+function litterSectionHtml(litter, rows) {
+  const pack = litter.furever_pack;
+  const selectedIds = new Set((pack && pack.selection && pack.selection.documentIds) || []);
+  return `
+    <div class="card" data-litter="${esc(litter.id)}" style="margin-top:12px;">
+      <div class="r-header" style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;">
+        <span class="r-arrow" style="display:inline-block; transition:transform 0.2s; font-size:12px;">▶</span>
+        <div class="row-between" style="flex:1; gap:8px;">
+          <span><strong>${esc(litter.nickname || 'Untitled litter')}</strong></span>
+          <span>${packStatusLine(pack)}</span>
+        </div>
+      </div>
+      <div class="r-body" style="display:none; margin-top:10px;">
+        ${pickerHtml({ prefix: `litter-${litter.id}`, rows, selectedIds, showUploads: false })}
+        <div class="cp-litter-confirm"></div>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+          <button type="button" class="btn btn-primary btn-sm cp-litter-publish">Publish this litter's pack</button>
+          <span class="muted cp-litter-status"></span>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadContentPackagesData() {
+  const allDogs = await dogRepo.getAll();
+  const kennelRows = (await Promise.all(allDogs.map(async (dog) => {
+    const docs = await documentRepo.getByDog(dog.id);
+    return docs.length ? { dog, docs } : null;
+  }))).filter(Boolean);
+
+  const allLitters = await litterRepo.getAll();
+  const litterEntries = [];
+  for (const litter of allLitters) {
+    const pups = await dogRepo.getByLitter(litter.id);
+    const ids = new Set(pups.map((p) => p.id));
+    if (litter.sire_id) ids.add(litter.sire_id);
+    if (litter.dam_id) ids.add(litter.dam_id);
+    const rows = [];
+    for (const id of ids) {
+      const dog = allDogs.find((d) => d.id === id) || await dogRepo.getById(id);
+      if (!dog) continue;
+      const docs = await documentRepo.getByDog(id);
+      if (docs.length) rows.push({ dog, docs });
+    }
+    litterEntries.push({ litter, rows });
+  }
+  return { kennelRows, litterEntries };
+}
+
+function wireContentPackages(kennelRows, litterEntries) {
+  wireConnect(els.contentPackages);
+
+  const kennelRoot = els.contentPackages.querySelector('.cp-picker[data-prefix="kennel"]');
+  if (kennelRoot) { wirePicker(kennelRoot); wireUploads(kennelRoot); }
+  const kennelBtn = document.getElementById('cp-kennel-publish');
+  if (kennelBtn) kennelBtn.addEventListener('click', () => doKennelPublish(kennelRows));
+
+  litterEntries.forEach(({ litter, rows }) => {
+    const card = els.contentPackages.querySelector(`[data-litter="${CSS.escape(litter.id)}"]`);
+    if (!card) return;
+    const root = card.querySelector('.cp-picker');
+    if (root) wirePicker(root);
+    const header = card.querySelector('.r-header');
+    const body = card.querySelector('.r-body');
+    const arrow = card.querySelector('.r-arrow');
+    header.addEventListener('click', () => {
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : 'block';
+      arrow.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+    });
+    card.querySelector('.cp-litter-publish').addEventListener('click', () => doLitterPublish(litter, rows));
+  });
+}
+
+async function renderContentPackages() {
+  const settings = getFureverSettings();
+  const { kennelRows, litterEntries } = await loadContentPackagesData();
+
+  els.contentPackages.innerHTML = `
+    ${driveConnectHtml()}
+    ${kennelSectionHtml(settings, kennelRows)}
+    ${litterEntries.length
+      ? litterEntries.map(({ litter, rows }) => litterSectionHtml(litter, rows)).join('')
+      : '<p class="muted" style="margin-top:12px;">No litters yet.</p>'}
+  `;
+  wireContentPackages(kennelRows, litterEntries);
+}
+
 async function main() {
   await renderIdentity();
   await loadData();
   renderRecipients();
+  await renderContentPackages();
 }
 
 main();

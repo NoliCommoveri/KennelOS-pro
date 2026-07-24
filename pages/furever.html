@@ -36,8 +36,19 @@
       <p class="muted" style="margin:8px 0 0;">One entry per pup with an open sale. Add an optional personal note and pickup details, then <strong>Prepare link</strong> to build the seed link and hand off a real email / SMS you tap to send.</p>
       <div id="recipients"></div>
     </section>
+
+    <section style="margin-top:16px;">
+      <h2 style="margin:0;">Content packages</h2>
+      <p class="muted" style="margin:8px 0 0;">Publish documents to Google Drive so every pup's app can pull them in automatically — one kennel-wide pack, plus one pack per litter. KennelOS creates the folders and does the uploading; you never touch Drive directly.</p>
+      <div id="content-packages-body" style="margin-top:12px;"></div>
+    </section>
   </main>
 
+  <!-- Google Identity Services — vendored (no-CDN rule), the token-client flow
+       "Connect Google Drive" (data/googleDrive.js) needs. Loaded as a plain
+       script (not a module) so it can set the global `google` object before any
+       module code runs. -->
+  <script src="../vendor/gsi/client.js"></script>
   <script type="module" src="../app.js"></script>
   <script type="module" src="./furever.js"></script>
 </body>
