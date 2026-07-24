@@ -18,6 +18,7 @@ import { getFureverSettings, setFureverSettings, getMyKennelId, getMyContactId }
 import { buildSeedPacket, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
 import { connectDrive, isDriveConnectedThisSession } from '../data/googleDrive.js';
 import { publishPack, isSensitiveDocType } from '../data/fureverContentPack.js';
+import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
 import { DOC_TYPES, descriptor, docTypeIcon } from '../data/vocab.js';
 import { compressToEncodedURIComponent } from '../vendor/lz-string.min.mjs';
 import { esc, badge } from '../assets/ui.js';
@@ -30,6 +31,7 @@ const MAX_EMAIL_HASH_LEN = 12000;
 
 const els = {
   error: document.getElementById('page-error'),
+  nudges: document.getElementById('setup-nudges'),
   identity: document.getElementById('identity'),
   recipients: document.getElementById('recipients'),
   contentPackages: document.getElementById('content-packages-body')
@@ -137,6 +139,7 @@ async function renderIdentity() {
     const saved = document.getElementById('id-saved');
     saved.textContent = 'Prefilled from your kennel records — review and Save.';
   }
+  return vets;
 }
 
 function wireIdentity(vets) {
@@ -186,6 +189,32 @@ async function loadData() {
   }
   rows.sort((a, b) => (a.dog.call_name || '').localeCompare(b.dog.call_name || '', undefined, { numeric: true }));
   ctx = rows;
+}
+
+// --- Setup nudges: subtle, dismissible-by-fixing reminders for the pieces the
+// Furever seed packet can carry but hasn't been given yet. Never blocking —
+// sending a link works fine without either; these just flag "you could add
+// this." Vet is kennel-wide (one check); the feeding schedule check is scoped
+// to breeds actually among today's recipients, so it stays relevant to what's
+// about to ship rather than nagging about breeds you don't currently have pups
+// for.
+async function renderSetupNudges(vets) {
+  if (!els.nudges) return;
+  const items = [];
+  if (!vets.length) {
+    items.push(`No vet contact on file. <a href="contact.html?new=1">Add one now →</a>`);
+  }
+  const breeds = [...new Set(ctx.map((r) => (r.dog.breed || '').trim()).filter(Boolean))];
+  const missingBreeds = [];
+  for (const breed of breeds) {
+    if (!(await breedFeedingScheduleRepo.getByBreed(breed))) missingBreeds.push(breed);
+  }
+  if (missingBreeds.length) {
+    items.push(`No feeding schedule configured for ${missingBreeds.map((b) => esc(b)).join(', ')}. <a href="breed-feeding-schedules.html">Configure now →</a>`);
+  }
+  els.nudges.innerHTML = items.length
+    ? `<div class="card" style="border-left:3px solid var(--amber, #d97706);">${items.map((i) => `<p class="muted" style="margin:4px 0;">${i}</p>`).join('')}</div>`
+    : '';
 }
 
 function recipientRow({ sale, dog, buyer }) {
@@ -368,12 +397,15 @@ function docCheckboxHtml(doc, selectedIds) {
     </label>`;
 }
 
-function dogGroupHtml(row, selectedIds) {
+// `roleLabel` (litter picker only — "Sire"/"Dam"/"Pup") makes explicit which
+// group's documents go to every family in the litter vs. just this one pup's.
+function dogGroupHtml(row, selectedIds, roleLabel) {
+  const role = roleLabel ? ` <span class="faint" style="font-weight:normal;">(${esc(roleLabel)})</span>` : '';
   return `
     <div class="cp-dog-group" style="margin:8px 0; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);">
       <label style="font-weight:600; display:flex; align-items:center; gap:6px;">
         <input type="checkbox" class="cp-dog-all">
-        ${esc(row.dog.call_name || 'Dog')}
+        ${esc(row.dog.call_name || 'Dog')}${role}
       </label>
       <div class="cp-dog-docs" style="margin-left:22px;">${row.docs.map((d) => docCheckboxHtml(d, selectedIds)).join('')}</div>
     </div>`;
@@ -404,18 +436,27 @@ function uploadsHtml() {
     </div>`;
 }
 
-function pickerHtml({ prefix, rows, selectedIds, showUploads }) {
+// `parentIds` ({sireId, damId}, litter picker only) drives the "(Sire)"/"(Dam)"
+// role labels — absent for the kennel-wide picker, where every row is just a
+// dog with no litter role to call out.
+function pickerHtml({ prefix, rows, selectedIds, showUploads, parentIds }) {
   const types = docTypesIn(rows);
   const typeToggles = types.map((t) =>
     `<label style="margin-right:10px;"><input type="checkbox" class="cp-type-all" data-type="${esc(t.value)}"> All ${esc(t.label.toLowerCase())}s</label>`
   ).join('');
+  const roleFor = (dog) => {
+    if (!parentIds) return null;
+    if (dog.id === parentIds.sireId) return 'Sire';
+    if (dog.id === parentIds.damId) return 'Dam';
+    return 'Pup';
+  };
   return `
     <div class="cp-picker" data-prefix="${esc(prefix)}">
       ${rows.length ? `<div class="cp-picker-controls" style="margin-bottom:8px;">
         <label style="margin-right:10px;"><input type="checkbox" class="cp-select-all"> Select all</label>
         ${typeToggles}
       </div>` : ''}
-      ${rows.length ? rows.map((r) => dogGroupHtml(r, selectedIds)).join('') : '<p class="muted">No documents filed on any connected dog yet.</p>'}
+      ${rows.length ? rows.map((r) => dogGroupHtml(r, selectedIds, roleFor(r.dog))).join('') : '<p class="muted">No documents filed on any connected dog yet.</p>'}
       ${showUploads ? uploadsHtml() : ''}
     </div>`;
 }
@@ -608,7 +649,12 @@ async function doLitterPublish(litter, rows) {
       litterNickname: litter.nickname,
       pointer: litter.furever_pack || {},
       documents: selectedDocs,
-      uploads: []
+      uploads: [],
+      // The litter's parents' documents go to every pup's family in the
+      // litter; each pup's own documents go only to that pup's family
+      // (contentPackFetch.js's per-pup filter reads this back).
+      sireId: litter.sire_id || null,
+      damId: litter.dam_id || null
     });
     await litterRepo.update(litter.id, { furever_pack: pointer });
     statusEl.textContent = 'Published.';
@@ -650,7 +696,8 @@ function litterSectionHtml(litter, rows) {
         </div>
       </div>
       <div class="r-body" style="display:none; margin-top:10px;">
-        ${pickerHtml({ prefix: `litter-${litter.id}`, rows, selectedIds, showUploads: false })}
+        <p class="muted" style="margin:0 0 8px; font-size:.85rem;">Sire/dam documents go to every family in this litter. A pup's own documents go only to that pup's family — check just that pup's box to send something to one family alone.</p>
+        ${pickerHtml({ prefix: `litter-${litter.id}`, rows, selectedIds, showUploads: false, parentIds: { sireId: litter.sire_id, damId: litter.dam_id } })}
         <div class="cp-litter-confirm"></div>
         <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
           <button type="button" class="btn btn-primary btn-sm cp-litter-publish">Publish this litter's pack</button>
@@ -726,10 +773,11 @@ async function renderContentPackages() {
 }
 
 async function main() {
-  await renderIdentity();
+  const vets = await renderIdentity();
   await loadData();
   renderRecipients();
   await renderContentPackages();
+  await renderSetupNudges(vets);
 }
 
 main();

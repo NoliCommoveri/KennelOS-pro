@@ -62,9 +62,13 @@ export async function completeKennelSetup({ kennelName, ownerName }) {
   if (ownerName) {
     const existingContactId = getMyContactId();
     const existingContact = existingContactId ? await contactRepo.getById(existingContactId) : null;
+    // Link the owner Contact to the kennel just created/updated above — this is
+    // definitionally the breeder's own contact at their own kennel, so it should
+    // never come out unlinked (kennel_id drives Furever/Companion prefill and the
+    // Kennel detail page's own-kennel views).
     contact = existingContact
-      ? await contactRepo.update(existingContact.id, { name: ownerName })
-      : await contactRepo.create({ name: ownerName });
+      ? await contactRepo.update(existingContact.id, { name: ownerName, kennel_id: kennel.id })
+      : await contactRepo.create({ name: ownerName, kennel_id: kennel.id });
     setMyContactId(contact.id);
   }
   return { kennel, contact };

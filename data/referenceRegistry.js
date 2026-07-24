@@ -130,6 +130,11 @@ export const EVENT_REFERENCES = [
 // (event_id, subject_id) point OUTWARD and are guarded on those targets above.
 export const EXPENSE_REFERENCES = [];
 
+// --- BreedFeedingSchedule: a leaf entity — nothing points at one. `breed` is a
+// free-text lookup key (matched against Dog.breed), not a stored FK, so there is
+// no reverse reference to guard.
+export const BREED_FEEDING_SCHEDULE_REFERENCES = [];
+
 // --- Document: a leaf entity — nothing points at a Document. Its own FK
 // (dog_id) points OUTWARD and is guarded on Dog above (DOG_REFERENCES). Its
 // file_id is not a referenceRegistry entry — a file is owned by exactly one

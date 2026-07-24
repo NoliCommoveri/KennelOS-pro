@@ -25,6 +25,8 @@ export const PRO_ONLY_PAGES = [
   'companion.html',
   // Furever seed-link generator
   'furever.html',
+  // Per-breed feeding schedules (sent along in the Furever seed packet)
+  'breed-feeding-schedules.html',
   // Documents + file storage
   'documents.html',
   // Invoice / receipt generation (print doc)

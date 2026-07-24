@@ -143,8 +143,24 @@ async function onLogoRemove() {
 // same gating both panels carried on the old Kennels-list rows.
 function renderConfig() {
   if (!kennel.is_own_kennel) { els.config.innerHTML = ''; return; }
-  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel);
+  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard();
   wireConfig();
+}
+
+// Feeding Schedules (§27.2) — per-breed feeding grids, edited on their own page
+// (breed-feeding-schedules.html; its breed list is pulled from the kennel's own
+// dogs, not scoped to a single Kennel record) and sent along in a placed pup's
+// Furever seed packet. This card is just the doorway from "kennel program
+// configuration", alongside Lifecycle nudges and Preferred tests.
+function feedingScheduleCard() {
+  return `
+    <section class="card">
+      <h2 style="margin-top:0;">Feeding schedules</h2>
+      <p class="field-hint">Your own recommended feeding amounts, by breed — sent along with each puppy's Furever seed link.</p>
+      <div class="form-actions">
+        <a class="btn btn-sm" href="breed-feeding-schedules.html">Open Feeding Schedules →</a>
+      </div>
+    </section>`;
 }
 
 // Lifecycle nudges (Data Integrity Brief §3.2) — opt-in, per-kennel: an enable

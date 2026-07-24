@@ -79,6 +79,7 @@ export const editionFlags = {
   receiptAttach: true,
   externalOwnership: true,
   assistant: true,
+  feedingSchedule: true,
 };
 
 // Full nav bar (Pro has every hub).

@@ -15,8 +15,15 @@
 // version — never an API key, never file bytes. Only packs that are actually
 // published are included; an unpublished kennel or litter pack is simply absent,
 // so an unpublished pup carries no breeder docs until a later resend.
+//
+// `feedingSchedule` (Feeding Schedules feature, Pro-only) is named-copy-only the
+// same way: a litter's own override (free text) takes priority, else the
+// kennel's breed default (breedFeedingScheduleRepo, matched against dog.breed);
+// null when neither is set, so Furever's Feeding page keeps its own generic
+// age-bracket placeholder untouched.
 import { getFureverSettings } from './settings.js';
 import { litterRepo } from './litterRepo.js';
+import { breedFeedingScheduleRepo } from './breedFeedingScheduleRepo.js';
 
 export const SEED_PACKET_VERSION = 1;
 
@@ -35,16 +42,31 @@ function packagePointer(pack, scope) {
   return pointer;
 }
 
-async function collectContentPackages(dog, identity) {
+function collectContentPackages(identity, litter) {
   const packages = [];
   const kennelPointer = packagePointer(identity.contentPack, 'kennel');
   if (kennelPointer) packages.push(kennelPointer);
-  if (dog.litter_id) {
-    const litter = await litterRepo.getById(dog.litter_id);
-    const litterPointer = litter && packagePointer(litter.furever_pack, 'litter');
-    if (litterPointer) packages.push(litterPointer);
-  }
+  const litterPointer = litter && packagePointer(litter.furever_pack, 'litter');
+  if (litterPointer) packages.push(litterPointer);
   return packages;
+}
+
+// The pup's feeding guidance: a per-litter override (free text) takes priority;
+// otherwise the kennel's own breed default. Both are named-copy-only (never a
+// record spread) — see this module's header. Returns null when neither exists.
+async function resolveFeedingSchedule(dog, litter) {
+  const litterOverride = (litter && litter.feeding_schedule_override) || null;
+  const breed = dog.breed ? await breedFeedingScheduleRepo.getByBreed(dog.breed) : null;
+  if (!litterOverride && !breed) return null;
+  return {
+    litterOverride,
+    breedSchedule: breed ? {
+      foodBrand: breed.food_brand || '',
+      ageColumns: breed.age_columns || [],
+      weightRows: (breed.weight_rows || []).map((r) => ({ label: r.label || '', amounts: r.amounts || [] })),
+      notes: breed.notes || ''
+    } : null
+  };
 }
 
 // `dog` is the pup being sent; `sale` (optional) supplies the per-placement
@@ -54,6 +76,7 @@ async function collectContentPackages(dog, identity) {
 export async function buildSeedPacket(dog, sale) {
   if (!dog) throw new Error('buildSeedPacket: a dog is required.');
   const identity = getFureverSettings();
+  const litter = dog.litter_id ? await litterRepo.getById(dog.litter_id) : null;
   return {
     packetVersion: SEED_PACKET_VERSION,
     pupId: dog.id,
@@ -75,6 +98,7 @@ export async function buildSeedPacket(dog, sale) {
     tagline: identity.tagline,
     breederContact: identity.breederContact,
     breederVet: identity.breederVet,
-    contentPackages: await collectContentPackages(dog, identity)
+    contentPackages: collectContentPackages(identity, litter),
+    feedingSchedule: await resolveFeedingSchedule(dog, litter)
   };
 }

@@ -76,6 +76,16 @@ export const db = new Dexie('KennelOSBreedingApp');
 //  - `expenses.receipt_file_id` (assets/receiptCapture.js) is a plain,
 //    unindexed FK into `files` — same posture as `vendor`/`notes`, fetched by
 //    id only, never queried/filtered on.
+//  - `breed_feeding_schedules` is the kennel's own recommended feeding grid per
+//    breed (food brand + a free-text weight-band x age-column table + notes),
+//    fed into a placed pup's Furever seed packet (fureverSeedExport.js). `breed`
+//    is a free-text lookup key (matched case-insensitively/trimmed against
+//    Dog.breed), not a stored FK, so it carries no referenceRegistry entry.
+//    Indexed on breed (breedFeedingScheduleRepo.getByBreed is a probe, not a
+//    scan). `litters.feeding_schedule_override` (a plain, unindexed free-text
+//    field, filtered in JS like the foster fields) is the per-litter override
+//    that takes priority over the breed default in the seed packet — both are
+//    Pro-only (editionFlags.feedingSchedule).
 db.version(1).stores({
   dogs:          'id, sire_id, dam_id, litter_id, breeder_kennel_id, owner_contact_id, *co_owner_contact_ids, status, ownership_type, sex, breed, kennel_id, is_archived',
   events:        'id, [subject_type+subject_id], event_type, event_date, reminder_date, related_dog_id, related_contact_id, is_archived',
@@ -88,7 +98,8 @@ db.version(1).stores({
   contracts:     'id, contract_type, status, related_sale_id, related_stud_service_id, related_dog_id, related_contact_id, is_archived',
   stud_services: 'id, our_dog_id, partner_dog_id, partner_contact_id, referred_by_contact_id, direction, status, pairing_id, is_archived',
   documents:     'id, dog_id, doc_type, doc_date, is_archived',
-  files:         'id, created_at'
+  files:         'id, created_at',
+  breed_feeding_schedules: 'id, breed, is_archived'
 });
 
 // --- First-run storage durability ----------------------------------------

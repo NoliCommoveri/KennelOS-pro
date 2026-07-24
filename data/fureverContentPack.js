@@ -29,7 +29,15 @@ export function isSensitiveDocType(docType) {
 // so a Document/upload field never rides along into a publicly-readable file by
 // accident (the same allow-list discipline fureverSeedExport.js's header
 // explains for the seed packet).
-function buildManifest({ packKey, scope, kennelName, version, files }) {
+//
+// `dogId` on each file (present only for a `scope:'litter'` publish — a
+// kennel-wide upload/document carries none, since that pack is deliberately
+// shared with every family) plus top-level `parentDogIds` are what let a family
+// app scope a litter pack DOWN to just its own pup's documents plus the
+// litter's sire/dam documents (shared with the whole litter), instead of every
+// pup's family seeing every other pup's filed documents — see
+// furever/data/contentPackFetch.js's per-pup filter.
+function buildManifest({ packKey, scope, kennelName, version, files, parentDogIds }) {
   return {
     packVersion: 1,
     packKey,
@@ -37,20 +45,23 @@ function buildManifest({ packKey, scope, kennelName, version, files }) {
     kennelName: kennelName || '',
     version,
     updatedAt: new Date().toISOString(),
+    ...(scope === 'litter' ? { parentDogIds: parentDogIds || [] } : {}),
     files: files.map((f) => ({
       fileId: f.fileId,
       ...(f.resourceKey ? { resourceKey: f.resourceKey } : {}),
       title: f.title || '',
       docType: f.docType || 'other',
       mime: f.mime || '',
-      size: f.size || 0
+      size: f.size || 0,
+      ...(scope === 'litter' ? { dogId: f.dogId || null } : {})
     }))
   };
 }
 
 // A dog-scoped KennelOS Document, reduced to the bytes + metadata a publish
 // needs. `key` is a stable dedupe id across republishes, used to reuse the same
-// Drive file id instead of creating a new one every time.
+// Drive file id instead of creating a new one every time. `dogId` carries
+// through to the manifest for a litter-scope publish's per-pup filtering.
 async function loadDocumentSource(doc) {
   const file = doc.file_id ? await fileRepo.get(doc.file_id) : null;
   if (!file || !file.blob) throw new Error(`"${doc.title || 'A document'}" has no stored file to publish.`);
@@ -59,7 +70,8 @@ async function loadDocumentSource(doc) {
     blob: file.blob,
     mime: file.mime || file.blob.type || 'application/octet-stream',
     title: doc.title || file.filename || 'Document',
-    docType: doc.doc_type || 'other'
+    docType: doc.doc_type || 'other',
+    dogId: doc.dog_id || null
   };
 }
 
@@ -86,11 +98,14 @@ function loadUploadSource(upload) {
 //   litterNickname  only used for scope:'litter' (the Drive folder name)
 //   documents       KennelOS Document rows the breeder ticked (dog-scoped)
 //   uploads         [{ id, title, docType, blob }] kennel-scope "Upload new" items
+//   sireId, damId   only used for scope:'litter' — the litter's parents, whose
+//                   documents are shared with every pup's family in the litter
+//                   (unlike an individual pup's own documents, which are not)
 //
 // Returns the new pointer to persist (settings.js's contentPack, or the litter's
 // furever_pack field) — this module never writes those itself, so it stays
 // agnostic to which scope it's publishing.
-export async function publishPack({ scope, kennelName, litterNickname, pointer = {}, documents = [], uploads = [] }) {
+export async function publishPack({ scope, kennelName, litterNickname, pointer = {}, documents = [], uploads = [], sireId = null, damId = null }) {
   const packKey = pointer.packKey || crypto.randomUUID();
   const driveFileIds = { ...((pointer.selection && pointer.selection.driveFileIds) || {}) };
 
@@ -120,7 +135,8 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
     driveFileIds[src.key] = { fileId: uploaded.id, resourceKey: uploaded.resourceKey || null };
     files.push({
       fileId: uploaded.id, resourceKey: uploaded.resourceKey || null,
-      title: src.title, docType: src.docType, mime: src.mime, size: src.blob.size || 0
+      title: src.title, docType: src.docType, mime: src.mime, size: src.blob.size || 0,
+      dogId: src.dogId || null
     });
   }
 
@@ -130,7 +146,8 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
 
   // 5. Write the manifest, bumping the CONTENT version so Furever knows to refetch.
   const version = (pointer.version || 0) + 1;
-  const manifest = buildManifest({ packKey, scope, kennelName, version, files });
+  const parentDogIds = [sireId, damId].filter(Boolean);
+  const manifest = buildManifest({ packKey, scope, kennelName, version, files, parentDogIds });
   const manifestResult = await writeManifestFile({
     folderId, manifest, existingFileId: pointer.manifestFileId || null
   });

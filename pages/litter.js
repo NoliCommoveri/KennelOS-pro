@@ -44,7 +44,8 @@ const blankLitter = () => ({
   puppies_born_total: '', puppies_born_alive: '', puppies_born_deceased: '', puppies_born_abnormalities: '', status: '', notes: '',
   expected_price_male: '', expected_price_female: '', expected_deposit_male: '', expected_deposit_female: '',
   foster_direction: '', foster_partner_contact_id: '', foster_comp_model: '',
-  foster_our_share_pct: '', foster_split_basis: '', foster_flat_fee_per_pup: '', foster_split_notes: ''
+  foster_our_share_pct: '', foster_split_basis: '', foster_flat_fee_per_pup: '', foster_split_notes: '',
+  feeding_schedule_override: ''
 });
 
 const ctx = {
@@ -192,6 +193,7 @@ function renderView() {
       ${row('Expected price (female)', esc(money(l.expected_price_female)))}
       ${row('Expected deposit (female)', esc(money(l.expected_deposit_female)))}
       ${row('Notes', l.notes ? esc(l.notes).replace(/\n/g, '<br>') : '')}
+      ${editionFlags.feedingSchedule ? row('Feeding schedule override', l.feeding_schedule_override ? esc(l.feeding_schedule_override).replace(/\n/g, '<br>') : '') : ''}
     </dl>`;
 }
 
@@ -289,6 +291,7 @@ function renderEdit() {
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/pairings/contacts in the pickers above</label>
       </div>` : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(l.notes)}</textarea>`, { wide: true })}
+      ${editionFlags.feedingSchedule ? field('Feeding schedule override', `<textarea id="f-feeding_schedule_override">${esc(l.feeding_schedule_override)}</textarea>`, { wide: true, hint: 'Optional. Overrides your breed default (Feeding Schedules page) for every pup in this litter’s Furever app — e.g. "This litter runs lean, feed on the higher end."' }) : ''}
       ${editionFlags.fosterArrangement ? `<details class="field-wide"${hasFosterData(l) ? ' open' : ''}>
         <summary style="cursor:pointer; font-weight:600; margin:8px 0;">Foster arrangement</summary>
         <span class="field-hint">Leave the direction blank for an ordinary litter. Foster is per-litter — the same dam can have foster and non-foster litters.</span>
@@ -367,6 +370,9 @@ function readForm() {
     expected_deposit_male: val('f-expected_deposit_male'),
     expected_deposit_female: val('f-expected_deposit_female'),
     notes: val('f-notes'),
+    // Absent from the DOM in Lite (editionFlags.feedingSchedule off) — falls
+    // back to the stored draft value rather than being clobbered to '' by val().
+    feeding_schedule_override: document.getElementById('f-feeding_schedule_override') ? val('f-feeding_schedule_override') : (ctx.draft.feeding_schedule_override ?? ''),
     // The whole Foster arrangement section is absent from the DOM in Lite
     // (editionFlags.fosterArrangement off) — every field here falls back to
     // its stored draft value rather than being clobbered to '' by val().
@@ -481,6 +487,7 @@ function normalizeCounts(candidate) {
     candidate[k] = candidate[k] === '' || candidate[k] == null ? null : Number(candidate[k]);
   }
   candidate.pairing_id = candidate.pairing_id || null;
+  candidate.feeding_schedule_override = (candidate.feeding_schedule_override || '').trim() || null;
   // Foster: empty → null (a non-foster litter stores null direction/partner). The
   // share % becomes a real Number or null; partner/basis/notes drop to null blank.
   candidate.foster_direction = candidate.foster_direction || null;
