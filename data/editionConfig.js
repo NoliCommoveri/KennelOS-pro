@@ -8,6 +8,9 @@
 
 export const edition = 'pro';
 
+// Suffix shown after "KennelOS" in the nav brand (nav.js). Null renders nothing.
+export const editionLabel = 'Pro';
+
 // No in-app upgrade CTA in this edition (Pro is already the full app; Demo is a
 // read-only showcase). Exported so shared code that reads it always resolves.
 export const upgradeUrl = null;

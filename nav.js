@@ -9,8 +9,9 @@
 // The lists themselves are EDITION-SPECIFIC (Lite omits the Pro-only hubs —
 // People, Reports, Documents, Companion), so they come from editionConfig and
 // this renderer stays edition-agnostic. Aliased to the original names to keep
-// the rest of this file unchanged.
-import { navItems as NAV_ITEMS, moreItems as MORE_ITEMS } from './data/editionConfig.js';
+// the rest of this file unchanged. The "KennelOS" wordmark itself gets an
+// edition suffix ("Pro"/"Lite") the same way — editionLabel, null in Demo.
+import { navItems as NAV_ITEMS, moreItems as MORE_ITEMS, editionLabel as EDITION_LABEL } from './data/editionConfig.js';
 // Lite's outbound "See the full app ↗" / "Upgrade to Pro →" links live at the
 // foot of the More menu (and on Today). Edition-agnostic: no-ops in Pro/Demo,
 // where hasEditionLinks() is false (editions plan §"In-Lite links to Demo/Pro").
@@ -63,10 +64,11 @@ export function renderNav(targetId = 'app-nav') {
   // Lite appends its outbound edition links to the bottom of the menu; Pro/Demo
   // add nothing (hasEditionLinks() false).
   const editionExtra = hasEditionLinks() ? editionLinksHtml({ variant: 'nav' }) : '';
+  const editionTag = EDITION_LABEL ? `<span class="nav-edition">${EDITION_LABEL}</span>` : '';
 
   host.innerHTML = `
     <nav class="nav-inner">
-      <a class="nav-brand" href="${prefix}index.html"><span class="paw">🐾</span> KennelOS</a>
+      <a class="nav-brand" href="${prefix}index.html"><span class="paw">🐾</span> KennelOS${editionTag}</a>
       <button type="button" class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
       <div class="nav-links">
         ${links}

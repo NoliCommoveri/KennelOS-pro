@@ -59,6 +59,11 @@ body {
   gap: 8px;
 }
 .nav-brand .paw { font-size: 18px; }
+.nav-edition {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--accent-dark); background: #fff; padding: 2px 6px; border-radius: 999px;
+  margin-left: 2px;
+}
 .nav-kennel { font-weight: 500; color: #d7e6de; margin-left: 2px; }
 .nav-link {
   color: #d7e6de;
