@@ -5,6 +5,7 @@
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { LITTER_REFERENCES } from './referenceRegistry.js';
+import { assertOwnKennel } from './kennelScope.js';
 import { FOSTER_DIRECTION, FOSTER_COMP_MODEL } from './vocab.js';
 import { enforceLitterCap } from './editionConfig.js';
 
@@ -59,6 +60,8 @@ export const litterRepo = {
 
   async create(data) {
     validateLitter(data);
+    // Kennel scope (Multi-Kennel Scope Spec §4.3).
+    await assertOwnKennel(data.kennel_id, 'Litter');
     // Edition cap hook (§3/§4 of the cap spec). Default (Pro/shared) is a no-op;
     // Lite throws CapExceededError here when creating a litter at the cap.
     await enforceLitterCap({ candidate: data });

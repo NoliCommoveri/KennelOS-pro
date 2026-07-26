@@ -9,7 +9,7 @@ const KEYS = {
   sampleDataCleared: 'kennelOS.sampleDataCleared',
   myKennelId: 'kennelOS.myKennelId',
   myContactId: 'kennelOS.myContactId',
-  myKennelSetupSkipped: 'kennelOS.myKennelSetupSkipped',
+  activeKennelId: 'kennelOS.activeKennelId',
   companion: 'kennelOS.companion',
   invoiceDefaults: 'kennelOS.invoiceDefaults',
   mileageDefaults: 'kennelOS.mileageDefaults',
@@ -86,12 +86,21 @@ export function setMyContactId(id) {
   localStorage.setItem(KEYS.myContactId, id);
 }
 
-export function wasMyKennelSetupSkipped() {
-  return localStorage.getItem(KEYS.myKennelSetupSkipped) === '1';
+// --- Active kennel scope (data/kennelScope.js) ------------------------------
+// Which of the user's own kennels the app is currently narrowed to, or absent for
+// "All kennels". Read/written only through kennelScope.js, never by a page.
+// Rides clearAllSettings() like every other key.
+//
+// (There is deliberately no "kennel setup skipped" key any more: first-run kennel
+// setup is a hard gate — Multi-Kennel Scope Spec §3.2 — because from that spec on,
+// every owned dog needs a kennel to point at. The gate re-fires until satisfied.)
+export function getActiveKennelId() {
+  return localStorage.getItem(KEYS.activeKennelId);
 }
 
-export function markMyKennelSetupSkipped() {
-  localStorage.setItem(KEYS.myKennelSetupSkipped, '1');
+export function setActiveKennelId(id) {
+  if (id == null) localStorage.removeItem(KEYS.activeKennelId);
+  else localStorage.setItem(KEYS.activeKennelId, id);
 }
 
 // --- Companion messaging (per recipient type) ------------------------------

@@ -70,6 +70,7 @@ const PRECACHE_URLS = [
   'data/license.js',
   'data/incomeView.js',
   'data/kennelRepo.js',
+  'data/kennelScope.js',
   'data/litterFinances.js',
   'data/kennelSetup.js',
   'data/litterRepo.js',

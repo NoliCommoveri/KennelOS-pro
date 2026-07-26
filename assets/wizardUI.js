@@ -157,14 +157,41 @@ const CLOSING_MESSAGE = 'And that’s it! You now know how to use KennelOS to ma
   'you’ve got your own dogs to load in — and get you set up with your kennel name next. We hope ' +
   'you love using the app!';
 
-// Finishing the tour mirrors the "I'll explore" onboarding ending: acknowledge,
-// clear the Thornfield seed (clearSampleData only removes the seeded records), and
-// hand off to the kennel-setup modal — exactly what the closing copy promises.
-async function finishTour() {
+const SKIPPED_MESSAGE = 'No problem — you can take the tour any time from the “More” menu. ' +
+  'We’ll clear the sample data now so you’re starting from a clean slate, and get you set up ' +
+  'with your kennel name next.';
+
+// Drop the Thornfield seed on the way out of the tour. clearSampleData only ever
+// removes the seeded records, but it REFUSES when one of the user's own records
+// has come to reference a sample one ("contaminated") — which is easy to do
+// mid-tour. Retrying with archiveConflicting archives just those referenced
+// sample records instead of deleting them, so the user's record keeps resolving
+// and nothing is left dangling. Without this, the tour's closing copy promises a
+// clear that silently doesn't happen.
+async function clearSeedForHandoff() {
+  try {
+    const result = await clearSampleData();
+    if (!result.cleared && result.reason === 'contaminated') {
+      await clearSampleData({ archiveConflicting: true });
+    }
+  } catch {
+    /* leave the seed in place if the clear fails outright */
+  }
+}
+
+// Both ways out of the tour land here: acknowledge, clear the seed, and hand off
+// to the kennel-setup gate. The handoff is `required` (Multi-Kennel Scope Spec
+// §3.2) — clearing the seed just removed the only own kennel that existed, so
+// there is nothing left to file a dog under until the user names theirs.
+async function endTour({ title, message, okLabel }) {
   teardown();
-  await alertModal({ title: 'Tour complete', message: CLOSING_MESSAGE, okLabel: 'Set up my kennel →' });
-  try { await clearSampleData(); } catch { /* leave the seed in place if the clear fails */ }
-  await showKennelSetupModal({ skippable: true });
+  await alertModal({ title, message, okLabel });
+  await clearSeedForHandoff();
+  await showKennelSetupModal({ mode: 'required' });
+}
+
+function finishTour() {
+  return endTour({ title: 'Tour complete', message: CLOSING_MESSAGE, okLabel: 'Set up my kennel →' });
 }
 
 function goNext() {
@@ -185,9 +212,15 @@ function goBack() {
   else goToStep(step);
 }
 
+// "Skip tour" ends the tour the same way finishing it does, rather than just
+// hiding the overlay: the seed is cleared immediately and the kennel-setup gate
+// follows. Leaving Thornfield in place would hand the user a kennel full of
+// someone else's dogs, and — because sample data satisfies the setup gate — would
+// let them start filing real dogs into a sample kennel that a later "Clear sample
+// data" then has to fight over.
 function skip() {
   dismissWizard();
-  teardown();
+  return endTour({ title: 'Tour skipped', message: SKIPPED_MESSAGE, okLabel: 'Set up my kennel →' });
 }
 
 // A centered card: the tour-intro and each hub-intro (one forward button), and

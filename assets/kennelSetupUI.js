@@ -3,27 +3,38 @@
 // kennel" — the same reachable-any-time-from-Settings pattern as Clear Sample
 // Data, since there's still no dedicated Settings page).
 import {
-  shouldOfferKennelSetupPrompt, skipKennelSetup, completeKennelSetup, getMyKennelName,
+  shouldRequireKennelSetup, completeKennelSetup, getMyKennelName,
   getKennelSetupState
 } from '../data/kennelSetup.js';
 import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js';
 import { esc } from './ui.js';
 import { renderBreedPicker } from './breedTestPicker.js';
 
-export function maybeShowKennelSetupPrompt() {
-  if (!shouldOfferKennelSetupPrompt()) return;
-  showKennelSetupModal({ skippable: true });
+// The mandatory first-run gate (Multi-Kennel Scope Spec §3.2), called from
+// app.js's boot on every page. Async because the gate's condition is a db read
+// ("does an own kennel exist"), unlike the old settings-only skip check.
+export async function maybeShowKennelSetupPrompt() {
+  if (!(await shouldRequireKennelSetup())) return;
+  showKennelSetupModal({ mode: 'required' });
 }
 
-// skippable: true for the first-run prompt; false when opened deliberately
-// from Import/Export (there, "Cancel" just closes without nagging state).
+// Two postures (spec §3.2.2):
+//   'required'    — no Skip, no Cancel, no backdrop close, no Escape. The only
+//                   way out is saving a kennel. Used by all three first-run call
+//                   sites; the app is unusable without a kennel to stamp dogs into.
+//   'cancellable' — a Cancel that closes and changes nothing. Used only by
+//                   Import/Export's deliberate reopen, which EDITS an existing
+//                   kennel and so must stay dismissible.
+// There is no 'skippable' any more — the skip flag it wrote is gone (§3.2.1).
+//
 // Reopening when a kennel/contact already exists prefills and UPDATES those
 // same records (see completeKennelSetup) rather than creating duplicates.
 // A successful save reloads the page — the nav banner and every dog-form
 // owner picker need the fresh kennel/contact, same as the sample-data flow
-// reloads after seeding. onDone(false) only fires on skip/cancel, where
-// nothing changed and a reload would be pointless.
-export async function showKennelSetupModal({ skippable, onDone } = {}) {
+// reloads after seeding. onDone(false) only fires on cancel, where nothing
+// changed and a reload would be pointless.
+export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
+  const required = mode !== 'cancellable';
   const initial = await getKennelSetupState();
 
   // The optional breed+test prefill (Test Planning Addendum §8–9). Populated
@@ -37,8 +48,9 @@ export async function showKennelSetupModal({ skippable, onDone } = {}) {
   overlay.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true" style="max-width:460px;">
       <h2 style="margin-top:0;">🏡 Set up your kennel</h2>
-      <p class="muted">This names your kennel in the header and lets new dogs prefill their
-        owner automatically.</p>
+      <p class="muted">${required
+        ? 'Every dog you add belongs to a kennel, so KennelOS needs yours before you start. This also names it in the header and lets new dogs prefill their owner automatically.'
+        : 'This names your kennel in the header and lets new dogs prefill their owner automatically.'}</p>
       <div class="form-grid">
         <div class="field field-wide"><label>Kennel name <span class="req">*</span></label>
           <input id="ks-kennel" type="text" placeholder="e.g. Thornfield Kennels" value="${esc(initial.kennelName)}"></div>
@@ -49,7 +61,7 @@ export async function showKennelSetupModal({ skippable, onDone } = {}) {
       <div id="ks-error"></div>
       <div class="form-actions">
         <button class="btn btn-primary" data-act="save">Save</button>
-        ${skippable ? '<button class="btn" data-act="skip">Skip for now</button>' : '<button class="btn" data-act="cancel">Cancel</button>'}
+        ${required ? '' : '<button class="btn" data-act="cancel">Cancel</button>'}
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -87,9 +99,21 @@ export async function showKennelSetupModal({ skippable, onDone } = {}) {
       errorBox.innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
     }
   });
-  const dismiss = overlay.querySelector('[data-act="skip"], [data-act="cancel"]');
-  dismiss.addEventListener('click', () => {
-    if (skippable) skipKennelSetup();
+  if (required) {
+    // No dismiss control at all, and neither of the two ambient escapes the app's
+    // other modals honour: a backdrop click and Escape both close `.modal-overlay`
+    // elsewhere, so both are swallowed here in the capture phase before any of
+    // that can run. The only exit is saving a kennel.
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) e.stopPropagation();
+    }, true);
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+    return;
+  }
+
+  overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => {
     overlay.remove();
     onDone?.(false);
   });

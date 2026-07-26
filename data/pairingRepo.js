@@ -8,6 +8,7 @@
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { PAIRING_REFERENCES } from './referenceRegistry.js';
+import { assertOwnKennel } from './kennelScope.js';
 
 const base = makeRepo('pairings', PAIRING_REFERENCES);
 
@@ -35,6 +36,10 @@ export const pairingRepo = {
 
   async create(data) {
     validatePairing(data);
+    // Kennel scope (Multi-Kennel Scope Spec §4.3) — stamped by the caller, which
+    // inherits it rather than guessing; the repo only refuses an absent or
+    // not-our-own kennel.
+    await assertOwnKennel(data.kennel_id, 'Pairing');
     return base.create(data);
   },
 

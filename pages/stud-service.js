@@ -16,6 +16,7 @@ import {
 import { esc, badge, fmtDate, param, confirmModal } from '../assets/ui.js';
 import { getMyContactId } from '../data/kennelSetup.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
+import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 
 const els = {
   title: document.getElementById('ss-title'),
@@ -364,6 +365,11 @@ async function doSave() {
   const candidate = normalizeMoney(readForm());
   try {
     if (ctx.mode === 'new') {
+      // Kennel scope (Multi-Kennel Scope Spec §6) — from OUR dog, never the
+      // partner's: the partner is by definition somebody else's dog.
+      candidate.kennel_id = await resolveKennelIdForWrite({
+        inheritFrom: ctx.dogsById.get(candidate.our_dog_id)
+      });
       const saved = await studServiceRepo.create(candidate);
       location.href = `stud-service.html?id=${encodeURIComponent(saved.id)}`;
       return;

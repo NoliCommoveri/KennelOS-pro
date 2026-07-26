@@ -15,6 +15,7 @@ import { studServiceRepo } from '../data/studServiceRepo.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { getMyContactId } from '../data/kennelSetup.js';
 import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
+import { getActiveKennelId, resolveKennelIdForWrite, SCOPED_OWNERSHIP } from '../data/kennelScope.js';
 import {
   SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, PAIRING_TYPE, PAIRING_STATUS,
   PLACEMENT_TYPE, SALE_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS,
@@ -165,8 +166,19 @@ async function loadRefs() {
 // The one kennel to silently prefill kennel_id with, when exactly one of the
 // user's own kennels exists (Own-Kennel Identity addendum §4). With zero or
 // 2+ own kennels, the field is left for the user to pick/leave blank.
-function soleOwnKennelId() {
-  const owned = ctx.allKennels.filter((k) => k.is_own_kennel && !k.is_archived);
+function ownKennelChoices() {
+  return ctx.allKennels.filter((k) => k.is_own_kennel && !k.is_archived);
+}
+
+// The kennel to prefill kennel_id with on a dog the user owns. The active scope
+// wins when one is set (Multi-Kennel Scope Spec §6); otherwise the sole own
+// kennel, when there is exactly one. With 2+ own kennels and no active scope
+// there is nothing to prefill and the (required) picker is left for the user —
+// the same "don't guess" posture this had before scope existed.
+function preferredOwnKennelId() {
+  const owned = ownKennelChoices();
+  const activeId = getActiveKennelId();
+  if (activeId && owned.some((k) => k.id === activeId)) return activeId;
   return owned.length === 1 ? owned[0].id : null;
 }
 
@@ -234,15 +246,20 @@ function contactOptions(current) {
   return `<option value="">— none —</option>` + opts;
 }
 
-// Every kennel is offered here — your own for a dog you own, or an outside
-// kennel for a dog you don't (external / leased). We track other people's
-// kennels now, so linking an external dog to its kennel is a first-class thing.
-function kennelOptions(current) {
+// Ownership-dependent (Multi-Kennel Scope Spec §3.1a):
+//  - a dog you OWN or CO-OWN belongs to one of YOUR OWN kennels, and must — this
+//    is its kennel scope, so an outside kennel here would make it invisible to
+//    every scoped view. Own kennels only, and no "— none —" to pick.
+//  - an external / leased-in dog may name an OUTSIDE kennel (its real home) or
+//    none at all: it is scope-transparent either way, so every kennel is offered.
+function kennelOptions(current, ownershipType) {
+  const mustBeOwn = SCOPED_OWNERSHIP.has(ownershipType);
   const opts = ctx.allKennels
+    .filter((k) => (mustBeOwn ? k.is_own_kennel : true))
     .filter((k) => ctx.pickerArchived || !k.is_archived || k.id === current)
     .map((k) => `<option value="${esc(k.id)}"${k.id === current ? ' selected' : ''}>${esc(k.kennel_name)}${k.is_own_kennel ? ' — My kennel' : ''}${k.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
-  return `<option value="">— none —</option>` + opts;
+  return (mustBeOwn ? `<option value="">— select —</option>` : `<option value="">— none —</option>`) + opts;
 }
 
 // Unlike kennelOptions() above, the breeder-kennel picker isn't limited to your
@@ -332,7 +349,12 @@ function renderEdit() {
       ${field('Breeder kennel', `<select id="f-breeder_kennel_id">${breederKennelOptions(d.breeder_kennel_id)}</select>`, { hint: 'The kennel that produced this dog — your own for an in-house litter, or an outside kennel for a dog you acquired.' })}
       ${field('Owner', `<select id="f-owner_contact_id">${contactOptions(d.owner_contact_id)}</select>`, { hint: 'Required for external / leased-in dogs.' })}
       ${field('Co-owners', `<select id="f-co_owner_contact_ids" multiple size="4">${coOptions}</select>`, { hint: 'Ctrl/Cmd-click to select multiple.' })}
-      ${field('Kennel', `<select id="f-kennel_id">${kennelOptions(d.kennel_id)}</select>`, { hint: 'The kennel this dog belongs to — your own, or an outside kennel for a dog you don’t own.' })}
+      ${editionFlags.multiKennel ? field('Kennel', `<select id="f-kennel_id">${kennelOptions(d.kennel_id, d.ownership_type)}</select>`, {
+        required: SCOPED_OWNERSHIP.has(d.ownership_type),
+        hint: SCOPED_OWNERSHIP.has(d.ownership_type)
+          ? 'Which of your kennels this dog belongs to. Required for a dog you own.'
+          : 'The kennel this dog belongs to — leave blank, or name the outside kennel it comes from.'
+      }) : ''}
       ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/contacts/kennels in the pickers above</label>
       </div>` : ''}
@@ -359,9 +381,17 @@ function renderEdit() {
       const myContactId = getMyContactId();
       if (myContactId && ctx.contactsById.has(myContactId)) ctx.draft.owner_contact_id = myContactId;
     }
-    if ((e.target.value === 'owned' || e.target.value === 'co_owned') && !ctx.draft.kennel_id) {
-      const soleId = soleOwnKennelId();
-      if (soleId) ctx.draft.kennel_id = soleId;
+    if (SCOPED_OWNERSHIP.has(e.target.value) && !ctx.draft.kennel_id) {
+      const preferred = preferredOwnKennelId();
+      if (preferred) ctx.draft.kennel_id = preferred;
+    }
+    // Switching AWAY from an owned type can leave an own-kennel id that the
+    // now-wider picker still offers — harmless — but switching TO one can leave an
+    // OUTSIDE kennel selected, which the picker no longer offers and the repo
+    // would reject. Drop it so the required picker re-prompts.
+    if (SCOPED_OWNERSHIP.has(e.target.value) && ctx.draft.kennel_id
+        && !ctx.kennelsById.get(ctx.draft.kennel_id)?.is_own_kennel) {
+      ctx.draft.kennel_id = preferredOwnKennelId() || '';
     }
     renderEdit();
   });
@@ -426,9 +456,14 @@ function readForm() {
     breeder_kennel_id: val('f-breeder_kennel_id') || null,
     owner_contact_id: val('f-owner_contact_id') || null,
     co_owner_contact_ids: coSel ? [...coSel.selectedOptions].map((o) => o.value) : [],
-    // Hidden (external/leased-in) means "doesn't apply" — clear rather than
-    // carry over a stale value from before ownership_type changed.
-    kennel_id: document.getElementById('f-kennel_id') ? (val('f-kennel_id') || null) : null,
+    // The picker is absent in two different situations, which mean opposite
+    // things: in a single-kennel edition (Lite) it is never rendered at all and
+    // the draft's already-resolved kennel must SURVIVE; anywhere else its absence
+    // means "doesn't apply". Falling back to the draft covers the first and is a
+    // no-op for the second (the draft has nothing to carry either).
+    kennel_id: document.getElementById('f-kennel_id')
+      ? (val('f-kennel_id') || null)
+      : (ctx.draft?.kennel_id || null),
     notes: val('f-notes')
   };
 }
@@ -623,6 +658,13 @@ async function doSave() {
       // untagged/breed-agnostic test still carries over to every new dog.
       const seedKennel = resolveSeedKennel(candidate);
       if (seedKennel) candidate.planned_tests = kennelRepo.testsForBreed(seedKennel, candidate.breed);
+      // Kennel scope (Multi-Kennel Scope Spec §6). A dog the user owns needs one;
+      // in a multi-kennel edition the required picker above supplied it, and in a
+      // single-kennel edition there IS no picker, so resolve it here. Never
+      // overrides a value the form did provide.
+      if (SCOPED_OWNERSHIP.has(candidate.ownership_type) && !candidate.kennel_id) {
+        candidate.kennel_id = await resolveKennelIdForWrite();
+      }
       saved = await dogRepo.create(candidate);
       location.href = `dog.html?id=${encodeURIComponent(saved.id)}`;
       return;

@@ -19,6 +19,7 @@
 import { esc, fmtDate, confirmModal } from './ui.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { documentRepo } from '../data/documentRepo.js';
+import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { fileRepo } from '../data/fileRepo.js';
 import { photosToPdf } from '../data/pdfBuild.js';
 import { DOC_TYPES, documentFieldsFor } from '../data/vocab.js';
@@ -224,7 +225,14 @@ export function openDocumentModal({
 
         let doc;
         if (isEdit) doc = await documentRepo.update(existing.id, payload);
-        else doc = await documentRepo.create(payload);
+        else {
+          // Kennel scope (Multi-Kennel Scope Spec §6): a document files under the
+          // kennel of the dog it belongs to.
+          payload.kennel_id = await resolveKennelIdForWrite({
+            inheritFrom: await dogRepo.getById(dogId)
+          });
+          doc = await documentRepo.create(payload);
+        }
 
         close();
         onSaved?.({ isEdit, doc });

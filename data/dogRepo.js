@@ -6,6 +6,7 @@ import { makeRepo, nowIso } from './repoBase.js';
 import { DOG_REFERENCES } from './referenceRegistry.js';
 import { todayYMD } from './dateUtils.js';
 import { enforceDogCap } from './editionConfig.js';
+import { SCOPED_OWNERSHIP, assertOwnKennel } from './kennelScope.js';
 
 const base = makeRepo('dogs', DOG_REFERENCES);
 
@@ -57,6 +58,21 @@ async function validateDog(candidate, existingId = null) {
 
   if (OWNER_REQUIRED_TYPES.includes(candidate.ownership_type) && !candidate.owner_contact_id) {
     throw new Error(`Dog: owner_contact_id is required when ownership_type is "${candidate.ownership_type}".`);
+  }
+
+  // Kennel scope (Multi-Kennel Scope Spec §3.1a / §4.3). A dog the user OWNS
+  // belongs to one of their own kennels — required, and it must actually be an
+  // own kennel, or it would be invisible to every scoped view.
+  //
+  // External / leased-in dogs are deliberately exempt: their kennel_id names
+  // somebody ELSE's kennel (the outside stud's home) or nothing at all, and they
+  // are scope-transparent — visible under every kennel — precisely because an
+  // outside dog used by two of the user's kennels belongs to neither.
+  if (SCOPED_OWNERSHIP.has(candidate.ownership_type)) {
+    if (!candidate.kennel_id) {
+      throw new Error('Dog: "kennel_id" is required for a dog you own or co-own.');
+    }
+    await assertOwnKennel(candidate.kennel_id, 'Dog');
   }
 
   // Parentage integrity — hard blocks (an undetected cycle would infinite-loop

@@ -20,6 +20,7 @@
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { DOCUMENT_REFERENCES } from './referenceRegistry.js';
+import { assertOwnKennel } from './kennelScope.js';
 import { fileRepo } from './fileRepo.js';
 
 const base = makeRepo('documents', DOCUMENT_REFERENCES);
@@ -54,6 +55,9 @@ export const documentRepo = {
   async create(data) {
     const norm = normalize(data);
     validateDocument(norm);
+    // Kennel scope (Multi-Kennel Scope Spec §4.3) — inherited from the dog the
+    // document is filed against.
+    await assertOwnKennel(norm.kennel_id, 'Document');
     return base.create(norm);
   },
 

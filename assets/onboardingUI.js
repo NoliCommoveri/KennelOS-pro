@@ -102,6 +102,8 @@ export async function runFirstRunOnboarding() {
     bodyHtml: BACKUP_INSTALL_HTML,
     buttons: [{ label: 'Got it!', value: 'ok', primary: true }]
   });
-  showKennelSetupModal({ skippable: true });
+  // Required, not skippable (spec §3.2): the user has declined sample data, so
+  // there is no kennel anywhere yet and nothing they create could be filed.
+  showKennelSetupModal({ mode: 'required' });
   return true;
 }

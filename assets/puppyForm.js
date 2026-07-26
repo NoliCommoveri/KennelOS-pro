@@ -27,7 +27,13 @@ function baseFromLitter(litter, dam) {
     date_of_birth: (litter.whelp_date && litter.whelp_date <= todayYMD()) ? litter.whelp_date : '',
     status: 'puppy',
     ownership_type: 'owned',
-    breeder_kennel_id: damIsMine ? (dam.kennel_id || null) : null
+    breeder_kennel_id: damIsMine ? (dam.kennel_id || null) : null,
+    // Kennel scope (Multi-Kennel Scope Spec §6): the puppy is ours (ownership_type
+    // 'owned' above), so it needs a required own-kennel scope — inherited from the
+    // LITTER, not the dam. The litter is the thing that belongs to a kennel, and on
+    // a foster-in litter the dam's kennel is somebody else's. Distinct from
+    // breeder_kennel_id above, which records who BRED the pup.
+    kennel_id: litter.kennel_id || null
   };
 }
 

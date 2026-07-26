@@ -165,7 +165,9 @@ async function renderKennelSetupStatus() {
 }
 
 document.getElementById('btn-kennel-setup').addEventListener('click', () => {
-  showKennelSetupModal({ skippable: false });
+  // Cancellable, not required: this is a deliberate reopen to EDIT an existing
+  // kennel, not the first-run gate (Multi-Kennel Scope Spec §3.2.2).
+  showKennelSetupModal({ mode: 'cancellable' });
 });
 
 renderKennelSetupStatus();

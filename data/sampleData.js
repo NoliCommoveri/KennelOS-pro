@@ -26,7 +26,7 @@ import { expenseRepo } from './expenseRepo.js';
 import { monthsFromToday, daysFromToday } from './dateUtils.js';
 import {
   findBlockingReferences, DOG_REFERENCES, PAIRING_REFERENCES, LITTER_REFERENCES,
-  SALE_REFERENCES, STUD_SERVICE_REFERENCES
+  SALE_REFERENCES, STUD_SERVICE_REFERENCES, KENNEL_REFERENCES
 } from './referenceRegistry.js';
 import {
   getSampleDataManifest,
@@ -250,6 +250,7 @@ export async function seedSampleData() {
 
   // Pairing P1 — the actual, whelped breeding that produced Fern/Birch/Hazel.
   const pairingP1 = await pairingRepo.create({
+    kennel_id: thornfield.id,
     sire_id: gunnar.id, dam_id: juniper.id, pairing_type: 'actual', method: 'natural',
     status: 'whelped', planned_date: '2025-06-18', expected_due_date: '2025-08-20'
   });
@@ -259,6 +260,7 @@ export async function seedSampleData() {
   // one puppy (Fern) still `available`: her placement fell through, so she is on
   // the roster again — this drives the litter→reopen nudge (§19). Thread G(7).
   const litter = await litterRepo.create({
+    kennel_id: thornfield.id,
     pairing_id: pairingP1.id, dam_id: juniper.id, sire_id: gunnar.id, nickname: 'Summer litter',
     whelp_date: '2025-08-20', litter_registration_number: 'THORN-L-2025-01',
     puppies_born_total: 3, puppies_born_alive: 3, puppies_born_deceased: 0, puppies_born_abnormalities: 0,
@@ -308,6 +310,7 @@ export async function seedSampleData() {
   // the Puppy Record can show, and her health history (below) touches all twelve
   // health-relevant event types so the printed record's per-type cards all fill.
   const litter2 = await litterRepo.create({
+    kennel_id: thornfield.id,
     dam_id: juniper.id, sire_id: gunnar.id, nickname: 'Spring litter',
     whelp_date: '2026-03-02', litter_registration_number: 'THORN-L-2026-01',
     puppies_born_total: 1, puppies_born_alive: 1, puppies_born_deceased: 0, puppies_born_abnormalities: 1,
@@ -328,10 +331,12 @@ export async function seedSampleData() {
   // priced, actively-selling litter behind Today's Active-litters card, the
   // prospective companion bundle, and the open Autumn sale below.
   const pairingP4 = await pairingRepo.create({
+    kennel_id: thornfield.id,
     sire_id: gunnar.id, dam_id: ivy.id, pairing_type: 'actual', method: 'natural',
     status: 'whelped', planned_date: daysFromToday(-126), expected_due_date: daysFromToday(-63)
   });
   const autumnLitter = await litterRepo.create({
+    kennel_id: thornfield.id,
     pairing_id: pairingP4.id, dam_id: ivy.id, sire_id: gunnar.id, nickname: 'Autumn litter',
     whelp_date: daysFromToday(-63), estimated_ready_date: daysFromToday(-7),
     accept_deposits_date: daysFromToday(-30), litter_registration_number: 'THORN-L-2026-02',
@@ -439,6 +444,7 @@ export async function seedSampleData() {
   // Pairing P2 — Juniper × Gunnar, planned only, no litter yet. Exercises the
   // "Create Litter from this Pairing" empty state and an empty pairing timeline.
   const pairingP2 = await pairingRepo.create({
+    kennel_id: thornfield.id,
     sire_id: gunnar.id, dam_id: juniper.id, pairing_type: 'planned', status: 'planned',
     planned_date: monthsFromToday(4)
   });
@@ -447,6 +453,7 @@ export async function seedSampleData() {
   // service (Birch is physically away at Ellen's now). Recently bred, no due date
   // yet, so it is NOT overdue. StudService.pairing_id is the canonical link.
   const pairingP3 = await pairingRepo.create({
+    kennel_id: thornfield.id,
     sire_id: birch.id, dam_id: nell.id, pairing_type: 'actual', method: 'ai_chilled',
     status: 'bred', planned_date: daysFromToday(-3)
   });
@@ -454,6 +461,7 @@ export async function seedSampleData() {
   // Pairing P5 — Percy × Dahlia, confirmed pregnant and now PAST its expected due
   // date with no litter recorded → overdue-pairing nudge (§19). Thread G(5).
   const pairingP5 = await pairingRepo.create({
+    kennel_id: thornfield.id,
     sire_id: percy.id, dam_id: dahlia.id, pairing_type: 'actual', method: 'natural',
     status: 'confirmed_pregnant', planned_date: daysFromToday(-72), expected_due_date: daysFromToday(-9)
   });
@@ -462,6 +470,7 @@ export async function seedSampleData() {
   // take). Terminal status, so it doesn't dedup Juno's stud→pairing nudge; it
   // gives the Boxer line a pairing and exercises PAIRING_STATUS `failed`. Thread I.
   const pairingP6 = await pairingRepo.create({
+    kennel_id: thornfield.id,
     sire_id: diesel.id, dam_id: juno.id, pairing_type: 'actual', method: 'natural',
     status: 'failed', planned_date: daysFromToday(-150)
   });
@@ -475,6 +484,7 @@ export async function seedSampleData() {
   // Gunnar off the planned pairing P2. Exercises LITTER_STATUS `expected` and the
   // "no roster yet" litter-detail state. Linked to P2 (also its own dam/sire).
   const expectedLitter = await litterRepo.create({
+    kennel_id: thornfield.id,
     pairing_id: pairingP2.id, dam_id: juniper.id, sire_id: gunnar.id, nickname: 'Winter litter',
     litter_registration_number: 'THORN-L-2026-03', status: 'expected'
   });
@@ -495,6 +505,7 @@ export async function seedSampleData() {
     status: 'external_reference', breeder_kennel_id: meadowRidge.id, kennel_id: meadowRidge.id
   });
   const fosterLitter = await litterRepo.create({
+    kennel_id: thornfield.id,
     dam_id: marigold.id, sire_id: gunnar.id, nickname: 'Meadow Ridge foster litter',
     whelp_date: daysFromToday(-56), estimated_ready_date: daysFromToday(0),
     litter_registration_number: 'MDWR-L-2026-01',
@@ -526,6 +537,7 @@ export async function seedSampleData() {
   // lease/co_own. Being live + partner-facing, it puts Dana on the Companion
   // Partners tab too.
   const fosterContract = await contractRepo.create({
+    kennel_id: thornfield.id,
     contract_type: 'foster', status: 'signed', signed_date: daysFromToday(-70),
     related_dog_id: marigold.id, related_contact_id: dana.id,
     title: 'Meadow Ridge foster / co-rearing agreement',
@@ -540,6 +552,7 @@ export async function seedSampleData() {
   // progress", §19/§4.2). flat_plus_pick with pick_value_amount so the partner
   // companion bundle exercises both a cash fee and a non-cash pick estimate.
   const studServiceBirch = await studServiceRepo.create({
+    kennel_id: thornfield.id,
     direction: 'outgoing', our_dog_id: birch.id, partner_dog_id: nell.id, partner_contact_id: ellen.id,
     fee_amount: 800, fee_structure: 'flat_plus_pick', pick_status: 'pending', pick_value_amount: 1500,
     pairing_id: pairingP3.id, type: 'in_person', sent_date: daysFromToday(-3),
@@ -549,6 +562,7 @@ export async function seedSampleData() {
     status: 'arranged', result_notes: 'Sent to Ellen’s for a natural breeding; awaiting confirmation.'
   });
   const studServiceContract = await contractRepo.create({
+    kennel_id: thornfield.id,
     contract_type: 'stud_service', status: 'signed', related_stud_service_id: studServiceBirch.id,
     title: 'Stud Service Agreement — Birch × Nell', signed_date: daysFromToday(-10),
     // document_url (Companion feature §20): a placeholder "anyone with the link"
@@ -566,11 +580,13 @@ export async function seedSampleData() {
   // drives the stud→pairing nudge (§19/§4.7). Its signed contract balances the
   // outgoing one above.
   const studServiceJuno = await studServiceRepo.create({
+    kennel_id: thornfield.id,
     direction: 'incoming', our_dog_id: juno.id, partner_dog_id: titan.id, partner_contact_id: hugo.id,
     fee_amount: 1200, fee_structure: 'flat_fee', type: 'ai', sent_date: daysFromToday(-25),
     status: 'completed', result_notes: 'Shipped chilled semen, AI performed by repro vet.'
   });
   const studServiceJunoContract = await contractRepo.create({
+    kennel_id: thornfield.id,
     contract_type: 'stud_service', status: 'signed', related_stud_service_id: studServiceJuno.id,
     title: 'Stud Service Agreement — Titan × Juno (AI)', signed_date: daysFromToday(-32),
     document_url: 'https://drive.example.com/thornfield/titan-juno-stud-agreement',
@@ -584,6 +600,7 @@ export async function seedSampleData() {
   // Percy's co-ownership with Sam. related_dog_id/related_contact_id are the only
   // way a co_own/lease/other contract reaches its dog/counterparty.
   const percyCoOwnContract = await contractRepo.create({
+    kennel_id: thornfield.id,
     contract_type: 'co_own', status: 'sent', related_dog_id: percy.id, related_contact_id: sam.id,
     title: 'Co-Ownership Agreement — Percy', signed_date: '',
     terms_summary: 'Shared ownership; show and breeding decisions made jointly.'
@@ -592,6 +609,7 @@ export async function seedSampleData() {
   // PARTNER in the Companion (partner membership comes from a live lease/co_own
   // contract with a counterparty), the third companion recipient type.
   const sageLeaseContract = await contractRepo.create({
+    kennel_id: thornfield.id,
     contract_type: 'lease', status: 'signed', related_dog_id: sage.id, related_contact_id: dana.id,
     title: 'Breeding Lease — Sage', signed_date: daysFromToday(-40),
     lease_start_date: daysFromToday(-40), lease_end_date: daysFromToday(120),
@@ -604,6 +622,7 @@ export async function seedSampleData() {
   // Hazel placed with Priya (pet home, delivered — terminal). Contract owns
   // related_sale_id (canonical); there is no Sale.contract_id.
   const hazelSale = await saleRepo.create({
+    kennel_id: thornfield.id,
     dog_id: hazel.id, buyer_contact_id: priya.id, sale_date: '2025-12-20',
     price: 2500, deposit_amount: 500, deposit_date: '2025-11-01', balance_paid_date: '2025-12-20',
     placement_type: 'pet', status: 'delivered', lead_source: 'Instagram',
@@ -613,6 +632,7 @@ export async function seedSampleData() {
     notes: 'Went home with a family in Concord, NH — regular updates from the family.'
   });
   const hazelContract = await contractRepo.create({
+    kennel_id: thornfield.id,
     contract_type: 'sale', status: 'signed', related_sale_id: hazelSale.id,
     title: 'Puppy Purchase Agreement — Hazel', signed_date: '2025-12-15',
     document_url: 'https://drive.example.com/thornfield/hazel-purchase-agreement',
@@ -625,12 +645,14 @@ export async function seedSampleData() {
   // Record "Print" picker lists non-delivered sales, and an open sale makes Nora
   // a current-family companion recipient.
   const daisySale = await saleRepo.create({
+    kennel_id: thornfield.id,
     dog_id: daisy.id, buyer_contact_id: nora.id, sale_date: '2026-05-20',
     price: 2800, deposit_amount: 600, deposit_date: '2026-04-01',
     placement_type: 'pet', status: 'deposit_paid', lead_source: 'Website',
     notes: 'Reserved — pickup scheduled for late May.'
   });
   const daisyContract = await contractRepo.create({
+    kennel_id: thornfield.id,
     contract_type: 'sale', status: 'signed', related_sale_id: daisySale.id,
     title: 'Puppy Purchase Agreement — Daisy', signed_date: '2026-04-01',
     document_url: 'https://drive.example.com/thornfield/daisy-purchase-agreement',
@@ -645,6 +667,7 @@ export async function seedSampleData() {
   // exercised (price + transport + boarding×units − deposit). A `show` placement
   // type broadens PLACEMENT_TYPE coverage beyond `pet`.
   const cedarSale = await saleRepo.create({
+    kennel_id: thornfield.id,
     dog_id: cedarPup.id, buyer_contact_id: jamal.id, sale_date: daysFromToday(-20),
     price: 2800, deposit_amount: 500, deposit_date: daysFromToday(-20), balance_due_date: daysFromToday(21),
     transport_fee: 250,
@@ -890,13 +913,21 @@ function resetCompanionSettings() {
 
 // --- Clearing -----------------------------------------------------------
 
+// `kennel` joins this set with the multi-kennel scope (Multi-Kennel Scope Spec
+// §3.2.6). Every owned dog now carries a required kennel_id, so a user who starts
+// entering real dogs mid-tour points them at the SEEDED Thornfield kennel — and
+// clearing the seed would delete the kennel out from under them. Listing kennel
+// here routes that through the same contamination guard as everything else: the
+// clear reports the conflict, and archiveConflicting archives the sample kennel
+// instead of deleting it, so the real dog's kennel_id keeps resolving.
 const ENTITY_REPOS = {
   dog: dogRepo, pairing: pairingRepo, litter: litterRepo,
-  sale: saleRepo, stud_service: studServiceRepo
+  sale: saleRepo, stud_service: studServiceRepo, kennel: kennelRepo
 };
 const ENTITY_REGISTRIES = {
   dog: DOG_REFERENCES, pairing: PAIRING_REFERENCES, litter: LITTER_REFERENCES,
-  sale: SALE_REFERENCES, stud_service: STUD_SERVICE_REFERENCES
+  sale: SALE_REFERENCES, stud_service: STUD_SERVICE_REFERENCES,
+  kennel: KENNEL_REFERENCES
 };
 
 // Human-readable label for a conflict message. Dogs already have a name; a
@@ -912,6 +943,10 @@ async function labelFor(entityType, id) {
     if (!s) return id;
     const [dog, buyer] = await Promise.all([db.dogs.get(s.dog_id), db.contacts.get(s.buyer_contact_id)]);
     return `Sale (${dog?.call_name || '—'} → ${buyer?.name || '—'})`;
+  }
+  if (entityType === 'kennel') {
+    const k = await db.kennels.get(id);
+    return k ? (k.kennel_name || id) : id;
   }
   if (entityType === 'stud_service') {
     const s = await db.stud_services.get(id);
@@ -944,7 +979,12 @@ async function findContaminatingReferences(manifest) {
     // Sample expenses point at manifest dogs/litters/pairings/kennels via
     // subject_id — list them here so the demo's OWN expenses aren't mistaken for
     // real (contaminating) references during clear.
-    expenses: new Set(manifest.expenses || [])
+    expenses: new Set(manifest.expenses || []),
+    // Needed once kennel joined the checked entities: the seed's own contacts and
+    // documents point at the sample kennel, and without these sets every one of
+    // them would read as a real, contaminating reference and block every clear.
+    contacts: new Set(manifest.contacts || []),
+    documents: new Set(manifest.documents || [])
   };
 
   // conflicts: Map key `${entityType}:${id}` -> { entityType, id, refs: [{label, row}] }
@@ -952,7 +992,8 @@ async function findContaminatingReferences(manifest) {
 
   for (const [entityType, ids] of [
     ['dog', manifest.dogs], ['pairing', manifest.pairings || []], ['litter', manifest.litters || []],
-    ['sale', manifest.sales || []], ['stud_service', manifest.stud_services || []]
+    ['sale', manifest.sales || []], ['stud_service', manifest.stud_services || []],
+    ['kennel', manifest.kennels || []]
   ]) {
     const registry = ENTITY_REGISTRIES[entityType];
     for (const id of ids) {
@@ -1004,7 +1045,7 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
 
   // Archive conflicting records (grouped by entity type), tracking which ids
   // to exclude from the bulk delete below.
-  const archivedIds = { dog: [], pairing: [], litter: [], sale: [], stud_service: [] };
+  const archivedIds = { dog: [], pairing: [], litter: [], sale: [], stud_service: [], kennel: [] };
   if (conflicts.size > 0) {
     for (const { entityType, id } of conflicts.values()) {
       await ENTITY_REPOS[entityType].archive(id);
@@ -1017,6 +1058,7 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
   const litterIdsToDelete = manifest.litters.filter((id) => !archivedIds.litter.includes(id));
   const saleIdsToDelete = manifest.sales.filter((id) => !archivedIds.sale.includes(id));
   const studServiceIdsToDelete = manifest.stud_services.filter((id) => !archivedIds.stud_service.includes(id));
+  const kennelIdsToDelete = manifest.kennels.filter((id) => !archivedIds.kennel.includes(id));
 
   const counts = {
     expenses: manifest.expenses.length,
@@ -1028,9 +1070,9 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
     contracts: manifest.contracts.length,
     dogs: dogIdsToDelete.length,
     contacts: manifest.contacts.length,
-    kennels: manifest.kennels.length,
+    kennels: kennelIdsToDelete.length,
     archived: archivedIds.dog.length + archivedIds.pairing.length + archivedIds.litter.length
-      + archivedIds.sale.length + archivedIds.stud_service.length
+      + archivedIds.sale.length + archivedIds.stud_service.length + archivedIds.kennel.length
   };
 
   // Dependency order: events -> contracts -> litters -> stud_services ->
@@ -1054,7 +1096,7 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
     if (saleIdsToDelete.length) await db.sales.bulkDelete(saleIdsToDelete);
     if (dogIdsToDelete.length) await db.dogs.bulkDelete(dogIdsToDelete);
     if (manifest.contacts.length) await db.contacts.bulkDelete(manifest.contacts);
-    if (manifest.kennels.length) await db.kennels.bulkDelete(manifest.kennels);
+    if (kennelIdsToDelete.length) await db.kennels.bulkDelete(kennelIdsToDelete);
   });
 
   removeSampleDataManifest();

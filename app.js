@@ -33,11 +33,13 @@ function registerServiceWorker() {
 
 // First run shows the onboarding sequence (Welcome → tour offer → tour or
 // backups+New Kennel). On a non-fresh load it does nothing and returns false, so
-// we fall through to the kennel-setup prompt that fires on the load right after
-// sample data is cleared (shouldOfferKennelSetupPrompt gates it).
+// we fall through to the MANDATORY kennel-setup gate, which fires on every load
+// until an own kennel exists (shouldRequireKennelSetup gates it — Multi-Kennel
+// Scope Spec §3.2). That fall-through is what makes the gate inescapable: a user
+// who reloads to dismiss the modal lands right back here.
 async function firstRunFlow() {
   const handled = await runFirstRunOnboarding();
-  if (!handled) maybeShowKennelSetupPrompt();
+  if (!handled) await maybeShowKennelSetupPrompt();
 }
 
 // --- Demo edition (editions plan §"The Demo edition") ----------------------

@@ -8,6 +8,7 @@
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { STUD_SERVICE_REFERENCES } from './referenceRegistry.js';
+import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
 import { todayYMD } from './dateUtils.js';
 
@@ -28,6 +29,9 @@ export const studServiceRepo = {
 
   async create(data) {
     validateStudService(data);
+    // Kennel scope (Multi-Kennel Scope Spec §4.3) — inherited from OUR dog, never
+    // the partner's: the partner is by definition somebody else's.
+    await assertOwnKennel(data.kennel_id, 'Stud service');
     const saved = await base.create(data);
     // Auto-tag the referral source as a Stud referrer (canonical FK stays
     // stud_services.referred_by_contact_id; this is a convenience role label).

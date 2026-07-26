@@ -14,6 +14,7 @@ import { editionFlags } from '../data/editionConfig.js';
 import { renderTimeline } from '../assets/timeline.js';
 import { openEventFromQuery } from '../assets/eventForm.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
+import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 
 const els = {
   title: document.getElementById('pairing-title'),
@@ -283,6 +284,12 @@ async function doSave() {
   const candidate = readForm();
   try {
     if (ctx.mode === 'new') {
+      // Kennel scope (Multi-Kennel Scope Spec §6): the pairing belongs to the
+      // kennel of whichever parent we own — dam first, then sire — falling back to
+      // the active/sole kennel when neither is ours (an all-external pairing).
+      candidate.kennel_id = await resolveKennelIdForWrite({
+        inheritFrom: [ctx.dogsById.get(candidate.dam_id), ctx.dogsById.get(candidate.sire_id)]
+      });
       const saved = await pairingRepo.create(candidate);
       // Write the canonical link back onto the source stud service (StudService
       // owns pairing_id — this repo's own update() is the only thing allowed to

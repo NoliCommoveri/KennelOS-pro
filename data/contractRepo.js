@@ -16,6 +16,7 @@
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { CONTRACT_REFERENCES } from './referenceRegistry.js';
+import { assertOwnKennel } from './kennelScope.js';
 import { documentRepo } from './documentRepo.js';
 
 const base = makeRepo('contracts', CONTRACT_REFERENCES);
@@ -68,6 +69,9 @@ export const contractRepo = {
   async create(data) {
     const record = normalizeLinks({ status: 'draft', ...data });
     validateContract(record);
+    // Kennel scope (Multi-Kennel Scope Spec §4.3) — inherited from whatever the
+    // contract documents (its sale, stud service, or dog).
+    await assertOwnKennel(record.kennel_id, 'Contract');
     return base.create(record);
   },
 

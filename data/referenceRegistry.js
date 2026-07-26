@@ -93,6 +93,11 @@ export const CONTACT_REFERENCES = [
 ];
 
 // --- Kennel: what can point at a Kennel -------------------------------------
+// The six kennel_id entries below are the KENNEL SCOPE (Multi-Kennel Scope Spec
+// §4.2). Consequence worth knowing: a kennel in real use becomes effectively
+// undeletable, because its litters/sales/contracts all block hard delete — archive
+// is the intended exit, and the Kennels page's Delete button is disabled with the
+// blocker list naming exactly which records are holding it.
 export const KENNEL_REFERENCES = [
   { table: 'contacts', field: 'kennel_id',          label: 'kennel of a contact' },
   { table: 'dogs',     field: 'kennel_id',          label: 'kennel of a dog' },
@@ -100,7 +105,13 @@ export const KENNEL_REFERENCES = [
   {
     table: 'expenses', field: 'subject_id', label: 'subject of an expense',
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'kennel'
-  }
+  },
+  { table: 'pairings',      field: 'kennel_id', label: 'kennel of a pairing' },
+  { table: 'litters',       field: 'kennel_id', label: 'kennel of a litter' },
+  { table: 'sales',         field: 'kennel_id', label: 'kennel of a sale' },
+  { table: 'stud_services', field: 'kennel_id', label: 'kennel of a stud service' },
+  { table: 'contracts',     field: 'kennel_id', label: 'kennel of a contract' },
+  { table: 'documents',     field: 'kennel_id', label: 'kennel of a document' }
 ];
 
 // --- Sale: what can point at a Sale (Stage 4) -------------------------------

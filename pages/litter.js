@@ -19,6 +19,7 @@ import { renderTimeline } from '../assets/timeline.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { openAddPuppyForm, openAddPuppiesForm } from '../assets/puppyForm.js';
 import { openEventForm, openEventFromQuery } from '../assets/eventForm.js';
+import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 
 // Statuses at/after whelping — used to decide whether a future whelp_date warns.
 const WHELPED_OR_LATER = ['whelped', 'weaning', 'ready', 'sold', 'closed'];
@@ -565,6 +566,13 @@ async function doSave() {
   const candidate = normalizeCounts(readForm());
   try {
     if (ctx.mode === 'new') {
+      // Kennel scope (Multi-Kennel Scope Spec §6) — dam's kennel, then sire's,
+      // then the active/sole kennel. A foster-IN litter out of an external dam
+      // inherits nothing from her (her kennel is somebody else's), so it lands on
+      // the active kennel, which is right: we are the ones raising it.
+      candidate.kennel_id = await resolveKennelIdForWrite({
+        inheritFrom: [ctx.dogsById.get(candidate.dam_id), ctx.dogsById.get(candidate.sire_id)]
+      });
       const saved = await litterRepo.create(candidate);
       location.href = `litter.html?id=${encodeURIComponent(saved.id)}`;
       return;

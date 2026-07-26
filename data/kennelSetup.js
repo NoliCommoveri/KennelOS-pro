@@ -5,10 +5,10 @@
 import { kennelRepo } from './kennelRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { hasSampleData } from './sampleData.js';
+import { hasOwnKennel } from './kennelScope.js';
 import {
   getMyKennelId, setMyKennelId,
   getMyContactId, setMyContactId,
-  wasMyKennelSetupSkipped, markMyKennelSetupSkipped,
   wasSampleDataCleared
 } from './settings.js';
 
@@ -16,17 +16,22 @@ export function hasMyKennelSetup() {
   return getMyKennelId() != null;
 }
 
-// Offered once the app is in "real data" mode (sample data was declined or
-// has since been cleared) and the user hasn't set this up or skipped it yet.
-// This intentionally fires again on the load right after sample data is
-// cleared, even if the very first run happened long ago.
-export function shouldOfferKennelSetupPrompt() {
+// The MANDATORY first-run gate (Multi-Kennel Scope Spec §3.2). Required, not
+// offered: from the multi-kennel work on, every owned dog carries a required
+// kennel_id, so the app isn't usable until one own kennel exists.
+//
+// Two things about the condition are load-bearing:
+//  - It tests "does an OWN KENNEL exist", not "is myKennelId set" (§3.2.4). The
+//    guided tour seeds an own kennel without ever setting myKennelId — only
+//    completeKennelSetup does — so testing the setting would trap tour users
+//    behind an unclosable modal.
+//  - There is no skip term any more. Removing it is what turns app.js's existing
+//    fall-through into the gate: declineSampleData() marks the cleared flag, so
+//    the load after a dismissed modal already lands here (§3.2.3). Nothing else
+//    was needed to make it re-fire until satisfied.
+export async function shouldRequireKennelSetup() {
   if (hasSampleData() || !wasSampleDataCleared()) return false;
-  return !hasMyKennelSetup() && !wasMyKennelSetupSkipped();
-}
-
-export function skipKennelSetup() {
-  markMyKennelSetupSkipped();
+  return !(await hasOwnKennel());
 }
 
 // Current values, for prefilling the wizard when it's reopened to make a

@@ -12,6 +12,7 @@
 // never silently created — they land in "needs review," where the user decides.
 import Papa from '../vendor/papaparse.min.mjs';
 import { dogRepo } from './dogRepo.js';
+import { resolveKennelIdForWrite, SCOPED_OWNERSHIP } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { pairingRepo } from './pairingRepo.js';
@@ -1309,6 +1310,27 @@ export function summarize(plan) {
   return s;
 }
 
+// --- Kennel scope on import -------------------------------------------------
+// The scoped entities (Multi-Kennel Scope Spec §4.1) carry a required kennel_id,
+// which a CSV generally doesn't name. Fill it in from the active/sole kennel just
+// before the write, leaving anything the row DID resolve (the dog mapping's
+// kennel_name column) untouched.
+//
+// Deliberately conservative for Phase 1: no inheritance from a matched parent
+// record, and dogs are stamped only when the user owns them — an external dog's
+// kennel is somebody else's and stays whatever the CSV said, including nothing.
+// Full per-row kennel columns for every entity are Phase 3 (spec §11).
+const KENNEL_SCOPED_IMPORTS = new Set(['pairing', 'litter', 'sale', 'stud_service']);
+
+async function stampKennelScope(entity, record) {
+  if (record.kennel_id) return;
+  const isDog = entity === 'dog';
+  if (!isDog && !KENNEL_SCOPED_IMPORTS.has(entity)) return;
+  if (isDog && !SCOPED_OWNERSHIP.has(record.ownership_type)) return;
+  const kennelId = await resolveKennelIdForWrite();
+  if (kennelId) record.kennel_id = kennelId;
+}
+
 // --- Commit ---------------------------------------------------------------
 // Applies each row's *decision* (create / update / skip). Rows are independent:
 // one failure is recorded and the rest still import.
@@ -1322,6 +1344,7 @@ export async function commitPlan(entity, plan) {
       // — the one place a relationship column isn't resolve-or-review).
       if (mapping.prepareRecord) await mapping.prepareRecord(r);
       if (r.decision === 'create') {
+        await stampKennelScope(entity, r.record);
         await mapping.repo.create(r.record);
         result.created++;
       } else if (r.decision === 'update') {

@@ -44,6 +44,18 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    to now) is indexed like every other canonical Dog FK, and guarded in
 //    `KENNEL_REFERENCES` (referenceRegistry.js) so a Kennel can't be
 //    hard-deleted out from under a dog that still names it as its breeder.
+//  - `kennel_id` on `pairings`/`litters`/`sales`/`stud_services`/`contracts`/
+//    `documents` is the KENNEL SCOPE (Multi-Kennel Scope Spec §4.1): which of the
+//    user's own kennels the record belongs to. Stamped on create by inheriting
+//    from the record's parent (a sale from its dog, a contract from its sale, a
+//    litter from the active kennel…) — never derived at read time, so a dog
+//    moving between the user's kennels can't retroactively rewrite the history of
+//    a litter or sale. Indexed so a scoped list is an index probe, not a scan,
+//    and guarded in KENNEL_REFERENCES like every other kennel FK.
+//    Deliberately NOT stamped: `events`/`expenses` are polymorphic and derive
+//    their scope from the subject they hang off (a second stored scope would be a
+//    second source of truth); `files` is fetched by id only; and
+//    `breed_feeding_schedules` is a program-wide per-breed lookup.
 //  - `contracts.related_contact_id` (Companion feature) is the counterparty FK
 //    for lease/co_own/other contracts — the types with no linked Sale/StudService
 //    to reach a contact through. Indexed like every other canonical Contract FK
@@ -92,12 +104,12 @@ db.version(1).stores({
   expenses:      'id, event_id, [subject_type+subject_id], category, expense_date, is_archived',
   contacts:      'id, kennel_id, waitlist_status, is_archived',
   kennels:       'id, is_archived',
-  pairings:      'id, sire_id, dam_id, status, pairing_type, is_archived',
-  litters:       'id, pairing_id, sire_id, dam_id, status, whelp_date, foster_partner_contact_id, is_archived',
-  sales:         'id, dog_id, buyer_contact_id, referred_by_contact_id, status, placement_type, is_archived',
-  contracts:     'id, contract_type, status, related_sale_id, related_stud_service_id, related_dog_id, related_contact_id, is_archived',
-  stud_services: 'id, our_dog_id, partner_dog_id, partner_contact_id, referred_by_contact_id, direction, status, pairing_id, is_archived',
-  documents:     'id, dog_id, doc_type, doc_date, is_archived',
+  pairings:      'id, kennel_id, sire_id, dam_id, status, pairing_type, is_archived',
+  litters:       'id, kennel_id, pairing_id, sire_id, dam_id, status, whelp_date, foster_partner_contact_id, is_archived',
+  sales:         'id, kennel_id, dog_id, buyer_contact_id, referred_by_contact_id, status, placement_type, is_archived',
+  contracts:     'id, kennel_id, contract_type, status, related_sale_id, related_stud_service_id, related_dog_id, related_contact_id, is_archived',
+  stud_services: 'id, kennel_id, our_dog_id, partner_dog_id, partner_contact_id, referred_by_contact_id, direction, status, pairing_id, is_archived',
+  documents:     'id, kennel_id, dog_id, doc_type, doc_date, is_archived',
   files:         'id, created_at',
   breed_feeding_schedules: 'id, breed, is_archived'
 });

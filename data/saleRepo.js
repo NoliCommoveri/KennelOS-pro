@@ -6,6 +6,7 @@
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { SALE_REFERENCES } from './referenceRegistry.js';
+import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
 
 const base = makeRepo('sales', SALE_REFERENCES);
@@ -33,6 +34,10 @@ export const saleRepo = {
 
   async create(data) {
     validateSale(data);
+    // Kennel scope (Multi-Kennel Scope Spec §4.3) — the sale inherits the kennel of
+    // the dog being placed, so a kennel-B dog sold while scoped to A still files
+    // under B.
+    await assertOwnKennel(data.kennel_id, 'Sale');
     const saved = await base.create(data);
     // Auto-tag the referral source as a Buyer referrer (a stored role on the
     // Contact — the canonical FK stays sales.referred_by_contact_id, this is just

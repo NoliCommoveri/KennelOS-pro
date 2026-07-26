@@ -12,6 +12,7 @@ import { documentRepo } from '../data/documentRepo.js';
 import { CONTRACT_TYPE, CONTRACT_STATUS, SEX, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate, param, confirmModal } from '../assets/ui.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
+import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 
 const els = {
   title: document.getElementById('contract-title'),
@@ -342,6 +343,17 @@ async function doSave() {
   const candidate = readForm();
   try {
     if (ctx.mode === 'new') {
+      // Kennel scope (Multi-Kennel Scope Spec §6): a contract files under whatever
+      // it documents — its sale, its stud service, or the dog it names — in that
+      // order. A counterparty-only contract (lease/co-own/other with no linked
+      // record) has nothing to inherit and falls back to the active/sole kennel.
+      candidate.kennel_id = await resolveKennelIdForWrite({
+        inheritFrom: [
+          ctx.allSales.find((x) => x.id === candidate.related_sale_id),
+          ctx.allStudServices.find((x) => x.id === candidate.related_stud_service_id),
+          ctx.dogsById.get(candidate.related_dog_id)
+        ]
+      });
       const saved = await contractRepo.create(candidate);
       location.href = `contract.html?id=${encodeURIComponent(saved.id)}`;
       return;

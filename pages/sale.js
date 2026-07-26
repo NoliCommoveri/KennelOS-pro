@@ -11,6 +11,7 @@ import { esc, badge, fmtDate, todayYMD, param, confirmModal, selectModal, dogRef
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 
 // Statuses that warrant the "log a scheduled pickup" prompt (Stage4.5 Addendum §D4).
 const PLACEMENT_PROMPT_STATUSES = ['paid_in_full', 'delivered'];
@@ -452,6 +453,14 @@ async function doSave() {
   const isNew = ctx.mode === 'new';
   const prevStatus = isNew ? null : ctx.original.status;
   try {
+    if (isNew) {
+      // Kennel scope (Multi-Kennel Scope Spec §6): the sale files under the kennel
+      // of the dog being placed, so a kennel-B dog sold while scoped to kennel A
+      // still belongs to B.
+      candidate.kennel_id = await resolveKennelIdForWrite({
+        inheritFrom: ctx.dogsById.get(candidate.dog_id)
+      });
+    }
     const saved = isNew
       ? await saleRepo.create(candidate)
       : await saleRepo.update(ctx.original.id, candidate);
