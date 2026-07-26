@@ -20,6 +20,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
+import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
 import { EVENT_TYPES, DOG_STATUS, DISPOSITION } from '../data/vocab.js';
 import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
@@ -39,7 +40,19 @@ const overviewEl = document.getElementById('today-overview');
 const editionsEl = document.getElementById('today-editions');
 
 // Subject-resolution context, loaded once. Shared by every section.
+//
+// These maps are built from the UNSCOPED loads on purpose (Multi-Kennel Scope
+// Spec §7). They exist to resolve labels, and scoping them would break the very
+// filter that uses them: `subjectInScope` treats an unresolvable subject as
+// in-scope (a row we can't place is better shown than silently dropped), so a map
+// pre-filtered to the active kennel would make every OTHER kennel's events look
+// unresolvable and let them through. Filter the display lists, never the maps.
 const ctx = { dogsById: new Map(), pairingsById: new Map(), littersById: new Map(), contactsById: new Map() };
+
+// The active-kennel predicate for a polymorphic Event, bound to those maps.
+const eventInScope = (ev) => subjectInScope(ev.subject_type, ev.subject_id, {
+  dog: ctx.dogsById, pairing: ctx.pairingsById, litter: ctx.littersById
+});
 
 function showError(msg) { errorBox.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; }
 
@@ -93,7 +106,7 @@ function reminderBucket(title, rows, bucketBadge) {
 }
 
 async function renderReminders() {
-  const reminders = await eventRepo.getReminders();
+  const reminders = (await eventRepo.getReminders()).filter(eventInScope);
   const isEmpty = !reminders.length;
   const title = `Reminders${reminders.length ? ` <span class="muted" style="font-size:14px;">(${reminders.length})</span>` : ''}`;
   let body;
@@ -407,15 +420,26 @@ async function main() {
   ctx.littersById = new Map(litters.map((l) => [l.id, l]));
   ctx.contactsById = new Map(contacts.map((c) => [c.id, c]));
 
+  // Active-kennel scope (Multi-Kennel Scope Spec §7). Applied AFTER the maps are
+  // built, for the reason spelled out at ctx. Dogs go through the dog flavor so
+  // external/leased dogs stay visible; the rest carry their own stamped kennel.
+  // Every one of these is a pass-through under "All kennels" and in Lite.
+  const scopedDogs = dogsInScope(allDogs);
+  const scopedLitters = inScopeOnly(litters);
+  const scopedPairings = inScopeOnly(pairings);
+  const scopedSales = inScopeOnly(sales);
+
   // Nudges and reminders each do their own async read; they're independent, so
   // run them concurrently rather than one-then-the-other (halves the critical
   // path for the two top cards). The remaining sections render synchronously
   // from the data main() already loaded.
   const asyncCards = Promise.all([renderNudges(), renderReminders()]);
-  renderAvailable(allDogs, litters);
-  renderUpcoming(upcoming);
+  renderAvailable(scopedDogs, scopedLitters);
+  renderUpcoming(upcoming.filter(eventInScope));
+  // boardRows arrive already scoped — getAwayBoardRows() owns that, so board.js,
+  // today.js, and dashboard.js can't disagree about who is away.
   renderBoard(boardRows);
-  renderOverview({ allDogs, litters, pairings, sales });
+  renderOverview({ allDogs: scopedDogs, litters: scopedLitters, pairings: scopedPairings, sales: scopedSales });
   await asyncCards;
 }
 

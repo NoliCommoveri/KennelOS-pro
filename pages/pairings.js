@@ -3,6 +3,7 @@
 import { pairingRepo } from '../data/pairingRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { createListView } from '../assets/listView.js';
+import { inScope } from '../data/kennelScope.js';
 import { badge, fmtDate, esc } from '../assets/ui.js';
 import { PAIRING_STATUS, PAIRING_TYPE } from '../data/vocab.js';
 
@@ -29,6 +30,11 @@ async function init() {
 
   createListView({
     mount,
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — a pairing carries its own
+    // stamped kennel_id. Note the sire/dam FILTER options above still list every
+    // dog used across pairings, including the other kennel's: filtering the option
+    // list as well would make the dropdowns disagree with the pedigree.
+    scope: inScope,
     search: {
       placeholder: 'Search by sire or dam name…',
       text: (p) => `${dogName(p.sire_id)} ${dogName(p.dam_id)}`

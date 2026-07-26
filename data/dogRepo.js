@@ -135,6 +135,9 @@ export const dogRepo = {
   },
 
   // --- Pedigree helpers (pure derivation over sire_id/dam_id) --------------
+  // DELIBERATELY NOT KENNEL-SCOPED (Multi-Kennel Scope Spec §7): the ancestor
+  // and offspring walks cross kennels by definition. Scoping them would
+  // silently truncate lineage — see assets/pedigree.js.
 
   // Direct children of a dog. Reverse lookups aren't native in Dexie, but both
   // parent fields are indexed, so this is two cheap index queries.

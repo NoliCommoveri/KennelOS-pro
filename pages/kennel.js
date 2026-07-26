@@ -1,4 +1,9 @@
-// kennel.js — Kennel Detail. The home for one kennel's program configuration
+// kennel.js — Kennel Detail, now a per-kennel HUB (Multi-Kennel Scope Spec §8):
+// roster counts, active litters, recent placements, and this kennel's P&L, all
+// derived on load and all filtered on THIS kennel's id rather than the active
+// scope — you opened this kennel's page, so you get its numbers whichever kennel
+// the app is currently narrowed to. Below the hub, the page keeps what it always
+// was: the home for one kennel's program configuration
 // (own kennels only): the promote-lifecycle nudge thresholds (Data Integrity
 // Brief §3.2) and the preferred-tests panel (Test Planning Addendum §6.1), both
 // moved here from the lightweight Kennels list (kennels.js), which now only
@@ -8,7 +13,15 @@
 // dues, marketing…), all carrying subject_type='kennel' + subject_id=this kennel.
 import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
-import { esc, param } from '../assets/ui.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { saleRepo } from '../data/saleRepo.js';
+import { pairingRepo } from '../data/pairingRepo.js';
+import { contactRepo } from '../data/contactRepo.js';
+import { expenseRepo } from '../data/expenseRepo.js';
+import { getIncomeRows, summarize } from '../data/incomeView.js';
+import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
+import { DOG_STATUS, LITTER_STATUS, SALE_STATUS } from '../data/vocab.js';
+import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 
 const els = {
@@ -18,8 +31,12 @@ const els = {
   error: document.getElementById('page-error'),
   logo: document.getElementById('logo-section'),
   config: document.getElementById('kennel-config'),
+  overview: document.getElementById('kennel-overview'),
   expenses: document.getElementById('expenses-section')
 };
+
+// How many recent placements the hub lists before "see all".
+const RECENT_PLACEMENTS = 5;
 
 // Longest edge (px) a logo is downscaled to before it's stored as a data URL.
 // Keeps the backup-riding string small; a program logo needs no more resolution
@@ -41,7 +58,9 @@ function renderProfile(k) {
   els.title.innerHTML = esc(k.kennel_name) +
     (k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : '') +
     (k.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
-  els.subtitle.textContent = 'Kennel-wide configuration, financials, and details.';
+  els.subtitle.textContent = k.is_own_kennel
+    ? 'This kennel’s roster, litters, placements, finances, and program configuration.'
+    : 'An outside kennel — reference data only.';
   els.body.innerHTML = `
     <dl class="dl-meta" style="margin-top:14px;">
       ${row('Name', esc(k.kennel_name))}
@@ -135,6 +154,182 @@ async function onLogoRemove() {
     await reloadKennel();
     renderLogo();
   } catch (err) { logoError(err.message || String(err)); }
+}
+
+// --- The per-kennel hub (Multi-Kennel Scope Spec §8) -----------------------
+// What makes kennel.html a real hub rather than a config screen: this kennel's
+// roster, its live litters, its recent placements, and its P&L.
+//
+// Everything here filters on THIS kennel's id, never on the active scope — you
+// opened this kennel's page, so you get this kennel's numbers whichever kennel
+// the app is currently narrowed to. (That is also why the income read passes
+// `kennelId` explicitly: getIncomeRows() otherwise honors the active scope.)
+// Own kennels only: an outside kennel is reference data, with no program of ours
+// to report on.
+
+function statTile(num, label, href) {
+  const cls = ['stat', num === 0 ? 'stat-zero' : ''].filter(Boolean).join(' ');
+  const inner = `<div class="stat-num">${esc(num)}</div><div class="stat-label">${esc(label)}</div>`;
+  return href ? `<a class="${cls}" href="${href}">${inner}</a>` : `<div class="${cls}">${inner}</div>`;
+}
+
+function moneyTile(label, value, tone) {
+  return `<div class="card" style="margin:0; height:100%; box-sizing:border-box; text-align:center; padding:14px;">
+      <div class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:.04em;">${esc(label)}</div>
+      <div style="font-size:22px; font-weight:700; padding-top:4px;${tone ? ` color:var(--${tone});` : ''}">${esc(value)}</div>
+    </div>`;
+}
+
+function dogName(id) {
+  return hub.dogsById.get(id)?.call_name || '—';
+}
+
+function litterLabel(l) {
+  return l.nickname || `${dogName(l.dam_id)} × ${dogName(l.sire_id)}`;
+}
+
+// Loaded once by loadHub(); kept module-level so the render helpers above can
+// resolve names without threading maps through every call.
+const hub = { dogsById: new Map(), contactsById: new Map() };
+
+// A litter still in progress — anything short of closed. `sold` stays here on
+// purpose: pups are spoken for but not all delivered, so it is still live work.
+const LIVE_LITTER_STATUSES = ['expected', 'whelped', 'weaning', 'ready', 'sold'];
+
+async function loadHub(k) {
+  const [dogs, litters, pairings, sales, contacts, expenses, incomeRows] = await Promise.all([
+    dogRepo.getAll({ includeArchived: true }),
+    litterRepo.getAll({ includeArchived: false }),
+    pairingRepo.getAll({ includeArchived: false }),
+    saleRepo.getAll({ includeArchived: false }),
+    contactRepo.getAll({ includeArchived: true }),
+    expenseRepo.getAll({ includeArchived: false }),
+    getIncomeRows({ includeArchived: false, kennelId: k.id })
+  ]);
+  hub.dogsById = new Map(dogs.map((d) => [d.id, d]));
+  hub.contactsById = new Map(contacts.map((c) => [c.id, c]));
+
+  const mine = (r) => r.kennel_id === k.id;
+  // The roster is the dogs this kennel OWNS. An external/leased dog carries
+  // somebody else's kennel (or none) and belongs to no roster of ours — the same
+  // rule that makes it scope-transparent everywhere else (spec §3.1a).
+  const roster = dogs.filter((d) => ['owned', 'co_owned'].includes(d.ownership_type) && mine(d));
+  const kLitters = litters.filter(mine);
+  const kSales = sales.filter(mine);
+
+  // An expense carries no kennel of its own (spec §4.1) — its scope is its
+  // subject's. Resolve that here by membership in this kennel's own record ids.
+  const ownIds = new Set([
+    k.id,
+    ...roster.map((d) => d.id),
+    ...kLitters.map((l) => l.id),
+    ...pairings.filter(mine).map((p) => p.id)
+  ]);
+  const kExpenses = expenses.filter((x) => ownIds.has(x.subject_id));
+
+  return { roster, kLitters, kSales, kExpenses, incomeRows };
+}
+
+function rosterCardHtml(roster) {
+  const active = roster.filter((d) => !d.is_archived);
+  const byStatus = new Map();
+  for (const d of active) byStatus.set(d.status, (byStatus.get(d.status) || 0) + 1);
+  const tiles = DOG_STATUS
+    .filter((s) => (byStatus.get(s.value) || 0) > 0)
+    .map((s) => statTile(byStatus.get(s.value), s.label, 'dogs.html'))
+    .join('');
+  return `<section class="card">
+      <div class="row-between" style="align-items:baseline;">
+        <h2 style="margin:0;">Roster <span class="muted" style="font-size:14px;">(${active.length})</span></h2>
+        <a class="btn btn-sm" href="dogs.html">All dogs →</a>
+      </div>
+      <p class="field-hint">Dogs this kennel owns or co-owns, by status. External and leased dogs belong to no kennel of yours, so they are not counted here.</p>
+      ${tiles ? `<div class="stat-grid">${tiles}</div>` : '<div class="empty-state">No dogs on this kennel’s roster yet.</div>'}
+    </section>`;
+}
+
+function littersCardHtml(kLitters) {
+  const live = kLitters
+    .filter((l) => LIVE_LITTER_STATUSES.includes(l.status))
+    .sort((a, b) => (b.whelp_date || '').localeCompare(a.whelp_date || ''));
+  const rows = live.map((l) => `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
+      <span><a href="litter.html?id=${encodeURIComponent(l.id)}"><strong>${esc(litterLabel(l))}</strong></a> ${badge(LITTER_STATUS, l.status)}</span>
+      <span class="muted" style="white-space:nowrap;">${l.whelp_date ? esc(fmtDate(l.whelp_date)) : '<span class="faint">not whelped</span>'}</span>
+    </li>`).join('');
+  return `<section class="card">
+      <div class="row-between" style="align-items:baseline;">
+        <h2 style="margin:0;">Active litters <span class="muted" style="font-size:14px;">(${live.length})</span></h2>
+        <a class="btn btn-sm" href="breeding.html">Breeding →</a>
+      </div>
+      ${rows ? `<ul class="linked-list" style="margin:6px 0 0; padding:0; list-style:none;">${rows}</ul>`
+             : '<div class="empty-state">No litters in progress at this kennel.</div>'}
+    </section>`;
+}
+
+function placementsCardHtml(kSales) {
+  const recent = kSales
+    .slice()
+    .sort((a, b) => (b.sale_date || b.created_at || '').localeCompare(a.sale_date || a.created_at || ''))
+    .slice(0, RECENT_PLACEMENTS);
+  const rows = recent.map((s) => `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
+      <span><a href="sale.html?id=${encodeURIComponent(s.id)}"><strong>${esc(dogName(s.dog_id))}</strong></a>
+        <span class="muted">→ ${esc(hub.contactsById.get(s.buyer_contact_id)?.name || '—')}</span> ${badge(SALE_STATUS, s.status)}</span>
+      <span class="muted" style="white-space:nowrap;">${s.sale_date ? esc(fmtDate(s.sale_date)) : '<span class="faint">—</span>'}</span>
+    </li>`).join('');
+  return `<section class="card">
+      <div class="row-between" style="align-items:baseline;">
+        <h2 style="margin:0;">Recent placements <span class="muted" style="font-size:14px;">(${kSales.length} total)</span></h2>
+        <a class="btn btn-sm" href="sales.html">Sales →</a>
+      </div>
+      ${rows ? `<ul class="linked-list" style="margin:6px 0 0; padding:0; list-style:none;">${rows}</ul>`
+             : '<div class="empty-state">No placements recorded for this kennel yet.</div>'}
+    </section>`;
+}
+
+function financesCardHtml(incomeRows, kExpenses) {
+  const { totals } = summarize(incomeRows);
+  const spent = expenseRepo.total(kExpenses);
+  const net = totals.earned - spent;
+  return `<section class="card">
+      <div class="row-between" style="align-items:baseline;">
+        <h2 style="margin:0;">This kennel's finances</h2>
+        <a class="btn btn-sm" href="financials.html">Financials →</a>
+      </div>
+      <p class="field-hint">Derived exactly as the Financials hub derives its own totals — nothing stored. Expenses include this kennel's overhead plus the costs on its dogs, litters, and pairings.</p>
+      <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:12px; margin-top:10px;">
+        ${moneyTile('Earned income', fmtMoney(totals.earned), 'success')}
+        ${moneyTile('Anticipated income', fmtMoney(totals.anticipated), 'warning')}
+        ${moneyTile('Expenses', fmtMoney(spent), 'danger')}
+        ${moneyTile('Net (earned − spent)', fmtMoney(net), net < 0 ? 'danger' : 'success')}
+      </div>
+    </section>`;
+}
+
+// "You are viewing another kennel" — the switcher's counterpart on the hub, so
+// the page you are reading and the scope the rest of the app is under can be
+// brought into agreement in one click.
+function scopeActionHtml(k) {
+  if (getActiveKennelId() === k.id) {
+    return `<p class="field-hint" style="margin-top:10px;">The app is currently scoped to this kennel — lists, hubs, and reports are showing its records.</p>`;
+  }
+  return `<div class="pill-row" style="margin-top:10px;">
+      <button class="btn btn-sm" data-act="scope-here">Scope the app to ${esc(k.kennel_name)}</button>
+    </div>`;
+}
+
+async function renderOverview() {
+  if (!kennel.is_own_kennel) { els.overview.innerHTML = ''; return; }
+  const { roster, kLitters, kSales, kExpenses, incomeRows } = await loadHub(kennel);
+  els.overview.innerHTML =
+    rosterCardHtml(roster)
+    + littersCardHtml(kLitters)
+    + placementsCardHtml(kSales)
+    + financesCardHtml(incomeRows, kExpenses)
+    + scopeActionHtml(kennel);
+  els.overview.querySelector('[data-act="scope-here"]')?.addEventListener('click', () => {
+    setActiveKennel(kennel.id);
+    location.reload();
+  });
 }
 
 // Own-kennel program configuration: lifecycle nudges + preferred tests. Only
@@ -346,6 +541,7 @@ async function main() {
   allDogs = dogs;
   renderProfile(k);
   renderLogo();
+  renderOverview().catch((e) => showError(e.message || String(e)));
   renderConfig();
   renderExpensePanel({ mount: els.expenses, subjectType: 'kennel', subjectId: k.id, title: 'Kennel Expenses' });
 }

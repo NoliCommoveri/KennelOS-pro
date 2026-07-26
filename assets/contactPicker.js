@@ -5,6 +5,15 @@
 // pickers (sale buyer, stud-service partner, boarding related contact) would
 // otherwise force (Data Integrity Brief §4.8). Same modal/overlay pattern as
 // puppyForm.js.
+//
+// DELIBERATELY NOT KENNEL-SCOPED (Multi-Kennel Scope Spec §7). The Multi-Kennel
+// spec lists this file under §9's "scoped by default with an escape", but §7 —
+// the load-bearing list — is what governs: the contact POOL is program-wide, and
+// a Contact's `kennel_id` is an AFFILIATION (usually somebody else's kennel, for
+// a breeder or co-owner), not a scope. Scoping a buyer picker by the active OWN
+// kennel would hide essentially every buyer, since a buyer's kennel_id is null.
+// A buyer who bought from two of your kennels is one person. Neither this
+// picker's list nor its inline create is narrowed by the active kennel.
 import { contactRepo } from '../data/contactRepo.js';
 import { CONTACT_TYPE } from '../data/vocab.js';
 import { esc } from './ui.js';

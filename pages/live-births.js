@@ -7,6 +7,7 @@
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { inScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 
 function livePct(l) {
@@ -29,6 +30,10 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('report-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — one row per litter, and a
+    // litter carries its own kennel. Live % is per-row, so scoping never distorts
+    // it: it is never a kennel-wide average that could mix two kennels together.
+    scope: inScope,
     csvFilename: `live-births-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dam or sire…', text: (l) => `${name(l.dam_id)} ${name(l.sire_id)}` },
     columns: [

@@ -75,6 +75,28 @@ body {
 .nav-link:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 .nav-link.active { background: rgba(255, 255, 255, 0.18); color: #fff; }
 
+/* --- Active-kennel switcher (Multi-Kennel Scope Spec §8) ------------------ */
+/* The slot is always in the markup but stays EMPTY in Lite and before the first
+   own kennel exists — so the `:not(:empty)` guards mean an edition without a
+   scope lays out exactly as it did before the switcher existed. When it does
+   render, it takes the auto margin that pins the right-hand group, and "More"
+   falls in beside it. */
+.nav-scope:not(:empty) { margin-left: auto; }
+.nav-scope:not(:empty) + .nav-more { margin-left: 8px; }
+.kennel-switcher {
+  font: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  max-width: 190px;
+}
+/* Narrowed to one kennel reads differently from "All kennels" at a glance. */
+.kennel-switcher.scoped { background: #fff; color: var(--accent-dark); font-weight: 600; }
+.kennel-switcher option { color: var(--text); background: #fff; }
+
 /* --- "More" corner menu -------------------------------------------------- */
 .nav-more { position: relative; margin-left: auto; }
 .nav-more-btn {
@@ -133,6 +155,9 @@ body {
   .nav-links .nav-link { padding: 11px 12px; border-radius: var(--radius-sm); }
   /* The "More" group flattens into the stack — its two links show inline, no
      nested dropdown to fish for on a touch screen. */
+  .nav-scope:not(:empty) { margin-left: 0; width: 100%; padding: 6px 0; }
+  .nav-scope:not(:empty) + .nav-more { margin-left: 0; }
+  .kennel-switcher { max-width: 100%; width: 100%; }
   .nav-more { position: static; margin-left: 0; width: 100%; }
   .nav-more-btn { display: none; }
   .nav-more-menu {
@@ -322,6 +347,29 @@ a.stat:hover { border-color: var(--accent); transform: translateY(-2px); }
 }
 .list-toolbar input[type="search"] { min-width: 200px; flex: 1 1 220px; }
 .toolbar-spacer { flex: 1 1 auto; }
+
+/* --- Kennel-scope affordances (Multi-Kennel Scope Spec §7) ---------------- */
+/* The chip a scoped list/report carries in its toolbar, so a short list always
+   says why it is short — and offers the one-click way back to All kennels. */
+.scope-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600;
+  color: var(--accent-dark); background: var(--accent-soft);
+  border: 1px solid #bfe0cd; border-radius: 999px; padding: 4px 6px 4px 12px;
+}
+.scope-chip-clear {
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  color: var(--accent-dark); background: #fff;
+  border: 1px solid #bfe0cd; border-radius: 999px; padding: 2px 10px;
+}
+.scope-chip-clear:hover { background: var(--accent-soft); }
+/* The banner an OUT-OF-SCOPE record shows on its own detail page. Detail pages
+   are never scope-filtered (§7) — a direct link must always resolve — so this
+   explains the mismatch and offers the switch rather than hiding the record. */
+.scope-notice {
+  background: var(--accent-soft); border: 1px solid #bfe0cd;
+  border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 10px; font-size: 14px;
+}
 .check-inline { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 14px; }
 /* Keep the checkbox/radio a fixed little box — flex layouts (esp. multi-line
    labels) otherwise stretch the native control to different sizes. */

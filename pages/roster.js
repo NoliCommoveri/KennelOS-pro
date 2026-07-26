@@ -4,6 +4,7 @@
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { dogInScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { descriptor, SEX, DOG_STATUS, OWNERSHIP_TYPE } from '../data/vocab.js';
 
@@ -17,6 +18,10 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('roster-mount'),
+    // Active-kennel scope (§7) — dog flavor, so external/leased dogs stay visible
+    // under every scope. The CSV export follows the scope, which is the point:
+    // "export my roster" while viewing one kennel means that kennel's roster.
+    scope: dogInScope,
     csvFilename: `active-roster-${new Date().toISOString().slice(0, 10)}.csv`,
     search: {
       placeholder: 'Search by name…',

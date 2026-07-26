@@ -3,6 +3,7 @@
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createListView } from '../assets/listView.js';
+import { dogInScope } from '../data/kennelScope.js';
 import { badge, fmtDate, esc, param } from '../assets/ui.js';
 import { descriptor, SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE } from '../data/vocab.js';
 
@@ -73,6 +74,11 @@ async function init() {
   createListView({
     mount,
     baseFilter: active.baseFilter || (() => true),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7). `dogInScope`, not the bare
+    // `inScope`: an external or leased-in dog belongs to somebody else's kennel and
+    // is scope-transparent, so the External bucket keeps showing every outside stud
+    // and foster dam whichever of your own kennels you are viewing.
+    scope: dogInScope,
     sort: active.sort || null,
     groupBy: active.groupBy || null,
     search: {

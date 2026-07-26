@@ -16,6 +16,10 @@ import { navItems as NAV_ITEMS, moreItems as MORE_ITEMS, editionLabel as EDITION
 // foot of the More menu (and on Today). Edition-agnostic: no-ops in Pro/Demo,
 // where hasEditionLinks() is false (editions plan §"In-Lite links to Demo/Pro").
 import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from './assets/editionLinks.js';
+// The active-kennel indicator + switcher (Multi-Kennel Scope Spec §8). Also
+// edition-agnostic here: it renders itself only when editionFlags.multiKennel is
+// on AND an own kennel exists, so Lite and a pre-setup first run get nothing.
+import { renderKennelSwitcher } from './assets/kennelScopeUI.js';
 
 // Pages live one directory deep (/pages/*.html); index.html sits at the app root.
 // Links are stored app-root-relative and prefixed at render time so they resolve
@@ -72,6 +76,7 @@ export function renderNav(targetId = 'app-nav') {
       <button type="button" class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
       <div class="nav-links">
         ${links}
+        <div class="nav-scope" id="nav-kennel-scope"></div>
         <div class="nav-more">
           <button type="button" class="nav-link nav-more-btn${moreActive}" aria-haspopup="true" aria-expanded="false">More ▾</button>
           <div class="nav-more-menu">${moreLinks}${editionExtra}</div>
@@ -82,6 +87,9 @@ export function renderNav(targetId = 'app-nav') {
   wireToggle(host);
   wireMoreMenu(host);
   wireEditionLinks(host);
+  // Async (it reads the kennels table); fire-and-forget so nav never blocks the
+  // page. A no-op in Lite and before the first own kennel exists.
+  renderKennelSwitcher(host.querySelector('#nav-kennel-scope'));
 }
 
 // Hamburger toggle for narrow (phone) widths: reveals the stacked links. On wide

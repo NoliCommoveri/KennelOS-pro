@@ -11,7 +11,8 @@ import { esc, badge, fmtDate, todayYMD, param, confirmModal, selectModal, dogRef
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { resolveKennelIdForWrite } from '../data/kennelScope.js';
+import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
+import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 
 // Statuses that warrant the "log a scheduled pickup" prompt (Stage4.5 Addendum §D4).
 const PLACEMENT_PROMPT_STATUSES = ['paid_in_full', 'delivered'];
@@ -36,6 +37,8 @@ const blankSale = () => ({
 
 const ctx = {
   mode: 'view', original: null, draft: null, pickerArchived: false,
+  // §9's "show all kennels" escape — see dogOptions().
+  pickerAllKennels: false,
   allDogs: [], allContacts: [], leadSources: [],
   dogsById: new Map(), contactsById: new Map(), littersById: new Map()
 };
@@ -91,14 +94,22 @@ function vocabOptions(vocab, current, placeholder) {
   ).join('');
 }
 
+// The dog being placed. Active-kennel scope (Multi-Kennel Scope Spec §9):
+// scoped by default with the "show all my kennels" escape, since a sale's own
+// kennel is INHERITED from this dog — picking one from another kennel files the
+// sale there, which should be a deliberate act. The current selection is always
+// listed so an existing sale never becomes uneditable.
 function dogOptions(current) {
   const opts = ctx.allDogs
+    .filter((d) => ctx.pickerAllKennels || d.id === current || dogInScope(d))
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
     .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
   return `<option value="">— select —</option>` + opts;
 }
 
+// NOT scoped, deliberately (§7): buyers are program-wide — one person who may
+// have bought from more than one of your kennels.
 function contactOptions(current) {
   const opts = ctx.allContacts
     .filter((c) => ctx.pickerArchived || !c.is_archived || c.id === current)
@@ -186,12 +197,21 @@ function renderEdit() {
       ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/contacts in the pickers above</label>
       </div>` : ''}
+      ${isScoped() ? `<div class="field field-wide">
+        <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show dogs from all my kennels</label>
+        <span class="field-hint">Off by default while a kennel is active. The sale is filed under the kennel of the dog you pick (Multi-Kennel Scope Spec §9).</span>
+      </div>` : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(s.notes)}</textarea>`, { wide: true })}
     </div>`;
 
   document.getElementById('picker-archived')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
+    renderEdit();
+  });
+  document.getElementById('picker-all-kennels')?.addEventListener('change', (e) => {
+    ctx.draft = readForm();
+    ctx.pickerAllKennels = e.target.checked;
     renderEdit();
   });
   // Prefilling price/deposit_amount from the selected dog's litter (only when
@@ -665,6 +685,12 @@ async function main() {
   if (!s) { showError('Sale not found. It may have been deleted.'); return; }
   ctx.original = s;
   ctx.mode = 'view';
+  // Out-of-scope banner (Multi-Kennel Scope Spec §7). A detail page reached by id
+  // is deliberately NEVER scope-filtered — a direct link, a bookmark, or a click
+  // through from a pedigree must always resolve — so an sale belonging to another
+  // kennel renders in full, with this above it saying whose it is and offering a
+  // one-click switch. Renders nothing in the ordinary in-scope case.
+  renderScopeNotice(document.getElementById('scope-notice'), s, { kind: 'sale' });
   renderAll();
 }
 

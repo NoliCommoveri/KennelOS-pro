@@ -6,6 +6,7 @@
 import { getLitterFinances } from '../data/litterFinances.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { LITTER_STATUS, FOSTER_DIRECTION, descriptor } from '../data/vocab.js';
 
@@ -24,6 +25,10 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('report-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — each row IS a litter, so
+    // the litter's own stamped kennel scopes its whole P&L (its income rows and its
+    // cost rows all hang off it).
+    scope: (f) => inScope(f.litter),
     csvFilename: `litter-pl-${new Date().toISOString().slice(0, 10)}.csv`,
     search: {
       placeholder: 'Search nickname, dam, or sire…',

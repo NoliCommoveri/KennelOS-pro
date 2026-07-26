@@ -14,6 +14,7 @@ import { saleRepo } from './saleRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
+import { inScopeOnly } from './kennelScope.js';
 import { INCOME_COMPONENTS, descriptor } from './vocab.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
@@ -104,7 +105,12 @@ export function incomeLineItems(sourceType, record) {
 // Build the one-per-record income rows. Each carries its component breakdown plus
 // the rolled-up earned / anticipated (cash) and pick (non-cash) totals, the raw
 // status value (for a badge), a display date, and a deep-link href.
-export async function getIncomeRows({ includeArchived = false } = {}) {
+// `kennelId` overrides the active scope with ONE named kennel — what the per-
+// kennel hub (kennel.html) needs, since it reports on the kennel you opened
+// rather than the kennel you are currently scoped to. Leave it unset everywhere
+// else and the active scope applies (Multi-Kennel Scope Spec §7/§8).
+export async function getIncomeRows({ includeArchived = false, kennelId = null } = {}) {
+  const scopeTo = (list) => (kennelId ? list.filter((r) => r.kennel_id === kennelId) : inScopeOnly(list));
   const [sales, studs, dogs, contacts] = await Promise.all([
     saleRepo.getAll({ includeArchived }),
     studServiceRepo.getAll({ includeArchived }),
@@ -118,7 +124,13 @@ export async function getIncomeRows({ includeArchived = false } = {}) {
 
   const rows = [];
 
-  for (const s of sales) {
+  // Active-kennel scope (Multi-Kennel Scope Spec §7), applied at the SOURCE
+  // records rather than in each consumer — so the Financials Overview tiles, the
+  // Income view, the per-litter P&L, and the invoice/receipt generator's record
+  // picker can never disagree about which money is yours-right-now. Both tables
+  // carry a stamped kennel_id (a sale inherits the dog's, a stud service OUR
+  // dog's), and both are pass-throughs when unscoped.
+  for (const s of scopeTo(sales)) {
     const components = saleComponents(s);
     if (!components.length) continue; // no money on this sale — nothing to show
     rows.push({
@@ -140,7 +152,7 @@ export async function getIncomeRows({ includeArchived = false } = {}) {
     });
   }
 
-  for (const s of studs) {
+  for (const s of scopeTo(studs)) {
     if (s.direction !== 'outgoing') continue; // incoming = we pay = an expense
     const components = studComponents(s);
     if (!components.length) continue;

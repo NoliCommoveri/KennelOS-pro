@@ -6,6 +6,7 @@
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { inScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { LITTER_STATUS, descriptor } from '../data/vocab.js';
 
@@ -23,6 +24,8 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('report-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7).
+    scope: inScope,
     csvFilename: `litters-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search nickname, dam, or sire…', text: (l) => `${l.nickname || ''} ${name(l.dam_id)} ${name(l.sire_id)}` },
     filters: [

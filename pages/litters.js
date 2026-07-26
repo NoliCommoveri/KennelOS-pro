@@ -4,6 +4,7 @@
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { createListView } from '../assets/listView.js';
+import { inScope } from '../data/kennelScope.js';
 import { badge, fmtDate, esc } from '../assets/ui.js';
 import { LITTER_STATUS, FOSTER_DIRECTION } from '../data/vocab.js';
 
@@ -31,6 +32,10 @@ async function init() {
 
   createListView({
     mount,
+    // Active-kennel scope (Multi-Kennel Scope Spec §7). A litter carries its own
+    // stamped kennel_id — a foster-in litter out of an external dam is filed under
+    // the kennel raising it, not the dam's — so the plain predicate is right here.
+    scope: inScope,
     search: {
       placeholder: 'Search by nickname, dam, or sire name…',
       text: (l) => `${l.nickname || ''} ${dogName(l.dam_id)} ${dogName(l.sire_id)} ${damBreed(l)} ${l.litter_registration_number || ''}`

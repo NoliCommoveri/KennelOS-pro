@@ -7,6 +7,7 @@ import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
+import { inScopeOnly } from '../data/kennelScope.js';
 import { PLACEMENT_TYPE, SALE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate } from '../assets/ui.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -99,13 +100,21 @@ async function main() {
   // Lite: Puppy Record is Pro-only (the page itself is excluded from the build) —
   // remove the button that opens it.
   if (!editionFlags.puppyRecord) document.getElementById('btn-print-puppy-record')?.remove();
-  const [sales, dogs, contacts, contracts, litters] = await Promise.all([
+  const [allSales, dogs, contacts, allContracts, litters] = await Promise.all([
     saleRepo.getAll({ includeArchived: false }),
     dogRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
     contractRepo.getAll({ includeArchived: false }),
     litterRepo.getAll({ includeArchived: true })
   ]);
+  // Active-kennel scope (Multi-Kennel Scope Spec §7). Sales carry the kennel they
+  // were placed FROM. Contracts are scoped too — the "+ Link contract" picker
+  // must not offer another kennel's contract, since linking it would silently
+  // move that contract's subject across kennels. The dog/contact/litter loads
+  // stay unscoped: they resolve the names ON the scoped cards (a litter header, a
+  // buyer, an external dog), which is lookup, not listing.
+  const sales = inScopeOnly(allSales);
+  const contracts = inScopeOnly(allContracts);
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const littersById = new Map(litters.map((l) => [l.id, l]));

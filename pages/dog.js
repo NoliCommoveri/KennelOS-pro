@@ -16,6 +16,7 @@ import { contractRepo } from '../data/contractRepo.js';
 import { getMyContactId } from '../data/kennelSetup.js';
 import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
 import { getActiveKennelId, resolveKennelIdForWrite, SCOPED_OWNERSHIP } from '../data/kennelScope.js';
+import { renderDogScopeNotice } from '../assets/kennelScopeUI.js';
 import {
   SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, PAIRING_TYPE, PAIRING_STATUS,
   PLACEMENT_TYPE, SALE_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS,
@@ -1223,6 +1224,12 @@ async function main() {
   if (!dog) { showError('Dog not found. It may have been deleted.'); return; }
   ctx.original = dog;
   ctx.mode = 'view';
+  // Out-of-scope banner (Multi-Kennel Scope Spec §7). A dog page reached by id is
+  // deliberately NEVER scope-filtered — the pedigree tree links straight into it
+  // across kennels — so another kennel's dog renders in full with this above it.
+  // The DOG flavor: an external or leased-in dog belongs to no kennel of yours,
+  // is in scope everywhere, and must never carry a "belongs elsewhere" banner.
+  renderDogScopeNotice(document.getElementById('scope-notice'), dog);
   renderAll();
   openEventFromQuery('dog', dog.id, renderTimelineSection);
 }

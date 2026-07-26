@@ -11,6 +11,7 @@
 //     csv   — override the exported value (defaults to value()).
 import Papa from '../vendor/papaparse.min.mjs';
 import { esc, badge as badgeHtml } from './ui.js';
+import { mountScopeChip } from './kennelScopeUI.js';
 
 function downloadCsv(filename, text) {
   const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
@@ -32,6 +33,14 @@ export function createReportView(opts) {
     search,                       // { placeholder, text:(r)=>string }
     load,                         // async () => records[]
     onRowClick,                   // optional (r) => void
+    scope = null,                 // optional (r) => bool — the ACTIVE-KENNEL predicate
+                                  // (Multi-Kennel Scope Spec §7), same contract as
+                                  // listView's. Every report is scoped; the flavor
+                                  // depends on what the row IS — a stamped record
+                                  // (`inScope`), a dog (`dogInScope`), or a polymorphic
+                                  // event scoped through its subject (`subjectInScope`).
+                                  // Applied before search/filters, so the CSV export
+                                  // exports the scoped set too.
     csvFilename = 'report.csv',
     emptyText = 'No matching records.'
   } = opts;
@@ -77,6 +86,14 @@ export function createReportView(opts) {
   countEl.className = 'muted';
   toolbar.appendChild(countEl);
 
+  // The "🏠 <kennel> only" chip — see listView's copy: a scoped report has to say
+  // so, or a short table reads as missing data. Empty when unscoped.
+  if (scope) {
+    const chip = document.createElement('div');
+    toolbar.appendChild(chip);
+    mountScopeChip(chip);
+  }
+
   const exportBtn = document.createElement('button');
   exportBtn.className = 'btn btn-sm';
   exportBtn.textContent = '⬇ Export visible to CSV';
@@ -92,6 +109,7 @@ export function createReportView(opts) {
 
   function visibleRecords() {
     return all.filter((r) => {
+      if (scope && !scope(r)) return false;
       if (state.q && search?.text && !search.text(r).toLowerCase().includes(state.q)) return false;
       for (const f of filters) {
         const v = state.filters[f.id];

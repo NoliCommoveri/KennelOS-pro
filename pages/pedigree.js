@@ -1,6 +1,12 @@
 // pedigree.js — the standalone Pedigree page. Picks a root dog (from ?id= or the
 // dropdown), renders the ancestor tree, and re-centers in place when a node is
 // clicked (updating the URL so the view is shareable/bookmarkable).
+//
+// DELIBERATELY NOT KENNEL-SCOPED (Multi-Kennel Scope Spec §7) — neither the
+// tree (see assets/pedigree.js) nor the root picker below. §9 makes ordinary
+// dog pickers scope-by-default with an escape, but this one is the exception:
+// its whole job is to center lineage on any dog you have a record of, and a
+// pedigree that stops at a kennel boundary is worse than no filter at all.
 import { dogRepo } from '../data/dogRepo.js';
 import { renderPedigree } from '../assets/pedigree.js';
 import { esc, param } from '../assets/ui.js';

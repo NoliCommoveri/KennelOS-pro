@@ -14,7 +14,8 @@ import { editionFlags } from '../data/editionConfig.js';
 import { renderTimeline } from '../assets/timeline.js';
 import { openEventFromQuery } from '../assets/eventForm.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
-import { resolveKennelIdForWrite } from '../data/kennelScope.js';
+import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
+import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 
 const els = {
   title: document.getElementById('pairing-title'),
@@ -48,6 +49,8 @@ const ctx = {
   original: null,
   draft: null,
   pickerArchived: false,
+  // §9's "show all kennels" escape — see dogOptions().
+  pickerAllKennels: false,
   allDogs: [],
   dogsById: new Map()
 };
@@ -89,8 +92,19 @@ const BREEDING_ELIGIBLE_STATUS = ['active_breeding', 'external_reference'];
 // dogs (a retired/deceased/pet-home/puppy dog isn't a breeding candidate) —
 // the current selection always stays listed so a mismatched legacy record is
 // still editable (warned, not hidden).
+//
+// Active-kennel scope (Multi-Kennel Scope Spec §9): scoped BY DEFAULT with an
+// escape, never a hard filter. Two workflows are intentionally cross-kennel —
+// stud services (the whole point is a dog from elsewhere) and co-breeding
+// between your own kennels (a sire at A over a dam at B) — and a hard filter
+// would break both. So the default hides the other kennel's dogs and the
+// "Show dogs from all my kennels" checkbox brings them back, exactly the shape
+// the existing "include archived" toggle already has. External/leased dogs are
+// scope-transparent and stay listed either way, and the CURRENT selection is
+// always listed so an existing record never becomes uneditable.
 function dogOptions(current, sex) {
   const opts = ctx.allDogs
+    .filter((d) => ctx.pickerAllKennels || d.id === current || dogInScope(d))
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
     .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
     .filter((d) => d.id === current || BREEDING_ELIGIBLE_STATUS.includes(d.status))
@@ -144,6 +158,10 @@ function renderEdit() {
       ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs in the pickers above</label>
       </div>` : ''}
+      ${isScoped() ? `<div class="field field-wide">
+        <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show dogs from all my kennels</label>
+        <span class="field-hint">Off by default while a kennel is active. Turn it on to co-breed across your own kennels — a sire at one over a dam at another (Multi-Kennel Scope Spec §9).</span>
+      </div>` : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(p.notes)}</textarea>`, { wide: true })}
     </div>
     <div id="form-warn"></div>`;
@@ -154,6 +172,11 @@ function renderEdit() {
   document.getElementById('picker-archived')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
+    renderEdit();
+  });
+  document.getElementById('picker-all-kennels')?.addEventListener('change', (e) => {
+    ctx.draft = readForm();
+    ctx.pickerAllKennels = e.target.checked;
     renderEdit();
   });
   // Planned first date prefills expected due date (63 days later) — only while
@@ -466,6 +489,12 @@ async function main() {
   if (!p) { showError('Pairing not found. It may have been deleted.'); return; }
   ctx.original = p;
   ctx.mode = 'view';
+  // Out-of-scope banner (Multi-Kennel Scope Spec §7). A detail page reached by id
+  // is deliberately NEVER scope-filtered — a direct link, a bookmark, or a click
+  // through from a pedigree must always resolve — so an pairing belonging to another
+  // kennel renders in full, with this above it saying whose it is and offering a
+  // one-click switch. Renders nothing in the ordinary in-scope case.
+  renderScopeNotice(document.getElementById('scope-notice'), p, { kind: 'pairing' });
   renderAll();
   openEventFromQuery('pairing', p.id, renderTimelineSection);
 }

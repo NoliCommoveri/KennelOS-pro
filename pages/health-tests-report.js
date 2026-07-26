@@ -7,6 +7,7 @@
 import { eventRepo } from '../data/eventRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { subjectInScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { EVENT_TYPES, descriptor } from '../data/vocab.js';
 
@@ -36,6 +37,10 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('report-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — scoped through the dog the
+    // test was run on. An external stud's tests stay visible under every scope
+    // (dogInScope), which is what makes this usable when vetting an outside sire.
+    scope: (e) => subjectInScope('dog', e.subject_id, { dog: dogsById }),
     csvFilename: `health-tests-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dog, title, or result…', text: (e) => `${dogName(e)} ${e.title || ''} ${detailsText(e)}` },
     filters: [

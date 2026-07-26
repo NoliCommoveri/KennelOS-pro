@@ -13,6 +13,7 @@ import { CONTRACT_TYPE, CONTRACT_STATUS, SEX, descriptor } from '../data/vocab.j
 import { esc, badge, fmtDate, param, confirmModal } from '../assets/ui.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 import { resolveKennelIdForWrite } from '../data/kennelScope.js';
+import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 
 const els = {
   title: document.getElementById('contract-title'),
@@ -441,6 +442,12 @@ async function main() {
   if (!c) { showError('Contract not found. It may have been deleted.'); return; }
   ctx.original = c;
   ctx.mode = 'view';
+  // Out-of-scope banner (Multi-Kennel Scope Spec §7). A detail page reached by id
+  // is deliberately NEVER scope-filtered — a direct link, a bookmark, or a click
+  // through from a pedigree must always resolve — so an contract belonging to another
+  // kennel renders in full, with this above it saying whose it is and offering a
+  // one-click switch. Renders nothing in the ordinary in-scope case.
+  renderScopeNotice(document.getElementById('scope-notice'), c, { kind: 'contract' });
   renderAll();
 }
 

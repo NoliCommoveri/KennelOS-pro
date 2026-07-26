@@ -23,6 +23,7 @@ import { pairingRepo } from './pairingRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
+import { dogsInScope, inScopeOnly, subjectInScope } from './kennelScope.js';
 import { todayYMD, monthsBetween } from './dateUtils.js';
 import { descriptor, PAIRING_STATUS, LITTER_STATUS } from './vocab.js';
 
@@ -98,6 +99,21 @@ export async function computeNudges() {
   ]);
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const kennelsById = new Map(kennels.map((k) => [k.id, k]));
+
+  // Active-kennel scope (Multi-Kennel Scope Spec §7). A nudge is a prompt to act
+  // on one record, so each rule iterates the SCOPED set of whatever it nudges
+  // about — you should not be prompted about the kennel you aren't looking at.
+  //
+  // The unscoped originals stay in play for every LOOKUP and every "has this
+  // already been handled?" test below (`pairingExistsForDam`, `pairingIdsWithLitter`,
+  // `pupsByLitter`, `salesByDog`). That asymmetry is the point: scoping a dedup
+  // check would resurrect a nudge whose answer already exists one kennel over —
+  // "record the pairing for this stud service" when the pairing is sitting in
+  // kennel B. All four are pass-throughs when unscoped (Lite, "All kennels").
+  const scopedStudServices = inScopeOnly(studServices);
+  const scopedPairings = inScopeOnly(pairings);
+  const scopedLitters = inScopeOnly(litters);
+  const scopedDogs = dogsInScope(dogs);
   // Pairings that already have a litter recorded against them — precomputed once
   // so the overdue-pairing rule below is a Set lookup, not a per-pairing query
   // (getForPairing counts archived litters too, matching includeArchived above).
@@ -106,7 +122,7 @@ export async function computeNudges() {
   const nudges = [];
 
   // §4.2 — stud-service status nudges.
-  for (const s of studServices) {
+  for (const s of scopedStudServices) {
     let n = null;
     if (s.returned_date && s.returned_date < today && ['arranged', 'in_progress'].includes(s.status)) {
       n = studCompletedNudge(s, dogsById);
@@ -117,7 +133,7 @@ export async function computeNudges() {
   }
 
   // §4.3 — promote-lifecycle nudge: opt-in per kennel, decide-not-auto-promote.
-  for (const d of dogs) {
+  for (const d of scopedDogs) {
     if (d.status !== 'puppy' || d.disposition !== 'keeping' || !d.date_of_birth) continue;
     const kennel = d.kennel_id ? kennelsById.get(d.kennel_id) : null;
     if (!kennel || kennel.promote_nudge_enabled !== true) continue;
@@ -141,7 +157,7 @@ export async function computeNudges() {
   // §4.7 — stud service completed/overdue with no linked pairing yet.
   // Auto-dismiss: once pairing_id is set the rule produces nothing at all —
   // no ledger entry needed, the link itself is the done-signal.
-  for (const s of studServices) {
+  for (const s of scopedStudServices) {
     if (s.pairing_id) continue;
     const isDone = s.status === 'completed' || (s.returned_date && s.returned_date < today);
     if (!isDone) continue;
@@ -162,6 +178,9 @@ export async function computeNudges() {
   // §4.5 — concluded heat cycle with no matching pairing since it started.
   const concludedHeats = events.filter((e) =>
     e.event_type === 'heat_cycle' && e.subject_type === 'dog' && e.event_end_date && e.event_end_date < today
+    // Scoped through the dam the heat was logged on (an Event carries no kennel
+    // of its own — §4.1); an external dam stays scope-transparent.
+    && subjectInScope('dog', e.subject_id, { dog: dogsById })
   );
   for (const ev of concludedHeats) {
     const key = `heatpair:${ev.id}`;
@@ -184,7 +203,7 @@ export async function computeNudges() {
   // status, or go record the litter (deep-links to the same
   // litter.html?new=1&pairing=<id> prefill the pairing page's own "Create
   // Litter" button uses).
-  for (const p of pairings) {
+  for (const p of scopedPairings) {
     if (!PRE_WHELP_STATUSES.includes(p.status) || !p.expected_due_date || p.expected_due_date >= today) continue;
     if (pairingIdsWithLitter.has(p.id)) continue;
     nudges.push({
@@ -215,7 +234,7 @@ export async function computeNudges() {
     if (arr) arr.push(s); else salesByDog.set(s.dog_id, [s]);
   }
 
-  for (const l of litters) {
+  for (const l of scopedLitters) {
     if (l.is_archived) continue;
     const pups = pupsByLitter.get(l.id);
     if (!pups || pups.length === 0) continue;

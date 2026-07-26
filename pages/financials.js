@@ -25,6 +25,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { getIncomeRows, summarize, incomeLineItems } from '../data/incomeView.js';
+import { subjectInScope, dogInScope, inScope, isScoped, getActiveKennelId } from '../data/kennelScope.js';
 import { getInvoiceDefaults, setInvoiceDefaults } from '../data/settings.js';
 import { createReportView } from '../assets/reportView.js';
 import { buildMileageFields, wireMileageMode } from '../assets/expensePanel.js';
@@ -73,6 +74,23 @@ const ref = { dogs: [], litters: [], pairings: [], kennels: [] };
 const maps = { dogsById: new Map(), littersById: new Map(), pairingsById: new Map(), kennelsById: new Map() };
 const dogName = (id) => maps.dogsById.get(id)?.call_name || '—';
 
+// Active-kennel scope for the Expense ledger (Multi-Kennel Scope Spec §7).
+// Expenses are deliberately NOT stamped with a kennel (§4.1): they are already
+// polymorphic, and their scope is a fact about the subject they hang off, so a
+// second stamped field would be a second source of truth for it. That makes this
+// a resolve-then-test rather than a field read — through the very same id→record
+// maps `subjectLabel` above uses to name the subject. A kennel-subject expense
+// (facility, dues, marketing) IS its kennel; a dog-subject one follows the dog,
+// so an outside stud's boarding cost stays visible under every scope.
+//
+// Income is scoped at its own source (data/incomeView.js), so both halves of the
+// Overview's Net are scoped the same way.
+function expenseInScope(x) {
+  return subjectInScope(x.subject_type, x.subject_id, {
+    dog: maps.dogsById, litter: maps.littersById, pairing: maps.pairingsById
+  });
+}
+
 function subjectLabel(x) {
   if (x.subject_type === 'dog') return dogName(x.subject_id);
   if (x.subject_type === 'kennel') return maps.kennelsById.get(x.subject_id)?.kennel_name || '—';
@@ -91,22 +109,32 @@ function subjectLabel(x) {
 // EXPENSES view (unchanged behavior, now one of three)
 // ==========================================================================
 
-function subjectOptionsFor(type) {
+// The expense SUBJECT picker — what a new cost is attached to. Active-kennel
+// scope (Multi-Kennel Scope Spec §9): scoped by default, with the "show all my
+// kennels" escape rendered beside the field, because an expense derives its
+// scope from its subject (§4.1) — attaching a cost to another kennel's litter
+// files it there. Dogs use the transparent flavor, so an outside stud you are
+// boarding can still take a cost; kennels list your own kennels, narrowed to the
+// active one while scoped.
+function subjectOptionsFor(type, allKennels = false) {
   const head = '<option value="">— select —</option>';
+  const dogOk = (d) => allKennels || dogInScope(d);
+  const recOk = (r) => allKennels || inScope(r);
+  const kennelOk = (k) => allKennels || !isScoped() || k.id === getActiveKennelId();
   if (type === 'dog') {
-    return head + ref.dogs.filter((d) => !d.is_archived)
+    return head + ref.dogs.filter((d) => !d.is_archived).filter(dogOk)
       .map((d) => `<option value="${esc(d.id)}">${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}</option>`).join('');
   }
   if (type === 'kennel') {
-    return head + ref.kennels.filter((k) => !k.is_archived)
+    return head + ref.kennels.filter((k) => !k.is_archived).filter(kennelOk)
       .map((k) => `<option value="${esc(k.id)}">${esc(k.kennel_name)}${k.is_own_kennel ? ' (mine)' : ''}</option>`).join('');
   }
   if (type === 'litter') {
-    return head + ref.litters.filter((l) => !l.is_archived)
+    return head + ref.litters.filter((l) => !l.is_archived).filter(recOk)
       .map((l) => `<option value="${esc(l.id)}">${esc(dogName(l.dam_id))} × ${esc(dogName(l.sire_id))}${l.whelp_date ? ' (' + esc(fmtDate(l.whelp_date)) + ')' : ''}</option>`).join('');
   }
   if (type === 'pairing') {
-    return head + ref.pairings.filter((p) => !p.is_archived)
+    return head + ref.pairings.filter((p) => !p.is_archived).filter(recOk)
       .map((p) => `<option value="${esc(p.id)}">${esc(dogName(p.sire_id))} × ${esc(dogName(p.dam_id))}${p.planned_date ? ' (' + esc(fmtDate(p.planned_date)) + ')' : ''}</option>`).join('');
   }
   return head;
@@ -126,6 +154,10 @@ function openAddExpense(onSaved) {
           <select id="af-subject-type">${EXPENSE_SUBJECT_TYPES.map((s) => `<option value="${esc(s.value)}">${esc(s.label)}</option>`).join('')}</select></div>
         <div class="field"><label>Subject <span class="req">*</span></label>
           <select id="af-subject-id">${subjectOptionsFor('dog')}</select></div>
+        ${isScoped() ? `<div class="field field-wide">
+          <label class="check-inline"><input id="af-all-kennels" type="checkbox"> Show subjects from all my kennels</label>
+          <span class="field-hint">Off by default while a kennel is active. An expense takes its scope from the subject you attach it to (Multi-Kennel Scope Spec §9).</span>
+        </div>` : ''}
         ${buildMileageFields('af', null)}
         <div class="field"><label>Category</label>
           <select id="af-category">${CATEGORY_OPTIONS}</select></div>
@@ -148,7 +180,10 @@ function openAddExpense(onSaved) {
   const modal = overlay.querySelector('.modal');
   const typeSel = modal.querySelector('#af-subject-type');
   const subjSel = modal.querySelector('#af-subject-id');
-  typeSel.addEventListener('change', () => { subjSel.innerHTML = subjectOptionsFor(typeSel.value); });
+  const allKennelsBox = modal.querySelector('#af-all-kennels');
+  const fillSubjects = () => { subjSel.innerHTML = subjectOptionsFor(typeSel.value, !!allKennelsBox?.checked); };
+  typeSel.addEventListener('change', fillSubjects);
+  allKennelsBox?.addEventListener('change', fillSubjects);
   const mileage = wireMileageMode(modal, 'af', modal.querySelector('#af-category'));
   const receipt = editionFlags.receiptAttach ? wireReceiptField(modal, 'af', {}) : null;
 
@@ -213,7 +248,7 @@ function renderExpenseSummary(expenses) {
 }
 
 async function loadExpenses() {
-  const expenses = await expenseRepo.getAll({ includeArchived: false });
+  const expenses = (await expenseRepo.getAll({ includeArchived: false })).filter(expenseInScope);
   expenses.sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || ''));
   return bucket ? expenses.filter((x) => x.category === bucket) : expenses;
 }
@@ -534,10 +569,11 @@ function tile(label, value, tone) {
 
 async function initOverview() {
   document.getElementById('financials-bucket-tabs')?.remove();
-  const [incomeRows, expenses] = await Promise.all([
-    getIncomeRows({ includeArchived: false }),
+  const [incomeRows, allExpenses] = await Promise.all([
+    getIncomeRows({ includeArchived: false }), // already scoped at the source
     expenseRepo.getAll({ includeArchived: false })
   ]);
+  const expenses = allExpenses.filter(expenseInScope);
   const { totals, byComponent } = summarize(incomeRows);
   const spent = expenseRepo.total(expenses);
   const net = totals.earned - spent;

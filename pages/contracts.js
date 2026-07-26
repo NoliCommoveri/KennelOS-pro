@@ -1,6 +1,7 @@
 // contracts.js — Contract List screen.
 import { contractRepo } from '../data/contractRepo.js';
 import { createListView } from '../assets/listView.js';
+import { inScope } from '../data/kennelScope.js';
 import { badge, esc } from '../assets/ui.js';
 import { CONTRACT_TYPE, CONTRACT_STATUS } from '../data/vocab.js';
 
@@ -18,6 +19,10 @@ createListView({
   // lease, other, and any unlinked sale/stud contract). Sale/stud-service
   // contracts live on their Sales/Stud Services cards instead.
   baseFilter: (c) => !c.related_sale_id && !c.related_stud_service_id,
+  // Active-kennel scope (Multi-Kennel Scope Spec §7) — a contract carries its own
+  // stamped kennel_id, inherited from the sale / stud service / dog it was created
+  // against.
+  scope: inScope,
   sort: signedDateDesc,
   search: {
     placeholder: 'Search title, terms…',

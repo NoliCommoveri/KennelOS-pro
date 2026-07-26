@@ -6,6 +6,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { inScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { PLACEMENT_TYPE, SALE_STATUS, descriptor } from '../data/vocab.js';
 
@@ -26,6 +27,10 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('report-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — a sale carries the kennel
+    // it was placed FROM, inherited from the dog at creation, so a dog moved or
+    // sold on afterwards never re-files the historic sale.
+    scope: inScope,
     csvFilename: `placements-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dog or buyer…', text: (s) => `${dogName(s)} ${buyerName(s)}` },
     filters: [

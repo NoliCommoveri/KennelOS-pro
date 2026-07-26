@@ -19,7 +19,8 @@ import { renderTimeline } from '../assets/timeline.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { openAddPuppyForm, openAddPuppiesForm } from '../assets/puppyForm.js';
 import { openEventForm, openEventFromQuery } from '../assets/eventForm.js';
-import { resolveKennelIdForWrite } from '../data/kennelScope.js';
+import { resolveKennelIdForWrite, dogInScope, inScope, isScoped } from '../data/kennelScope.js';
+import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 
 // Statuses at/after whelping — used to decide whether a future whelp_date warns.
 const WHELPED_OR_LATER = ['whelped', 'weaning', 'ready', 'sold', 'closed'];
@@ -54,6 +55,8 @@ const ctx = {
   original: null,
   draft: null,
   pickerArchived: false,
+  // §9's "show all kennels" escape — see dogOptions().
+  pickerAllKennels: false,
   allDogs: [],
   allPairings: [],
   allContacts: [],
@@ -114,8 +117,17 @@ const BREEDING_ELIGIBLE_STATUS = ['active_breeding', 'external_reference'];
 // retired/deceased/pet-home/puppy dog isn't a breeding candidate) — the
 // current selection always stays listed so a mismatched legacy record is
 // still editable (warned, not hidden).
+//
+// Active-kennel scope (Multi-Kennel Scope Spec §9): scoped BY DEFAULT with an
+// escape, never a hard filter — co-breeding between your own kennels (a sire at
+// one over a dam at another) is a real workflow, so the "Show dogs from all my
+// kennels" checkbox brings the rest back, the same shape the "include archived"
+// toggle already has. External/leased dogs are scope-transparent and stay listed
+// either way; the CURRENT selection is always listed so an existing litter never
+// becomes uneditable.
 function dogOptions(current, sex) {
   const opts = ctx.allDogs
+    .filter((d) => ctx.pickerAllKennels || d.id === current || dogInScope(d))
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
     .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
     .filter((d) => d.id === current || BREEDING_ELIGIBLE_STATUS.includes(d.status))
@@ -124,14 +136,20 @@ function dogOptions(current, sex) {
   return `<option value="">— select —</option>` + opts;
 }
 
+// The linked-pairing picker follows the same scope + escape (§9): a pairing
+// carries its own stamped kennel, and linking a litter to another kennel's
+// pairing is a cross-kennel act that should be deliberate, not a mis-click.
 function pairingOptions(current) {
   const opts = ctx.allPairings
+    .filter((p) => ctx.pickerAllKennels || p.id === current || inScope(p))
     .filter((p) => ctx.pickerArchived || !p.is_archived || p.id === current)
     .map((p) => `<option value="${esc(p.id)}"${p.id === current ? ' selected' : ''}>${esc(pairingLabel(p))}${p.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
   return `<option value="">— none —</option>` + opts;
 }
 
+// NOT scoped, deliberately (§7): the contact pool is program-wide. A foster
+// partner, like any contact, belongs to the program rather than to one kennel.
 function contactOptions(current) {
   const opts = ctx.allContacts
     .filter((c) => ctx.pickerArchived || !c.is_archived || c.id === current)
@@ -291,6 +309,10 @@ function renderEdit() {
       ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/pairings/contacts in the pickers above</label>
       </div>` : ''}
+      ${isScoped() ? `<div class="field field-wide">
+        <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show dogs and pairings from all my kennels</label>
+        <span class="field-hint">Off by default while a kennel is active. Turn it on to co-breed across your own kennels (Multi-Kennel Scope Spec §9).</span>
+      </div>` : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(l.notes)}</textarea>`, { wide: true })}
       ${editionFlags.feedingSchedule ? field('Feeding schedule override', `<textarea id="f-feeding_schedule_override">${esc(l.feeding_schedule_override)}</textarea>`, { wide: true, hint: 'Optional. Overrides your breed default (Feeding Schedules page) for every pup in this litter’s Furever app — e.g. "This litter runs lean, feed on the higher end."' }) : ''}
       ${editionFlags.fosterArrangement ? `<details class="field-wide"${hasFosterData(l) ? ' open' : ''}>
@@ -318,6 +340,11 @@ function renderEdit() {
   document.getElementById('picker-archived')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
+    renderEdit();
+  });
+  document.getElementById('picker-all-kennels')?.addEventListener('change', (e) => {
+    ctx.draft = readForm();
+    ctx.pickerAllKennels = e.target.checked;
     renderEdit();
   });
   // Choosing a pairing fills dam/sire from it (only when those are still empty,
@@ -833,6 +860,12 @@ async function main() {
   if (!l) { showError('Litter not found. It may have been deleted.'); return; }
   ctx.original = l;
   ctx.mode = 'view';
+  // Out-of-scope banner (Multi-Kennel Scope Spec §7). A detail page reached by id
+  // is deliberately NEVER scope-filtered — a direct link, a bookmark, or a click
+  // through from a pedigree must always resolve — so an litter belonging to another
+  // kennel renders in full, with this above it saying whose it is and offering a
+  // one-click switch. Renders nothing in the ordinary in-scope case.
+  renderScopeNotice(document.getElementById('scope-notice'), l, { kind: 'litter' });
   renderAll();
   openEventFromQuery('litter', l.id, renderTimelineSection);
 }

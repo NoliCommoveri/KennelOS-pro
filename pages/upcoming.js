@@ -8,6 +8,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { subjectInScope } from '../data/kennelScope.js';
 import { fmtDate, esc } from '../assets/ui.js';
 import { EVENT_TYPES, descriptor } from '../data/vocab.js';
 
@@ -49,6 +50,11 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('upcoming-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7). An Event is polymorphic and
+    // carries no kennel of its own — its scope is its SUBJECT's, resolved through
+    // the same id→record maps subjectLabel() already uses. A dog subject goes
+    // through dogInScope, so an event on an external stud stays visible.
+    scope: (e) => subjectInScope(e.subject_type, e.subject_id, { dog: dogsById, pairing: pairingsById, litter: littersById }),
     csvFilename: `upcoming-${new Date().toISOString().slice(0, 10)}.csv`,
     search: {
       placeholder: 'Search title…',

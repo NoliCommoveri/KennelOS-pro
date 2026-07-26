@@ -61,6 +61,12 @@ async function init() {
 
   createListView({
     mount,
+    // NO `scope` — deliberate (Multi-Kennel Scope Spec §7). The contact POOL is
+    // program-wide: a buyer who bought from two of your kennels is one person, and
+    // a vet serves the whole program. Contact.kennel_id is an AFFILIATION (usually
+    // an outside breeder's kennel), not a scope — filtering this list by the active
+    // own-kennel would hide almost every buyer. What §7 does scope is the list of
+    // contacts hanging off a kennel, which lives on the kennel hub, not here.
     baseFilter: GROUPS[group]?.predicate || (() => true),
     search: {
       placeholder: 'Search name, email, phone…',

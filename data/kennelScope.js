@@ -3,11 +3,14 @@
 // §5). Pages never read the setting directly, exactly as they never read
 // localStorage directly — they come through here.
 //
-// Phase 1 (this file's current callers) uses only the WRITE side: every scoped
-// record is stamped with a kennel on create, inheriting from its parent record
-// where there is one and falling back to the active kennel. The read side
-// (`inScope`, `isScoped`) is implemented here too and is what Phase 2's list /
-// hub / report filtering will call — nothing filters by scope yet.
+// Two halves. The WRITE side (Phase 1) stamps every scoped record with a kennel
+// on create, inheriting from its parent record where there is one and falling
+// back to the active kennel. The READ side (Phase 2) is the predicate family —
+// `inScope` / `dogInScope` / `subjectInScope` and their array conveniences —
+// that every scoped list, hub, and report filters by. What is deliberately NOT
+// filtered is as load-bearing as what is: pedigree/lineage, detail pages reached
+// by id, external/leased dogs, and the contact pool all stay unscoped (spec §7),
+// each with a comment at its call site saying so.
 //
 // Edition posture (spec §12): multi-kennel is Pro-only. Lite has exactly one own
 // kennel, `editionFlags.multiKennel` is false there, and `isScoped()` is
@@ -16,16 +19,15 @@
 import { kennelRepo } from './kennelRepo.js';
 import { getActiveKennelId as readSetting, setActiveKennelId as writeSetting } from './settings.js';
 import { editionFlags } from './editionConfig.js';
+// The pure record-shape rules live in their own db-free module so they can be
+// unit-tested without a browser (spec §16, the same split rosterCount.js already
+// has). This file binds them to the LIVE active kennel; pages import the bound
+// forms below and never pass an id by hand.
+import {
+  SCOPED_OWNERSHIP, isOwnedByUser, inScopeOf, dogInScopeOf, subjectInScopeOf
+} from './scopePredicates.js';
 
-// Ownership types whose dogs belong to one of the user's OWN kennels, and which
-// therefore carry a required, own-kennel `kennel_id` (spec §3.1a). An external /
-// leased-in dog's kennel_id points at somebody else's kennel (or nothing), so it
-// is neither required nor a scope.
-export const SCOPED_OWNERSHIP = new Set(['owned', 'co_owned']);
-
-export function isOwnedByUser(dog) {
-  return !!dog && SCOPED_OWNERSHIP.has(dog.ownership_type);
-}
+export { SCOPED_OWNERSHIP, isOwnedByUser };
 
 // The user's own, non-archived kennels — the only kennels that are ever a scope
 // (spec decision 2). Outside kennels (a breeder of record, a contact's
@@ -78,25 +80,36 @@ export function isScoped() {
   return getActiveKennelId() != null;
 }
 
-// The read-side predicate every scoped list/hub/report will filter by (Phase 2).
-// Three cases, in order:
-//   1. Not scoped (All kennels, or Lite)      → everything is in scope.
-//   2. Scope-transparent record               → in scope under every kennel.
-//   3. Otherwise                              → the record's kennel must match.
-//
-// Scope-transparency (spec §3.1a/§7) is what keeps external dogs visible
-// everywhere: an outside stud used by two of your kennels belongs to neither, and
-// hiding him under a scope would break pedigree and stud-service workflows.
-export function inScope(record, { transparent = false } = {}) {
-  const activeId = getActiveKennelId();
-  if (!activeId) return true;
-  if (transparent) return true;
-  return record?.kennel_id === activeId;
+// The read-side predicates every scoped list/hub/report filters by, bound to the
+// live active kennel. The rules themselves are in scopePredicates.js — see there
+// for what each case means and why.
+export function inScope(record, opts) {
+  return inScopeOf(getActiveKennelId(), record, opts);
 }
 
 // A dog is scope-transparent unless the user owns it.
 export function dogInScope(dog) {
-  return inScope(dog, { transparent: !isOwnedByUser(dog) });
+  return dogInScopeOf(getActiveKennelId(), dog);
+}
+
+// Array conveniences — the shape almost every read path actually wants. Both
+// return the SAME array instance when nothing is scoped, so an unscoped page
+// (all of Lite, and "All kennels" in Pro) does no work at all.
+export function inScopeOnly(records) {
+  return isScoped() ? records.filter((r) => inScope(r)) : records;
+}
+
+export function dogsInScope(dogs) {
+  return isScoped() ? dogs.filter(dogInScope) : dogs;
+}
+
+// Polymorphic subjects — Event and Expense. `maps` is a bag of id→record Maps
+// keyed by subject_type: { dog, litter, pairing }. Callers already build these to
+// resolve subject labels, so scoping costs them one extra argument rather than
+// another query. See scopePredicates.js for the unresolvable-subject rule, which
+// is the one callers most need to know about.
+export function subjectInScope(subjectType, subjectId, maps = {}) {
+  return subjectInScopeOf(getActiveKennelId(), subjectType, subjectId, maps);
 }
 
 // --- Validation ------------------------------------------------------------

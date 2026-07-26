@@ -1,12 +1,23 @@
-// kennels.js — minimal kennel management (add / edit / archive / delete).
-// Deliberately lightweight: identity only (name / prefix / location / own).
+// kennels.js — two screens in one page. On top, the PORTFOLIO (Multi-Kennel
+// Scope Spec §8): one card per own kennel with live counts and the entry point
+// to switching the active scope — rendered only once a second own kennel exists.
+// Below it, the original lightweight management list: identity only (name /
+// prefix / location / own) across every kennel on record, outside ones included.
 // Per-kennel program configuration — preferred tests and lifecycle nudges —
 // lives on the Kennel detail page (kennel.js), reached via each row's "Open →".
-// Delete is blocked while any contact or dog still points at the kennel (KENNEL_REFERENCES).
+// Delete is blocked while anything still points at the kennel (KENNEL_REFERENCES —
+// since Phase 1 that includes its litters, sales, pairings, stud services,
+// contracts, and documents, so a working kennel is archive-only by design).
 import { kennelRepo } from '../data/kennelRepo.js';
+import { dogRepo } from '../data/dogRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { saleRepo } from '../data/saleRepo.js';
+import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { esc, confirmModal } from '../assets/ui.js';
 
 const listEl = document.getElementById('kennel-list');
+const portfolioEl = document.getElementById('kennel-portfolio');
+const allHeadingEl = document.getElementById('all-kennels-heading');
 const errEl = document.getElementById('page-error');
 
 let editingId = null;   // id of the kennel currently shown as an inline edit row, or null
@@ -48,8 +59,80 @@ function editRow(k) {
   </tr>`;
 }
 
+// --- Portfolio (Multi-Kennel Scope Spec §8) --------------------------------
+// One card per OWN kennel with live counts, plus the entry point to switching
+// the active scope. Deliberately silent when there is only one own kennel: a
+// portfolio of one is noise, and the same silence rule already governs the dog
+// form's kennel picker and the nav switcher's usefulness.
+//
+// Counts are derived on load, like every other count in the app — no stored
+// aggregates. The roster count is OWNED dogs only: an external or leased dog
+// belongs to no kennel of yours (spec §3.1a), so it is on nobody's roster.
+
+const LIVE_LITTER_STATUSES = ['expected', 'whelped', 'weaning', 'ready', 'sold'];
+
+function portfolioCard(k, counts, activeId) {
+  const isActive = k.id === activeId;
+  const stat = (n, label) => `<div class="stat${n === 0 ? ' stat-zero' : ''}"><div class="stat-num">${esc(n)}</div><div class="stat-label">${esc(label)}</div></div>`;
+  return `<section class="card" style="margin-top:14px;${isActive ? ' border-color:var(--accent);' : ''}">
+      <div class="row-between" style="align-items:baseline;">
+        <h3 style="margin:0;">${esc(k.kennel_name)}${isActive ? ' <span class="badge badge-green">Active scope</span>' : ''}${k.is_archived ? ' <span class="badge badge-gray">Archived</span>' : ''}</h3>
+        <a class="btn btn-sm" href="kennel.html?id=${encodeURIComponent(k.id)}">Open hub →</a>
+      </div>
+      ${k.location ? `<p class="muted" style="margin:2px 0 0; font-size:13px;">${esc(k.location)}</p>` : ''}
+      <div class="stat-grid" style="margin-top:10px;">
+        ${stat(counts.dogs, 'Dogs on roster')}
+        ${stat(counts.litters, 'Active litters')}
+        ${stat(counts.sales, 'Placements this year')}
+      </div>
+      <div class="pill-row" style="margin-top:10px;">
+        ${isActive
+          ? `<button class="btn btn-sm" data-scope-clear>Show all kennels</button>`
+          : `<button class="btn btn-sm" data-scope-to="${esc(k.id)}">Switch to this kennel</button>`}
+      </div>
+    </section>`;
+}
+
+async function renderPortfolio(kennels) {
+  if (!portfolioEl) return;
+  const own = kennels.filter((k) => k.is_own_kennel && !k.is_archived);
+  if (own.length < 2) {
+    portfolioEl.innerHTML = '';
+    if (allHeadingEl) allHeadingEl.hidden = true;
+    return;
+  }
+  if (allHeadingEl) allHeadingEl.hidden = false;
+
+  const [dogs, litters, sales] = await Promise.all([
+    dogRepo.getAll({ includeArchived: false }),
+    litterRepo.getAll({ includeArchived: false }),
+    saleRepo.getAll({ includeArchived: false })
+  ]);
+  const year = String(new Date().getFullYear());
+  const countsFor = (k) => ({
+    dogs: dogs.filter((d) => ['owned', 'co_owned'].includes(d.ownership_type) && d.kennel_id === k.id).length,
+    litters: litters.filter((l) => l.kennel_id === k.id && LIVE_LITTER_STATUSES.includes(l.status)).length,
+    sales: sales.filter((s) => s.kennel_id === k.id && (s.sale_date || '').startsWith(year)).length
+  });
+
+  const activeId = getActiveKennelId();
+  portfolioEl.innerHTML = `<p class="field-hint" style="margin-top:6px;">Switching changes what every list, hub, and report shows across the app.</p>`
+    + own.map((k) => portfolioCard(k, countsFor(k), activeId)).join('');
+
+  // Switching re-derives every read on every page, so it reloads — the same
+  // posture the nav switcher takes.
+  portfolioEl.querySelectorAll('[data-scope-to]').forEach((btn) => {
+    btn.addEventListener('click', () => { setActiveKennel(btn.dataset.scopeTo); location.reload(); });
+  });
+  portfolioEl.querySelector('[data-scope-clear]')?.addEventListener('click', () => {
+    setActiveKennel(null);
+    location.reload();
+  });
+}
+
 async function render() {
   const kennels = await kennelRepo.getAll({ includeArchived: true });
+  renderPortfolio(kennels).catch((e) => showError(e.message || String(e)));
   // My own kennels sort to the top; everyone else's fall below in alphabetical
   // order by name (own kennels are also name-sorted among themselves).
   kennels.sort((a, b) => {

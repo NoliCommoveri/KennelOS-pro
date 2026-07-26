@@ -6,6 +6,7 @@ import { HistoryEvent } from '../data/eventRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { subjectInScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 
 async function init() {
@@ -21,6 +22,9 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('placements-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — placements are always dog
+    // events, scoped through the puppy being placed.
+    scope: (e) => subjectInScope('dog', e.subject_id, { dog: dogsById }),
     csvFilename: `scheduled-placements-${new Date().toISOString().slice(0, 10)}.csv`,
     search: {
       placeholder: 'Search puppy or buyer…',

@@ -6,6 +6,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { inScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { descriptor, PAIRING_TYPE, PAIRING_STATUS, LITTER_STATUS } from '../data/vocab.js';
 
@@ -17,6 +18,9 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('pairings-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — pairings carry their own
+    // stamped kennel_id.
+    scope: inScope,
     csvFilename: `active-pairings-${new Date().toISOString().slice(0, 10)}.csv`,
     search: {
       placeholder: 'Search by sire or dam name…',
@@ -41,6 +45,8 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('litters-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — litters likewise.
+    scope: inScope,
     csvFilename: `active-litters-${new Date().toISOString().slice(0, 10)}.csv`,
     search: {
       placeholder: 'Search by dam or sire name…',

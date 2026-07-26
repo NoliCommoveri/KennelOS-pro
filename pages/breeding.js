@@ -11,6 +11,7 @@
 import { pairingRepo } from '../data/pairingRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
+import { inScopeOnly, dogsInScope } from '../data/kennelScope.js';
 import { PAIRING_STATUS, PAIRING_TYPE, LITTER_STATUS } from '../data/vocab.js';
 import { esc, badge, fmtDate } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
@@ -123,17 +124,28 @@ function openDamPicker(females) {
 
 document.getElementById('log-heat-btn').addEventListener('click', async () => {
   const dogs = await dogRepo.getAll();
-  const females = dogs.filter((d) => d.sex === 'female' && !d.is_archived);
+  // Scoped to the active kennel (Multi-Kennel Scope Spec §9). No escape toggle on
+  // this one: it is a one-field modal for logging a heat on a dam you keep, and
+  // an external dam stays listed anyway (dogsInScope is the transparent flavor).
+  const females = dogsInScope(dogs).filter((d) => d.sex === 'female' && !d.is_archived);
   if (!females.length) { showError('No female dogs on the roster yet.'); return; }
   openDamPicker(females);
 });
 
 async function main() {
-  const [pairings, dogs, allLittersIncl] = await Promise.all([
+  const [allPairings, dogs, allLittersIncl] = await Promise.all([
     pairingRepo.getAll({ includeArchived: false }),
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: true })
   ]);
+  // Active-kennel scope (Multi-Kennel Scope Spec §7). Scoped at the PAIRING and
+  // ORPHAN-LITTER level only — the two things this hub actually lists. A litter
+  // hanging off an in-scope pairing, and that litter's puppies, are shown whole:
+  // this page's whole job is the chain pairing → litter → pups, and dropping a
+  // link out of the middle of it would misrepresent the litter rather than filter
+  // it. (Stamping inheritance means they agree in practice anyway; showing the
+  // chain intact is what happens if they ever don't.)
+  const pairings = inScopeOnly(allPairings);
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
 
   // Group the derived relationships once, in memory, instead of firing a
@@ -164,7 +176,7 @@ async function main() {
   // Litters that exist without any recorded pairing — surfaced on their own so
   // the chain view never hides a litter. Orphan list stays non-archived only.
   const linkedLitterIds = new Set(withLitters.map((w) => w.litter?.id).filter(Boolean));
-  const orphanLitters = allLittersIncl.filter((l) => !l.is_archived && !linkedLitterIds.has(l.id));
+  const orphanLitters = inScopeOnly(allLittersIncl).filter((l) => !l.is_archived && !linkedLitterIds.has(l.id));
 
   if (!withLitters.length && !orphanLitters.length) {
     body.innerHTML = `<div class="card empty-state">No pairings yet. Click “+ Add Pairing” to record the first breeding.</div>`;

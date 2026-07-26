@@ -7,6 +7,7 @@
 // kennel scale and keeps typing in the search box instant.
 import { esc } from './ui.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { mountScopeChip } from './kennelScopeUI.js';
 import Papa from '../vendor/papaparse.min.mjs';
 
 function downloadCsv(filename, text) {
@@ -38,6 +39,15 @@ export function createListView(opts) {
                              // adds an "Export visible to CSV" button (Navigation
                              // Consolidation Plan v1 §3/§6: Roster's export moves onto Dogs)
     sort = null,            // optional (a,b)=>number comparator applied to visibleRecords()
+    scope = null,           // optional (record) => bool — the ACTIVE-KENNEL predicate
+                             // (Multi-Kennel Scope Spec §7). This is the one lever that
+                             // covers every list screen built on listView at once, so
+                             // each caller passes the right flavor: `inScope` for a
+                             // record that carries its own kennel_id, `dogInScope` for
+                             // dogs (external/leased dogs are scope-transparent), and
+                             // NOTHING — with a comment saying why — for a list that is
+                             // deliberately program-wide, like Contacts. Both predicates
+                             // are constant-true under "All kennels" and in all of Lite.
     groupBy = null          // optional { key:(record)=>value, groups:[{value,label}] } —
                              // partitions the sorted rows into labeled sections, each with
                              // its own <table>, under the one shared toolbar. Omit for the
@@ -77,6 +87,16 @@ export function createListView(opts) {
   const spacer = document.createElement('div');
   spacer.className = 'toolbar-spacer';
   toolbar.appendChild(spacer);
+
+  // The "🏠 <kennel> only" chip, so a list narrowed by the active kennel always
+  // says why it is short and offers the way back. Fills itself in async (it needs
+  // the kennel's name) and stays empty for an unscoped view — which is every view
+  // in Lite and every view under "All kennels".
+  if (scope) {
+    const chip = document.createElement('div');
+    toolbar.appendChild(chip);
+    mountScopeChip(chip);
+  }
 
   // "Show archived" toggle. Lite hides it (cap spec §7 — no include-archived
   // toggles anywhere): archived = departed, and state.showArchived stays false,
@@ -119,6 +139,7 @@ export function createListView(opts) {
   function visibleRecords() {
     const rows = all.filter((r) => {
       if (!baseFilter(r)) return false;
+      if (scope && !scope(r)) return false;
       if (!state.showArchived && r.is_archived) return false;
       if (state.q && search?.text) {
         if (!search.text(r).toLowerCase().includes(state.q)) return false;

@@ -7,6 +7,8 @@
 // away: one row per physical trip now, sourced from whichever table owns it.
 import { eventRepo } from './eventRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
+import { dogRepo } from './dogRepo.js';
+import { isScoped, subjectInScope } from './kennelScope.js';
 
 function fromBoardingEvent(ev) {
   const d = ev.details || {};
@@ -25,6 +27,22 @@ function fromBoardingEvent(ev) {
   };
 }
 
+// Active-kennel scope (Multi-Kennel Scope Spec §7), applied HERE rather than in
+// each of the three renderers (board.js, today.js, dashboard.js) so they cannot
+// disagree about who is away. Both row kinds normalize to a `dogId`, and the dog
+// is what is physically away — so both are scoped the same way, through that dog.
+// A dog you don't own is scope-transparent (an outside stud boarding with you
+// belongs to no kennel of yours and must not vanish under a scope).
+//
+// Costs one extra read, and only when there IS a scope: unscoped — all of Lite,
+// and "All kennels" in Pro — this returns the rows untouched without loading dogs.
+async function scopeRows(rows) {
+  if (!isScoped() || !rows.length) return rows;
+  const dogs = await dogRepo.getAll({ includeArchived: true });
+  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  return rows.filter((r) => subjectInScope('dog', r.dogId, { dog: dogsById }));
+}
+
 // Sorted soonest-return-first, open-ended stays last — same ordering
 // eventRepo.getBoardRows() used before the union.
 export async function getAwayBoardRows() {
@@ -32,7 +50,7 @@ export async function getAwayBoardRows() {
     eventRepo.getBoardRows(),
     studServiceRepo.getBoardRows()
   ]);
-  const rows = [...boarding.map(fromBoardingEvent), ...stud];
+  const rows = await scopeRows([...boarding.map(fromBoardingEvent), ...stud]);
   return rows.sort((a, b) => {
     if (!a.returnDate && !b.returnDate) return 0;
     if (!a.returnDate) return 1;

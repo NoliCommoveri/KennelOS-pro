@@ -6,6 +6,13 @@
 // parents center over their children" pass and draw with absolutely-positioned
 // nodes over an SVG connector layer.
 //
+// DELIBERATELY NOT KENNEL-SCOPED (Multi-Kennel Scope Spec §7). Ancestry crosses
+// kennels by definition — a dam bought in from another program, a sire standing
+// at your second kennel, an outside stud — so no read in this file consults the
+// active scope. Truncating a pedigree at a kennel boundary is the single most
+// damaging regression this feature could cause: it would look like a complete
+// tree while silently omitting half the lineage.
+//
 // Dogs with unknown parents render as a visible placeholder node (never a
 // truncated branch). Clicking a node re-centers the tree on that dog via the
 // caller-supplied onNavigate; a small link opens the dog's full record.

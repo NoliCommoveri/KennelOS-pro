@@ -16,6 +16,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { getAwayBoardRows } from '../data/awayBoard.js';
+import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
 import { DOG_STATUS } from '../data/vocab.js';
 import { esc } from '../assets/ui.js';
 import { todayYMD, daysFromToday } from '../data/dateUtils.js';
@@ -40,7 +41,7 @@ function card(title, tilesHtml, subtitle) {
 }
 
 async function main() {
-  const [allDogs, litters, pairings, sales, contacts, reminders, upcoming, boardRows] = await Promise.all([
+  const [allDogsAll, littersAll, pairingsAll, sales, contacts, reminders, upcoming, boardRows] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: false }),
     pairingRepo.getAll({ includeArchived: false }),
@@ -50,6 +51,23 @@ async function main() {
     eventRepo.getUpcoming(),
     getAwayBoardRows()
   ]);
+
+  // Active-kennel scope (Multi-Kennel Scope Spec §7). Every tile on this page is
+  // a COUNT, so scoping matters most here: a count that silently mixed two
+  // kennels together would be wrong in a way a list never is — you can't see what
+  // it included. Dogs take the dog flavor (external/leased stay transparent); the
+  // rest carry their own stamped kennel. The unscoped maps below exist only to
+  // resolve each event's subject, per §7's rule about polymorphic subjects.
+  const dogsById = new Map(allDogsAll.map((d) => [d.id, d]));
+  const pairingsById = new Map(pairingsAll.map((p) => [p.id, p]));
+  const littersById = new Map(littersAll.map((l) => [l.id, l]));
+  const eventInScope = (ev) => subjectInScope(ev.subject_type, ev.subject_id, {
+    dog: dogsById, pairing: pairingsById, litter: littersById
+  });
+
+  const allDogs = dogsInScope(allDogsAll);
+  const litters = inScopeOnly(littersAll);
+  const pairings = inScopeOnly(pairingsAll);
 
   // Dogs: split archived (archive flag) from active (non-archived), then count
   // the active set by status. Deceased stays a status here, distinct from archived.
@@ -68,16 +86,20 @@ async function main() {
   const inYear = (ymd) => (ymd || '').startsWith(year);
   const littersThisYear = litters.filter((l) => inYear(l.whelp_date)).length;
   const pairingsThisYear = pairings.filter((p) => inYear(p.planned_date)).length;
-  const salesThisYear = sales.filter((s) => inYear(s.sale_date)).length;
+  const salesThisYear = inScopeOnly(sales).filter((s) => inYear(s.sale_date)).length;
 
   // Reminders: bucket the pending set the same way the reminder view does.
   const today = todayYMD();
   const horizon = daysFromToday(DUE_SOON_DAYS);
-  const overdue = reminders.filter((e) => e.reminder_date < today).length;
-  const dueSoon = reminders.filter((e) => e.reminder_date >= today && e.reminder_date <= horizon).length;
+  const scopedReminders = reminders.filter(eventInScope);
+  const overdue = scopedReminders.filter((e) => e.reminder_date < today).length;
+  const dueSoon = scopedReminders.filter((e) => e.reminder_date >= today && e.reminder_date <= horizon).length;
 
-  const upcomingPlacements = upcoming.filter((e) => e.event_type === 'placement').length;
+  const upcomingPlacements = upcoming.filter((e) => e.event_type === 'placement' && eventInScope(e)).length;
+  // Already scoped by getAwayBoardRows() — the one place that decision lives.
   const awayCount = boardRows.length;
+  // NOT scoped, deliberately (§7): the contact pool is program-wide, so the
+  // waitlist is one queue across the program rather than a per-kennel line.
   const waitlistActive = contacts.filter((c) => c.waitlist_status === 'active').length;
 
   body.innerHTML =

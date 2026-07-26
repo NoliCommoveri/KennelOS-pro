@@ -5,6 +5,7 @@ import { studServiceRepo } from '../data/studServiceRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createReportView } from '../assets/reportView.js';
+import { inScope } from '../data/kennelScope.js';
 import { STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS, descriptor } from '../data/vocab.js';
 
 const FEE_STRUCTURES_WITH_PICK = ['pick_of_litter', 'flat_plus_pick'];
@@ -22,6 +23,11 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('report-mount'),
+    // Active-kennel scope (Multi-Kennel Scope Spec §7) — a stud service is stamped
+    // from OUR dog, never the partner's, so an incoming service files under the
+    // kennel whose stud did the work. The partner dog stays external and
+    // scope-transparent; only the arrangement is scoped.
+    scope: inScope,
     csvFilename: `stud-services-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dog or partner…', text: (s) => `${dogName(s.our_dog_id)} ${dogName(s.partner_dog_id)} ${contactName(s.partner_contact_id)}` },
     filters: [

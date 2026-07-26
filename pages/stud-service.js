@@ -16,7 +16,8 @@ import {
 import { esc, badge, fmtDate, param, confirmModal } from '../assets/ui.js';
 import { getMyContactId } from '../data/kennelSetup.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
-import { resolveKennelIdForWrite } from '../data/kennelScope.js';
+import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
+import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 
 const els = {
   title: document.getElementById('ss-title'),
@@ -42,6 +43,8 @@ function feeHasPick(structure) { return FEE_STRUCTURES_WITH_PICK.includes(struct
 
 const ctx = {
   mode: 'view', original: null, draft: null, pickerArchived: false,
+  // §9's "show all kennels" escape — see ourDogOptions().
+  pickerAllKennels: false,
   allDogs: [], allContacts: [], allPairings: [],
   dogsById: new Map(), contactsById: new Map(), pairingsById: new Map()
 };
@@ -86,8 +89,13 @@ function sexLetter(d) {
 // current selection always stays in the list (edit safety) even if it no
 // longer matches. Once direction is set, our dog is the stud (outgoing =
 // male) or the dam (incoming = female) — filter to that sex.
+// Active-kennel scope (Multi-Kennel Scope Spec §9), scoped by default with the
+// escape: the stud service's kennel is inherited from OUR dog, never the
+// partner's, so which of your kennels' studs you pick decides where the
+// arrangement is filed.
 function ourDogOptions(current, direction) {
   const list = ctx.allDogs
+    .filter((d) => ctx.pickerAllKennels || d.id === current || dogInScope(d))
     .filter((d) => (['owned', 'co_owned'].includes(d.ownership_type) && d.status === 'active_breeding') || d.id === current)
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
     .filter((d) => d.id === current || direction !== 'outgoing' || d.sex === 'male')
@@ -103,6 +111,10 @@ function ourDogOptions(current, direction) {
   return `<option value="">— select —</option>` + opts;
 }
 
+// NOT scoped, deliberately (§7/§9): the partner is an EXTERNAL dog, which is
+// scope-transparent — belonging to no kennel of yours — and a stud service is
+// one of the two workflows §9 names as intentionally cross-kennel. Filtering
+// here would empty the picker outright.
 // External dogs only — the outside partner. Once direction is set, the
 // partner is the opposite role from our dog: outgoing (our dog is the stud)
 // means the partner is the dam (female); incoming means the partner is the
@@ -210,6 +222,10 @@ function renderEdit() {
       <div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/contacts/pairings in the pickers above</label>
       </div>
+      ${isScoped() ? `<div class="field field-wide">
+        <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show my dogs from all my kennels</label>
+        <span class="field-hint">Off by default while a kennel is active; affects the "Our dog" picker only — the partner is an outside dog and is always listed (Multi-Kennel Scope Spec §9).</span>
+      </div>` : ''}
       ${field('Result notes', `<textarea id="f-result_notes">${esc(s.result_notes)}</textarea>`, { wide: true })}
       ${field('Notes', `<textarea id="f-notes">${esc(s.notes)}</textarea>`, { wide: true })}
     </div>
@@ -230,6 +246,11 @@ function renderEdit() {
   document.getElementById('picker-archived').addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
+    renderEdit();
+  });
+  document.getElementById('picker-all-kennels')?.addEventListener('change', (e) => {
+    ctx.draft = readForm();
+    ctx.pickerAllKennels = e.target.checked;
     renderEdit();
   });
   const onNewContact = (contact) => {
@@ -480,6 +501,12 @@ async function main() {
   if (!s) { showError('Stud service not found. It may have been deleted.'); return; }
   ctx.original = s;
   ctx.mode = 'view';
+  // Out-of-scope banner (Multi-Kennel Scope Spec §7). A detail page reached by id
+  // is deliberately NEVER scope-filtered — a direct link, a bookmark, or a click
+  // through from a pedigree must always resolve — so an stud service belonging to another
+  // kennel renders in full, with this above it saying whose it is and offering a
+  // one-click switch. Renders nothing in the ordinary in-scope case.
+  renderScopeNotice(document.getElementById('scope-notice'), s, { kind: 'stud service' });
   renderAll();
 }
 
