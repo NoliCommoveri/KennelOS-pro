@@ -39,7 +39,14 @@ export const PRO_ONLY_PAGES = [
 // the Lite build. `assets/documentModal.js` is the shared Documents add/edit + view
 // modal, imported only by the Pro-only Documents and Contract pages, so Lite (which
 // ships neither) doesn't need it — keep it out so no Pro-only code lands in Lite.
-export const PRO_ONLY_STANDALONE = ['companion-view.html', 'assistant.html', 'assistant.js', 'assets/documentModal.js'];
+// `assets/kennelCardUI.js` is the same story for Kennel Cards: imported only by the
+// Pro-only Kennel hub and Kennels list. (Its data-layer half, `data/kennelCard.js`,
+// stays in the shared build — it's reached through kennelRepo, exactly like
+// `data/companionExport.js` ships to Lite while `companion.html` does not.)
+export const PRO_ONLY_STANDALONE = [
+  'companion-view.html', 'assistant.html', 'assistant.js',
+  'assets/documentModal.js', 'assets/kennelCardUI.js'
+];
 
 // True when a link target (an href like "contact-import.html" or with a query string)
 // points at a Pro-only page. Used by runtime gating in Lite-kept pages.

@@ -23,6 +23,7 @@ import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { DOG_STATUS, LITTER_STATUS, SALE_STATUS } from '../data/vocab.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
+import { renderKennelCardSection } from '../assets/kennelCardUI.js';
 
 const els = {
   title: document.getElementById('kennel-title'),
@@ -30,6 +31,7 @@ const els = {
   body: document.getElementById('profile-body'),
   error: document.getElementById('page-error'),
   logo: document.getElementById('logo-section'),
+  card: document.getElementById('kennel-card-section'),
   config: document.getElementById('kennel-config'),
   overview: document.getElementById('kennel-overview'),
   expenses: document.getElementById('expenses-section')
@@ -542,6 +544,9 @@ async function main() {
   renderProfile(k);
   renderLogo();
   renderOverview().catch((e) => showError(e.message || String(e)));
+  // Async because an own kennel that predates public_id has one minted on the
+  // spot (kennelRepo.ensurePublicId) — self-healing rather than a boot migration.
+  renderKennelCardSection(els.card, kennel).catch((e) => showError(e.message || String(e)));
   renderConfig();
   renderExpensePanel({ mount: els.expenses, subjectType: 'kennel', subjectId: k.id, title: 'Kennel Expenses' });
 }

@@ -56,6 +56,18 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    their scope from the subject they hang off (a second stored scope would be a
 //    second source of truth); `files` is fetched by id only; and
 //    `breed_feeding_schedules` is a program-wide per-breed lookup.
+//  - `kennels.public_id` is the kennel's PORTABLE PUBLIC IDENTITY (End-State
+//    guide §28): a `kos1_<uuid>` string minted once for each of the user's OWN
+//    kennels and thereafter immutable, so the same real-world kennel keeps one
+//    identifier across a JSON backup/restore, the Lite→Pro bridge, a Dropbox
+//    sync, and any kennel card it hands to another breeder. It is NOT a foreign
+//    key — nothing points at it, so it carries no referenceRegistry entry — but
+//    it IS indexed, because the kennel-card import's match-or-create step probes
+//    it (kennelRepo.getByPublicId) on every apply. An OUTSIDE kennel never has
+//    one minted locally: its public_id can only ever be RECEIVED from a card its
+//    owner issued, because minting one would be inventing somebody else's
+//    identity. A blank public_id on an outside kennel is therefore meaningful,
+//    not missing data — it says "I typed this kennel in myself".
 //  - `contracts.related_contact_id` (Companion feature) is the counterparty FK
 //    for lease/co_own/other contracts — the types with no linked Sale/StudService
 //    to reach a contact through. Indexed like every other canonical Contract FK
@@ -103,7 +115,7 @@ db.version(1).stores({
   events:        'id, [subject_type+subject_id], event_type, event_date, reminder_date, related_dog_id, related_contact_id, is_archived',
   expenses:      'id, event_id, [subject_type+subject_id], category, expense_date, is_archived',
   contacts:      'id, kennel_id, waitlist_status, is_archived',
-  kennels:       'id, is_archived',
+  kennels:       'id, public_id, is_archived',
   pairings:      'id, kennel_id, sire_id, dam_id, status, pairing_type, is_archived',
   litters:       'id, kennel_id, pairing_id, sire_id, dam_id, status, whelp_date, foster_partner_contact_id, is_archived',
   sales:         'id, kennel_id, dog_id, buyer_contact_id, referred_by_contact_id, status, placement_type, is_archived',

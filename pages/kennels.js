@@ -14,6 +14,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { esc, confirmModal } from '../assets/ui.js';
+import { mountKennelCardImport, maybeOpenCardFromHash } from '../assets/kennelCardUI.js';
 
 const listEl = document.getElementById('kennel-list');
 const portfolioEl = document.getElementById('kennel-portfolio');
@@ -25,10 +26,19 @@ let editingId = null;   // id of the kennel currently shown as an inline edit ro
 function showError(msg) { errEl.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; }
 function clearError() { errEl.innerHTML = ''; }
 
+// An OUTSIDE kennel carrying a public_id got its details from a card its owner
+// issued, rather than from this breeder typing them in — which is exactly the
+// difference between a cross-kennel reference that lines up with the other
+// breeder's records and one that only looks like it does. Own kennels all carry
+// an id by construction, so badging those too would just be noise.
+function linkedBadge(k) {
+  return (!k.is_own_kennel && k.public_id) ? ' <span class="badge badge-blue">linked</span>' : '';
+}
+
 function displayRow(k, blocked) {
   const title = blocked.length ? 'Referenced by ' + blocked.map((b) => `${b.label} (${b.count})`).join(', ') : 'Delete kennel';
   return `<tr class="${k.is_archived ? 'row-archived' : ''}">
-    <td><strong>${esc(k.kennel_name)}</strong>${k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : ''}</td>
+    <td><strong>${esc(k.kennel_name)}</strong>${k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : ''}${linkedBadge(k)}</td>
     <td class="col-collapse">${k.prefix ? esc(k.prefix) : '<span class="faint">—</span>'}</td>
     <td class="col-collapse">${k.location ? esc(k.location) : '<span class="faint">—</span>'}</td>
     <td class="pill-row" style="justify-content:flex-end;">
@@ -237,4 +247,10 @@ document.getElementById('k-add').addEventListener('click', async (e) => {
   }
 });
 
+// Kennel cards (End-State guide §28) — the receiving half. Two doors into the
+// same dry-run preview: the button here, and a card LINK that lands on this page
+// with `#kennelcard=…`. Both re-render the list only once something was written.
+mountKennelCardImport(document.getElementById('card-import'), { onDone: () => render() });
+
 render();
+maybeOpenCardFromHash({ onDone: () => render() });
