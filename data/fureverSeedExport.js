@@ -25,7 +25,7 @@ import { getFureverSettings } from './settings.js';
 import { litterRepo } from './litterRepo.js';
 import { breedFeedingScheduleRepo } from './breedFeedingScheduleRepo.js';
 
-export const SEED_PACKET_VERSION = 1;
+const SEED_PACKET_VERSION = 1;
 
 // Furever's own deploy origin (build/README.md's deploy table) — a fixed
 // constant, not edition config: every edition that ships this console (Pro,

@@ -99,8 +99,20 @@ function nodeHtml(n) {
 //   onNavigate(dogId) — called when a node name is clicked (re-center). If
 //   omitted, name clicks fall back to navigating to the pedigree page.
 export async function renderPedigree({ mount, rootId, generations = 3, onNavigate }) {
-  const dogs = await dogRepo.getAll({ includeArchived: true });
-  const byId = new Map(dogs.map((d) => [d.id, d]));
+  const byId = new Map();
+  async function fetchDog(id) {
+    if (!id) return null;
+    if (byId.has(id)) return byId.get(id);
+    const dog = await dogRepo.getById(id);
+    if (dog) byId.set(id, dog);
+    return dog;
+  }
+  async function fetchAncestors(id, depth) {
+    const dog = await fetchDog(id);
+    if (!dog || depth >= generations) return;
+    await Promise.all([fetchAncestors(dog.sire_id, depth + 1), fetchAncestors(dog.dam_id, depth + 1)]);
+  }
+  await fetchAncestors(rootId, 0);
   const rootDog = byId.get(rootId);
 
   if (!rootDog) {
@@ -114,10 +126,9 @@ export async function renderPedigree({ mount, rootId, generations = 3, onNavigat
   const width = (maxDepth + 1) * NODE_W + maxDepth * COL_GAP;
   const height = Math.max(leafCount, 1) * ROW_H;
 
-  const cx = (n) => n.depth * (NODE_W + COL_GAP);              // left edge
-  const cyCenter = (n) => n.row * ROW_H + ROW_H / 2;           // vertical center
+  const cx = (n) => n.depth * (NODE_W + COL_GAP);
+  const cyCenter = (n) => n.row * ROW_H + ROW_H / 2;
 
-  // Connector paths: from a parent's right edge to each child's left edge (elbow).
   const paths = [];
   for (const n of nodes) {
     for (const child of [n.sire, n.dam]) {
@@ -134,8 +145,8 @@ export async function renderPedigree({ mount, rootId, generations = 3, onNavigat
     return `<div class="ped-pos" style="left:${cx(n)}px;top:${top}px;">${nodeHtml(n)}</div>`;
   }).join('');
 
-  // Build offspring section
-  const offspring = dogs.filter((d) => d.sire_id === rootId || d.dam_id === rootId);
+  const offspring = await dogRepo.getChildren(rootId);
+  for (const d of offspring) byId.set(d.id, d);
   const offspringByLitter = new Map();
   for (const pup of offspring) {
     const litterId = pup.litter_id || 'no-litter';

@@ -491,8 +491,9 @@ function makeIncomeBox(mountId, state, onChanged) {
       { header: 'Amount', value: (r) => fmtMoney(amountOf(r)), csv: (r) => String(amountOf(r) || '') }
     ],
     onRowClick: (r) => openAdjust(r, onChanged),
-    load: async () => {
-      const rows = (await getIncomeRows({ includeArchived: false })).filter((r) => amountOf(r) > 0);
+    load: async (preloaded) => {
+      const allRows = preloaded || await getIncomeRows({ includeArchived: false });
+      const rows = allRows.filter((r) => amountOf(r) > 0);
       const years = [...new Set(rows.map(year).filter(Boolean))].sort().reverse();
       const yearSel = document.querySelector(`#${mountId} select[aria-label="Year"]`);
       if (yearSel) {
@@ -532,7 +533,6 @@ async function initIncome() {
       <div id="income-anticipated-mount" style="margin-top:12px;"></div>
     </section>`;
 
-  // Shared refresh: recompute the summary + both box header totals after an edit.
   async function refreshSummary() {
     const rows = await getIncomeRows({ includeArchived: false });
     renderIncomeSummary(rows);
@@ -541,9 +541,10 @@ async function initIncome() {
     const a = document.getElementById('anticipated-box-total');
     if (e) e.textContent = fmtMoney(totals.earned);
     if (a) a.textContent = fmtMoney(totals.anticipated);
+    return rows;
   }
 
-  const onChanged = () => { refreshSummary(); earnedBox.refresh(); anticipatedBox.refresh(); };
+  const onChanged = async () => { const rows = await refreshSummary(); earnedBox.refresh(rows); anticipatedBox.refresh(rows); };
   const earnedBox = makeIncomeBox('income-earned-mount', 'earned', onChanged);
   const anticipatedBox = makeIncomeBox('income-anticipated-mount', 'anticipated', onChanged);
   await refreshSummary();

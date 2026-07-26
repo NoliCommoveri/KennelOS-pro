@@ -233,7 +233,7 @@ const DONE_COPY = {
 // Open the import flow. `prefill` seeds the paste box (used by the link path).
 // `onDone` fires only when something was actually written, so the caller can
 // re-render its list without a pointless repaint after a cancel.
-export function openKennelCardImport({ prefill = '', onDone } = {}) {
+function openKennelCardImport({ prefill = '', onDone } = {}) {
   const { close, body } = modalShell(pasteFormHtml(prefill));
 
   const showError = (msg) => {

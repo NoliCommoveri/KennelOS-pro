@@ -36,7 +36,7 @@ import { kennelRepo } from './kennelRepo.js';
 import { todayYMD } from './dateUtils.js';
 import { getCompanionSettings } from './settings.js';
 
-export const COMPANION_BUNDLE_VERSION = 1;
+const COMPANION_BUNDLE_VERSION = 1;
 
 const FEE_STRUCTURES_WITH_PICK = ['pick_of_litter', 'flat_plus_pick'];
 

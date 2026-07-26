@@ -42,10 +42,6 @@ export function isIntroStep(step) {
 // only the real feature stops, not the intro cards between hubs.
 export const HIGHLIGHT_STEPS = WIZARD_STEPS.filter((s) => !isIntroStep(s));
 
-export function stepsForPage(pageKey) {
-  return WIZARD_STEPS.filter((s) => s.page && s.page.split('?')[0] === pageKey);
-}
-
 export function startWizard() {
   setWizardStatusRaw('active');
   setWizardStepIndexRaw(0);
@@ -68,7 +64,7 @@ export function dismissWizard() {
   setWizardStatusRaw('dismissed'); // index untouched — resuming later picks up where it left off
 }
 
-export function completeWizard() {
+function completeWizard() {
   setWizardStatusRaw('completed');
   setWizardStepIndexRaw(0); // finishing implies "from the top" on replay
 }

@@ -158,8 +158,8 @@ export function createReportView(opts) {
     downloadCsv(csvFilename, csv);
   }
 
-  async function refresh() {
-    all = await load();
+  async function refresh(preloaded) {
+    all = preloaded ? await load(preloaded) : await load();
     render();
   }
 

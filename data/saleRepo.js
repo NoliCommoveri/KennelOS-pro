@@ -17,7 +17,7 @@ const REQUIRED_FIELDS = ['dog_id', 'buyer_contact_id', 'placement_type', 'status
 // current "family" and never appears in that family's companion bundle — applied
 // identically to membership (companion.js) and bundle contents (companionExport.js)
 // via isOpenSale so the two can't drift.
-export const TERMINAL_SALE_STATUSES = ['delivered', 'returned', 'cancelled'];
+const TERMINAL_SALE_STATUSES = ['delivered', 'returned', 'cancelled'];
 
 function validateSale(candidate) {
   for (const f of REQUIRED_FIELDS) {

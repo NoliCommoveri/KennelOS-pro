@@ -86,7 +86,7 @@ const PRECACHE_URLS = [
   'data/proPages.js',
   'data/referenceRegistry.js',
   'data/repoBase.js',
-  'data/rosterCount.js',
+
   'data/saleRepo.js',
   'data/sampleData.js',
   'data/scopePredicates.js',
@@ -201,10 +201,6 @@ const PRECACHE_URLS = [
   'vendor/gsi/client.js',
   'vendor/lz-string.min.mjs',
   'vendor/papaparse.min.mjs',
-  'vendor/tesseract/eng.traineddata.gz',
-  'vendor/tesseract/tesseract-core-simd-lstm.wasm.js',
-  'vendor/tesseract/tesseract.esm.min.js',
-  'vendor/tesseract/worker.min.js',
   'resources/common_tests_by_breed_seed.csv',
 ];
 

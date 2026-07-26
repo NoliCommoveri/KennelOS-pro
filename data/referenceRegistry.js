@@ -169,11 +169,11 @@ async function countReferences(ref, id) {
 // schema. Empty array => hard delete is allowed.
 export async function findBlockingReferences(registry, id) {
   const existing = new Set(existingTableNames());
+  const applicable = registry.filter((ref) => existing.has(ref.table));
+  const counts = await Promise.all(applicable.map((ref) => countReferences(ref, id)));
   const blockers = [];
-  for (const ref of registry) {
-    if (!existing.has(ref.table)) continue; // stage-honest: don't probe absent tables
-    const count = await countReferences(ref, id);
-    if (count > 0) blockers.push({ label: ref.label, count });
+  for (let i = 0; i < applicable.length; i++) {
+    if (counts[i] > 0) blockers.push({ label: applicable[i].label, count: counts[i] });
   }
   return blockers;
 }

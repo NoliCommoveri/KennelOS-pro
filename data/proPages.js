@@ -9,7 +9,7 @@
 
 // Pages under pages/ — basenames of the .html (the matching .js, when present, is
 // excluded alongside it by the build).
-export const PRO_ONLY_PAGES = [
+const PRO_ONLY_PAGES = [
   // People / Contacts
   'contacts.html', 'contact.html', 'contact-import.html',
   // Kennel management (full) — Lite keeps only first-run kennel setup

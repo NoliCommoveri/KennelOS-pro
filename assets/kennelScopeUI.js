@@ -24,7 +24,7 @@ import { esc } from './ui.js';
 
 // True in the editions that have a scope at all. Callers that build markup up
 // front (rather than awaiting a render) branch on this to skip the host element.
-export function hasKennelScopeUI() {
+function hasKennelScopeUI() {
   return !!editionFlags.multiKennel;
 }
 

@@ -21,7 +21,7 @@ import { editionFlags } from './editionConfig.js';
 // errors (the same path CapExceededError / ReferenceBlockedError use), so a
 // blocked write reads as this friendly line rather than a raw failure. Pro/Lite
 // never construct it (isDemo() false), so no demo wording ships in those builds.
-export class DemoModeError extends Error {
+class DemoModeError extends Error {
   constructor() {
     super("This is a demo — changes aren't saved.");
     this.name = 'DemoModeError';

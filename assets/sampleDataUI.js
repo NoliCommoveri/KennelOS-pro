@@ -29,7 +29,7 @@ export async function renderSampleBanner() {
 // The clear flow itself — shared by the banner button and the Import/Export
 // page's own "Clear Sample Data" control. Returns the clearSampleData() result,
 // or undefined if the user backed out.
-export async function promptClearSampleData() {
+async function promptClearSampleData() {
   if (!hasSampleData()) {
     await alertModal({ title: 'No sample data', message: 'There is no sample data loaded.' });
     return;

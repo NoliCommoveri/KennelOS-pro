@@ -14,7 +14,7 @@ import { enforceImportDogCap } from './editionConfig.js';
 //   v2: file blobs (the `files` table's `blob`, backing Documents + expense
 //       receipts) are base64-tagged so they survive JSON — see below. A v1 file
 //       predates the `files` table entirely, so nothing there needs decoding.
-export const BACKUP_FORMAT_VERSION = 2;
+const BACKUP_FORMAT_VERSION = 2;
 
 // --- Blob (binary) round-tripping -------------------------------------------
 // JSON can't represent a Blob — JSON.stringify turns one into `{}`, silently
@@ -28,7 +28,7 @@ function isBlobMarker(v) {
   return !!v && typeof v === 'object' && v[BLOB_TAG] === true && typeof v.data === 'string';
 }
 
-export async function blobToMarker(blob) {
+async function blobToMarker(blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   // Chunked to avoid blowing the argument limit of String.fromCharCode on big files.
   let binary = '';
@@ -39,7 +39,7 @@ export async function blobToMarker(blob) {
   return { [BLOB_TAG]: true, mime: blob.type || 'application/octet-stream', data: btoa(binary) };
 }
 
-export function markerToBlob(marker) {
+function markerToBlob(marker) {
   const binary = atob(marker.data);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);

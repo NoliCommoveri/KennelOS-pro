@@ -31,7 +31,7 @@ const base = makeRepo('kennels', KENNEL_REFERENCES);
 const PUBLIC_ID_PREFIX = 'kos1_';
 const PUBLIC_ID_RE = /^kos1_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-export function newPublicId() {
+function newPublicId() {
   return PUBLIC_ID_PREFIX + newId();
 }
 

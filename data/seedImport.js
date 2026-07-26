@@ -14,7 +14,7 @@ import { kennelRepo } from './kennelRepo.js';
 // App-root-relative path to the bundled starter file. Prefixed at call time so
 // it resolves from index.html or from a /pages/*.html page (same convention as
 // nav.js's rootPrefix), and from any GitHub Pages sub-path.
-export const SEED_RESOURCE_PATH = 'resources/common_tests_by_breed_seed.csv';
+const SEED_RESOURCE_PATH = 'resources/common_tests_by_breed_seed.csv';
 
 export const ci = (s) => String(s ?? '').trim().toLowerCase();
 
@@ -26,7 +26,7 @@ function rootPrefix() {
 // disclaimer/how-to header the shipped file carries; header is
 // `Breed Group,breed,test_name` (col A, "Breed Group", is optional — an older
 // two-column `breed,test_name` file still parses, just with an empty group).
-export function parseSeedCsv(fileOrText) {
+function parseSeedCsv(fileOrText) {
   return new Promise((resolve, reject) => {
     Papa.parse(fileOrText, {
       header: true,

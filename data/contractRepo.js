@@ -41,7 +41,7 @@ export const CONTACT_LINK_TYPES = ['lease', 'co_own', 'foster', 'other'];
 // Statuses that take a contract out of play. A partner never sees a contract in
 // one of these states, and such a contract never confers partner membership —
 // applied identically in both places via isLivePartnerContract so the two agree.
-export const TERMINAL_CONTRACT_STATUSES = ['declined', 'cancelled', 'void'];
+const TERMINAL_CONTRACT_STATUSES = ['declined', 'cancelled', 'void'];
 
 function validateContract(candidate) {
   for (const f of REQUIRED_FIELDS) {

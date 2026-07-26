@@ -6,7 +6,7 @@
 //
 // Deliberately LOCAL time (getFullYear/getMonth/getDate), not UTC — "today"
 // should match the breeder's own wall clock, not a server's.
-export function formatYMD(d) {
+function formatYMD(d) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }

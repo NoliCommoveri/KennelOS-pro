@@ -16,13 +16,13 @@ import { dogRepo } from './dogRepo.js';
 // One row per non-archived litter: income (earned/anticipated) from its puppy
 // sales, its full cost (litter + puppy expenses), and net (earned − cost).
 export async function getLitterFinances() {
-  const [rows, expenses, litters, dogs] = await Promise.all([
-    getIncomeRows({ includeArchived: false }),
+  const [expenses, litters, dogs] = await Promise.all([
     expenseRepo.getAll({ includeArchived: false }),
     litterRepo.getAll({ includeArchived: false }),
     dogRepo.getAll({ includeArchived: true })
   ]);
   const dogById = new Map(dogs.map((d) => [d.id, d]));
+  const rows = await getIncomeRows({ includeArchived: false, preloadedDogs: dogs });
 
   const acc = new Map(); // litterId -> accumulator
   const get = (id) => {

@@ -200,7 +200,7 @@ export function descriptor(vocab, value) {
 // Suggest-not-enforce starter set for boarding's `boarding_reason` (Stage4.5
 // Addendum §C3) — a plain string in `details`, never a validated vocab, so a
 // combobox surfaces these as suggestions without blocking free text.
-export const BOARDING_REASON_SUGGESTIONS = [
+const BOARDING_REASON_SUGGESTIONS = [
   'Stud service', 'Co-owner rotation', 'Foster', 'Grow-out', 'Owner travel', 'Whelp assist', 'Other'
 ];
 
@@ -213,7 +213,7 @@ export const COI_METHOD_SUGGESTIONS = ['genomic', 'pedigree', 'registry', 'other
 
 // Enforced choice list for the `placement` event type's `Method` field —
 // how the puppy actually travelled to the buyer.
-export const PLACEMENT_METHODS = ['Flight nanny', 'Ground transport', 'Local pickup', 'Other'];
+const PLACEMENT_METHODS = ['Flight nanny', 'Ground transport', 'Local pickup', 'Other'];
 
 // Payment methods for the invoice/receipt generator (§24). On an invoice these
 // are the *accepted* methods offered to the buyer (a global default lives in
@@ -239,7 +239,7 @@ export const BOARDING_FREQUENCY_OPTIONS = ['Day', 'Week', 'Month'];
 
 // Enforced choice list for the `abnormalities` event type's `Type` field —
 // common canine birth defects a breeder would record at whelping.
-export const ABNORMALITY_TYPES = [
+const ABNORMALITY_TYPES = [
   'Cleft palate', 'Cleft lip', 'Umbilical hernia', 'Inguinal hernia',
   'Anasarca (walrus puppy)', 'Swimmer puppy syndrome', 'Hydrocephalus',
   'Heart murmur', 'Limb deformity', 'Atresia ani (imperforate anus)',

@@ -159,8 +159,8 @@ function openSnooze(id) {
 
 // --- 0. Nudges (derived, dismissible — Data Integrity Brief §2) -------------
 
-async function renderNudges() {
-  const all = await computeNudges();
+async function renderNudges(preloaded) {
+  const all = await computeNudges({ preloaded });
   const rows = all.filter((n) => !isDismissed(n.key));
   if (!rows.length) { nudgesEl.innerHTML = ''; return; }
   const title = `Nudges <span class="muted" style="font-size:14px;">(${rows.length})</span>`;
@@ -429,11 +429,10 @@ async function main() {
   const scopedPairings = inScopeOnly(pairings);
   const scopedSales = inScopeOnly(sales);
 
-  // Nudges and reminders each do their own async read; they're independent, so
-  // run them concurrently rather than one-then-the-other (halves the critical
-  // path for the two top cards). The remaining sections render synchronously
-  // from the data main() already loaded.
-  const asyncCards = Promise.all([renderNudges(), renderReminders()]);
+  const asyncCards = Promise.all([
+    renderNudges({ dogs: allDogs, pairings, sales }),
+    renderReminders()
+  ]);
   renderAvailable(scopedDogs, scopedLitters);
   renderUpcoming(upcoming.filter(eventInScope));
   // boardRows arrive already scoped — getAwayBoardRows() owns that, so board.js,

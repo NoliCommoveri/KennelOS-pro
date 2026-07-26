@@ -86,16 +86,16 @@ function studInProgressNudge(s, dogsById) {
   };
 }
 
-export async function computeNudges() {
+export async function computeNudges({ preloaded = {} } = {}) {
   const today = todayYMD();
   const [studServices, dogs, kennels, pairings, events, litters, sales] = await Promise.all([
     studServiceRepo.getAll(),
-    dogRepo.getAll(),
+    preloaded.dogs || dogRepo.getAll(),
     kennelRepo.getAll(),
-    pairingRepo.getAll(),
+    preloaded.pairings || pairingRepo.getAll(),
     eventRepo.getAll(),
-    litterRepo.getAll({ includeArchived: true }),
-    saleRepo.getAll()
+    preloaded.litters || litterRepo.getAll({ includeArchived: true }),
+    preloaded.sales || saleRepo.getAll()
   ]);
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const kennelsById = new Map(kennels.map((k) => [k.id, k]));

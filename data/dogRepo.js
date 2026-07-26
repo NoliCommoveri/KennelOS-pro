@@ -15,23 +15,20 @@ const base = makeRepo('dogs', DOG_REFERENCES);
 const REQUIRED_FIELDS = ['call_name', 'sex', 'breed', 'ownership_type', 'status'];
 const OWNER_REQUIRED_TYPES = ['external', 'leased_in'];
 
-// Walk up from a starting parent id and return the set of all ancestor ids.
-// `dogsById` is a Map of the current dog table so the walk is a pure in-memory
-// graph traversal. A `visited` set guards against pre-existing bad cycles in the
-// data so this never infinite-loops.
-function collectAncestors(startId, dogsById) {
-  const ancestors = new Set();
+async function hasAncestor(startId, targetId) {
+  const visited = new Set();
   const stack = [startId];
   while (stack.length) {
     const id = stack.pop();
-    if (id == null || ancestors.has(id)) continue;
-    ancestors.add(id);
-    const dog = dogsById.get(id);
+    if (id == null || visited.has(id)) continue;
+    if (id === targetId) return true;
+    visited.add(id);
+    const dog = await db.dogs.get(id);
     if (!dog) continue;
     if (dog.sire_id) stack.push(dog.sire_id);
     if (dog.dam_id) stack.push(dog.dam_id);
   }
-  return ancestors;
+  return false;
 }
 
 // Hard-block validation (Build Brief B1). Softer, interactive rules — sex
@@ -83,13 +80,9 @@ async function validateDog(candidate, existingId = null) {
   }
 
   if (selfId && (candidate.sire_id || candidate.dam_id)) {
-    const allDogs = await db.dogs.toArray();
-    const dogsById = new Map(allDogs.map((d) => [d.id, d]));
     for (const parentId of [candidate.sire_id, candidate.dam_id]) {
       if (!parentId) continue;
-      // If this dog already appears in the proposed parent's ancestor chain,
-      // adding the link would create a cycle.
-      if (collectAncestors(parentId, dogsById).has(selfId)) {
+      if (await hasAncestor(parentId, selfId)) {
         throw new Error('Dog: this parent would create a pedigree cycle.');
       }
     }
@@ -159,8 +152,8 @@ export const dogRepo = {
   // Distinct breed values already entered — feeds the free-text breed autocomplete
   // (Build Brief B1).
   async getBreeds() {
-    const all = await db.dogs.toArray();
-    return [...new Set(all.map((d) => d.breed).filter(Boolean))].sort();
+    const keys = await db.dogs.orderBy('breed').uniqueKeys();
+    return keys.filter(Boolean).sort();
   },
 
   // Additive, dedupe-on-write merge into planned_tests (Test Planning Addendum

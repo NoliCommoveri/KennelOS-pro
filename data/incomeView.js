@@ -109,13 +109,13 @@ export function incomeLineItems(sourceType, record) {
 // kennel hub (kennel.html) needs, since it reports on the kennel you opened
 // rather than the kennel you are currently scoped to. Leave it unset everywhere
 // else and the active scope applies (Multi-Kennel Scope Spec §7/§8).
-export async function getIncomeRows({ includeArchived = false, kennelId = null } = {}) {
+export async function getIncomeRows({ includeArchived = false, kennelId = null, preloadedDogs = null, preloadedContacts = null } = {}) {
   const scopeTo = (list) => (kennelId ? list.filter((r) => r.kennel_id === kennelId) : inScopeOnly(list));
   const [sales, studs, dogs, contacts] = await Promise.all([
     saleRepo.getAll({ includeArchived }),
     studServiceRepo.getAll({ includeArchived }),
-    dogRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true })
+    preloadedDogs || dogRepo.getAll({ includeArchived: true }),
+    preloadedContacts || contactRepo.getAll({ includeArchived: true })
   ]);
   const dogById = new Map(dogs.map((d) => [d.id, d]));
   const contactById = new Map(contacts.map((c) => [c.id, c]));

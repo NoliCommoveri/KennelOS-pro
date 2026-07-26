@@ -144,7 +144,7 @@ function parseReceiptNumber(text) {
   return m ? m[1] : null;
 }
 
-export function parseFields(text) {
+function parseFields(text) {
   return {
     amount: parseAmount(text),
     date: parseDate(text),
