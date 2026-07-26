@@ -32,24 +32,35 @@
         <button class="seg-tab" type="button" data-mode="restore">Restore</button>
       </div>
 
+      <!-- Destination/source is chosen per run, independently of the tab above.
+           Removed wholesale in Lite (no Dropbox), leaving the card exactly as it
+           was before the two axes existed. -->
+      <div class="dest-row" id="dest-row">
+        <span class="dest-label" id="dest-label">To:</span>
+        <div class="seg-tabs seg-tabs-sub" id="dest-tabs">
+          <button class="seg-tab active" type="button" data-dest="local">💾 This device</button>
+          <button class="seg-tab" type="button" data-dest="dropbox">☁️ Dropbox</button>
+        </div>
+      </div>
+
+      <div id="dest-warn"></div>
+
       <div id="br-backup">
-        <p class="muted">Downloads every record as one JSON file — also the migration path if the app ever moves to a new web address (your data doesn't follow automatically).</p>
+        <p class="muted" id="backup-blurb"></p>
         <p class="muted">Last backup: <strong id="last-backup">—</strong></p>
         <button class="btn btn-primary" id="btn-backup">⬇ Download backup</button>
       </div>
 
       <div id="br-restore" hidden>
-        <p class="muted">Load records from a backup file. <strong>Merge</strong> adds/updates by id and keeps everything else; <strong>Replace</strong> wipes current records first.</p>
+        <p class="muted" id="restore-blurb"></p>
         <input type="file" id="restore-file" accept="application/json,.json">
+        <button class="btn" id="btn-dbx-fetch" hidden>⬇ Fetch from Dropbox</button>
         <div id="restore-preview" style="margin-top:14px;"></div>
       </div>
+
+      <div id="dropbox-connect"></div>
     </section>
 
-    <section class="card" style="margin-top:16px;" id="dropbox-section">
-      <h2 style="margin-top:0;">KennelAssistant</h2>
-      <p class="muted">Connect Dropbox to enable <a href="../assistant.html">KennelAssistant</a> and log events on a second device.</p>
-      <div id="dropbox-body"><p class="muted">Checking…</p></div>
-    </section>
 
     <section class="card" style="margin-top:16px;">
       <h2 style="margin-top:0;">CSV import</h2>

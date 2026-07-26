@@ -20,7 +20,7 @@
 // These are cross-origin calls, so the service worker's cache-first fetch
 // handler ignores them entirely — every sync action is live network, by design
 // (the sync features are online-only; the rest of the app still works offline).
-const APP_KEY = 'd4fna4tzs2qbcva';
+const APP_KEY = 'z9m7ey6rf6yfcpv';
 
 import { getDropboxSettings, setDropboxSettings, clearDropboxSettings } from './settings.js';
 

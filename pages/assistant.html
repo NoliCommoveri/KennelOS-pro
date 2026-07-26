@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KennelAssistant — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>KennelAssistant</h1>
+        <p class="page-subtitle">Let a helper log weights, milestones, medications and notes from their own
+          phone — no account, no access to your contacts, sales or finances. You send them a curated copy of
+          your dogs; their entries come back here for you to review before anything is written.</p>
+      </div>
+    </div>
+
+    <div id="page-msg"></div>
+
+    <section class="card">
+      <h2 style="margin-top:0;">Connection</h2>
+      <p class="muted" style="margin-top:0;">KennelAssistant passes files through your own Dropbox — the same
+        connection Import/Export uses as a backup destination. Connect on either page and both are set.</p>
+      <div id="dropbox-connect"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+      <h2 style="margin-top:0;">Your helper's copy</h2>
+      <p class="muted" style="margin-top:0;">Your helper only ever sees what you last sent, so send again after
+        adding dogs or a new litter. This does not back up your records — use
+        <a href="import-export.html">Import / Export</a> for that.</p>
+      <p class="muted">Last sent: <strong id="feed-sent">—</strong></p>
+      <div id="feed-body"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+      <h2 style="margin-top:0;">Their entries</h2>
+      <p class="muted" style="margin-top:0;">Everything your helper logged, previewed before it's written —
+        the same dry-run every import in KennelOS gets. Entries you've already brought in are skipped, so
+        checking twice is harmless.</p>
+      <div id="outbox-body"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+      <h2 style="margin-top:0;">Set up your helper's phone</h2>
+      <p class="muted" style="margin-top:0;">Open <a href="../assistant.html">KennelAssistant</a> on their
+        phone, sign into <strong>your</strong> Dropbox once, and add it to their home screen. It works offline
+        and holds its own entries until they send them.</p>
+      <div id="privacy-body"></div>
+    </section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./assistant.js"></script>
+</body>
+</html>

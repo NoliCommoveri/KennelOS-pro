@@ -23,6 +23,11 @@ export const PRO_ONLY_PAGES = [
   'litter-finances-report.html', 'placements-report.html', 'stud-services-report.html',
   // Companion share-out
   'companion.html',
+  // KennelAssistant owner console (the helper's own app is the root-level
+  // assistant.html in PRO_ONLY_STANDALONE below — same basename, different
+  // directory, and both are Pro-only so isProOnlyPage's basename match is
+  // correct either way).
+  'assistant.html',
   // Furever seed-link generator
   'furever.html',
   // Per-breed feeding schedules (sent along in the Furever seed packet)

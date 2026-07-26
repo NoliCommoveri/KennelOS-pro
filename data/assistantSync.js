@@ -5,7 +5,7 @@
 // that single-writer split is what makes the whole scheme conflict-free:
 //   /kennelos-backup.json   written HERE (pushToDropbox) — the full JSON backup,
 //                           same object the download-backup button builds; a
-//                           second phone pulls it and merge-restores.
+//                           second phone pulls it and restores (merge or replace).
 //   /assistant-feed.json    written HERE (pushToDropbox) — the curated slice the
 //                           KennelAssistant app is allowed to see: basic dog
 //                           fields + dog-subject events. Privacy is enforced at
@@ -20,9 +20,10 @@
 // Lives in the data layer, so like importExport.js it may use `db` directly for
 // the cross-table work; pages call these functions, never the pieces.
 import { db } from './db.js';
-import { exportAll, restoreBackup, inspectBackup } from './importExport.js';
+import { exportAll, inspectBackup } from './importExport.js';
 import { dropboxUploadJson, dropboxDownloadJson, DROPBOX_PATHS } from './dropbox.js';
-import { setLastBackupDate } from './settings.js';
+import { setLastBackupDate, setAssistantFeedPushedAt } from './settings.js';
+import { assertWritable } from './demoMode.js';
 import { EVENT_TYPES, ASSISTANT_EVENT_TYPES, descriptor } from './vocab.js';
 
 // Bumped only if the feed/outbox shapes ever change incompatibly.
@@ -76,30 +77,38 @@ export async function buildAssistantFeed() {
   };
 }
 
+// Rebuild and upload JUST the assistant feed — the Assistant console's "send
+// updates to my helper", which shouldn't require a full backup round-trip to
+// tell the helper about a dog added five minutes ago. Deliberately does NOT
+// stamp lastBackupDate: the feed is an allow-listed slice, not a backup, and
+// treating it as one would tell the owner they're safe when they aren't.
+export async function pushAssistantFeed() {
+  const feed = await buildAssistantFeed();
+  await dropboxUploadJson(DROPBOX_PATHS.feed, feed);
+  setAssistantFeedPushedAt(feed.generated_at);
+  return { dogs: feed.dogs.length, events: feed.events.length };
+}
+
 // Push both owner-written files in one act: the full backup (for the second
 // phone) and the freshly rebuilt assistant feed (so the kid's app is never
 // stale relative to the last push). Counts as a backup for the reminder date.
 export async function pushToDropbox() {
   const backup = await exportAll();
   await dropboxUploadJson(DROPBOX_PATHS.backup, backup);
-  const feed = await buildAssistantFeed();
-  await dropboxUploadJson(DROPBOX_PATHS.feed, feed);
+  const feed = await pushAssistantFeed();
   setLastBackupDate(backup.exported_at);
   const records = Object.values(backup.collections).reduce((n, rows) => n + rows.length, 0);
-  return { records, dogs: feed.dogs.length, events: feed.events.length };
+  return { records, dogs: feed.dogs, events: feed.events };
 }
 
 // Fetch the backup another phone pushed. Returns { backup, info } for the page
-// to confirm before merging, or null when nothing has ever been pushed.
+// to show in its restore preview (the same dry-run a file restore gets — the
+// page then calls restoreBackup() itself in merge or replace mode), or null when
+// nothing has ever been pushed.
 export async function fetchDropboxBackup() {
   const backup = await dropboxDownloadJson(DROPBOX_PATHS.backup);
   if (!backup) return null;
   return { backup, info: inspectBackup(backup) };
-}
-
-// Merge-restore a fetched backup (upsert by id — same engine as file restore).
-export function mergeDropboxBackup(backup) {
-  return restoreBackup(backup, 'merge');
 }
 
 // --- Assistant outbox ------------------------------------------------------
@@ -138,6 +147,10 @@ export async function fetchAssistantOutbox() {
 // local `pending` marker and stamps updated_at; created_at/id are the kid's
 // own (real record identity, so re-imports stay idempotent).
 export async function importAssistantEvents(rows) {
+  // This writes through `db` rather than a repo (cross-table data-layer work,
+  // like importExport.js), so the demo guard has to be asserted here by hand —
+  // repoBase's blanket check never sees these rows.
+  assertWritable();
   const importable = rows.filter((r) => r.status === 'new' || r.status === 'update');
   const records = importable.map(({ event }) => {
     const { pending, ...rest } = event;

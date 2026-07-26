@@ -18,6 +18,7 @@ const KEYS = {
   wizardStepIndex: 'kennelOS.wizardStepIndex',
   dropbox: 'kennelOS.dropbox',
   assistantLastSync: 'kennelOS.assistantLastSync',
+  assistantFeedPushedAt: 'kennelOS.assistantFeedPushedAt',
   furever: 'kennelOS.furever'
 };
 
@@ -411,6 +412,20 @@ export function getAssistantLastSync() {
 
 export function setAssistantLastSync(iso = new Date().toISOString()) {
   localStorage.setItem(KEYS.assistantLastSync, iso);
+  return iso;
+}
+
+// Owner side of the same story: when THIS device last uploaded the assistant
+// feed. The helper only ever sees what was pushed, so the console needs this to
+// answer "does my helper know about the puppies I added this morning?" — which
+// `assistantLastSync` (a per-device read stamp, written on the helper's phone)
+// cannot answer here.
+export function getAssistantFeedPushedAt() {
+  return localStorage.getItem(KEYS.assistantFeedPushedAt);
+}
+
+export function setAssistantFeedPushedAt(iso = new Date().toISOString()) {
+  localStorage.setItem(KEYS.assistantFeedPushedAt, iso);
   return iso;
 }
 

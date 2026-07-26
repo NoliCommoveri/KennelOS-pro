@@ -110,5 +110,8 @@ export const moreItems = [
   { label: 'Documents',     path: 'pages/documents.html' },
   { label: 'Companion',     path: 'pages/companion.html' },
   { label: 'Furever',       path: 'pages/furever.html' },
+  // Temporary home — step 3 folds Companion/Furever/Assistant into one
+  // top-level 'Sharing' nav item and drops all three from here.
+  { label: 'Assistant',     path: 'pages/assistant.html' },
   { label: 'Import/Export', path: 'pages/import-export.html' },
 ];
