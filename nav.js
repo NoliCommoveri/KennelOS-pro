@@ -40,7 +40,8 @@ const HUB_CHILDREN = {
   'pages/dogs.html': ['dog.html', 'roster.html', 'pedigree.html'],
   'pages/breeding.html': ['pairings.html', 'pairing.html', 'litters.html', 'litter.html', 'active-breeding.html', 'live-births.html'],
   'pages/contacts.html': ['contact.html', 'kennels.html', 'kennel.html'],
-  'pages/sales.html': ['sale.html', 'stud-services.html', 'stud-service.html', 'contracts.html', 'contract.html']
+  'pages/sales.html': ['sale.html', 'stud-services.html', 'stud-service.html', 'contracts.html', 'contract.html'],
+  'pages/companion.html': ['furever.html', 'assistant.html']
 };
 
 function isActive(item, here) {

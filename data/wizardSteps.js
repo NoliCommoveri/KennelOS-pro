@@ -347,11 +347,24 @@ export const WIZARD_STEPS = [
     body: 'What comes out of the generator: an itemized bill with due dates, a running balance, and the payment methods you accept — ready to Print / Save as PDF. Switch the doc type in the generator to produce a receipt the same way, for money already collected.'
   },
 
-  // --- More: Reports / Companion / Import-Export --------------------------
+  // --- Sharing: Companion ---------------------------------------------------
+  {
+    id: 'sharing-intro', kind: 'hub-intro', hub: 'Sharing', button: 'Explore Sharing Hub →',
+    title: 'Sharing',
+    body: 'The Sharing hub is where your records go out to other people, on your own terms — starting with Companion.'
+  },
+  {
+    id: 'companion', hub: 'Sharing', page: 'companion.html',
+    selector: '#companion-type-tabs',
+    title: 'Companion app',
+    body: 'A place to generate snapshots of the information you want to share, in a format that looks like an app, without putting your business online. Three preconfigured Companion packages suit different audiences: pick the toggle, find the relevant contact, preview it, and send off a link. The recipient sees just what you sent, in a clean, readable format.'
+  },
+
+  // --- More: Reports / Documents / Import-Export ---------------------------
   {
     id: 'more-intro', kind: 'hub-intro', hub: 'More', button: 'Explore More Hub →',
-    title: 'Reports, Documents, Companion & Backups',
-    body: 'Behind the More menu: analytics Reports, Documents for filing a dog’s paperwork, read-only Companion share-outs for buyers and partners, and Import / Export for backups and spreadsheet import.'
+    title: 'Reports, Documents & Backups',
+    body: 'Behind the More menu: analytics Reports, Documents for filing a dog’s paperwork, and Import / Export for backups and spreadsheet import.'
   },
   {
     id: 'reports', hub: 'More', page: 'reports.html',
@@ -364,12 +377,6 @@ export const WIZARD_STEPS = [
     selector: '#doc-form-modal', beforeShow: { click: '#btn-add-document' },
     title: 'Documents',
     body: 'File a dog’s pedigree, registration, health-test results, or other paperwork here — upload a PDF, or take/choose a photo and KennelOS turns it into a compressed PDF automatically. Everything is grouped by dog and stored right on this device.'
-  },
-  {
-    id: 'companion', hub: 'More', page: 'companion.html',
-    selector: '#companion-type-tabs',
-    title: 'Companion app',
-    body: 'A place to generate snapshots of the information you want to share, in a format that looks like an app, without putting your business online. Three preconfigured Companion packages suit different audiences: pick the toggle, find the relevant contact, preview it, and send off a link. The recipient sees just what you sent, in a clean, readable format.'
   },
   {
     id: 'import-export', hub: 'More', page: 'import-export.html',

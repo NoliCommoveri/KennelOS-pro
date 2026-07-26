@@ -103,15 +103,11 @@ export const navItems = [
   { label: 'People',   path: 'pages/contacts.html' },
   { label: 'Placements & Contracts', path: 'pages/sales.html' },
   { label: 'Financials', path: 'pages/financials.html' },
+  { label: 'Sharing',    path: 'pages/companion.html' }, // Companion + Furever + Assistant, seg-tabbed
 ];
 
 export const moreItems = [
   { label: 'Reports',       path: 'pages/reports.html' },
   { label: 'Documents',     path: 'pages/documents.html' },
-  { label: 'Companion',     path: 'pages/companion.html' },
-  { label: 'Furever',       path: 'pages/furever.html' },
-  // Temporary home — step 3 folds Companion/Furever/Assistant into one
-  // top-level 'Sharing' nav item and drops all three from here.
-  { label: 'Assistant',     path: 'pages/assistant.html' },
   { label: 'Import/Export', path: 'pages/import-export.html' },
 ];
