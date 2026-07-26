@@ -113,6 +113,42 @@ function buildDogNameIndex(dogs) {
   return byName;
 }
 
+// Name -> existing Kennel lookup shared by every mapping that can carry a
+// kennel scope (Multi-Kennel Scope Spec §11) — dog, pairing, litter, sale,
+// stud_service. `ownIds` lets classify() tell an outside kennel (fine for an
+// external/leased dog's kennel_name) from one of the user's own (required for
+// every other scoped table, and for an owned/co_owned dog).
+function buildKennelNameIndex(kennels) {
+  const byName = new Map();
+  const ownIds = new Set();
+  for (const k of kennels) {
+    if (k.kennel_name) byName.set(k.kennel_name.trim().toLowerCase(), k);
+    if (k.is_own_kennel) ownIds.add(k.id);
+  }
+  return { byName, ownIds };
+}
+
+// Resolves a `kennel_name` column against EXISTING kennels only (Data Model §8's
+// relationship-column rule: an unresolved name is flagged, never invented, and
+// never auto-created). `requireOwn` rejects a match that isn't one of the
+// user's own kennels — true for every scoped table except an external/leased
+// dog, whose kennel_id may legitimately name someone else's kennel. Returns
+// true when a NAMED kennel failed to resolve, so the caller routes the row to
+// review (same as an unresolved sire/dam) instead of silently falling through
+// to whatever default stampKennelScope() would otherwise stamp at commit.
+function resolveKennelColumn(row, kennelIndex, record, reasons, { requireOwn }) {
+  const raw = col(row, 'kennel_name', 'kennel');
+  if (!raw) return false;
+  const hit = kennelIndex.byName.get(raw.trim().toLowerCase());
+  if (!hit) { reasons.push(`Kennel "${raw}" not found.`); return true; }
+  if (requireOwn && !kennelIndex.ownIds.has(hit.id)) {
+    reasons.push(`Kennel "${raw}" is not one of your own kennels.`);
+    return true;
+  }
+  record.kennel_id = hit.id;
+  return false;
+}
+
 // Composite natural-key string: parts joined by a space. Callers only ever
 // pass resolved dog ids (UUIDs) and YYYY-MM-DD dates here, neither of which
 // contains a space, so distinct combinations never collide. Any blank/nullish
@@ -141,12 +177,19 @@ const DOG_MAPPING = {
   templateHeaders: [
     'call_name', 'registered_name', 'sex', 'date_of_birth', 'breed',
     'sire_registered_name', 'dam_registered_name', 'ownership_type', 'status',
-    'color_markings', 'registry', 'registration_number', 'microchip_id',
+    'kennel_name', 'color_markings', 'registry', 'registration_number', 'microchip_id',
     'coi_value', 'coi_method', 'coi_source', 'coi_as_of', 'notes'
   ],
   requiredForCreate: ['call_name', 'sex', 'breed', 'ownership_type', 'status'],
 
-  loadExisting: () => dogRepo.getAll({ includeArchived: true }),
+  async loadExisting() {
+    const [dogs, kennels] = await Promise.all([
+      dogRepo.getAll({ includeArchived: true }),
+      kennelRepo.getAll({ includeArchived: true })
+    ]);
+    this._kennels = buildKennelNameIndex(kennels);
+    return dogs;
+  },
 
   buildIndex(existing) {
     const byReg = new Map();   // registered_name+dob -> id
@@ -159,7 +202,7 @@ const DOG_MAPPING = {
       const ck = d.call_name?.trim().toLowerCase();
       if (ck && !byName.has(ck)) byName.set(ck, d);
     }
-    return { byReg, byCall, byName };
+    return { byReg, byCall, byName, kennels: this._kennels };
   },
 
   classify(row, index, i) {
@@ -187,6 +230,10 @@ const DOG_MAPPING = {
     if (breed) record.breed = breed;
     if (ownership) record.ownership_type = ownership;
     if (status) record.status = status;
+    // Kennel by name (§11) — required to be one of the user's own kennels only
+    // when the dog's ownership means the app scopes it (owned/co_owned); an
+    // external/leased dog may legitimately name an outside kennel here.
+    const kennelUnresolved = resolveKennelColumn(row, index.kennels, record, reasons, { requireOwn: SCOPED_OWNERSHIP.has(ownership) });
     for (const [key, ...aliases] of [
       ['color_markings', 'color', 'markings'], ['registry'], ['registration_number', 'reg_number'],
       ['microchip_id', 'microchip'], ['notes']
@@ -253,6 +300,7 @@ const DOG_MAPPING = {
     }
     // Unresolved parents push a create/update row to review (fixable, or apply anyway).
     if (unresolved.length) { if (status_ !== 'review') status_ = 'review'; reasons.push(unresolved.join('; ') + '.'); }
+    if (kennelUnresolved) status_ = 'review';
 
     const display = reg || call || `(row ${i + 2})`;
     return {
@@ -371,16 +419,18 @@ const PAIRING_MAPPING = {
   label: 'Pairings',
   templateHeaders: [
     'sire_registered_name', 'dam_registered_name', 'pairing_type', 'method',
-    'status', 'planned_date', 'expected_due_date', 'notes'
+    'status', 'planned_date', 'expected_due_date', 'kennel_name', 'notes'
   ],
   requiredForCreate: ['sire_id', 'dam_id', 'pairing_type', 'status'],
 
   async loadExisting() {
-    const [pairings, dogs] = await Promise.all([
+    const [pairings, dogs, kennels] = await Promise.all([
       pairingRepo.getAll({ includeArchived: true }),
-      dogRepo.getAll({ includeArchived: true })
+      dogRepo.getAll({ includeArchived: true }),
+      kennelRepo.getAll({ includeArchived: true })
     ]);
     this._dogNames = buildDogNameIndex(dogs);
+    this._kennels = buildKennelNameIndex(kennels);
     return pairings;
   },
 
@@ -390,7 +440,7 @@ const PAIRING_MAPPING = {
       const key = nkParts(p.sire_id, p.dam_id, p.planned_date);
       if (key) byKey.set(key, p);
     }
-    return { byKey, dogNames: this._dogNames };
+    return { byKey, dogNames: this._dogNames, kennels: this._kennels };
   },
 
   classify(row, index, i) {
@@ -437,6 +487,9 @@ const PAIRING_MAPPING = {
     const notes = col(row, 'notes');
     if (notes) record.notes = notes;
 
+    // Kennel by name (§11) — pairings only ever carry an own-kennel scope.
+    const kennelUnresolved = resolveKennelColumn(row, index.kennels, record, reasons, { requireOwn: true });
+
     // Natural key → match-or-create.
     const key = (sireId && damId && planned) ? nkParts(sireId, damId, planned) : null;
     let status_ = 'create';
@@ -459,6 +512,7 @@ const PAIRING_MAPPING = {
       }
     }
     if (unresolved.length) { if (status_ !== 'review') status_ = 'review'; reasons.push(unresolved.join('; ') + '.'); }
+    if (kennelUnresolved) status_ = 'review';
 
     const display = `${sireName || '?'} × ${damName || '?'}${planned ? ` (${planned})` : ''}`;
     return {
@@ -487,16 +541,18 @@ const LITTER_MAPPING = {
   templateHeaders: [
     'dam_registered_name', 'sire_registered_name', 'nickname', 'whelp_date',
     'litter_registration_number', 'puppies_born_total', 'puppies_born_alive',
-    'puppies_born_deceased', 'status', 'notes'
+    'puppies_born_deceased', 'status', 'kennel_name', 'notes'
   ],
   requiredForCreate: ['dam_id', 'sire_id', 'status'],
 
   async loadExisting() {
-    const [litters, dogs] = await Promise.all([
+    const [litters, dogs, kennels] = await Promise.all([
       litterRepo.getAll({ includeArchived: true }),
-      dogRepo.getAll({ includeArchived: true })
+      dogRepo.getAll({ includeArchived: true }),
+      kennelRepo.getAll({ includeArchived: true })
     ]);
     this._dogNames = buildDogNameIndex(dogs);
+    this._kennels = buildKennelNameIndex(kennels);
     return litters;
   },
 
@@ -506,7 +562,7 @@ const LITTER_MAPPING = {
       const key = nkParts(l.dam_id, l.sire_id, l.whelp_date);
       if (key) byKey.set(key, l);
     }
-    return { byKey, dogNames: this._dogNames };
+    return { byKey, dogNames: this._dogNames, kennels: this._kennels };
   },
 
   classify(row, index, i) {
@@ -554,6 +610,9 @@ const LITTER_MAPPING = {
     const notes = col(row, 'notes');
     if (notes) record.notes = notes;
 
+    // Kennel by name (§11) — litters only ever carry an own-kennel scope.
+    const kennelUnresolved = resolveKennelColumn(row, index.kennels, record, reasons, { requireOwn: true });
+
     // Natural key → match-or-create.
     const key = (damId && sireId && whelp) ? nkParts(damId, sireId, whelp) : null;
     let status_ = 'create';
@@ -573,6 +632,7 @@ const LITTER_MAPPING = {
       if (missing.length) { status_ = 'review'; reasons.push(`Missing required field(s) for a new litter: ${missing.join(', ')}.`); }
     }
     if (unresolved.length) { if (status_ !== 'review') status_ = 'review'; reasons.push(unresolved.join('; ') + '.'); }
+    if (kennelUnresolved) status_ = 'review';
 
     const display = `${damName || '?'} × ${sireName || '?'}${whelp ? ` (${whelp})` : ''}`;
     return {
@@ -606,20 +666,22 @@ const SALE_MAPPING = {
   label: 'Sales',
   templateHeaders: [
     'dog_registered_name', 'buyer_name', 'sale_date', 'placement_type', 'status',
-    'price', 'deposit_amount', 'deposit_date', 'balance_paid_date', 'lead_source', 'notes'
+    'price', 'deposit_amount', 'deposit_date', 'balance_paid_date', 'kennel_name', 'lead_source', 'notes'
   ],
   requiredForCreate: ['dog_id', 'placement_type', 'status'],
 
   async loadExisting() {
-    const [sales, dogs, contacts] = await Promise.all([
+    const [sales, dogs, contacts, kennels] = await Promise.all([
       saleRepo.getAll({ includeArchived: true }),
       dogRepo.getAll({ includeArchived: true }),
-      contactRepo.getAll({ includeArchived: true })
+      contactRepo.getAll({ includeArchived: true }),
+      kennelRepo.getAll({ includeArchived: true })
     ]);
     this._dogNames = buildDogNameIndex(dogs);
     this._contactsById = new Map(contacts.map((c) => [c.id, c]));
     this._contactByName = new Map();
     for (const c of contacts) if (c.name) this._contactByName.set(c.name.trim().toLowerCase(), c);
+    this._kennels = buildKennelNameIndex(kennels);
     return sales;
   },
 
@@ -630,7 +692,7 @@ const SALE_MAPPING = {
       const key = nkParts(s.dog_id, buyerName || null, s.sale_date);
       if (key) byKey.set(key, s);
     }
-    return { byKey, dogNames: this._dogNames, contactByName: this._contactByName };
+    return { byKey, dogNames: this._dogNames, contactByName: this._contactByName, kennels: this._kennels };
   },
 
   classify(row, index, i) {
@@ -681,6 +743,9 @@ const SALE_MAPPING = {
       else if (d) record[key] = d;
     }
 
+    // Kennel by name (§11) — sales only ever carry an own-kennel scope.
+    const kennelUnresolved = resolveKennelColumn(row, index.kennels, record, reasons, { requireOwn: true });
+
     // Natural key → match-or-create. Uses the buyer NAME (not id) so a
     // not-yet-created buyer still matches consistently within this import.
     const key = (dogId && buyerNameKey && saleDate) ? nkParts(dogId, buyerNameKey, saleDate) : null;
@@ -702,6 +767,7 @@ const SALE_MAPPING = {
     }
     if (!dogId && dogNameRaw) status_ = 'review'; // unresolved dog is always flagged, unlike buyer
     if (toCreateBuyer) reasons.push(`Buyer "${toCreateBuyer}" not found — will be created as a new Contact.`);
+    if (kennelUnresolved) status_ = 'review';
 
     const display = `${dogNameRaw || '?'} → ${buyerName || '?'}${saleDate ? ` (${saleDate})` : ''}`;
     return {
@@ -921,20 +987,22 @@ const STUD_SERVICE_MAPPING = {
   label: 'Stud Services',
   templateHeaders: [
     'direction', 'our_dog_registered_name', 'partner_dog_registered_name',
-    'partner_contact_name', 'fee_amount', 'fee_structure', 'status', 'result_notes'
+    'partner_contact_name', 'fee_amount', 'fee_structure', 'status', 'kennel_name', 'result_notes'
   ],
   requiredForCreate: ['direction', 'our_dog_id', 'partner_dog_id', 'partner_contact_id', 'status'],
 
   async loadExisting() {
-    const [studServices, dogs, contacts] = await Promise.all([
+    const [studServices, dogs, contacts, kennels] = await Promise.all([
       studServiceRepo.getAll({ includeArchived: true }),
       dogRepo.getAll({ includeArchived: true }),
-      contactRepo.getAll({ includeArchived: true })
+      contactRepo.getAll({ includeArchived: true }),
+      kennelRepo.getAll({ includeArchived: true })
     ]);
     this._dogNames = buildDogNameIndex(dogs);
     this._dogsById = new Map(dogs.map((d) => [d.id, d]));
     this._contactByName = new Map();
     for (const c of contacts) if (c.name) this._contactByName.set(c.name.trim().toLowerCase(), c);
+    this._kennels = buildKennelNameIndex(kennels);
     return studServices;
   },
 
@@ -946,7 +1014,7 @@ const STUD_SERVICE_MAPPING = {
       if (!byKey.has(key)) byKey.set(key, []);
       byKey.get(key).push(s);
     }
-    return { byKey, dogNames: this._dogNames, contactByName: this._contactByName, dogsById: this._dogsById };
+    return { byKey, dogNames: this._dogNames, contactByName: this._contactByName, dogsById: this._dogsById, kennels: this._kennels };
   },
 
   classify(row, index, i) {
@@ -999,6 +1067,10 @@ const STUD_SERVICE_MAPPING = {
     const resultNotes = col(row, 'result_notes');
     if (resultNotes) record.result_notes = resultNotes;
 
+    // Kennel by name (§11) — a stud service only ever carries an own-kennel
+    // scope (it inherits from OUR dog, never the partner's).
+    const kennelUnresolved = resolveKennelColumn(row, index.kennels, record, reasons, { requireOwn: true });
+
     // pairing_id is deliberately never set via CSV (Addendum §A1.2) — link it
     // later from the Stud Service Detail screen.
 
@@ -1031,6 +1103,7 @@ const STUD_SERVICE_MAPPING = {
     if (!ourDogId && ourDogName) status_ = 'review';
     if (!partnerDogId && partnerDogName) status_ = 'review';
     if (toCreateContact) reasons.push(`Partner contact "${toCreateContact}" not found — will be created as a new Contact.`);
+    if (kennelUnresolved) status_ = 'review';
 
     const display = `${ourDogName || '?'} × ${partnerDogName || '?'}${direction ? ` (${direction})` : ''}`;
     return {
@@ -1311,15 +1384,12 @@ export function summarize(plan) {
 }
 
 // --- Kennel scope on import -------------------------------------------------
-// The scoped entities (Multi-Kennel Scope Spec §4.1) carry a required kennel_id,
-// which a CSV generally doesn't name. Fill it in from the active/sole kennel just
-// before the write, leaving anything the row DID resolve (the dog mapping's
-// kennel_name column) untouched.
-//
-// Deliberately conservative for Phase 1: no inheritance from a matched parent
-// record, and dogs are stamped only when the user owns them — an external dog's
-// kennel is somebody else's and stays whatever the CSV said, including nothing.
-// Full per-row kennel columns for every entity are Phase 3 (spec §11).
+// The scoped entities (Multi-Kennel Scope Spec §4.1) carry a required kennel_id.
+// Every mapping now resolves its own `kennel_name` column first (§11) — this is
+// only the fallback for a row that left it blank: the active/sole kennel, same
+// default every other write path uses. Dogs are stamped only when the user
+// owns them — an external dog's kennel is somebody else's and stays whatever
+// the CSV said, including nothing.
 const KENNEL_SCOPED_IMPORTS = new Set(['pairing', 'litter', 'sale', 'stud_service']);
 
 async function stampKennelScope(entity, record) {

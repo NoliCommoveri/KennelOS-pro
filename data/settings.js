@@ -111,6 +111,13 @@ export function setActiveKennelId(id) {
 // IndexedDB — consistent with "nothing app-level goes in IndexedDB." The Layer-2
 // per-recipient personal message is Contact.companion_note (a real record field),
 // shown ALONGSIDE the broadcast announcement (not an override).
+//
+// Deliberately ONE shared set across all of a user's own kennels, even in Pro's
+// multi-kennel mode (Multi-Kennel Scope Spec §10) — weighed against per-kennel
+// keying and kept global by owner decision: simpler, and a multi-kennel breeder
+// can swap the kennel name/tagline by hand before sending if they want
+// per-kennel branding. Not a gap to "finish" — revisit only if this becomes a
+// real pain point in practice.
 export const COMPANION_TYPES = ['prospective', 'family', 'partner'];
 
 const COMPANION_TYPE_LABELS = {
@@ -222,6 +229,13 @@ export function setCompanionSettings(type, values) {
 // this kennel dedupes into ONE `breeders` row in Furever — deliberately NOT tied
 // to "My Kennel" (settings' myKennelId): Furever should work even if Kennel Setup
 // was skipped.
+//
+// Deliberately ONE shared block across all of a user's own kennels, even in
+// Pro's multi-kennel mode (Multi-Kennel Scope Spec §10) — same owner decision
+// as Companion above, kept global rather than keyed per kennel. Per-kennel
+// keying would also have meant per-kennel Drive content-pack pointers and
+// breederKey values, risking already-sent packets' dedup; staying global sidesteps
+// that entirely. Not a gap to "finish."
 //
 // Also holds the KENNEL-WIDE content-pack pointer (Content Package Fetch
 // Mechanism §3.4): `packKey`/`folderId`/`manifestFileId`/`manifestResourceKey`/

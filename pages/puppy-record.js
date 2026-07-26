@@ -10,6 +10,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { getActiveKennel } from '../data/kennelScope.js';
 import { descriptor, SEX, EVENT_TYPES } from '../data/vocab.js';
 import { esc, param } from '../assets/ui.js';
 
@@ -210,18 +211,20 @@ async function main() {
   }
   document.getElementById('pr-back').href = `sale.html?id=${encodeURIComponent(sale.id)}`;
 
-  const [buyer, sire, dam, litter, events, kennels] = await Promise.all([
+  const [buyer, sire, dam, litter, events, kennels, activeKennel] = await Promise.all([
     sale.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null,
     dog.sire_id ? dogRepo.getById(dog.sire_id) : null,
     dog.dam_id ? dogRepo.getById(dog.dam_id) : null,
     dog.litter_id ? litterRepo.getById(dog.litter_id) : null,
     eventRepo.getForSubject('dog', dog.id),
-    kennelRepo.getAll({ includeArchived: true })
+    kennelRepo.getAll({ includeArchived: true }),
+    getActiveKennel()
   ]);
   // The puppy's own kennel when it's one of the user's own; otherwise the
-  // first own-kennel on record (same "which own kennel" fallback other pages
-  // use — dog.js, kennel-tests-import.js).
+  // active kennel scope, then the sole own kennel on record as a last resort
+  // (Lite, or "All kennels" with just one) — Multi-Kennel Scope Spec §10.
   const ownKennel = (dog.kennel_id && kennels.find((k) => k.id === dog.kennel_id))
+    || activeKennel
     || kennels.find((k) => k.is_own_kennel && !k.is_archived)
     || null;
 

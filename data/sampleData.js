@@ -677,6 +677,67 @@ export async function seedSampleData() {
   });
   manifest.sales.push(cedarSale.id);
 
+  // --- Briar Hollow Kennels — a SECOND own kennel (Multi-Kennel Scope Spec §13).
+  // Meadow Ridge is Dana's OUTSIDE kennel (breeder-of-record/external-ownership
+  // demo, not a scope), so it never exercised the switcher — a second *own*
+  // kennel is what shows the scope actually segmenting something. Deliberately
+  // small (its own sire/dam, one pairing, one litter, one placed pup, one sale)
+  // rather than a second full packet: enough for the switcher, the kennel hub's
+  // roster/litters/P&L, and a cross-kennel picker check, without doubling the
+  // seed. A different breed line makes "which kennel is this" obvious at a glance.
+  const briarHollow = await kennelRepo.create({
+    kennel_name: 'Briar Hollow Kennels', prefix: 'BRIAR', location: 'Woodstock, VT', is_own_kennel: true,
+    preferred_breeds: ['Golden Retriever'],
+    promote_nudge_enabled: true, promote_age_male_months: 14, promote_age_female_months: 11
+  });
+  manifest.kennels.push(briarHollow.id);
+
+  const renee = await contactRepo.create({
+    name: 'Renee Coleman', contact_type: ['buyer'], waitlist_status: 'fulfilled',
+    first_contact_source: 'Website', phone: '555-0114', email: 'renee.coleman@example.com',
+    address: '9 Orchard Row, Woodstock, VT 05091'
+  });
+  manifest.contacts.push(renee.id);
+
+  const cassius = await dogRepo.create({
+    call_name: 'Cassius', sex: 'male', breed: 'Golden Retriever',
+    date_of_birth: '2020-05-18', registered_name: 'Briar Hollow Cassius', registry: 'AKC',
+    ownership_type: 'owned', status: 'active_breeding', kennel_id: briarHollow.id
+  });
+  const opal = await dogRepo.create({
+    call_name: 'Opal', sex: 'female', breed: 'Golden Retriever',
+    date_of_birth: '2021-02-09', registered_name: 'Briar Hollow Opal', registry: 'AKC',
+    ownership_type: 'owned', status: 'active_breeding', kennel_id: briarHollow.id
+  });
+  const pairingB1 = await pairingRepo.create({
+    kennel_id: briarHollow.id,
+    sire_id: cassius.id, dam_id: opal.id, pairing_type: 'actual', method: 'natural',
+    status: 'whelped', planned_date: daysFromToday(-160), expected_due_date: daysFromToday(-97)
+  });
+  const briarLitter = await litterRepo.create({
+    kennel_id: briarHollow.id,
+    pairing_id: pairingB1.id, dam_id: opal.id, sire_id: cassius.id, nickname: 'Meadowlark litter',
+    whelp_date: daysFromToday(-97), litter_registration_number: 'BRIAR-L-2026-01',
+    puppies_born_total: 1, puppies_born_alive: 1, puppies_born_deceased: 0, puppies_born_abnormalities: 0,
+    status: 'sold'
+  });
+  const maple = await dogRepo.create({
+    call_name: 'Maple', sex: 'female', breed: 'Golden Retriever',
+    date_of_birth: daysFromToday(-97), sire_id: cassius.id, dam_id: opal.id, litter_id: briarLitter.id,
+    ownership_type: 'owned', status: 'pet_home', kennel_id: briarHollow.id, breeder_kennel_id: briarHollow.id
+  });
+  const mapleSale = await saleRepo.create({
+    kennel_id: briarHollow.id,
+    dog_id: maple.id, buyer_contact_id: renee.id, sale_date: daysFromToday(-30),
+    price: 2200, deposit_amount: 500, deposit_date: daysFromToday(-90), balance_paid_date: daysFromToday(-30),
+    placement_type: 'pet', status: 'delivered', lead_source: 'Website',
+    notes: 'Went home with the Colemans in Woodstock, VT.'
+  });
+  manifest.dogs.push(cassius.id, opal.id, maple.id);
+  manifest.pairings.push(pairingB1.id);
+  manifest.litters.push(briarLitter.id);
+  manifest.sales.push(mapleSale.id);
+
   // Events — spread across all three subject types to cover the catalog.
   const dogEvents = [
     // Juniper — annual vaccines with a now-OVERDUE reminder (Stage 5 §9): the
@@ -877,15 +938,16 @@ export async function seedSampleData() {
     poppy: poppy.id, sage: sage.id, aster: asterPup.id, percy: percy.id, fern: fern.id,
     wren: wrenPup.id, cedar: cedarPup.id, birch: birch.id, hazel: hazel.id, clover: clover.id,
     willow: willow.id, nell: nell.id, dahlia: dahlia.id, juno: juno.id, titan: titan.id, ash: ash.id,
-    thornfield: thornfield.id, meadowRidge: meadowRidge.id,
+    thornfield: thornfield.id, meadowRidge: meadowRidge.id, briarHollow: briarHollow.id,
     priya: priya.id, owen: owen.id, ellen: ellen.id, jamal: jamal.id, dana: dana.id,
     tessa: tessa.id, grace: grace.id, rex: rex.id, nora: nora.id, marcus: marcus.id,
-    sam: sam.id, hugo: hugo.id, patricia: patricia.id,
+    sam: sam.id, hugo: hugo.id, patricia: patricia.id, renee: renee.id,
     summerLitter: litter.id, springLitter: litter2.id, autumnLitter: autumnLitter.id, winterLitter: expectedLitter.id,
     marigold: marigold.id, bramble: bramblePup.id, sorrel: sorrelPup.id, fosterLitter: fosterLitter.id, fosterContract: fosterContract.id,
+    cassius: cassius.id, opal: opal.id, maple: maple.id, briarLitter: briarLitter.id,
     pairingP1: pairingP1.id, pairingP2: pairingP2.id, pairingP3: pairingP3.id,
-    pairingP4: pairingP4.id, pairingP5: pairingP5.id, pairingP6: pairingP6.id,
-    hazelSale: hazelSale.id, daisySale: daisySale.id, cedarSale: cedarSale.id,
+    pairingP4: pairingP4.id, pairingP5: pairingP5.id, pairingP6: pairingP6.id, pairingB1: pairingB1.id,
+    hazelSale: hazelSale.id, daisySale: daisySale.id, cedarSale: cedarSale.id, mapleSale: mapleSale.id,
     studServiceBirch: studServiceBirch.id, studServiceJuno: studServiceJuno.id,
     hazelContract: hazelContract.id, daisyContract: daisyContract.id,
     studServiceContract: studServiceContract.id, studServiceJunoContract: studServiceJunoContract.id,

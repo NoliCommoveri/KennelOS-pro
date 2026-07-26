@@ -30,6 +30,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { getActiveKennel } from '../data/kennelScope.js';
 import { incomeLineItems } from '../data/incomeView.js';
 import { getMyContactId, getInvoiceDefaults } from '../data/settings.js';
 import { PLACEMENT_TYPE, FEE_STRUCTURE, INVOICE_LINE_LABELS, descriptor } from '../data/vocab.js';
@@ -90,15 +91,23 @@ async function main() {
 
   const dogId = source === 'sale' ? record.dog_id : record.our_dog_id;
   const recipientId = source === 'sale' ? record.buyer_contact_id : record.partner_contact_id;
-  const [dog, recipient, kennels, myContact] = await Promise.all([
+  const [dog, recipient, kennels, myContact, activeKennel] = await Promise.all([
     dogId ? dogRepo.getById(dogId) : null,
     recipientId ? contactRepo.getById(recipientId) : null,
     kennelRepo.getAll({ includeArchived: true }),
-    (() => { const cid = getMyContactId(); return cid ? contactRepo.getById(cid) : null; })()
+    (() => { const cid = getMyContactId(); return cid ? contactRepo.getById(cid) : null; })(),
+    getActiveKennel()
   ]);
   if (source === 'sale' && dog && dog.litter_id) await litterRepo.getById(dog.litter_id);
 
-  const ownKennel = (dog && dog.kennel_id && kennels.find((k) => k.id === dog.kennel_id))
+  // The record's own kennel wins — a sale/stud service carries a real
+  // kennel_id as of Multi-Kennel Scope Spec §4 (a stud service inherits it from
+  // OUR dog, never the partner's, so this is never the recipient's kennel).
+  // Falls back to the dog's own kennel, then the active kennel scope, then the
+  // sole own kennel as a last resort (Lite, or "All kennels" with just one).
+  const ownKennel = (record.kennel_id && kennels.find((k) => k.id === record.kennel_id))
+    || (dog && dog.kennel_id && kennels.find((k) => k.id === dog.kennel_id))
+    || activeKennel
     || kennels.find((k) => k.is_own_kennel && !k.is_archived)
     || null;
 
