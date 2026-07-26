@@ -447,3 +447,29 @@ export function setProLicense(record) {
 export function clearProLicense() {
   localStorage.removeItem(PRO_LICENSE_KEY);
 }
+
+// --- Device id (Pro license gate — data/license.js) --------------------------
+// A random id this browser mints for itself, used for exactly one thing: making
+// the name of this browser's activation ("instance") in the Lemon Squeezy
+// dashboard unique, so an owner who has used several of their allowed
+// activations can tell them apart and release the right one.
+//
+// This is NOT device detection and reads nothing whatsoever about the machine —
+// no hardware, no fingerprint, no user agent. It is a UUID with no meaning
+// outside this browser's own storage, and it never leaves the app except as the
+// last 8 characters of a label the owner sees in their own store account.
+//
+// Outside KEYS above for the same reason the license record is: it is
+// entitlement bookkeeping, not program data, so Reset App to Start must leave it
+// alone. If a reset re-minted it, this browser's already-held activation would
+// silently change name and stop being identifiable.
+const DEVICE_ID_KEY = 'kennelOS.deviceId';
+
+export function getDeviceId() {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}

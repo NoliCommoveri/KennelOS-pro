@@ -57,12 +57,20 @@ function renderActivationWall() {
       <label class="license-label" for="license-key-input">License key</label>
       <input id="license-key-input" class="license-input" type="text" autocomplete="off"
              spellcheck="false" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" />
+      <div class="license-field">
+        <label class="license-label" for="license-device-input">
+          Name this device <span class="license-hint">— optional</span>
+        </label>
+        <input id="license-device-input" class="license-input" type="text" autocomplete="off"
+               maxlength="60" placeholder="Kitchen laptop" />
+      </div>
       <div class="license-error" id="license-error" role="alert"></div>
       <div class="license-actions">
         <button type="submit" class="btn btn-primary" id="license-activate">Activate</button>
         ${checkoutLinkHtml('Buy Pro →')}
       </div>
     </form>
+    <p class="license-note">Your key covers a set number of devices. Naming this one makes it easy to tell your devices apart later — you can release a device from <strong>Import/Export</strong> when you stop using it, which frees its slot.</p>
     <p class="license-note">Just upgrading from Lite? After activating, use <strong>Import</strong> to bring in the backup you exported.</p>
   `);
   wireActivationForm(card);
@@ -71,6 +79,7 @@ function renderActivationWall() {
 function wireActivationForm(card) {
   const form = card.querySelector('#license-form');
   const input = card.querySelector('#license-key-input');
+  const deviceInput = card.querySelector('#license-device-input');
   const errorSlot = card.querySelector('#license-error');
   const button = card.querySelector('#license-activate');
   input.focus();
@@ -80,7 +89,7 @@ function wireActivationForm(card) {
     button.disabled = true;
     button.textContent = 'Activating…';
     try {
-      await activate(input.value);
+      await activate(input.value, deviceInput.value);
       // Re-evaluate from scratch on a fresh load so the app boots licensed.
       location.reload();
     } catch (err) {
@@ -89,6 +98,33 @@ function wireActivationForm(card) {
       errorSlot.textContent = err?.message || 'Activation failed. Try again.';
     }
   });
+}
+
+// A lifetime key that walls because its offline check-in window ran out is a
+// completely different situation from a lapsed subscription: nothing is wrong,
+// nothing was lost, and there is nothing to renew — the app just hasn't reached
+// the store in months. Telling that owner their "subscription needs attention"
+// and selling them a renewal would be wrong on both counts, so both walls and the
+// grace banner branch on it. Detected as: a perpetual key we still believe is
+// active, which can only have walled on staleness (a revoked one has a status
+// that isn't 'active', and gets the ordinary wall).
+const isStaleLifetime = (record) => record?.interval === 'lifetime' && record.status === 'active';
+
+// --- Reconnect wall (lifetime key, offline past its check-in window) --------
+function renderReconnectWall() {
+  const card = mountWall(`
+    <h2 class="license-title">Reconnect to confirm your license</h2>
+    <p class="license-lead">Your Lifetime license doesn't expire — but this device hasn't been able to reach us in a few months, so we need one online check to confirm it. Connect to the internet and check again. Nothing has been lost, and your records are untouched.</p>
+    <div class="license-error" id="license-error" role="alert"></div>
+    <div class="license-actions">
+      <button type="button" class="btn btn-primary" id="license-recheck">Check again</button>
+    </div>
+    <div class="license-secondary">
+      ${portalLinkHtml('Manage my license')}
+      <button type="button" class="license-link" id="license-reset">Use a different key</button>
+    </div>
+  `);
+  wireRenewalWall(card);
 }
 
 // --- Renewal wall (lapsed past grace) --------------------------------------
@@ -124,22 +160,38 @@ function wireRenewalWall(card) {
     recheck.disabled = false;
     recheck.textContent = 'Check again';
     errorSlot.textContent = refreshed
-      ? 'That subscription is still not active. Renew to continue.'
+      ? (refreshed.interval === 'lifetime'
+        ? 'That license is no longer active. If you think that\'s wrong, get in touch — your records are safe either way.'
+        : 'That subscription is still not active. Renew to continue.')
       : "Couldn't reach the licensing server. Check your connection and try again.";
   });
-  card.querySelector('#license-reset').addEventListener('click', () => {
-    resetLicense();
+  // "Use a different key" now also hands this browser's activation slot back, so
+  // switching keys doesn't quietly consume one on the old key forever. Best-effort
+  // by design (data/license.js): the owner is already walled, so a failed release
+  // still drops them to the activation wall rather than trapping them here.
+  const reset = card.querySelector('#license-reset');
+  reset.addEventListener('click', async () => {
+    reset.disabled = true;
+    reset.textContent = 'Releasing…';
+    await resetLicense();
     renderActivationWall();
   });
 }
 
 // --- Grace banner (validated, but past expiry / offline within grace) ------
-function renderGraceBanner() {
+function renderGraceBanner(record) {
   if (document.getElementById('license-grace-banner')) return;
   const bar = document.createElement('div');
   bar.id = 'license-grace-banner';
   bar.className = 'license-grace-banner';
   bar.setAttribute('role', 'status');
+  // A lifetime key in grace needs a reconnect, not a renewal — there is nothing
+  // to buy, and offering it would read as being asked to pay twice.
+  if (isStaleLifetime(record)) {
+    bar.innerHTML = '⚠️ <strong>Reconnect soon</strong> — your Lifetime license is fine, but this device hasn\'t been able to confirm it in a while. Connect to the internet once and it\'s sorted.';
+    document.body.insertBefore(bar, document.body.firstChild);
+    return;
+  }
   const renew = licenseConfig?.checkoutUrl
     ? ` <a href="${esc(licenseConfig.checkoutUrl)}" target="_blank" rel="noopener">Renew now →</a>`
     : '';
@@ -152,10 +204,12 @@ function renderGraceBanner() {
 // then stops). In the 'grace' state it returns true but drops a dismissible-looking
 // banner so the owner knows to reconnect/renew.
 export async function ensureLicensed() {
-  const { state } = await evaluateLicense();
+  const { state, record } = await evaluateLicense();
   if (state === 'valid') return true;
-  if (state === 'grace') { renderGraceBanner(); return true; }
+  if (state === 'grace') { renderGraceBanner(record); return true; }
   if (state === 'unactivated') { renderActivationWall(); return false; }
-  renderRenewalWall(); // 'wall'
+  // 'wall' — a stale lifetime key needs a reconnect, not a renewal.
+  if (isStaleLifetime(record)) renderReconnectWall();
+  else renderRenewalWall();
   return false;
 }

@@ -514,6 +514,8 @@ table.data tr.row-detail .dl-meta { margin: 0; }
   border-radius: var(--radius-sm);
   box-sizing: border-box;
 }
+.license-field { margin-top: 14px; }
+.license-hint { font-weight: 400; color: var(--text-muted); }
 .license-error { color: var(--danger); font-size: 13px; min-height: 18px; margin: 8px 0 0; }
 .license-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
 .license-secondary { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 16px; }
