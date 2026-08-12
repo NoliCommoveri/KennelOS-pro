@@ -25,10 +25,18 @@ export const demoUrl = null;
 // editionFlags.licenseGate is true — which it is ONLY here, in Pro. Lite/Demo
 // export a null config (their import must resolve) but never run the gate.
 export const licenseConfig = {
-  // The Lemon Squeezy checkout URL for buying / renewing Pro, shown on the
-  // activation and renewal walls. Set the store checkout's post-purchase redirect
-  // to this Pro origin so an upgrader lands here to activate + import.
-  checkoutUrl: 'https://kennelos.lemonsqueezy.com/checkout',
+  // Where "Buy Pro →" (activation wall) and "Renew Pro →" (renewal wall) point.
+  // Set the store checkout's post-purchase redirect to this Pro origin so a buyer
+  // lands here to activate + import.
+  //
+  // This is the all-tiers pricing section, NOT a single Lemon Squeezy variant link,
+  // because one slot serves both walls: a direct variant URL is right for at most
+  // one visitor. "Buy Pro" should let a first-time buyer choose monthly / yearly /
+  // lifetime, and "Renew Pro" must not push a lapsed monthly subscriber at a $69.99
+  // one-time purchase (or a lifetime owner at a subscription). The per-variant
+  // checkout links live on that page, one per tier. For a lapsed subscriber who just
+  // wants to manage billing, set `portalUrl` below — that's the better door.
+  checkoutUrl: 'https://kennelos.app/pro.html#pricing',
   // Optional Lemon Squeezy customer-portal URL ("Manage subscription") shown on
   // the renewal wall. Null hides that link. PLACEHOLDER — set at launch if used.
   portalUrl: null,
@@ -69,12 +77,7 @@ export const editionFlags = {
   includeArchivedToggles: true,
   archivedDogLinks: true,
   fullDogStatuses: true,
-  // TEMPORARY: off so pro.kennelos.app is browsable for live testing before a real
-  // Lemon Squeezy store/license exists — with it on, every visitor hits the
-  // activation wall before the app (nav included) ever renders. Flip back to
-  // `true` once the store's live (docs/LAUNCH_CHECKLIST.md §1/§2) — until then
-  // this ships Pro fully unlocked to anyone who visits.
-  licenseGate: false,
+  licenseGate: true, // read by license.js — Pro is the ONLY edition that gates on a key
   // Pro-only feature gates — all on in Pro.
   contactsSection: true,
   studServices: true,
