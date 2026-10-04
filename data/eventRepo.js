@@ -204,6 +204,24 @@ export const HistoryEvent = {
       }
     }
     return out;
+  },
+
+  // Distinct non-blank values of one `details` key across every event of a
+  // type — suggestions for a free-text combobox (e.g. a show's club or judge,
+  // Show Tracking Spec §2.2). Deduped case-insensitively + trimmed; the first
+  // spelling seen wins. Suggestions only, never a validated vocab.
+  async getDetailValues(eventType, key) {
+    const rows = await db.events.where('event_type').equals(eventType).toArray();
+    const seen = new Set();
+    const out = [];
+    for (const e of rows) {
+      const v = String(e.details?.[key] ?? '').trim();
+      const k = v.toLowerCase();
+      if (!v || seen.has(k)) continue;
+      seen.add(k);
+      out.push(v);
+    }
+    return out.sort((a, b) => a.localeCompare(b));
   }
 };
 
