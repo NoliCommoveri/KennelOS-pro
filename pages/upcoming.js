@@ -10,11 +10,12 @@ import { contactRepo } from '../data/contactRepo.js';
 import { createReportView } from '../assets/reportView.js';
 import { subjectInScope } from '../data/kennelScope.js';
 import { fmtDate, esc } from '../assets/ui.js';
-import { EVENT_TYPES, descriptor } from '../data/vocab.js';
-
-const INSTANT_TYPES = EVENT_TYPES.filter((t) => t.duration === 'instant');
+import { EVENT_TYPES, descriptor, enabledEventTypes } from '../data/vocab.js';
 
 async function init() {
+  // The Type filter offers only this edition's types (Lite has no `show`).
+  // Built at call time, not module load, so the edition flags are always read live.
+  const INSTANT_TYPES = enabledEventTypes().filter((t) => t.duration === 'instant');
   const [rows, dogs, pairings, litters, contacts] = await Promise.all([
     HistoryEvent.getUpcoming(),
     dogRepo.getAll({ includeArchived: true }),

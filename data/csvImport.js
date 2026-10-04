@@ -923,15 +923,22 @@ const EVENT_MAPPING = {
       if (!dateRaw) reasons.push('No event_date — cannot form a natural key.');
     } else {
       const candidates = index.byKey.get(key) || [];
+      const sameTitle = (c) => !!title && (c.title || '').trim().toLowerCase() === title.trim().toLowerCase();
       if (candidates.length === 0) {
         status_ = 'create';
+      } else if (eventType === 'show' && candidates.length === 1 && !sameTitle(candidates[0])) {
+        // Show double-headers (Show Tracking Spec §8): two shows at one site on
+        // one day are two events, so for `show` the title always takes part in
+        // the match — a lone candidate with a different title is never silently
+        // overwritten (nor silently duplicated): the user decides.
+        status_ = 'review';
+        match = candidates[0];
+        reasons.push('An existing show event for this dog on this date has a different title — if this is a second show the same day, choose Create; if it\'s the same show retitled, choose Update match.');
       } else if (candidates.length === 1) {
         match = candidates[0];
         status_ = 'update';
       } else {
-        const titleMatches = title
-          ? candidates.filter((c) => (c.title || '').trim().toLowerCase() === title.trim().toLowerCase())
-          : [];
+        const titleMatches = candidates.filter(sameTitle);
         if (titleMatches.length === 1) {
           match = titleMatches[0];
           status_ = 'update';

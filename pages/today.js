@@ -21,18 +21,20 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
-import { EVENT_TYPES, DOG_STATUS, DISPOSITION } from '../data/vocab.js';
+import { EVENT_TYPES, DOG_STATUS, DISPOSITION, SHOW_ENTRY_STATUS } from '../data/vocab.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/editionLinks.js';
 import { CapExceededError } from '../data/repoBase.js';
-import { todayYMD, daysFromToday } from '../data/dateUtils.js';
+import { todayYMD, daysFromToday, addDaysToYMD } from '../data/dateUtils.js';
 
 const DUE_SOON_DAYS = 30; // shared window with the reminder buckets (§3.3)
 
 const errorBox = document.getElementById('page-error');
 const remindersEl = document.getElementById('today-reminders');
 const upcomingEl = document.getElementById('today-upcoming');
+const showsEl = document.getElementById('today-shows');
 const boardEl = document.getElementById('today-board');
 const availableEl = document.getElementById('today-available');
 const nudgesEl = document.getElementById('today-nudges');
@@ -224,6 +226,45 @@ function renderUpcoming(rows) {
   const title = `Due outs &amp; upcoming${rows.length ? ` <span class="muted" style="font-size:14px;">(${rows.length})</span>` : ''}`;
   const body = `<p class="field-hint">Everything scheduled from today onward — drop-offs, vet visits, surgeries.</p>${inner}`;
   upcomingEl.innerHTML = cardShell(title, body, { key: 'upcoming', isEmpty, marginTop: true });
+}
+
+// --- 2b. Upcoming shows (Show Tracking Spec §5.3, Pro-only) -------------------
+// Show events in the next 14 days (not scratched), grouped by show day: dog ·
+// show · location · handler · ring time. Silent when empty. Entries-close alerts
+// need nothing here — they're ordinary reminders via reminder_date. While this
+// card is on, main() keeps show events OUT of the Due outs card, so a show is
+// listed exactly once on Today (decision 8).
+const SHOWS_WINDOW_DAYS = 14;
+
+function renderShows(rows) {
+  if (!showsEl) return;
+  if (!rows.length) { showsEl.innerHTML = ''; return; }
+  const byDate = new Map();
+  for (const ev of rows) {
+    const arr = byDate.get(ev.event_date);
+    if (arr) arr.push(ev); else byDate.set(ev.event_date, [ev]);
+  }
+  const inner = [...byDate.entries()].map(([date, evs]) => `
+    <h3 style="margin:14px 0 0; font-size:14px;">${esc(fmtDate(date))}</h3>
+    <ul class="linked-list" style="margin:2px 0 0; padding:0; list-style:none;">
+      ${evs.map((ev) => {
+        const det = ev.details || {};
+        const handler = ev.related_contact_id ? ctx.contactsById.get(ev.related_contact_id)?.name : '';
+        const meta = [det.location, handler ? `Handler: ${handler}` : '', [det.ring && `Ring ${det.ring}`, det.ring_time].filter(Boolean).join(' · ')]
+          .filter(Boolean).map(esc).join(' · ');
+        const openHref = subjectHref(ev, `&openEvent=${encodeURIComponent(ev.id)}`);
+        return `<li class="row-between" style="padding:9px 0; border-top:1px solid var(--border);">
+          <div style="min-width:0;">
+            <div><a href="${subjectHref(ev)}"><strong>${esc(subjectLabel(ev))}</strong></a> — ${esc(det.show_name || ev.title || '')} ${det.entry_status ? badge(SHOW_ENTRY_STATUS, det.entry_status) : ''}</div>
+            ${meta ? `<div class="muted" style="font-size:13px;">${meta}</div>` : ''}
+          </div>
+          <a class="btn btn-sm" href="${esc(openHref)}">Open →</a>
+        </li>`;
+      }).join('')}
+    </ul>`).join('');
+  const title = `Upcoming shows <span class="muted" style="font-size:14px;">(${rows.length})</span>`;
+  const body = `<p class="field-hint">Show entries in the next ${SHOWS_WINDOW_DAYS} days. <a href="shows.html">All shows →</a></p>${inner}`;
+  showsEl.innerHTML = cardShell(title, body, { key: 'shows', isEmpty: false, marginTop: true });
 }
 
 // --- 3. Who's away (Location / Status Board) --------------------------------
@@ -435,7 +476,17 @@ async function main() {
   // from the data main() already loaded.
   const asyncCards = Promise.all([renderNudges(), renderReminders()]);
   renderAvailable(scopedDogs, scopedLitters);
-  renderUpcoming(upcoming.filter(eventInScope));
+  const scopedUpcoming = upcoming.filter(eventInScope);
+  if (editionFlags.shows) {
+    // Shows get their own card and leave the Due outs card (decision 8). The
+    // filter is here, not in getUpcoming(), so the Upcoming page still lists them.
+    const horizon = addDaysToYMD(todayYMD(), SHOWS_WINDOW_DAYS);
+    renderShows(scopedUpcoming.filter((e) => e.event_type === 'show'
+      && e.event_date <= horizon && e.details?.entry_status !== 'scratched'));
+    renderUpcoming(scopedUpcoming.filter((e) => e.event_type !== 'show'));
+  } else {
+    renderUpcoming(scopedUpcoming);
+  }
   // boardRows arrive already scoped — getAwayBoardRows() owns that, so board.js,
   // today.js, and dashboard.js can't disagree about who is away.
   renderBoard(boardRows);

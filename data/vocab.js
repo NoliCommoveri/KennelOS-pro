@@ -1,6 +1,11 @@
 // vocab.js — controlled vocabularies (the enums from the data model) in one place,
 // each value carrying a human label and a badge color class (assets/app.css).
 // Dropdowns and badges both read from here so they never drift apart.
+//
+// The one edition-aware piece is the event-type list (enabledEventTypes /
+// eventTypesFor below): a type carrying `editionFlag` exists only when that flag
+// is on in the edition's config, so every type picker drops it in one place.
+import { editionFlags } from './editionConfig.js';
 
 export const SEX = [
   { value: 'male',    label: 'Male',    badge: 'badge-blue' },
@@ -114,6 +119,9 @@ export const CONTACT_TYPE = [
   { value: 'stud_referrer',  label: 'Stud referrer',  badge: 'badge-amber' },
   { value: 'co_owner',       label: 'Co-owner',       badge: 'badge-neutral' },
   { value: 'buyer',          label: 'Buyer',          badge: 'badge-blue' },
+  // Tagged automatically when a contact is picked as a `show` event's handler
+  // (Show Tracking Spec §2.2/§5.6). Harmless in Lite (no Contacts pages there).
+  { value: 'handler',        label: 'Handler',        badge: 'badge-purple' },
   { value: 'other',          label: 'Other',          badge: 'badge-gray' }
 ];
 
@@ -201,7 +209,8 @@ export function descriptor(vocab, value) {
 // Addendum §C3) — a plain string in `details`, never a validated vocab, so a
 // combobox surfaces these as suggestions without blocking free text.
 export const BOARDING_REASON_SUGGESTIONS = [
-  'Stud service', 'Co-owner rotation', 'Foster', 'Grow-out', 'Owner travel', 'Whelp assist', 'Other'
+  'Stud service', 'Co-owner rotation', 'Foster', 'Grow-out', 'Owner travel', 'Whelp assist',
+  'With handler / show circuit', 'Other'
 ];
 
 // Suggest-not-enforce starter set for a recorded COI's `method` (Stage 5, Build
@@ -246,6 +255,56 @@ export const ABNORMALITY_TYPES = [
   'Open fontanelle', 'Cryptorchidism', 'Other'
 ];
 
+// --- Show tracking (Show Tracking Spec, Pro) ---------------------------------
+// The `show` event type's vocabularies. One event per dog per show day; the
+// entry lifecycle is a status on that one record, and points/majors/titles are
+// DERIVED from the events (data/showPoints.js) — never stored on the Dog.
+
+// Entry lifecycle (§3). Not a locked state machine — moves any direction, same
+// posture as CONTRACT_STATUS. Only `shown` events count toward points.
+export const SHOW_ENTRY_STATUS = [
+  { value: 'planned',   label: 'Planned',      badge: 'badge-gray' },
+  { value: 'entered',   label: 'Entered',      badge: 'badge-blue' },
+  { value: 'shown',     label: 'Shown',        badge: 'badge-green' },
+  { value: 'absent',    label: 'Absent',       badge: 'badge-amber' },
+  { value: 'scratched', label: 'Scratched',    badge: 'badge-gray' },
+  { value: 'excused',   label: 'Excused / DQ', badge: 'badge-red' }
+];
+
+// Enforced organization list (§4.1). AKC first; UKC/CKC/FCI arrive later as
+// new rows here plus their TITLE_TRACKS rows — no structural change.
+export const SHOW_ORGANIZATIONS = [
+  { value: 'AKC',   label: 'AKC' },
+  { value: 'other', label: 'Other' }
+];
+
+// Requirements per title track (§4.1). The points engine reads these; it never
+// hardcodes a number. A major is a win with points >= majorMin — derived, never
+// a stored flag. `requires` = a title the dog must already hold, and only wins
+// dated AFTER it count (AKC: GCH points only after the dog finishes CH).
+export const TITLE_TRACKS = [
+  { value: 'akc_ch',  label: 'AKC Champion (CH)',        organization: 'AKC', title: 'CH',
+    points: 15, majorMin: 3, majors: 2, distinctMajorJudges: 2, distinctJudges: 3,
+    perShowMax: 5 },
+  { value: 'akc_gch', label: 'AKC Grand Champion (GCH)', organization: 'AKC', title: 'GCH',
+    points: 25, majorMin: 3, majors: 3, distinctMajorJudges: 3, distinctJudges: 4,
+    perShowMax: 5, championDefeats: 3, requires: 'akc_ch' }
+];
+
+// Suggest-not-enforce lists for the show form's Class and Award comboboxes —
+// plain strings in `details`, never validated, same posture as
+// BOARDING_REASON_SUGGESTIONS.
+export const AKC_SHOW_CLASSES = [
+  'Puppy 6–9 Months', 'Puppy 9–12 Months', '12–18 Months', 'Novice',
+  'Bred-by-Exhibitor', 'Amateur-Owner-Handler', 'American-Bred', 'Open',
+  'Best of Breed', 'Veterans'
+];
+export const AKC_SHOW_AWARDS = [
+  '1st', '2nd', '3rd', '4th', 'WD', 'WB', 'RWD', 'RWB', 'BOW', 'BOB', 'BOS',
+  'Select Dog', 'Select Bitch', 'BOB Owner-Handler',
+  'Group 1', 'Group 2', 'Group 3', 'Group 4', 'BIS', 'RBIS'
+];
+
 // --- Event type catalog (Data Model doc §5.2; Stage4.5 Addendum §C3/D1) ----
 // Each type carries a badge color and the type-specific `details` fields shown
 // as a short form (Build Brief B1: one small form per event_type, not a generic
@@ -265,9 +324,24 @@ export const ABNORMALITY_TYPES = [
 // field inside `details` (details.location stays a plain string; only a real
 // FK belongs at the top level).
 //
+// `relatedContact` may also be a STRING, used as the picker's label (`show`
+// labels it "Handler"); `true` keeps the generic "Related contact" label.
+//
+// `editionFlag` (optional): the type exists only when `editionFlags[editionFlag]`
+// is on — enabledEventTypes()/eventTypesFor() drop it otherwise, so every type
+// picker (event form, CSV import, Upcoming's filter, the assistant) loses it in
+// one place. EVENT_TYPES itself stays complete, so descriptor()/badge lookups
+// still resolve such an event if one arrives in a backup from another edition.
+//
+// `titleFrom` (optional): a details key whose value auto-fills the title while
+// the user hasn't typed their own (eventForm.js).
+//
 // Field `type` is one of: text | textarea | date | number (optional `step`) |
 // combobox (a free-text input with suggestions — suggest-not-enforce, never a
-// validated enum) | select (enforced choice from `options[]`).
+// validated enum) | select (enforced choice from `options[]`). Options are
+// plain strings or { value, label } vocab objects (the form stores `value` and
+// shows `label`). A field may carry `default`, applied only when creating an
+// event whose draft has no value for that key (a prefill wins).
 export const EVENT_TYPES = [
   // Acquisition — an option for the first event on a newly-bought dog's
   // timeline, never auto-created. `source` is a plain free-text field (the
@@ -357,13 +431,42 @@ export const EVENT_TYPES = [
       { key: 'location', label: 'Location', type: 'text' },
       { key: 'notes', label: 'Notes', type: 'textarea' }
     ] },
+  // Show (Show Tracking Spec §2, Pro-only via `editionFlag: 'shows'`) — one
+  // event per dog per show day. Instant, so upcoming shows land on the Upcoming
+  // page with no extra code. The handler is the top-level related_contact_id;
+  // reminder_date is the "entries close" date. Judge/club are free text with
+  // suggestions from values already logged (eventForm.js LOGGED_VALUE_FIELDS).
+  { value: 'show',               label: 'Show',               badge: 'badge-purple',  subjects: ['dog'], duration: 'instant',
+    relatedContact: 'Handler', editionFlag: 'shows', titleFrom: 'show_name',
+    fields: [
+      { key: 'entry_status', label: 'Entry status', type: 'select', options: SHOW_ENTRY_STATUS, default: 'planned' },
+      { key: 'show_name', label: 'Show', type: 'text' },
+      { key: 'club', label: 'Club', type: 'combobox' },
+      { key: 'organization', label: 'Organization', type: 'select', options: SHOW_ORGANIZATIONS, default: 'AKC' },
+      { key: 'location', label: 'Location', type: 'text' },
+      { key: 'ring', label: 'Ring', type: 'text' },
+      { key: 'ring_time', label: 'Ring time', type: 'text' },
+      { key: 'judge', label: 'Judge', type: 'combobox' },
+      { key: 'class', label: 'Class', type: 'combobox', options: AKC_SHOW_CLASSES },
+      { key: 'placement', label: 'Award', type: 'combobox', options: AKC_SHOW_AWARDS },
+      { key: 'points', label: 'Points', type: 'number' },
+      { key: 'points_toward', label: 'Points toward', type: 'select', options: TITLE_TRACKS },
+      { key: 'defeated_champion', label: 'Defeated a champion of record?', type: 'select', options: ['Yes', 'No'] }
+    ] },
   { value: 'note',               label: 'Note',               badge: 'badge-gray',    subjects: ['dog', 'pairing', 'litter'], duration: 'instant',
     fields: [] }
 ];
 
-// Event types loggable against a given subject_type.
+// The event types this edition offers: EVENT_TYPES minus any type whose
+// `editionFlag` is off. Flags are read at CALL time (never cached in a
+// top-level const), so module load order can't matter.
+export function enabledEventTypes() {
+  return EVENT_TYPES.filter((t) => !t.editionFlag || editionFlags[t.editionFlag]);
+}
+
+// Event types loggable against a given subject_type (edition-filtered).
 export function eventTypesFor(subjectType) {
-  return EVENT_TYPES.filter((t) => t.subjects.includes(subjectType));
+  return enabledEventTypes().filter((t) => t.subjects.includes(subjectType));
 }
 
 // The KennelAssistant allow-list (§26): the event types the helper app can SEE
@@ -390,6 +493,7 @@ export const EXPENSE_CATEGORIES = [
   { value: 'dog_purchase', label: 'New dog purchase',   badge: 'badge-red' },
   { value: 'marketing',    label: 'Marketing',          badge: 'badge-blue' },
   { value: 'insurance',    label: 'Insurance',          badge: 'badge-neutral' },
+  { value: 'show',         label: 'Shows & handling',   badge: 'badge-purple' },
   { value: 'other',        label: 'Other',              badge: 'badge-gray' }
 ];
 
@@ -457,7 +561,8 @@ const EVENT_TYPE_EXPENSE_CATEGORY = {
   vet_visit: 'veterinary', injury: 'veterinary', ultrasound: 'veterinary',
   genetic_test: 'testing', ofa_pennhip: 'testing', breed_specific_test: 'testing',
   progesterone_test: 'testing',
-  boarding: 'boarding'
+  boarding: 'boarding',
+  show: 'show'
 };
 
 export function defaultExpenseCategoryFor(eventType) {
