@@ -176,14 +176,9 @@ export async function seedSampleData() {
   const hugo = await contactRepo.create({
     name: 'Hugo Marsh', contact_type: ['breeder'], phone: '555-0113', address: 'Keene, NH'
   });
-  // Lauren — Birch's professional handler (Show Tracking Spec §9): the
-  // related_contact on his show entries, tagged with the `handler` role.
-  const lauren = await contactRepo.create({
-    name: 'Lauren Pike', contact_type: ['handler'], phone: '555-0114', address: 'Northampton, MA'
-  });
   manifest.contacts.push(
     patricia.id, dana.id, sam.id, tessa.id, marcus.id, priya.id, owen.id, ellen.id,
-    nora.id, jamal.id, grace.id, rex.id, hugo.id, lauren.id
+    nora.id, jamal.id, grace.id, rex.id, hugo.id
   );
 
   // Dogs — ancestors first so each generation can reference the last.
@@ -872,42 +867,9 @@ export async function seedSampleData() {
       details: { total_born: 3, live_born: 3, notes: 'Three healthy pups; Ivy an attentive first-time dam.' } }
   ];
 
-  // Show tracking (Show Tracking Spec §9, Pro/Demo — Lite seeds from its own
-  // tour package). Birch, a young owned male, is working toward his AKC CH:
-  // 7 past results (one Reserve with no points) totalling 12 points with ONE
-  // major across 3 judges, so his Show Record card shows real gaps ("3 more
-  // points, 1 more major under a new judge"). Then a cluster weekend inside
-  // Today's 14-day window, handled by Lauren: Saturday `entered` (with its entry
-  // fee captured via the event Cost link, below), Sunday still `planned` with
-  // entries closing in 3 days — a live reminder and an amber flag on Shows.
-  const CLUB = 'Thistle Valley Kennel Club';
-  const VENUE = 'Valley Expo Center, West Springfield, MA';
-  const birchShow = (days, showName, judge, cls, placement, points, extra = {}) => ({
-    subject_id: birch.id, event_type: 'show', event_date: daysFromToday(days), title: showName,
-    related_contact_id: lauren.id,
-    details: {
-      entry_status: 'shown', show_name: showName, club: CLUB, organization: 'AKC', location: VENUE,
-      judge, class: cls, placement, points, points_toward: 'akc_ch', defeated_champion: 'No', ...extra
-    }
-  });
-  dogEvents.push(
-    birchShow(-130, 'Thistle Valley KC — Show 1', 'Mrs. Helen Archer', 'Puppy 9–12 Months', 'WD', 2),
-    birchShow(-129, 'Thistle Valley KC — Show 2', 'Mr. David Ostrowski', 'Puppy 9–12 Months', 'RWD', 0),
-    birchShow(-101, 'Granite State KC', 'Mr. David Ostrowski', 'Puppy 9–12 Months', 'WD', 1),
-    birchShow(-72, 'Merrimack Valley KC', 'Ms. Carla Benitez', '12–18 Months', 'BOW', 3),
-    birchShow(-58, 'Green Mountain Terrier Club', 'Mrs. Helen Archer', '12–18 Months', 'WD', 2),
-    birchShow(-37, 'Seacoast KC — Show 1', 'Mr. David Ostrowski', '12–18 Months', 'WD', 2),
-    birchShow(-36, 'Seacoast KC — Show 2', 'Ms. Carla Benitez', '12–18 Months', 'BOW', 2),
-    { ...birchShow(9, 'Thistle Valley KC — Show 1', '', '12–18 Months', '', '', { entry_status: 'entered', judge: 'Mrs. Joan Whitaker', ring: '4', ring_time: '9:30 AM' }) },
-    { ...birchShow(10, 'Thistle Valley KC — Show 2', '', '12–18 Months', '', '', { entry_status: 'planned', ring: '4', ring_time: '11:15 AM' }),
-      reminder_date: daysFromToday(3) }
-  );
-
-  let birchEntryShow = null;
   for (const e of dogEvents) {
     const saved = await HistoryEvent.create({ subject_type: 'dog', ...e });
     manifest.events.push(saved.id);
-    if (e.event_type === 'show' && e.details.entry_status === 'entered') birchEntryShow = saved;
   }
   for (const e of pairingEvents) {
     const saved = await HistoryEvent.create({ subject_type: 'pairing', ...e });
@@ -944,9 +906,6 @@ export async function seedSampleData() {
     // dog_purchase (Thread I/G6/§7) — Diesel's acquisition cost, category captured
     // from his acquisition event's Cost field.
     { subject_type: 'dog', subject_id: diesel.id, amount: 2500, category: 'dog_purchase', expense_date: '2022-02-14', vendor: 'Ridgeline Boxers', notes: 'Purchase of Diesel' },
-    // Birch's entry fee for the upcoming Saturday show — a `show` ("Shows &
-    // handling") expense captured from the show event's Cost (Show Tracking §9).
-    { event_id: birchEntryShow.id, subject_type: 'dog', subject_id: birch.id, amount: 38, category: 'show', expense_date: daysFromToday(-5), vendor: 'Thistle Valley Kennel Club', notes: 'Entry fee — Show 1' },
     // Captured-from-event row (links back to the vet visit above).
     { event_id: vetVisit.id, subject_type: 'dog', subject_id: juniper.id, amount: 145, category: 'veterinary', expense_date: daysFromToday(-20), vendor: 'Green Mountain Vet', notes: 'Exam + medication' },
     // Foster-in ledger (guide §21): the split payout to the owner is a real
@@ -982,7 +941,7 @@ export async function seedSampleData() {
     thornfield: thornfield.id, meadowRidge: meadowRidge.id, briarHollow: briarHollow.id,
     priya: priya.id, owen: owen.id, ellen: ellen.id, jamal: jamal.id, dana: dana.id,
     tessa: tessa.id, grace: grace.id, rex: rex.id, nora: nora.id, marcus: marcus.id,
-    sam: sam.id, hugo: hugo.id, patricia: patricia.id, renee: renee.id, lauren: lauren.id,
+    sam: sam.id, hugo: hugo.id, patricia: patricia.id, renee: renee.id,
     summerLitter: litter.id, springLitter: litter2.id, autumnLitter: autumnLitter.id, winterLitter: expectedLitter.id,
     marigold: marigold.id, bramble: bramblePup.id, sorrel: sorrelPup.id, fosterLitter: fosterLitter.id, fosterContract: fosterContract.id,
     cassius: cassius.id, opal: opal.id, maple: maple.id, briarLitter: briarLitter.id,

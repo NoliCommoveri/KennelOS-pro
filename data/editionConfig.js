@@ -93,7 +93,6 @@ export const editionFlags = {
   externalOwnership: true,
   assistant: true,
   feedingSchedule: true,
-  shows: true,             // Show tracking (Show Tracking Spec §7)
   // Multi-kennel scope (Multi-Kennel Scope Spec §12) — Pro is the edition that
   // gets more than one own kennel and the active-kennel switcher.
   multiKennel: true,
@@ -112,7 +111,6 @@ export const navItems = [
 
 export const moreItems = [
   { label: 'Reports',       path: 'pages/reports.html' },
-  { label: 'Shows',         path: 'pages/shows.html' },
   { label: 'Documents',     path: 'pages/documents.html' },
   { label: 'Import/Export', path: 'pages/import-export.html' },
 ];

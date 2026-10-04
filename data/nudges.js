@@ -11,12 +11,10 @@
 // Nothing here mutates a record on its own; every action is a user-confirmed
 // button click.
 //
-// Nine rules (End-State guide §19), each producing zero or more nudges:
+// Eight rules (End-State guide §19), each producing zero or more nudges:
 // stud-service status (§4.2), promote-lifecycle (§4.3), heat→pairing (§4.5),
-// stud→pairing (§4.7), the overdue-pairing rule, three litter-lifecycle
-// rules (litter→sold / reopen / close) grouped over each litter's roster below,
-// and the Pro-only show-track-complete → "log the title?" rule (Show Tracking
-// Spec §5.4, gated on editionFlags.shows).
+// stud→pairing (§4.7), the overdue-pairing rule, and three litter-lifecycle
+// rules (litter→sold / reopen / close) grouped over each litter's roster below.
 //   { key, title, detail, subjectHref, actions: [{ label, run: async () => {} }] }
 import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
@@ -28,8 +26,6 @@ import { eventRepo } from './eventRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from './kennelScope.js';
 import { todayYMD, monthsBetween } from './dateUtils.js';
 import { descriptor, PAIRING_STATUS, LITTER_STATUS } from './vocab.js';
-import { editionFlags } from './editionConfig.js';
-import { showRecordFrom } from './showPoints.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
@@ -289,42 +285,6 @@ export async function computeNudges() {
           subjectHref: href,
           actions: [
             { label: 'Close litter', run: async () => { await litterRepo.update(l.id, { status: 'closed' }); } }
-          ]
-        });
-      }
-    }
-  }
-
-  // Show Tracking Spec §5.4 — a title track the dog's results complete, with no
-  // matching title_earned logged yet → suggest logging it. Decide-not-auto: the
-  // action only opens a prefilled event form on the dog's page. Auto-dismisses
-  // once the title_earned event exists (the event is the done-signal). Pro-only.
-  if (editionFlags.shows) {
-    const eventsByDog = new Map();
-    for (const e of events) {
-      if (e.subject_type !== 'dog' || (e.event_type !== 'show' && e.event_type !== 'title_earned')) continue;
-      const arr = eventsByDog.get(e.subject_id);
-      if (arr) arr.push(e); else eventsByDog.set(e.subject_id, [e]);
-    }
-    for (const d of scopedDogs) {
-      const dogEvents = eventsByDog.get(d.id);
-      if (!dogEvents?.some((e) => e.event_type === 'show')) continue;
-      for (const { track, progress, titleEvent } of showRecordFrom(dogEvents).tracks) {
-        if (!progress.complete || titleEvent) continue;
-        const qs = new URLSearchParams({
-          id: d.id,
-          logEvent: 'title_earned',
-          logTitle: track.label,
-          logDetails: JSON.stringify({ title_abbreviation: track.title, organization: track.organization })
-        });
-        if (progress.completedOn) qs.set('logDate', progress.completedOn);
-        nudges.push({
-          key: `show-title:${d.id}:${track.value}`,
-          title: `${d.call_name} has finished the ${track.title} — log the title?`,
-          detail: `${track.label} requirements met${progress.completedOn ? ` on ${progress.completedOn}` : ''}.`,
-          subjectHref: `dog.html?id=${encodeURIComponent(d.id)}`,
-          actions: [
-            { label: 'Log title', run: async () => { location.href = `dog.html?${qs.toString()}`; } }
           ]
         });
       }

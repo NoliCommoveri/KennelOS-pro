@@ -6,52 +6,17 @@
 // medication) also shows the plain `event_end_date` field, and a
 // `relatedContact: true` type (boarding, placement) shows a top-level Contact
 // picker — the canonical events.related_contact_id FK, never a `details` field.
-// A string `relatedContact` (show: 'Handler') is the picker's label.
-//
-// Generic descriptor extensions (Show Tracking Spec §2.4) — none is show-specific
-// in the code: select/combobox options may be { value, label } vocab objects;
-// a field `default` seeds a NEW event's empty detail; `titleFrom` auto-fills the
-// title from a details field until the user types their own; and
-// `prefill.event_date` seeds a new event's date.
 import { HistoryEvent } from '../data/eventRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { eventTypesFor, descriptor, EVENT_TYPES, EXPENSE_CATEGORIES, defaultExpenseCategoryFor, TITLE_TRACKS } from '../data/vocab.js';
+import { eventTypesFor, descriptor, EVENT_TYPES, EXPENSE_CATEGORIES, defaultExpenseCategoryFor } from '../data/vocab.js';
 import { esc, todayYMD, param, confirmModal } from './ui.js';
 import { attachNewContactButton } from './contactPicker.js';
 
 // Which combobox field on each test-bearing type draws from the shared test
 // vocabulary rather than a static options list (Test Planning Addendum §3).
 const TEST_VOCAB_FIELDS = { genetic_test: 'panel_name', breed_specific_test: 'test_name', ofa_pennhip: 'joint' };
-
-// Combobox fields whose suggestions are the distinct values already logged on
-// events of the same type (Show Tracking Spec §2.2: a show's club and judge).
-// Free text either way — the suggestions never constrain what's typed.
-const LOGGED_VALUE_FIELDS = { show: ['club', 'judge'] };
-
-// The contact role a type's related contact is tagged with on save (Show
-// Tracking Spec §2.2): picking someone as a show's handler makes them a
-// Handler. contactRepo.ensureType is a no-op when the role is already there.
-const RELATED_CONTACT_ROLE = { show: 'handler' };
-
-// A select/combobox option is a plain string or a { value, label } vocab object.
-const optValue = (o) => (o && typeof o === 'object' ? o.value : o);
-const optLabel = (o) => (o && typeof o === 'object' ? o.label : o);
-
-// Show-specific soft checks (Show Tracking Spec §2.3) — page-level confirms,
-// never repo blocks. Returns human-readable issues; empty when nothing's off.
-function showSoftIssues(details, eventDate) {
-  const issues = [];
-  const pts = details.points === '' || details.points == null ? null : Number(details.points);
-  const track = TITLE_TRACKS.find((t) => t.value === details.points_toward);
-  const perShowMax = track?.perShowMax ?? 5;
-  if (pts != null && pts > perShowMax) issues.push(`${pts} points is more than the ${perShowMax} per show ${track ? track.organization : 'AKC'} allows — only ${perShowMax} will count.`);
-  if (pts > 0 && details.entry_status !== 'shown') issues.push('Points are recorded but the entry status isn\'t "Shown" — they won\'t count until it is.');
-  if ((details.placement || pts != null) && eventDate && eventDate > todayYMD()) issues.push('Results are filled in for a show that hasn\'t happened yet.');
-  if (pts > 0 && !details.points_toward) issues.push('Points are recorded with no "Points toward" title — they won\'t count toward any track.');
-  return issues;
-}
 
 // Open the modal. opts: { subjectType, subjectId, event?, prefill?, onSaved, onCancel? }
 // If `event` is provided we're editing; otherwise creating. `prefill` seeds a
@@ -155,19 +120,10 @@ export async function openEventForm(opts) {
     }
   }
 
-  // Logged-value suggestions (club/judge…) for the types that use them, keyed
-  // `${type}.${key}`. Loaded once up front, like the test vocabulary.
-  const loggedValues = new Map();
-  await Promise.all(Object.entries(LOGGED_VALUE_FIELDS)
-    .filter(([type]) => types.some((t) => t.value === type))
-    .flatMap(([type, keys]) => keys.map(async (key) => {
-      loggedValues.set(`${type}.${key}`, await HistoryEvent.getDetailValues(type, key));
-    })));
-
   // Working state
   const draft = {
     event_type: event?.event_type || prefill?.event_type || types[0].value,
-    event_date: event?.event_date || prefill?.event_date || todayYMD(),
+    event_date: event?.event_date || todayYMD(),
     event_end_date: event?.event_end_date || '',
     related_contact_id: event?.related_contact_id || prefill?.related_contact_id || '',
     title: event?.title || prefill?.title || '',
@@ -181,21 +137,6 @@ export async function openEventForm(opts) {
     // like time_of_day — stay shared across every target). Empty otherwise.
     perTargetDetails: {}
   };
-
-  // Field defaults (e.g. a show's entry_status 'planned') seed a NEW event only,
-  // and only where the draft has no value — a prefill always wins.
-  function applyFieldDefaults() {
-    if (isEdit) return;
-    for (const f of descriptor(EVENT_TYPES, draft.event_type).fields || []) {
-      if (f.default !== undefined && (draft.details[f.key] ?? '') === '') draft.details[f.key] = f.default;
-    }
-  }
-  applyFieldDefaults();
-
-  // `titleFrom` auto-title: the last value the form wrote into the title from
-  // the source field. While the title is empty, the type label, or this value,
-  // typing in the source field rewrites it; a hand-edited title is left alone.
-  let lastAutoTitle = draft.details[descriptor(EVENT_TYPES, draft.event_type).titleFrom] ?? null;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -217,13 +158,11 @@ export async function openEventForm(opts) {
     if (f.type === 'combobox') {
       const isTestField = TEST_VOCAB_FIELDS[typeDef.value] === f.key;
       const dlId = `ef-dl-${f.key}`;
-      const logged = loggedValues.get(`${typeDef.value}.${f.key}`);
-      const source = isTestField ? testVocabulary : logged || f.options || [];
-      const opts = source.map((o) => `<option value="${esc(optValue(o))}">${optLabel(o) !== optValue(o) ? esc(optLabel(o)) : ''}</option>`).join('');
+      const opts = (isTestField ? testVocabulary : (f.options || [])).map((o) => `<option value="${esc(o)}"></option>`).join('');
       return `<div class="field"><label>${esc(f.label)}</label><input data-detail="${esc(f.key)}" type="text" list="${dlId}" value="${esc(v)}"><datalist id="${dlId}">${opts}</datalist></div>`;
     }
     if (f.type === 'select') {
-      const opts = (f.options || []).map((o) => `<option value="${esc(optValue(o))}"${optValue(o) === v ? ' selected' : ''}>${esc(optLabel(o))}</option>`).join('');
+      const opts = (f.options || []).map((o) => `<option value="${esc(o)}"${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('');
       return `<div class="field"><label>${esc(f.label)}</label><select data-detail="${esc(f.key)}"><option value="">— select —</option>${opts}</select></div>`;
     }
     const inputType = f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text';
@@ -265,11 +204,7 @@ export async function openEventForm(opts) {
 
   function render() {
     const typeDef = descriptor(EVENT_TYPES, draft.event_type);
-    // Editing an event whose type this edition doesn't offer (e.g. a Pro `show`
-    // restored into Lite) keeps its own type in the picker rather than
-    // silently displaying the first option.
-    const pickable = types.some((t) => t.value === draft.event_type) ? types : [...types, typeDef];
-    const typeOptions = pickable.map((t) =>
+    const typeOptions = types.map((t) =>
       `<option value="${esc(t.value)}"${t.value === draft.event_type ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
     const isSpan = typeDef.duration === 'span';
     modal.innerHTML = `
@@ -294,7 +229,7 @@ export async function openEventForm(opts) {
           <span class="field-hint">Leave blank for an open-ended/ongoing stay.</span></div>` : ''}
         <div class="field field-wide"><label>Title <span class="req">*</span></label>
           <input id="ef-title" type="text" value="${esc(draft.title)}" placeholder="Short summary shown in the timeline"></div>
-        ${typeDef.relatedContact ? `<div class="field"><label>${esc(typeof typeDef.relatedContact === 'string' ? typeDef.relatedContact : 'Related contact')}</label>
+        ${typeDef.relatedContact ? `<div class="field"><label>Related contact</label>
           <select id="ef-related-contact">${contactOptions(draft.related_contact_id)}</select>
           <span class="field-hint">The person or kennel on the other side of this event.</span></div>` : ''}
       </div>
@@ -325,19 +260,8 @@ export async function openEventForm(opts) {
       // Follow the new type's suggested cost category, unless the user has
       // deliberately picked a different one (then leave their choice alone).
       if (draft.expenseCategory === prevDefault) draft.expenseCategory = defaultExpenseCategoryFor(draft.event_type);
-      applyFieldDefaults();
       render();
     });
-    if (typeDef.titleFrom) {
-      const srcEl = modal.querySelector(`[data-detail="${typeDef.titleFrom}"]`);
-      const titleEl = modal.querySelector('#ef-title');
-      srcEl?.addEventListener('input', () => {
-        const cur = titleEl.value.trim();
-        if (cur && cur !== typeDef.label && cur !== lastAutoTitle) return; // hand-edited — leave it
-        lastAutoTitle = srcEl.value.trim();
-        titleEl.value = lastAutoTitle || typeDef.label;
-      });
-    }
     const relatedContactEl = modal.querySelector('#ef-related-contact');
     if (relatedContactEl) {
       attachNewContactButton(relatedContactEl, {
@@ -445,18 +369,6 @@ export async function openEventForm(opts) {
         if (!ok) return;
       }
     }
-    // Soft checks on a show's results (points cap, status, future date, track).
-    if (draft.event_type === 'show') {
-      const issues = showSoftIssues(draft.details, draft.event_date);
-      if (issues.length) {
-        const ok = await confirmModal({
-          title: 'Check this show result',
-          message: `${issues.map((m) => `• ${m}`).join('\n')}\n\nSave anyway?`,
-          confirmLabel: 'Save anyway', cancelLabel: 'Go back'
-        });
-        if (!ok) return;
-      }
-    }
     const basePayload = {
       subject_type: subjectType,
       event_type: draft.event_type,
@@ -493,10 +405,6 @@ export async function openEventForm(opts) {
           : await HistoryEvent.create(payload);
         await syncLinkedExpense(saved, subjectType, subjectId, amount, draft, linkedExpense);
       }
-      // Tag the related contact with this type's role (a show's handler), for a
-      // contact picked from the list as well as one created inline.
-      const role = RELATED_CONTACT_ROLE[draft.event_type];
-      if (role && basePayload.related_contact_id) await contactRepo.ensureType(basePayload.related_contact_id, role);
       close();
       onSaved?.(saved);
     } catch (e) {
@@ -547,11 +455,6 @@ export async function openEventForm(opts) {
 // a fresh event of that type (a reminder — nudging the NEXT occurrence, not
 // re-editing the one that fired it). Call once, after the subject page has
 // loaded its record; a no-op if neither param is present.
-//
-// A `logEvent` link may also carry `logDate=<YYYY-MM-DD>`, `logTitle=<text>` and
-// `logDetails=<URL-encoded JSON object>` to prefill the new event's date, title
-// and details (the "Log the title?" nudge — Show Tracking Spec §5.4). Only
-// string/number detail values are taken; a malformed `logDetails` is ignored.
 export async function openEventFromQuery(subjectType, subjectId, onSaved) {
   const openId = param('openEvent');
   if (openId) {
@@ -561,17 +464,6 @@ export async function openEventFromQuery(subjectType, subjectId, onSaved) {
   }
   const logType = param('logEvent');
   if (logType) {
-    const prefill = { event_type: logType };
-    const date = param('logDate');
-    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) prefill.event_date = date;
-    if (param('logTitle')) prefill.title = param('logTitle');
-    try {
-      const raw = JSON.parse(param('logDetails') || 'null');
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        prefill.details = Object.fromEntries(Object.entries(raw)
-          .filter(([, v]) => typeof v === 'string' || typeof v === 'number'));
-      }
-    } catch { /* malformed logDetails — open without detail prefill */ }
-    openEventForm({ subjectType, subjectId, prefill, onSaved });
+    openEventForm({ subjectType, subjectId, prefill: { event_type: logType }, onSaved });
   }
 }
