@@ -9,6 +9,13 @@
 //     value — plain-text accessor (also the CSV value unless `csv` overrides).
 //     badge — if set, the cell renders value() as a colored badge for that vocab.
 //     csv   — override the exported value (defaults to value()).
+//     tone  — optional (r)=>badgeClass|null: renders value() inside a badge of that
+//             class for this row only (e.g. an amber/red "entries close" date).
+//             The class comes from page code, never user data; the text is escaped.
+//
+// `groupBy` (optional) — (r)=>string: when consecutive visible rows change group,
+// a full-width group header row (escaped text) is inserted. Rows aren't re-sorted,
+// so the caller's load() order decides the grouping. CSV export is unaffected.
 import Papa from '../vendor/papaparse.min.mjs';
 import { esc, badge as badgeHtml } from './ui.js';
 import { mountScopeChip } from './kennelScopeUI.js';
@@ -42,7 +49,8 @@ export function createReportView(opts) {
                                   // Applied before search/filters, so the CSV export
                                   // exports the scoped set too.
     csvFilename = 'report.csv',
-    emptyText = 'No matching records.'
+    emptyText = 'No matching records.',
+    groupBy = null
   } = opts;
 
   let all = [];
@@ -122,6 +130,8 @@ export function createReportView(opts) {
   function cellHtml(c, r) {
     const v = c.value(r);
     if (c.badge && v) return badgeHtml(c.badge, v);
+    const tone = c.tone && v ? c.tone(r) : null;
+    if (tone) return `<span class="badge ${esc(tone)}">${esc(v)}</span>`;
     return v ? esc(v) : '<span class="faint">—</span>';
   }
 
@@ -134,14 +144,21 @@ export function createReportView(opts) {
       return;
     }
     const head = columns.map((c) => `<th>${esc(c.header)}</th>`).join('');
+    let lastGroup = null;
     const body = rows.map((r, i) => {
       const cells = columns.map((c) => `<td class="${c.className || ''}">${cellHtml(c, r)}</td>`).join('');
-      return `<tr class="${onRowClick ? 'clickable' : ''}" data-idx="${i}">${cells}</tr>`;
+      let groupRow = '';
+      if (groupBy) {
+        const g = groupBy(r);
+        if (g !== lastGroup) groupRow = `<tr class="group-row"><td colspan="${columns.length}">${esc(g)}</td></tr>`;
+        lastGroup = g;
+      }
+      return `${groupRow}<tr class="${onRowClick ? 'clickable' : ''}" data-idx="${i}">${cells}</tr>`;
     }).join('');
     tableWrap.innerHTML = `<table class="data"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 
     if (onRowClick) {
-      tableWrap.querySelectorAll('tbody tr').forEach((tr) => {
+      tableWrap.querySelectorAll('tbody tr[data-idx]').forEach((tr) => {
         tr.addEventListener('click', () => onRowClick(rows[Number(tr.dataset.idx)]));
       });
     }

@@ -24,7 +24,9 @@ export function renderTimeline(opts) {
   // `title` lets non-dog subjects relabel the panel (dogs keep "Event History";
   // pairings/litters use plain "Timeline"). Everything else is subject-agnostic —
   // the add/edit form already filters event types by subject_type via the catalog.
-  const { mount, subjectType, subjectId, title = 'Event History' } = opts;
+  // `onChange` (optional) runs after any add/edit/archive/delete, so a page can
+  // re-render panels derived from the same events (e.g. the dog's Show record).
+  const { mount, subjectType, subjectId, title = 'Event History', onChange = null } = opts;
   let showArchived = false;
 
   mount.innerHTML = `
@@ -99,17 +101,23 @@ export function renderTimeline(opts) {
     });
   }
 
+  // A mutation: redraw the list and tell the page.
+  function changed() {
+    refresh();
+    onChange?.();
+  }
+
   async function onAction(act, ev) {
     if (act === 'edit') {
-      openEventForm({ subjectType, subjectId, event: ev, onSaved: refresh });
+      openEventForm({ subjectType, subjectId, event: ev, onSaved: changed });
     } else if (act === 'archive') {
       ev.is_archived ? await HistoryEvent.unarchive(ev.id) : await HistoryEvent.archive(ev.id);
-      refresh();
+      changed();
     } else if (act === 'delete') {
       if (await confirmModal({ title: `Delete “${ev.title}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) {
         try {
           await HistoryEvent.hardDelete(ev.id);
-          refresh();
+          changed();
         } catch (e) {
           // Blocked by a linked expense (EVENT_REFERENCES): clear the event's
           // Cost first (or archive the event) — the message names the blocker.
@@ -120,7 +128,7 @@ export function renderTimeline(opts) {
   }
 
   mount.querySelector('#tl-add').addEventListener('click', () => {
-    openEventForm({ subjectType, subjectId, onSaved: refresh });
+    openEventForm({ subjectType, subjectId, onSaved: changed });
   });
   mount.querySelector('#tl-archived').addEventListener('change', (e) => {
     showArchived = e.target.checked;

@@ -20,13 +20,15 @@ import { renderDogScopeNotice } from '../assets/kennelScopeUI.js';
 import {
   SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, PAIRING_TYPE, PAIRING_STATUS,
   PLACEMENT_TYPE, SALE_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS,
-  LITTER_STATUS, EVENT_TYPES, descriptor, COI_METHOD_SUGGESTIONS, CONTRACT_TYPE, CONTRACT_STATUS
+  LITTER_STATUS, EVENT_TYPES, descriptor, COI_METHOD_SUGGESTIONS, CONTRACT_TYPE, CONTRACT_STATUS,
+  SHOW_ENTRY_STATUS, TITLE_TRACKS
 } from '../data/vocab.js';
+import { getShowRecord } from '../data/showPoints.js';
 import { esc, badge, fmtDate, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { renderTimeline } from '../assets/timeline.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
-import { openEventFromQuery } from '../assets/eventForm.js';
+import { openEventForm, openEventFromQuery } from '../assets/eventForm.js';
 import { renderPedigree } from '../assets/pedigree.js';
 
 const OWNER_REQUIRED = ['external', 'leased_in'];
@@ -42,6 +44,7 @@ const els = {
   recordedCoi: document.getElementById('recorded-coi-section'),
   plannedTests: document.getElementById('planned-tests-section'),
   healthTests: document.getElementById('health-tests-section'),
+  showRecord: document.getElementById('show-record-section'),
   timeline: document.getElementById('timeline-section'),
   expenses: document.getElementById('expenses-section'),
   pairings: document.getElementById('pairings-section'),
@@ -583,6 +586,7 @@ function enterEdit() {
   renderRecordedCoiSection(); // hide while editing the profile
   renderPlannedTestsSection(); // hide while editing the profile too
   renderHealthTestsSection(); // hide while editing the profile
+  renderShowRecordSection();
   renderTimelineSection(); // hide timeline while editing the profile
   renderExpensesSection(); // hide expenses while editing too
   renderPairingsSection(); // hide pairings while editing too
@@ -603,6 +607,7 @@ function cancel() {
   const eventsP = viewDogEventsPromise();
   renderPlannedTestsSection(eventsP);
   renderHealthTestsSection(eventsP);
+  renderShowRecordSection();
   renderTimelineSection();
   renderExpensesSection();
   renderPairingsSection();
@@ -756,7 +761,8 @@ async function renderCapBanner() {
 function renderTimelineSection() {
   if (!els.timeline) return;
   if (ctx.mode === 'view' && ctx.original) {
-    renderTimeline({ mount: els.timeline, subjectType: 'dog', subjectId: ctx.original.id });
+    // The Show record card is derived from the same events — keep it in step.
+    renderTimeline({ mount: els.timeline, subjectType: 'dog', subjectId: ctx.original.id, onChange: renderShowRecordSection });
   } else {
     els.timeline.innerHTML = '';
   }
@@ -899,6 +905,93 @@ async function renderHealthTestsSection(eventsP = null) {
   const hasContent = tests.length > 0;
   els.healthTests.innerHTML = renderCollapsibleCard('Health-Test Summary', bodyHtml, '', { sectionKey: 'health-tests', hasContent });
   setupCollapsibleCard('health-tests');
+}
+
+// Derived "Show record" card (Show Tracking Spec §5.1, Pro-only): progress
+// toward each title track the dog has show events for, then the show history.
+// Everything is derived by data/showPoints.js from the dog's `show` events —
+// nothing here is stored. Renders only once the dog has a show event, so pet
+// puppies never carry an empty card; the first show is logged from the Event
+// History's "+ Add Event".
+async function renderShowRecordSection() {
+  if (!els.showRecord) return;
+  if (!editionFlags.shows) { els.showRecord.innerHTML = ''; return; } // Pro-only
+  if (ctx.mode !== 'view' || !ctx.original) { els.showRecord.innerHTML = ''; return; }
+  const d = ctx.original;
+  const { tracks, history } = await getShowRecord(d.id);
+  if (!history.length) { els.showRecord.innerHTML = ''; return; }
+
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const trackHtml = tracks.map(({ track, progress: p, titleEvent }) => {
+    const parts = [
+      `${p.points} / ${track.points} pts`,
+      `majors ${p.majors} / ${track.majors}${p.majorJudges < p.majors ? ` (${plural(p.majorJudges, 'judge')})` : ''}`,
+      `judges ${p.judges} / ${track.distinctJudges}`
+    ];
+    if (track.championDefeats) parts.push(`champions defeated ${p.championDefeats} / ${track.championDefeats}`);
+    let status;
+    if (titleEvent) status = `<span class="badge badge-green">${esc(track.title)} earned ${esc(fmtDate(titleEvent.event_date))}</span>`;
+    else if (p.complete) status = `<span class="badge badge-green">Complete</span> <span class="faint">finished ${esc(fmtDate(p.completedOn))} — log the ${esc(track.title)} title in the Event History</span>`;
+    else status = `<span class="muted">Needs: ${esc(p.missing.join(', '))}</span>`;
+    const notCounted = p.notCounted
+      ? `<div class="faint" style="font-size:13px;">${plural(p.notCounted, 'earlier win')} not counted (before ${esc(TITLE_TRACKS.find((t) => t.value === track.requires)?.title || track.requires)})</div>`
+      : '';
+    return `<li style="padding:8px 0; border-top:1px solid var(--border);">
+      <div><strong>${esc(track.label)}</strong> <span class="faint">${esc(parts.join(' · '))}</span></div>
+      <div style="font-size:14px;">${status}</div>
+      ${notCounted}
+    </li>`;
+  }).join('');
+  const tracksBlock = tracks.length
+    ? `<ul class="linked-list" style="margin:14px 0 0; padding:0; list-style:none;">${trackHtml}</ul>`
+    : `<p class="muted" style="margin:14px 0 0;">No points recorded toward a title yet — set "Points toward" on a show result to track progress.</p>`;
+
+  const today = todayYMD();
+  const rows = history.map((ev, i) => {
+    const det = ev.details || {};
+    const status = det.entry_status && det.entry_status !== 'shown' ? ` ${badge(SHOW_ENTRY_STATUS, det.entry_status)}` : '';
+    const handler = ev.related_contact_id ? contactName(ev.related_contact_id) : '';
+    const pts = det.points === '' || det.points == null ? '' : det.points;
+    return `<tr class="clickable" data-idx="${i}">
+      <td>${esc(fmtDate(ev.event_date))}${ev.event_date > today ? ' <span class="badge badge-amber">Upcoming</span>' : ''}</td>
+      <td>${esc(det.show_name || ev.title)}</td>
+      <td>${esc(det.placement || '')}${status}</td>
+      <td>${esc(pts)}</td>
+      <td>${esc(det.judge || '')}</td>
+      <td>${esc(handler || '')}</td>
+    </tr>`;
+  }).join('');
+  const historyBlock = `
+    <div class="table-scroll" style="margin-top:14px;">
+      <table class="data">
+        <thead><tr><th>Date</th><th>Show</th><th>Award</th><th>Points</th><th>Judge</th><th>Handler</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+
+  const bodyHtml = `
+    <p class="field-hint">Points, majors and judges are counted from this dog's "Shown" show results — nothing here is stored separately. Click a row to edit it.</p>
+    ${tracksBlock}
+    ${historyBlock}`;
+  const headerBtn = `<button class="btn btn-sm" id="btn-add-show">+ Add Show</button>`;
+  els.showRecord.innerHTML = renderCollapsibleCard('Show Record', bodyHtml, headerBtn, { sectionKey: 'show-record', hasContent: true });
+  setupCollapsibleCard('show-record');
+
+  els.showRecord.querySelector('#btn-add-show')?.addEventListener('click', () => {
+    openEventForm({ subjectType: 'dog', subjectId: d.id, prefill: { event_type: 'show' }, onSaved: afterEventSaved });
+  });
+  els.showRecord.querySelectorAll('tr[data-idx]').forEach((tr) => {
+    tr.addEventListener('click', () => {
+      openEventForm({ subjectType: 'dog', subjectId: d.id, event: history[Number(tr.dataset.idx)], onSaved: afterEventSaved });
+    });
+  });
+}
+
+// An event saved from outside the timeline (the Show record card, a ?openEvent
+// deep link): redraw the timeline and the panels derived from the same events.
+function afterEventSaved() {
+  renderTimelineSection();
+  renderShowRecordSection();
 }
 
 // Planned Tests panel + advisory completeness view (Test Planning Addendum §6.2).
@@ -1193,6 +1286,7 @@ function renderAll() {
   const eventsP = viewDogEventsPromise();
   renderPlannedTestsSection(eventsP);
   renderHealthTestsSection(eventsP);
+  renderShowRecordSection();
   renderTimelineSection();
   renderExpensesSection();
   renderPairingsSection();
@@ -1231,7 +1325,7 @@ async function main() {
   // is in scope everywhere, and must never carry a "belongs elsewhere" banner.
   renderDogScopeNotice(document.getElementById('scope-notice'), dog);
   renderAll();
-  openEventFromQuery('dog', dog.id, renderTimelineSection);
+  openEventFromQuery('dog', dog.id, afterEventSaved);
 }
 
 main();

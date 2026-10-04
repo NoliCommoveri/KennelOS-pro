@@ -38,6 +38,8 @@ export const PRO_ONLY_PAGES = [
   'invoice.html',
   // Puppy Record generation (print doc)
   'puppy-record.html',
+  // Show tracking — the Shows page (Show Tracking Spec §5.2/§7)
+  'shows.html',
 ];
 
 // Standalone Pro files that live outside pages/ (no nav entry) — also excluded from

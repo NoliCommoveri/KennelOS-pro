@@ -112,6 +112,7 @@ export const navItems = [
 
 export const moreItems = [
   { label: 'Reports',       path: 'pages/reports.html' },
+  { label: 'Shows',         path: 'pages/shows.html' },
   { label: 'Documents',     path: 'pages/documents.html' },
   { label: 'Import/Export', path: 'pages/import-export.html' },
 ];

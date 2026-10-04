@@ -391,6 +391,8 @@ table.data th { background: var(--surface-2); font-size: 12px; text-transform: u
 table.data tbody tr:last-child td { border-bottom: none; }
 table.data tbody tr.clickable { cursor: pointer; }
 table.data tbody tr.clickable:hover { background: var(--accent-soft); }
+/* reportView `groupBy` header rows (e.g. the Shows page's per-date blocks) */
+table.data tbody tr.group-row td { background: var(--surface-2); font-weight: 600; font-size: 13px; padding: 6px 14px; }
 .row-archived { opacity: 0.55; }
 table.data tbody tr.row-review { background: var(--warn-soft); }
 table.data tbody tr.row-review td { border-bottom-color: #e6d5ad; }

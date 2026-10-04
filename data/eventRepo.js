@@ -206,6 +206,17 @@ export const HistoryEvent = {
     return out;
   },
 
+  // Every event of one type across all subjects, by date (oldest first) — the
+  // Shows page's single `event_type` index probe (Show Tracking Spec §5.2).
+  // Archived rows are left out unless asked for.
+  async getByType(eventType, { includeArchived = false } = {}) {
+    const rows = await db.events.where('event_type').equals(eventType).toArray();
+    const visible = includeArchived ? rows : rows.filter((r) => !r.is_archived);
+    return visible.sort((a, b) =>
+      (a.event_date || '') < (b.event_date || '') ? -1 : (a.event_date || '') > (b.event_date || '') ? 1
+        : (a.created_at ?? '') < (b.created_at ?? '') ? -1 : 1);
+  },
+
   // Distinct non-blank values of one `details` key across every event of a
   // type — suggestions for a free-text combobox (e.g. a show's club or judge,
   // Show Tracking Spec §2.2). Deduped case-insensitively + trimmed; the first

@@ -547,6 +547,11 @@ export async function openEventForm(opts) {
 // a fresh event of that type (a reminder — nudging the NEXT occurrence, not
 // re-editing the one that fired it). Call once, after the subject page has
 // loaded its record; a no-op if neither param is present.
+//
+// A `logEvent` link may also carry `logDate=<YYYY-MM-DD>`, `logTitle=<text>` and
+// `logDetails=<URL-encoded JSON object>` to prefill the new event's date, title
+// and details (the "Log the title?" nudge — Show Tracking Spec §5.4). Only
+// string/number detail values are taken; a malformed `logDetails` is ignored.
 export async function openEventFromQuery(subjectType, subjectId, onSaved) {
   const openId = param('openEvent');
   if (openId) {
@@ -556,6 +561,17 @@ export async function openEventFromQuery(subjectType, subjectId, onSaved) {
   }
   const logType = param('logEvent');
   if (logType) {
-    openEventForm({ subjectType, subjectId, prefill: { event_type: logType }, onSaved });
+    const prefill = { event_type: logType };
+    const date = param('logDate');
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) prefill.event_date = date;
+    if (param('logTitle')) prefill.title = param('logTitle');
+    try {
+      const raw = JSON.parse(param('logDetails') || 'null');
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        prefill.details = Object.fromEntries(Object.entries(raw)
+          .filter(([, v]) => typeof v === 'string' || typeof v === 'number'));
+      }
+    } catch { /* malformed logDetails — open without detail prefill */ }
+    openEventForm({ subjectType, subjectId, prefill, onSaved });
   }
 }
