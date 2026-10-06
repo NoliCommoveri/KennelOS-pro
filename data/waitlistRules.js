@@ -26,7 +26,8 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   respond_days: 3,
   no_response_counts_as_pass: true,
   color_matching: false,
-  checkin_months: 6
+  checkin_months: 6,
+  soon_notice_text: '' // blank = SOON_NOTICE_DEFAULT
 });
 
 // The effective config for a kennel record (or null/undefined → all defaults).
@@ -238,6 +239,68 @@ export function nextFamilyForLitter(entries, offers, litter, pups, sales, opts =
   return litterQueue(entries, litter, pups, sales, opts).find((q) => !spent.has(q.entry.id)) || null;
 }
 
+// --- "Pups available soon" (Spec §15.5) -----------------------------------------
+
+// The default "almost your turn" notice (her wording, decided 2026-10-06). The
+// first line is the heading (the email subject); `[Kennel Name]` is filled in by
+// soonNoticeText. She edits it in Waitlist settings (waitlist_config.soon_notice_text).
+export const SOON_NOTICE_DEFAULT = "It's almost your turn!\n[Kennel Name] has puppies who will soon be searching for their furever families. You've been patiently waiting; based on your current waitlist position,  we anticipate being able to match you to your new furbaby this litter. Please be on the lookout for a communication with details about how to make your selection within the next few weeks.";
+
+// The notice for one kennel, split for delivery: { subject, body, text }.
+// `subject` is the first line, `body` the rest (an email shows the subject on its
+// own), `text` the whole message (a status page shows it all; W2).
+export function soonNoticeText(config, kennelName = '') {
+  const text = String((config && config.soon_notice_text) || SOON_NOTICE_DEFAULT)
+    .replace(/\[kennel name\]/gi, kennelName || 'Our kennel').trim();
+  const [first, ...rest] = text.split('\n');
+  return { subject: first.trim(), body: rest.join('\n').trim(), text };
+}
+
+const openOfferEntryIds = (offers) =>
+  new Set(offers.filter((o) => !o.is_archived && o.outcome === 'open').map((o) => o.entry_id));
+
+// Who is within reach of a litter's pups: walking the litter queue in order (§6.2
+// eligibility — paused, listening elsewhere, or no matching pup → skipped), each
+// family takes up one of the litter's available pups until they run out. Families
+// whose turn on this litter already closed (passed / no response) are left out.
+// A family holding an open offer — on THIS litter or ANY other — still takes a
+// pup's worth of room but is marked `inFlight`: they're mid-decision and must not
+// get an "almost your turn" notice. `offers` must be ALL the kennel's offers so
+// offers on other litters are seen. Returns [{ entry, eligibleDogs, soonPosition,
+// inFlight }] in queue order; the notice goes to the rows with !inFlight.
+export function soonFamiliesForLitter(entries, offers, litter, pups, sales, opts = {}) {
+  let slots = pups.filter((d) => d.litter_id === litter.id && isPupAvailable(d, sales)).length;
+  const here = offers.filter((o) => !o.is_archived && o.litter_id === litter.id);
+  const closedHere = new Set(here.filter((o) => o.outcome !== 'open' && SPENT_OUTCOMES.includes(o.outcome)).map((o) => o.entry_id));
+  const inFlight = openOfferEntryIds(offers);
+  const queue = litterQueue(entries, litter, pups, sales, opts).filter((q) => !closedHere.has(q.entry.id));
+  // An open offer here whose family has since dropped out of the queue (paused,
+  // say) still holds this litter's turn, so it still takes a pup's worth of room.
+  const queued = new Set(queue.map((q) => q.entry.id));
+  slots -= here.filter((o) => o.outcome === 'open' && !queued.has(o.entry_id)).length;
+  if (slots <= 0) return [];
+  return queue.slice(0, slots).map((q, i) => ({ ...q, soonPosition: i + 1, inFlight: inFlight.has(q.entry.id) }));
+}
+
+// The same across several litters (the Waitlist page; pass the live litters of
+// one kennel). One row per family, listing every litter they're within reach of,
+// in list order. A family with an open offer anywhere is `inFlight` and gets no
+// notice, but still took up room on each litter above. Returns [{ entry, inFlight,
+// litters: [{ litter, eligibleDogs, soonPosition }] }].
+export function soonFamiliesForKennel(entries, offers, litters, pups, sales, opts = {}) {
+  const byEntry = new Map();
+  for (const litter of litters) {
+    if (litter.is_archived) continue;
+    for (const row of soonFamiliesForLitter(entries, offers, litter, pups, sales, opts)) {
+      if (!byEntry.has(row.entry.id)) byEntry.set(row.entry.id, { entry: row.entry, inFlight: row.inFlight, litters: [] });
+      byEntry.get(row.entry.id).litters.push({ litter, eligibleDogs: row.eligibleDogs, soonPosition: row.soonPosition });
+    }
+  }
+  const kennelId = litters.find((l) => !l.is_archived)?.kennel_id;
+  const order = overallPositions(entries, kennelId, opts.programsById || new Map());
+  return [...byEntry.values()].sort((a, b) => (order.get(a.entry.id) || 0) - (order.get(b.entry.id) || 0));
+}
+
 // --- Passes and removal (Spec §6.4) ---------------------------------------------
 
 // Whether an offer outcome counts as a pass, decided ONCE when it's recorded and
@@ -365,4 +428,23 @@ export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d
   const lines = rows.map((r) => `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`);
   const gaps = rows.some((r, i) => r.position !== i + 1);
   return [head, '', ...lines, ...(gaps ? ['', 'A skipped number is a family who has paused. They keep their place.'] : [])].join('\n');
+}
+
+// --- Telling her what an action did to offers -------------------------------------
+
+// Plain-text lines for the offers an action closed or made on her behalf, so no
+// offer is ever made silently: `voided` (offers that ended because the family left
+// the list) and `next` / `offered` (families now holding a turn, whom she must
+// contact — W1 sends nothing). `nameOf(entryId)` and `litterOf(litterId)` give
+// display names; `fmtDate` formats a YYYY-MM-DD. [] when nothing changed.
+export function describeOfferChanges({ next = null, voided = [], offered = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {
+  const lines = [];
+  if (voided.length) {
+    lines.push(`Their open offer${voided.length === 1 ? '' : 's'} on ${voided.map((o) => litterOf(o.litter_id)).join(', ')} ${voided.length === 1 ? 'was' : 'were'} voided (not a pass).`);
+  }
+  for (const o of [next, ...offered].filter(Boolean)) {
+    lines.push(`${litterOf(o.litter_id)}: now offered to ${nameOf(o.entry_id)}, respond by ${fmtDate(o.respond_by_date)}. Let them know; nothing is sent automatically.`);
+  }
+  if (voided.length && !offered.length) lines.push('Nobody else on the list is eligible for those litters right now.');
+  return lines;
 }

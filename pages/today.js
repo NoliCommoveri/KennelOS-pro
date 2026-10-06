@@ -23,7 +23,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
 import { EVENT_TYPES, DOG_STATUS, DISPOSITION, SHOW_ENTRY_STATUS } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
+import { esc, badge, fmtDate, cardShell, alertModal } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/editionLinks.js';
 import { CapExceededError } from '../data/repoBase.js';
@@ -187,7 +187,13 @@ async function renderNudges() {
     const nudge = rows.find((n) => n.key === key);
     holder.querySelectorAll('[data-nudge-action]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        try { await nudge.actions[Number(btn.dataset.nudgeAction)].run(); renderNudges(); }
+        try {
+          // An action may return { title, message } to report what it did (the
+          // waitlist's turn moving on to another family, say).
+          const report = await nudge.actions[Number(btn.dataset.nudgeAction)].run();
+          renderNudges();
+          if (report && report.message) await alertModal(report);
+        }
         catch (e) {
           // The promote-lifecycle nudge matures a pup (a ✗→✓ dog transition); in
           // Lite that can hit the cap and throw CapExceededError — show the

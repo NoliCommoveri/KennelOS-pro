@@ -21,6 +21,7 @@
 // offer past its deadline, a fee past its pay-by date, and the 7-day undo on a
 // second-pass removal — each a one-tap suggestion, never an automatic write.
 //   { key, title, detail, subjectHref, actions: [{ label, run: async () => {} }] }
+// `run` may resolve to { title, message }, which Today shows once it's done.
 import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { kennelRepo } from './kennelRepo.js';
@@ -36,7 +37,7 @@ import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { contactRepo } from './contactRepo.js';
-import { overdueOffers, overdueFees, canUndoRemoval, entryName } from './waitlistRules.js';
+import { overdueOffers, overdueFees, canUndoRemoval, entryName, describeOfferChanges } from './waitlistRules.js';
 import { recordOutcome, markFeeExpired, undoRemoval } from './waitlistActions.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
@@ -348,6 +349,8 @@ export async function computeNudges() {
 // W1 has no server, so nothing on the waitlist moves while she's away: these
 // surface what needs a decision, and she confirms with one tap. Scoped like every
 // rule (the waitlist is per kennel, so entries/offers carry kennel_id).
+// A waitlist action's `run` returns the message Today shows afterwards (the turn
+// can move on to another family, who she must contact — never silently).
 async function waitlistNudges(today, litters, dogsById) {
   const [entriesAll, offersAll, contacts] = await Promise.all([
     waitlistEntryRepo.getAll(),
@@ -389,7 +392,25 @@ async function waitlistNudges(today, litters, dogsById) {
       title: `${name(e)}'s offer deadline passed`,
       detail: `${l ? litterLabel(l, dogsById) : 'Litter'} — they had until ${o.respond_by_date}. Recording no response moves the turn on.`,
       subjectHref: `litter.html?id=${encodeURIComponent(o.litter_id)}`,
-      actions: [{ label: 'Record no response', run: async () => { await recordOutcome(o.id, 'no_response'); } }]
+      actions: [{
+        label: 'Record no response',
+        run: async () => {
+          const res = await recordOutcome(o.id, 'no_response');
+          const fresh = new Map((await waitlistEntryRepo.getAll({ includeArchived: true })).map((x) => [x.id, x]));
+          const lines = [];
+          if (res.passes) {
+            lines.push(!res.passes.counted ? `This doesn't count as a pass for ${name(e)}.`
+              : res.removed ? `That was ${name(e)}'s pass ${res.passes.used} of ${res.passes.max}, so they've been removed from the list. You can undo this for 7 days.`
+              : `This counts as ${name(e)}'s pass ${res.passes.used} of ${res.passes.max}. They keep their place.`);
+          }
+          lines.push(...describeOfferChanges(res, {
+            nameOf: (id) => (fresh.get(id) ? name(fresh.get(id)) : 'the next family'),
+            litterOf: (id) => (littersById.get(id) ? litterLabel(littersById.get(id), dogsById) : 'A litter')
+          }));
+          if (!res.next) lines.push('Nobody else on the list is eligible for this litter right now.');
+          return { title: 'Recorded', message: lines.join('\n\n') };
+        }
+      }]
     });
   }
 
@@ -409,7 +430,13 @@ async function waitlistNudges(today, litters, dogsById) {
       title: `Removed ${name(e)} from the waitlist after their second pass`,
       detail: `You can undo this until ${addDaysToYMD(e.removed_date, 7)}. Undoing forgives that pass and puts them back in their old place.`,
       subjectHref: `waitlist-entry.html?id=${encodeURIComponent(e.id)}`,
-      actions: [{ label: 'Undo', run: async () => { await undoRemoval(e.id, { today }); } }]
+      actions: [{
+        label: 'Undo',
+        run: async () => {
+          await undoRemoval(e.id, { today });
+          return { title: 'Removal undone', message: `${name(e)} is back in their old place. No offer was made for them; offer a litter from their page when you're ready.` };
+        }
+      }]
     });
   }
   return out;

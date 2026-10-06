@@ -22,7 +22,7 @@ import { getIncomeRows, summarize } from '../data/incomeView.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { waitlistConfig } from '../data/waitlistRules.js';
+import { waitlistConfig, SOON_NOTICE_DEFAULT } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { renderKennelCardSection } from '../assets/kennelCardUI.js';
@@ -372,6 +372,9 @@ function waitlistCard(k) {
           <label class="check-inline"><input id="wl-noresp" type="checkbox"${c.no_response_counts_as_pass ? ' checked' : ''}> No response by the deadline counts as a pass</label>
           <label class="check-inline"><input id="wl-colors" type="checkbox"${c.color_matching ? ' checked' : ''}> Match on color (only offer pups in a color the family listed)</label>
         </div>
+        <div class="field field-wide"><label for="wl-soon-text">"Almost your turn" message</label>
+          <textarea id="wl-soon-text" style="min-height:130px;">${esc(c.soon_notice_text || SOON_NOTICE_DEFAULT)}</textarea>
+          <span class="field-hint">Sent from the Almost your turn… button to families whose turn is coming up. The first line is the email subject. [Kennel Name] becomes ${esc(k.kennel_name)}. Clear it to go back to the default.</span></div>
       </div>
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
     </section>`;
@@ -390,7 +393,9 @@ async function onSaveWaitlist() {
     max_passes: num('#wl-passes'),
     payment_instructions: q('#wl-instructions').value.trim(),
     no_response_counts_as_pass: q('#wl-noresp').checked,
-    color_matching: q('#wl-colors').checked
+    color_matching: q('#wl-colors').checked,
+    // Stored only when she's changed it, so the default wording stays the default.
+    soon_notice_text: q('#wl-soon-text').value.trim() === SOON_NOTICE_DEFAULT.trim() ? '' : q('#wl-soon-text').value.trim()
   };
   if (waitlist_config.max_passes != null && waitlist_config.max_passes < 1) { showError('Passes before removal must be at least 1.'); return; }
   try {

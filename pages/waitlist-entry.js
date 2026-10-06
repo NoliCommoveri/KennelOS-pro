@@ -21,7 +21,8 @@ import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches,
   entryName, canUndoRemoval, isPaused, rankedList, REMOVAL_UNDO_DAYS,
-  eligiblePupsFor, nextFamilyForLitter, turnSpent, hasOpenOffer, isListeningFor, isPupAvailable
+  eligiblePupsFor, nextFamilyForLitter, turnSpent, hasOpenOffer, isListeningFor, isPupAvailable,
+  describeOfferChanges
 } from '../data/waitlistRules.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired
@@ -174,6 +175,40 @@ async function afterAction() {
   renderAll();
 }
 
+// Plain-text lines for the offers an action voided or made (describeOfferChanges),
+// read against the freshly reloaded context.
+const offerChangeLines = (res) => describeOfferChanges(res || {}, {
+  nameOf: (entryId) => familyNameById(entryId),
+  litterOf: (litterId) => { const l = ctx.litters.find((x) => x.id === litterId); return l ? litterLabel(l) : 'A litter'; },
+  fmtDate
+});
+
+// After the family leaves the list: say which of their offers closed and who the
+// turn moved to, so she knows who to contact. Silent when they held none.
+async function reportLeaving(res) {
+  const lines = offerChangeLines(res);
+  if (lines.length) await alertModal({ title: 'Offers updated', message: lines.join('\n\n') });
+}
+
+// The open offers this family holds, for the leave-the-list confirmations.
+function openOfferWarning() {
+  const open = ctx.offers.filter((o) => o.outcome === 'open' && !o.is_archived);
+  if (!open.length) return '';
+  const names = open.map((o) => { const l = ctx.litters.find((x) => x.id === o.litter_id); return l ? litterLabel(l) : 'a litter'; });
+  return ` Their open offer on ${names.join(', ')} will be voided (not a pass) and offered to the next family.`;
+}
+
+// After a family joins (or rejoins) the list: no offer is made for them
+// automatically (waitlistActions header), so say where they're next in line now.
+async function reportNextInLine() {
+  if (ctx.entry.status !== 'active') return;
+  const mine = litterChoices(ctx.entry).filter((c) => !c.blocked && c.next && c.next.entry.id === ctx.entry.id);
+  if (!mine.length) return;
+  const name = entryName(ctx.entry, ctx.contact);
+  const list = mine.map((c) => `${litterLabel(c.litter)} (${c.litter.picks_opened_date ? 'picks open' : 'picks not open yet'})`).join(', ');
+  await alertModal({ title: `${name} is next in line`, message: `${name} is next for ${list}. No offer has been made. Use "Offer a litter…" when you're ready.` });
+}
+
 async function onApprove() {
   const e = ctx.entry;
   const matches = e.contact_id ? [] : contactMatches(e.application || {}, ctx.contacts);
@@ -201,7 +236,7 @@ async function onApprove() {
         contactId: picked ? picked.value || null : null
       });
     }
-  }) && afterAction();
+  }) && (await afterAction(), await reportNextInLine());
 }
 
 async function onDecline() {
@@ -213,9 +248,10 @@ async function onDecline() {
 
 async function onWithdraw() {
   const name = entryName(ctx.entry, ctx.contact);
-  if (!(await confirmModal({ title: `${name} left the list?`, message: 'Record that the family withdrew. Coming back means a new application, a new fee and a new place.', confirmLabel: 'They withdrew' }))) return;
-  await actions.withdraw(ctx.entry.id);
+  if (!(await confirmModal({ title: `${name} left the list?`, message: `Record that the family withdrew. Coming back means a new application, a new fee and a new place.${openOfferWarning()}`, confirmLabel: 'They withdrew' }))) return;
+  const res = await actions.withdraw(ctx.entry.id);
   await afterAction();
+  await reportLeaving(res);
 }
 
 async function onExpire() {
@@ -227,14 +263,16 @@ async function onExpire() {
 
 async function onRemove() {
   const name = entryName(ctx.entry, ctx.contact);
-  if (!(await confirmModal({ title: `Remove ${name} from the list?`, message: 'This is final. To come back they would re-apply, with a new fee and a new place.', confirmLabel: 'Remove', danger: true }))) return;
-  await actions.removeByBreeder(ctx.entry.id);
+  if (!(await confirmModal({ title: `Remove ${name} from the list?`, message: `This is final. To come back they would re-apply, with a new fee and a new place.${openOfferWarning()}`, confirmLabel: 'Remove', danger: true }))) return;
+  const res = await actions.removeByBreeder(ctx.entry.id);
   await afterAction();
+  await reportLeaving(res);
 }
 
 async function onUndo() {
   await actions.undoRemoval(ctx.entry.id);
   await afterAction();
+  await reportNextInLine();
 }
 
 async function onReapply() {
@@ -267,7 +305,7 @@ async function onFeeReceived() {
             reference: o.querySelector('#fr-ref').value.trim()
           });
     }
-  }) && afterAction();
+  }) && (await afterAction(), await reportNextInLine());
 }
 
 async function onMove() {
@@ -301,6 +339,11 @@ async function onMove() {
 
 // --- Details: view ----------------------------------------------------------------
 
+// The litters the family was last told "almost your turn" about (Spec §15.5).
+function soonLitters(e) {
+  return (e.soon_notified_litter_ids || []).map((id) => ctx.litters.find((l) => l.id === id)).filter(Boolean).map(litterLabel).join(', ');
+}
+
 function listenSummary(e) {
   if ((e.listen_mode || 'all') !== 'selected') return 'All litters';
   const litters = (e.listen_litter_ids || []).map((id) => ctx.litters.find((l) => l.id === id)).filter(Boolean).map(litterLabel);
@@ -327,6 +370,7 @@ function renderView() {
       ${row('Fee policy', e.fee_credit_policy ? esc(descriptor(FEE_CREDIT_POLICY, e.fee_credit_policy).label) : '')}
       ${row('Fee received', e.fee_received_date ? esc(fmtDate(e.fee_received_date)) + [e.fee_payment_method, e.fee_payment_reference].filter(Boolean).map((s) => ` <span class="faint">${esc(s)}</span>`).join('') : '')}
       ${row('Pay by', e.fee_due_date ? esc(fmtDate(e.fee_due_date)) : '')}
+      ${row('Told "almost your turn"', e.soon_notified_date ? esc(fmtDate(e.soon_notified_date)) + (soonLitters(e) ? ` <span class="faint">— ${esc(soonLitters(e))}</span>` : '') : '')}
       ${row('Notes', multiline(e.notes))}
     </dl>
     <h3 style="margin:18px 0 6px;">Application</h3>
@@ -592,6 +636,7 @@ async function onOfferOutcome(offer, outcome) {
     const live = litter ? eligiblePupsFor(e, litter, kennelLitterPups(litter), ctx.sales, { today: todayYMD(), config: ctx.config }) : [];
     if (!live.length) { await alertModal({ title: 'No pups available', message: 'None of the pups offered to them is still available.' }); return; }
     let saleId = null;
+    let res = null;
     const done = await formModal({
       title: `${name} accepted a pup`,
       confirmLabel: 'Record and create the sale',
@@ -599,13 +644,14 @@ async function onOfferOutcome(offer, outcome) {
         <div class="field"><label>Date</label><input id="oc-date" type="date" value="${esc(todayYMD())}"></div>
         <p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts), marks the pup placed, and marks the family placed. Any other open offers they have are voided.</p>`,
       onConfirm: async (o) => {
-        const res = await actions.recordOutcome(offer.id, 'accepted', { chosenDogId: o.querySelector('#oc-dog').value, date: o.querySelector('#oc-date').value || todayYMD() });
+        res = await actions.recordOutcome(offer.id, 'accepted', { chosenDogId: o.querySelector('#oc-dog').value, date: o.querySelector('#oc-date').value || todayYMD() });
         saleId = res.sale.id;
       }
     });
     if (!done) return;
     await afterAction();
-    if (await confirmModal({ title: 'Sale created', message: 'Open the sale to add the deposit and details? Their invoice and receipts are under Documents on this page.', confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
+    const changes = offerChangeLines(res);
+    if (await confirmModal({ title: 'Sale created', message: `${changes.length ? `${changes.join('\n\n')}\n\n` : ''}Open the sale to add the deposit and details? Their invoice and receipts are under Documents on this page.`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
       location.href = `sale.html?id=${encodeURIComponent(saleId)}`;
     }
     return;
@@ -622,8 +668,8 @@ async function onOfferOutcome(offer, outcome) {
     const msg = !res.passes.counted ? 'This doesn\'t count as a pass.'
       : res.removed ? `That was pass ${res.passes.used} of ${res.passes.max}, so they've been removed from the list. You can undo this for ${REMOVAL_UNDO_DAYS} days.`
       : `This counts as pass ${res.passes.used} of ${res.passes.max}. They keep their place.`;
-    const next = res.next ? `\n\nOffered to ${familyNameById(res.next.entry_id)} next, respond by ${fmtDate(res.next.respond_by_date)}.` : '';
-    await alertModal({ title: 'Recorded', message: msg + next });
+    const changes = offerChangeLines(res);
+    await alertModal({ title: 'Recorded', message: [msg, ...changes].join('\n\n') });
   }
 }
 
@@ -753,10 +799,16 @@ async function renderHeaderActions() {
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
   document.getElementById('btn-archive').onclick = async () => {
     const verb = e.is_archived ? 'Unarchive' : 'Archive';
-    if (!(await confirmModal({ title: `${verb} this entry?`, message: e.is_archived ? '' : 'Archived entries are hidden from the waitlist and drop off the list.', confirmLabel: verb }))) return;
+    if (!(await confirmModal({ title: `${verb} this entry?`, message: e.is_archived ? '' : `Archived entries are hidden from the waitlist and drop off the list.${openOfferWarning()}`, confirmLabel: verb }))) return;
     try {
-      if (e.is_archived) await waitlistEntryRepo.unarchive(e.id); else await waitlistEntryRepo.archive(e.id);
-      await afterAction();
+      if (e.is_archived) {
+        await waitlistEntryRepo.unarchive(e.id);
+        await afterAction();
+      } else {
+        const res = await actions.archiveEntry(e.id);
+        await afterAction();
+        await reportLeaving(res);
+      }
     } catch (err) { showError(err.message || String(err)); }
   };
   if (!blockers.length) {

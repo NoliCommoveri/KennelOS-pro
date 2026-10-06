@@ -16,10 +16,11 @@ import * as actions from '../data/waitlistActions.js';
 import { WAITLIST_ENTRY_STATUS, WAITLIST_PRIORITY, WAITLIST_REMOVED_REASON } from '../data/vocab.js';
 import {
   waitlistConfig, rankedList, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
-  canUndoRemoval, overdueFees, nextFamilyForLitter, isPupAvailable, publicList, publicListText
+  canUndoRemoval, overdueFees, nextFamilyForLitter, isPupAvailable, publicList, publicListText,
+  soonFamiliesForKennel
 } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal } from '../assets/ui.js';
-import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, formModal } from '../assets/waitlistUI.js';
+import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, formModal, openSoonNotice } from '../assets/waitlistUI.js';
 
 const els = {
   title: document.getElementById('wl-title'),
@@ -53,6 +54,7 @@ async function main() {
     <a class="btn" href="waitlist-form.html?${kq}">Application form</a>
     <a class="btn" href="waitlist-programs.html?${kq}">Programs</a>
     <button class="btn" id="wl-copy-public">Copy public list</button>
+    <button class="btn" id="wl-soon" title="Tell the families whose turn is coming up for the pups available now">Almost your turn…</button>
     <a class="btn" href="waitlist-import.html?${kq}">Import CSV</a>
     <a class="btn btn-primary" href="waitlist-entry.html?new=1&${kq}">+ New application</a>`;
 
@@ -190,6 +192,19 @@ async function main() {
       }
     });
   });
+
+  // "It's almost your turn" (Spec §15.5): every live litter of this kennel at once.
+  // Families with an open offer anywhere are left out but still count toward the
+  // pups, so a second litter never re-notifies a family mid-decision.
+  document.getElementById('wl-soon').onclick = () => {
+    const live = litters.filter((l) => l.kennel_id === kennel.id && !l.is_archived && LIVE_LITTER.includes(l.status));
+    const rows = soonFamiliesForKennel(entries, offers, live, dogs, sales, opts);
+    openSoonNotice({
+      kennel, config, rows, contactsById,
+      litterLabelOf: (r) => r.litters.map((x) => `${litterLabel(x.litter)}: #${x.soonPosition} in line`).join(' · '),
+      litterIdsOf: (r) => r.litters.map((x) => x.litter.id)
+    });
+  };
 
   // The public list as text (Spec §15.3): allow-listed fields only, paused
   // families left out with their numbers skipped.
