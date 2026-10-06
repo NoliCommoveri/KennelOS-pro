@@ -17,7 +17,7 @@ import { WAITLIST_ENTRY_STATUS, WAITLIST_PRIORITY, WAITLIST_REMOVED_REASON } fro
 import {
   waitlistConfig, rankedList, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, isPupAvailable, publicList, publicListText,
-  soonFamiliesForKennel
+  soonFamiliesForKennel, kennelBreeds, resolveBreed
 } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, formModal, openSoonNotice } from '../assets/waitlistUI.js';
@@ -68,6 +68,10 @@ async function main() {
     saleRepo.getAll({ includeArchived: true })
   ]);
   const config = waitlistConfig(kennel);
+  // A breed preference that isn't one of this kennel's breeds matches no pup: flag it.
+  const breeds = kennelBreeds(kennel, dogs);
+  const breedFlag = (e) => (e.pref_breed && resolveBreed(e.pref_breed, breeds) === null
+    ? ' <span class="badge badge-red" title="No pup will match this breed. Open the family to pick one of your breeds.">Unknown breed</span>' : '');
   const today = todayYMD();
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const nameOf = (e) => esc(entryName(e, contactsById.get(e.contact_id)));
@@ -109,7 +113,7 @@ async function main() {
   const listHtml = ranked.length
     ? table(['#', 'Family', 'Wants', 'Passes', 'In line since'], ranked.map((e, i) => row(e, [
         `<strong>${i + 1}</strong>`,
-        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today)}`,
+        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today)}${breedFlag(e)}`,
         prefsSummary(e),
         `${passesUsed(e, offers)} of ${esc(config.max_passes)}`,
         `${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ' <span class="badge badge-purple" title="You set this place by hand">Moved by you</span>' : ''}`
@@ -140,7 +144,8 @@ async function main() {
         if (open) {
           const e = entriesById.get(open.entry_id);
           const overdue = open.respond_by_date && open.respond_by_date < today;
-          turn = `Offered to ${e ? familyLink(e) : 'a family'} · respond by ${esc(fmtDate(open.respond_by_date))}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}`;
+          const picked = open.chosen_dog_id ? ` · <span class="badge badge-purple">Picked ${esc(dogName(open.chosen_dog_id))}</span> deposit pending` : '';
+          turn = `Offered to ${e ? familyLink(e) : 'a family'}${picked} · pick and pay by ${esc(fmtDate(open.respond_by_date))}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}`;
         } else if (next) {
           turn = `Next: ${familyLink(next.entry)} <button class="btn btn-sm btn-primary" data-offer-litter="${esc(l.id)}">Offer to them</button>`;
         } else turn = '<span class="faint">Nobody on the list is eligible</span>';
@@ -183,7 +188,7 @@ async function main() {
         const offer = l.picks_opened_date ? await actions.offerNext(l.id) : await actions.openPicks(l.id);
         if (offer) {
           const e = entriesById.get(offer.entry_id);
-          await alertModal({ title: 'Offer made', message: `It's ${e ? entryName(e, contactsById.get(e.contact_id)) : 'the next family'}'s turn. They have until ${fmtDate(offer.respond_by_date)} to respond. Let them know; nothing is sent automatically yet.` });
+          await alertModal({ title: 'Offer made', message: `It's ${e ? entryName(e, contactsById.get(e.contact_id)) : 'the next family'}'s turn. They have until ${fmtDate(offer.respond_by_date)} to pick a pup and send the deposit. Let them know; nothing is sent automatically yet.` });
         }
         await main();
       } catch (err) {

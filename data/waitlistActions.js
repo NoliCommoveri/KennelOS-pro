@@ -8,12 +8,21 @@
 // W1 sends nothing: no emails, no status page. She messages families herself.
 // Nothing here runs on page load: every write follows a tap (Spec §0).
 //
-// When are offers made without her picking the family? Only when an offer on that
-// same litter closes (accepted / passed / no response, or the family left the list
-// while holding it) — the turn moves on, and every such offer is RETURNED so the
-// page can tell her who to contact. Actions on one family (fee received, a
-// fee-waived approval, an undo) never make offers on any litter (decided
-// 2026-10-06): she offers from "Next: … Offer to them".
+// When are offers made without her picking the family? Only when she has turned on
+// automatic offers (waitlist_config.auto_offer_next — OFF by default, decided
+// 2026-10-06) and an offer on that same litter closes (deposit received / passed /
+// no response, or the family left the list while holding it) — the turn moves on,
+// and every such offer is RETURNED so the page can tell her who to contact. With
+// automatic offers off, the same moments return who is next (`waiting`) and offer
+// nobody. Actions on one family (fee received, a fee-waived approval, an undo)
+// never make offers on any litter (decided 2026-10-06): she offers from "Next: …
+// Offer to them".
+//
+// Accepting is two steps (decided 2026-10-06): the family PICKS a pup (a
+// deposit-pending Sale holds it; the offer stays open, the pick can be switched)
+// and then sends the deposit within the same respond-by window. Only the deposit
+// makes the offer `accepted`, places the family, and moves the turn on. No deposit
+// by the deadline = no response: the Sale is cancelled and the pup is free again.
 import { kennelRepo } from './kennelRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
@@ -27,8 +36,11 @@ import { todayYMD } from './dateUtils.js';
 import {
   waitlistConfig, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
   nextFamilyForLitter, respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
-  hasOpenOffer, turnSpent, eligiblePupsFor
+  hasOpenOffer, turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker
 } from './waitlistRules.js';
+
+const nowISO = () => new Date().toISOString();
+const appendNote = (notes, line) => [notes, line].filter(Boolean).join('\n');
 
 async function load(entryId) {
   const entry = await waitlistEntryRepo.getById(entryId);
@@ -84,7 +96,7 @@ export async function approve(entryId, { date = todayYMD(), contactId = null, pr
     status: 'approved'
   };
   if (fee === 0) {
-    Object.assign(changes, { status: 'active', fee_received_date: date, fee_payment_method: 'Waived' });
+    Object.assign(changes, { status: 'active', fee_received_date: date, fee_received_at: nowISO(), fee_payment_method: 'Waived' });
   }
   return waitlistEntryRepo.update(entryId, changes);
 }
@@ -96,13 +108,15 @@ export async function decline(entryId, { date = todayYMD() } = {}) {
 }
 
 // Fee received — this fixes the family's place in line (fee_received_date is the
-// position anchor, §6.1). Also used with a null fee ("Add to the list").
+// position anchor, §6.1; fee_received_at, the moment she recorded it, orders two
+// families who paid on the same day). Also used with a null fee ("Add to the list").
 export async function feeReceived(entryId, { date = todayYMD(), amount, method = '', reference = '' } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['approved'], 'mark the fee received for');
   const changes = {
     status: 'active',
     fee_received_date: date,
+    fee_received_at: nowISO(),
     fee_payment_method: method,
     fee_payment_reference: reference
   };
@@ -285,20 +299,219 @@ export async function offerTo(litterId, entryId, { today = todayYMD(), note = ''
 // can't keep holding a litter's turn: void each open offer they have (never a
 // pass) and move that litter on to its next family. Returns { voided, offered } —
 // the closed offers and the new ones — so the page can say who to contact.
+// A pick they were holding is let go too (its deposit-pending Sale is cancelled).
+// Returns { voided, offered, waiting }.
 async function releaseOpenOffers(entryId, { date = todayYMD(), why, exceptOfferId = null } = {}) {
   const open = (await waitlistOfferRepo.getByEntry(entryId))
     .filter((o) => o.id !== exceptOfferId && o.outcome === 'open' && !o.is_archived);
   const voided = [];
   const offered = [];
+  const waiting = [];
   for (const o of open) {
+    await releasePick(o, { date, why, strict: false });
     voided.push(await waitlistOfferRepo.update(o.id, {
       outcome: 'voided', outcome_date: date, counts_as_pass: false,
-      notes: [o.notes, `Voided automatically: ${why}.`].filter(Boolean).join('\n')
+      notes: appendNote(o.notes, `Voided automatically: ${why}.`)
     }));
-    const next = await offerNext(o.litter_id, { today: date });
-    if (next) offered.push(next);
+    const moved = await moveTurnOn(o.litter_id, { today: date });
+    if (moved.next) offered.push(moved.next);
+    if (moved.waiting) waiting.push(moved.waiting);
   }
-  return { voided, offered };
+  return { voided, offered, waiting };
+}
+
+// The turn on this litter moved on (an offer closed, or its family left the list).
+// With automatic offers on, the next family is offered now (picks must be open);
+// with them off (the default), nobody is offered and the family who's next is
+// returned so the page can tell her. Returns { next, waiting } — at most one set.
+async function moveTurnOn(litterId, { today = todayYMD() } = {}) {
+  const c = await litterContext(litterId);
+  if (c.config.auto_offer_next) return { next: await offerNext(litterId, { today }), waiting: null };
+  if (c.litter.is_archived) return { next: null, waiting: null };
+  const n = nextFamilyForLitter(c.entries, c.offers, c.litter, c.pups, c.sales, {
+    today, config: c.config, programsById: c.programsById
+  });
+  return { next: null, waiting: n ? { litter_id: litterId, entry_id: n.entry.id } : null };
+}
+
+// Fold moveTurnOn's answer into an action's result.
+async function finishTurn(result, litterId, today) {
+  const moved = await moveTurnOn(litterId, { today });
+  result.next = moved.next;
+  if (moved.waiting) result.waiting = [...(result.waiting || []), moved.waiting];
+  return result;
+}
+
+// The deposit-pending Sale holding an open offer's pick, or null.
+async function heldSale(offer) {
+  return offer.sale_id ? saleRepo.getById(offer.sale_id) : null;
+}
+
+// Let go of an open offer's pick before it closes without a deposit: cancel the
+// deposit-pending Sale so the pup is free again. `strict` refuses when the Sale
+// already shows the deposit (she recorded it on the Sale page) — the offer should be
+// settled with "Deposit received" instead. Leaving the list is never refused.
+async function releasePick(offer, { date, why, strict = true }) {
+  if (!isAwaitingDeposit(offer)) return;
+  const sale = await heldSale(offer);
+  if (!sale || sale.is_archived) return;
+  if (sale.status !== 'deposit_pending') {
+    if (strict && !['cancelled', 'returned'].includes(sale.status)) {
+      throw new Error('Their sale already shows the deposit as received. Record it with "Deposit received" instead.');
+    }
+    return;
+  }
+  await saleRepo.update(sale.id, {
+    status: 'cancelled',
+    notes: appendNote(sale.notes, `Cancelled ${date}: the waitlist pick lapsed (${why}).`)
+  });
+}
+
+async function loadOffer(offerId) {
+  const offer = await waitlistOfferRepo.getById(offerId);
+  if (!offer) throw new Error('That offer no longer exists.');
+  return offer;
+}
+
+async function loadOpenOffer(offerId) {
+  const offer = await loadOffer(offerId);
+  if (offer.outcome !== 'open') throw new Error('This offer has already been closed.');
+  return offer;
+}
+
+// The family picked a pup (Spec §6.5): create the Sale (deposit pending, buyer =
+// the family, price/deposit prefilled) to hold it while they send the deposit. The
+// offer stays OPEN — nothing moves on, the family stays on the list — and the
+// respond-by date is still their deadline, now for the deposit. Returns { offer, sale }.
+export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {}) {
+  const offer = await loadOpenOffer(offerId);
+  if (offer.chosen_dog_id) throw new Error('They\'ve already picked a pup. Use "Change pup" to switch.');
+  const entry = await load(offer.entry_id);
+  if (!entry.contact_id) throw new Error('This family has no contact record.');
+  const c = await litterContext(offer.litter_id);
+  const dog = c.pups.find((d) => d.id === chosenDogId);
+  if (!dog) throw new Error('Pick one of this litter\'s pups.');
+  if (!isPupAvailable(dog, c.sales)) throw new Error(`${dog.call_name} is no longer available.`);
+  const sale = await saleRepo.create({
+    dog_id: dog.id,
+    buyer_contact_id: entry.contact_id,
+    placement_type: dog.intended_placement || entry.pref_placement_type || 'pet',
+    status: 'deposit_pending',
+    kennel_id: dog.kennel_id || c.litter.kennel_id,
+    sale_date: date,
+    lead_source: 'Waitlist',
+    ...expectedPricing(dog, c.litter)
+  });
+  const saved = await waitlistOfferRepo.update(offerId, { chosen_dog_id: dog.id, picked_date: date, sale_id: sale.id });
+  return { offer: saved, sale };
+}
+
+// Switch the pup a family picked (Spec §6.5 — they clicked the wrong one). Allowed
+// while the deposit is pending, and after it too as long as nobody else has been
+// offered this litter since. The same Sale moves to the new pup; its price and
+// deposit follow the new pup's expected amounts only where she hasn't changed them
+// (and a paid deposit is never touched). Returns { offer, sale }.
+export async function changePick(offerId, { chosenDogId, date = todayYMD() } = {}) {
+  const offer = await loadOffer(offerId);
+  const c = await litterContext(offer.litter_id);
+  const accepted = offer.outcome === 'accepted';
+  if (accepted && !canSwitchAcceptedPick(offer, c.offers)) {
+    throw new Error('Another family has been offered this litter since, so the pup can\'t be switched here. Change it on the sale.');
+  }
+  if (!accepted && !isAwaitingDeposit(offer)) throw new Error('They haven\'t picked a pup yet.');
+  if (chosenDogId === offer.chosen_dog_id) return { offer, sale: null };
+  const dog = c.pups.find((d) => d.id === chosenDogId);
+  if (!dog) throw new Error('Pick one of this litter\'s pups.');
+  if (!isPupAvailable(dog, c.sales)) throw new Error(`${dog.call_name} is no longer available.`);
+  let saleId = offer.sale_id;
+  if (!saleId && accepted) saleId = (await load(offer.entry_id)).placed_sale_id || null;
+  const sale = saleId ? await saleRepo.getById(saleId) : null;
+  if (!sale) throw new Error('There\'s no sale for this pick to move. Change it on the Sales page.');
+  const oldDog = c.pups.find((d) => d.id === offer.chosen_dog_id) || null;
+  const was = expectedPricing(oldDog, c.litter);
+  const now = expectedPricing(dog, c.litter);
+  const changes = { dog_id: dog.id, placement_type: dog.intended_placement || sale.placement_type };
+  if ((sale.price ?? null) === was.price) changes.price = now.price;
+  if (sale.status === 'deposit_pending' && (sale.deposit_amount ?? null) === was.deposit_amount) changes.deposit_amount = now.deposit_amount;
+  const savedSale = await saleRepo.update(sale.id, changes);
+  if (accepted) {
+    await dogRepo.update(dog.id, { disposition: 'placed' });
+    if (oldDog) await dogRepo.update(oldDog.id, { disposition: 'available' });
+  }
+  const saved = await waitlistOfferRepo.update(offerId, {
+    chosen_dog_id: dog.id,
+    notes: appendNote(offer.notes, `Pick switched from ${oldDog ? oldDog.call_name : 'another pup'} to ${dog.call_name} on ${date}.`)
+  });
+  return { offer: saved, sale: savedSale };
+}
+
+// The deposit arrived for a picked pup: the Sale moves to deposit paid, the pup is
+// placed, the offer is accepted, the family is placed and leaves the list (their
+// other open offers are voided, never a pass), and the turn moves on. Returns the
+// same shape as recordOutcome.
+export async function confirmDeposit(offerId, { date = todayYMD(), amount } = {}) {
+  const offer = await loadOpenOffer(offerId);
+  if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
+  const entry = await load(offer.entry_id);
+  const sale = await heldSale(offer);
+  if (!sale || sale.is_archived || ['cancelled', 'returned'].includes(sale.status)) {
+    throw new Error('The sale holding their pick was cancelled or archived. Void this offer, or open the sale and fix it first.');
+  }
+  const saleChanges = { deposit_date: date };
+  if (sale.status === 'deposit_pending') saleChanges.status = 'deposit_paid';
+  if (amount !== undefined && amount !== null && amount !== '') saleChanges.deposit_amount = Number(amount);
+  const result = { offer: null, sale: null, removed: false, passes: null, next: null, voided: [], offered: [], waiting: [] };
+  result.sale = await saleRepo.update(sale.id, saleChanges);
+  await dogRepo.update(offer.chosen_dog_id, { disposition: 'placed' });
+  result.offer = await waitlistOfferRepo.update(offerId, { outcome: 'accepted', outcome_date: date, counts_as_pass: false });
+  await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id });
+  // Their other open offers end too — never a pass (Spec §6.4 leaning).
+  Object.assign(result, await releaseOpenOffers(entry.id, { date, why: 'the family accepted a pup from another litter', exceptOfferId: offerId }));
+  return finishTurn(result, offer.litter_id, date);
+}
+
+// Undo a pass or no response (Spec §6.4): the family is next in line for this
+// litter again. Their offer reopens with a fresh respond-by date and the pass no
+// longer counts; if that pass had removed them (second pass), they're back on the
+// list. A family holding this litter's turn meanwhile has their offer voided —
+// never a pass, and they're next again once this family's turn settles — unless
+// they've already picked a pup (then she settles that first). Makes no other offer.
+// Returns { offer, voided, restored }.
+export async function undoPass(offerId, { today = todayYMD() } = {}) {
+  const offer = await loadOffer(offerId);
+  const entry = await load(offer.entry_id);
+  const blocker = undoPassBlocker(offer, entry, today);
+  if (blocker) throw new Error(blocker);
+  const c = await litterContext(offer.litter_id);
+  if (c.litter.is_archived) throw new Error('That litter is archived.');
+  const holder = c.offers.find((o) => o.id !== offer.id && !o.is_archived && o.outcome === 'open');
+  if (holder && isAwaitingDeposit(holder)) {
+    throw new Error('The family holding this litter\'s turn now has already picked a pup. Record their deposit or void their offer first.');
+  }
+  const eligible = eligiblePupsFor({ ...entry, status: 'active' }, c.litter, c.pups, c.sales, { today, config: c.config });
+  if (!eligible.length) {
+    throw new Error('They can\'t be offered this litter right now (no matching pup left, paused, or listening for other litters), so there\'s no turn to give back.');
+  }
+  const program = c.programsById.get(entry.waitlist_program_id) || null;
+  const result = { offer: null, voided: [], restored: false };
+  if (holder) {
+    result.voided.push(await waitlistOfferRepo.update(holder.id, {
+      outcome: 'voided', outcome_date: today, counts_as_pass: false,
+      notes: appendNote(holder.notes, 'Voided automatically: you undid an earlier pass on this litter, so that family got their turn back. Not a pass; this family is next again after them.')
+    }));
+  }
+  if (entry.status === 'removed') {
+    await waitlistEntryRepo.update(entry.id, { status: 'active', removed_date: null, removed_reason: null });
+    result.restored = true;
+  }
+  const label = offer.outcome === 'passed' ? 'Pass' : 'No response';
+  result.offer = await waitlistOfferRepo.update(offerId, {
+    outcome: 'open', outcome_date: null, counts_as_pass: false,
+    respond_by_date: respondByDate(today, c.config, program),
+    eligible_dog_ids: eligible.map((d) => d.id),
+    notes: appendNote(offer.notes, `${label} undone by you on ${today}; their turn is back with a new respond-by date.`)
+  });
+  return result;
 }
 
 // **Open picks** (Spec §6.5): stamp the litter and offer the first family.
@@ -314,51 +527,34 @@ export async function closePicks(litterId) {
 }
 
 // Record how an open offer ended. `outcome` is accepted / passed / no_response /
-// voided. Returns { offer, sale, removed, passes, next, voided, offered } for the
-// page's message: `next` is this litter's new offer; `voided` / `offered` are the
-// family's OTHER open offers that closed because they left the list, and the
-// offers those litters moved on to.
-//  - accepted: needs `chosenDogId` (an available pup from this litter). Creates the
-//    Sale (deposit_pending, prefilled price/deposit, buyer = the family), marks the
-//    pup placed, the entry `placed`, and voids the family's other open offers.
-//  - passed / no_response: counts_as_pass is decided now and frozen (§6.4); at the
-//    pass limit the entry is removed (second_pass, with a 7-day undo) and their
-//    other open offers are voided too.
-//  - voided: never a pass. The turn is NOT moved on automatically (she voided it
-//    for a reason; the same family would just be offered again) — she offers the
+// voided. Returns { offer, sale, removed, passes, next, voided, offered, waiting }
+// for the page's message: `next` is this litter's new offer (automatic offers on),
+// `waiting` who's next when they're off; `voided` / `offered` are the family's
+// OTHER open offers that closed because they left the list, and the offers those
+// litters moved on to.
+//  - accepted: the pick AND the deposit at once — needs `chosenDogId` (an available
+//    pup from this litter) unless they've already picked; `depositDate` /
+//    `depositAmount` are optional. Same as recordPick + confirmDeposit.
+//  - passed / no_response: a pick they were holding lapses (its Sale is cancelled).
+//    counts_as_pass is decided now and frozen (§6.4); at the pass limit the entry is
+//    removed (second_pass, with a 7-day undo) and their other open offers are voided too.
+//  - voided: never a pass; a held pick lapses. The turn is NOT moved on (she voided
+//    it for a reason; the same family would just be offered again) — she offers the
 //    next family from the litter page.
-// After accepted/passed/no_response the turn moves on (offerNext).
-export async function recordOutcome(offerId, outcome, { date = todayYMD(), chosenDogId = null } = {}) {
-  const offer = await waitlistOfferRepo.getById(offerId);
-  if (!offer) throw new Error('That offer no longer exists.');
-  if (offer.outcome !== 'open') throw new Error('This offer has already been closed.');
+// After passed/no_response the turn moves on (moveTurnOn).
+export async function recordOutcome(offerId, outcome, { date = todayYMD(), chosenDogId = null, depositDate = null, depositAmount } = {}) {
+  const offer = await loadOpenOffer(offerId);
   const entry = await load(offer.entry_id);
-  const result = { offer: null, sale: null, removed: false, passes: null, next: null, voided: [], offered: [] };
 
   if (outcome === 'accepted') {
-    const c = await litterContext(offer.litter_id);
-    const dog = c.pups.find((d) => d.id === chosenDogId);
-    if (!dog) throw new Error('Pick one of this litter\'s pups.');
-    if (!isPupAvailable(dog, c.sales)) throw new Error(`${dog.call_name} is no longer available.`);
-    if (!entry.contact_id) throw new Error('This family has no contact record.');
-    result.sale = await saleRepo.create({
-      dog_id: dog.id,
-      buyer_contact_id: entry.contact_id,
-      placement_type: dog.intended_placement || entry.pref_placement_type || 'pet',
-      status: 'deposit_pending',
-      kennel_id: dog.kennel_id || c.litter.kennel_id,
-      sale_date: date,
-      lead_source: 'Waitlist',
-      ...expectedPricing(dog, c.litter)
-    });
-    await dogRepo.update(dog.id, { disposition: 'placed' });
-    result.offer = await waitlistOfferRepo.update(offerId, {
-      outcome: 'accepted', outcome_date: date, chosen_dog_id: dog.id, counts_as_pass: false
-    });
-    await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: result.sale.id });
-    // Their other open offers end too — never a pass (Spec §6.4 leaning).
-    Object.assign(result, await releaseOpenOffers(entry.id, { date, why: 'the family accepted a pup from another litter', exceptOfferId: offerId }));
-  } else if (outcome === 'passed' || outcome === 'no_response') {
+    if (!offer.chosen_dog_id) await recordPick(offerId, { chosenDogId, date });
+    else if (chosenDogId && chosenDogId !== offer.chosen_dog_id) await changePick(offerId, { chosenDogId, date });
+    return confirmDeposit(offerId, { date: depositDate || date, amount: depositAmount });
+  }
+
+  const result = { offer: null, sale: null, removed: false, passes: null, next: null, voided: [], offered: [], waiting: [] };
+  if (outcome === 'passed' || outcome === 'no_response') {
+    await releasePick(offer, { date, why: outcome === 'passed' ? 'they passed' : 'no deposit by the deadline' });
     const [kennel, program] = await Promise.all([
       kennelRepo.getById(entry.kennel_id),
       entry.waitlist_program_id ? waitlistProgramRepo.getById(entry.waitlist_program_id) : null
@@ -375,12 +571,12 @@ export async function recordOutcome(offerId, outcome, { date = todayYMD(), chose
       Object.assign(result, await releaseOpenOffers(entry.id, { date, why: 'the family was removed after their last pass', exceptOfferId: offerId }));
     }
   } else if (outcome === 'voided') {
+    await releasePick(offer, { date, why: 'you voided the offer' });
     result.offer = await waitlistOfferRepo.update(offerId, { outcome: 'voided', outcome_date: date, counts_as_pass: false });
     return result;
   } else {
     throw new Error(`Unknown outcome "${outcome}".`);
   }
 
-  result.next = await offerNext(offer.litter_id, { today: date });
-  return result;
+  return finishTurn(result, offer.litter_id, date);
 }

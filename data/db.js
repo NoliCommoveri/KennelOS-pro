@@ -132,7 +132,7 @@ db.version(1).stores({
   files:         'id, created_at',
   breed_feeding_schedules: 'id, breed, is_archived',
   waitlist_entries:  'id, kennel_id, contact_id, status, waitlist_program_id, *listen_pairing_ids, *listen_litter_ids, placed_sale_id, is_archived',
-  waitlist_offers:   'id, entry_id, litter_id, kennel_id, chosen_dog_id, outcome, is_archived',
+  waitlist_offers:   'id, entry_id, litter_id, kennel_id, chosen_dog_id, sale_id, outcome, is_archived',
   waitlist_programs: 'id, kennel_id, is_archived'
 });
 

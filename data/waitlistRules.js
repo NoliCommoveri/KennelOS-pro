@@ -23,7 +23,8 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   fee_due_days: null,
   payment_instructions: '',
   max_passes: 2,
-  respond_days: 3,
+  respond_days: 3, // days to accept AND send the deposit (§6.5)
+  auto_offer_next: false, // offer the next family by itself when an offer closes
   no_response_counts_as_pass: true,
   color_matching: false,
   checkin_months: 6,
@@ -101,11 +102,16 @@ function priorityGroup(entry, programsById) {
   return p && p.priority === 'ahead' ? 0 : 1;
 }
 
-// Total order: priority group, anchor date, approved_date, created_at, then id so
-// two identical rows can never swap places between renders.
+// Total order: priority group, anchor date, then the moment the fee was recorded
+// (fee_received_at — so two families who paid on the same day stay in the order
+// they paid, never the order they applied), approved_date, created_at, then id so
+// two identical rows can never swap places between renders. An entry with no
+// fee_received_at (imported, or recorded before it existed) sorts first among its
+// same-day peers.
 export function compareEntries(a, b, programsById) {
   return (priorityGroup(a, programsById) - priorityGroup(b, programsById))
     || anchorDate(a).localeCompare(anchorDate(b))
+    || (a.fee_received_at || '').localeCompare(b.fee_received_at || '')
     || (a.approved_date || '').localeCompare(b.approved_date || '')
     || (a.created_at || '').localeCompare(b.created_at || '')
     || String(a.id).localeCompare(String(b.id));
@@ -143,6 +149,31 @@ export function isPupAvailable(dog, sales = []) {
   if (dog.status === 'deceased') return false;
   if (dog.disposition === 'keeping' || dog.disposition === 'placed') return false;
   return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASING_SALE_STATUSES.includes(s.status));
+}
+
+// The breeds a family can ask for on this kennel's list (decided 2026-10-06: a
+// dropdown, never free text, so a misspelling or shorthand can't make a family
+// match no pup). The breeds of the kennel's own non-archived dogs — what its pups
+// are actually recorded as — plus the kennel's preferred breeds, deduped
+// case-insensitively (a dog's spelling wins), sorted.
+export function kennelBreeds(kennel, dogs = []) {
+  if (!kennel) return [];
+  const seen = new Map();
+  const add = (raw) => {
+    const b = String(raw ?? '').trim();
+    if (b && !seen.has(key(b))) seen.set(key(b), b);
+  };
+  for (const d of dogs) if (!d.is_archived && d.kennel_id === kennel.id) add(d.breed);
+  for (const b of kennel.preferred_breeds || []) add(b);
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+// The kennel's own spelling of `value` (case-insensitive, trimmed), or null when
+// it isn't one of `breeds`. Blank → '' (any breed).
+export function resolveBreed(value, breeds) {
+  const k = key(value);
+  if (!k) return '';
+  return breeds.find((b) => key(b) === k) || null;
 }
 
 // The family's listed colors as an array of lowercase tokens. Stored as an array,
@@ -219,6 +250,43 @@ const SPENT_OUTCOMES = ['open', 'accepted', 'passed', 'no_response'];
 
 export function hasOpenOffer(offers, litterId) {
   return offers.some((o) => !o.is_archived && o.litter_id === litterId && o.outcome === 'open');
+}
+
+// An open offer whose family has picked a pup but hasn't sent the deposit yet
+// (Spec §6.5). The pick is held by a deposit-pending Sale (offer.sale_id); the
+// offer only becomes `accepted`, and the turn only moves on, once the deposit is in.
+export const isAwaitingDeposit = (o) => Boolean(o) && o.outcome === 'open' && Boolean(o.chosen_dog_id);
+
+// The pups a family could switch their pick to: this litter's available pups that
+// match their preferences, other than the one they hold now. Ignores list status on
+// purpose — after the deposit the family is `placed`, and a switch is still allowed
+// until the next family has been offered (see canSwitchAcceptedPick).
+export function switchablePups(entry, litter, pups, sales, { currentDogId = null, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
+  return pups.filter((d) => d.litter_id === litter.id && d.id !== currentDogId
+    && isPupAvailable(d, sales) && pupMatchesPrefs(entry, d, config));
+}
+
+// An ACCEPTED offer's pup can still be switched while nobody else has been offered
+// on that litter since (Spec §6.5). An offer made later and then voided doesn't
+// count — the turn never really moved on.
+export function canSwitchAcceptedPick(offer, litterOffers) {
+  if (!offer || offer.outcome !== 'accepted' || !offer.chosen_dog_id) return false;
+  return !litterOffers.some((o) => o.id !== offer.id && !o.is_archived && o.litter_id === offer.litter_id
+    && o.outcome !== 'voided' && (o.created_at || '') > (offer.created_at || ''));
+}
+
+// Can this closed pass / no response be undone (Spec §6.4)? The family must still be
+// on the list, or removed by THIS pass's second-pass removal within the undo window.
+// Returns '' when it can, else the reason it can't.
+export function undoPassBlocker(offer, entry, today) {
+  if (!offer || !['passed', 'no_response'].includes(offer.outcome)) return 'Only a pass or a no response can be undone.';
+  if (!entry) return 'That family no longer exists.';
+  if (entry.is_archived) return 'That family\'s entry is archived.';
+  if (entry.status === 'active') return '';
+  if (entry.status === 'removed' && entry.removed_reason === 'second_pass') {
+    return canUndoRemoval(entry, today) ? '' : 'Their removal can no longer be undone.';
+  }
+  return 'They\'re no longer on the list.';
 }
 
 // Who's next for this litter (Spec §6.5, sequential picks): the first family in
@@ -437,7 +505,11 @@ export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d
 // the list) and `next` / `offered` (families now holding a turn, whom she must
 // contact — W1 sends nothing). `nameOf(entryId)` and `litterOf(litterId)` give
 // display names; `fmtDate` formats a YYYY-MM-DD. [] when nothing changed.
-export function describeOfferChanges({ next = null, voided = [], offered = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {
+//
+// `waiting` lists the families who are next but were NOT offered because she has
+// automatic offers turned off (waitlist_config.auto_offer_next): [{ litter_id,
+// entry_id }]. She offers them herself.
+export function describeOfferChanges({ next = null, voided = [], offered = [], waiting = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {
   const lines = [];
   if (voided.length) {
     lines.push(`Their open offer${voided.length === 1 ? '' : 's'} on ${voided.map((o) => litterOf(o.litter_id)).join(', ')} ${voided.length === 1 ? 'was' : 'were'} voided (not a pass).`);
@@ -445,6 +517,9 @@ export function describeOfferChanges({ next = null, voided = [], offered = [] } 
   for (const o of [next, ...offered].filter(Boolean)) {
     lines.push(`${litterOf(o.litter_id)}: now offered to ${nameOf(o.entry_id)}, respond by ${fmtDate(o.respond_by_date)}. Let them know; nothing is sent automatically.`);
   }
-  if (voided.length && !offered.length) lines.push('Nobody else on the list is eligible for those litters right now.');
+  for (const w of waiting) {
+    lines.push(`${litterOf(w.litter_id)}: ${nameOf(w.entry_id)} is next in line. No offer was made (automatic offers are off); offer it when you're ready.`);
+  }
+  if (voided.length && !offered.length && !waiting.length) lines.push('Nobody else on the list is eligible for those litters right now.');
   return lines;
 }

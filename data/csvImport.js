@@ -24,7 +24,7 @@ import { expenseRepo, mileageAmount } from './expenseRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { formQuestions, isAnswerQuestion, snapshotQuestions, columnsFor, IMPORT_ALIASES } from './waitlistForm.js';
-import { waitlistConfig } from './waitlistRules.js';
+import { waitlistConfig, kennelBreeds, resolveBreed } from './waitlistRules.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
@@ -1388,13 +1388,16 @@ const WAITLIST_MAPPING = {
   requiredForCreate: ['name', 'email'],
 
   async loadExisting() {
-    const [entries, own, programs, contacts] = await Promise.all([
+    const [entries, own, programs, contacts, dogs] = await Promise.all([
       waitlistEntryRepo.getAll(),
       ownKennels(),
       waitlistProgramRepo.getAll(),
-      contactRepo.getAll({ includeArchived: true })
+      contactRepo.getAll({ includeArchived: true }),
+      dogRepo.getAll()
     ]);
     this._own = own;
+    // Each kennel's breeds: a breed preference must be one of them (never free text).
+    this._breedsByKennel = new Map(own.map((k) => [k.id, kennelBreeds(k, dogs)]));
     this._formByKennel = new Map(own.map((k) => [k.id, formQuestions(waitlistConfig(k))]));
     this._programs = programs;
     this._contactsById = new Map(contacts.map((c) => [c.id, c]));
@@ -1465,8 +1468,14 @@ const WAITLIST_MAPPING = {
       if (v) record.pref_sex = v;
       else reasons.push(`Unrecognized sex preference "${sexRaw}" (left as either).`);
     }
+    // Breed resolves against that kennel's breeds (case-insensitive) and takes the
+    // kennel's spelling; an unknown one is flagged and left as any, never invented.
     const breed = col(row, ...colsFor('pref_breed'));
-    if (breed) record.pref_breed = breed;
+    if (breed) {
+      const hit = resolveBreed(breed, (this._breedsByKennel && this._breedsByKennel.get(record.kennel_id)) || []);
+      if (hit) record.pref_breed = hit;
+      else reasons.push(`Breed "${breed}" isn't one of this kennel's breeds (left as any). Pick it on their page.`);
+    }
     const placementRaw = col(row, ...colsFor('pref_placement'));
     if (placementRaw) {
       const v = normEnum(PLACEMENT_TYPE, placementRaw);

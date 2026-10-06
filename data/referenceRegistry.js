@@ -125,7 +125,8 @@ export const KENNEL_REFERENCES = [
 // --- Sale: what can point at a Sale (Stage 4) -------------------------------
 export const SALE_REFERENCES = [
   { table: 'contracts', field: 'related_sale_id', label: 'documented by a contract' },
-  { table: 'waitlist_entries', field: 'placed_sale_id', label: 'placement of a waitlist family' }
+  { table: 'waitlist_entries', field: 'placed_sale_id', label: 'placement of a waitlist family' },
+  { table: 'waitlist_offers', field: 'sale_id', label: 'a waitlist family\'s pick' }
 ];
 
 // --- StudService: what can point at a StudService (Stage 4) ----------------

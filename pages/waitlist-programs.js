@@ -34,7 +34,7 @@ function adjustments(p) {
   out.push(esc(feeLabel(p)));
   if (p.passes_count === false) out.push('Passes don\'t count');
   if (p.pause_allowed) out.push('May pause');
-  if (p.respond_days_override) out.push(`${esc(p.respond_days_override)} days to respond`);
+  if (p.respond_days_override) out.push(`${esc(p.respond_days_override)} days to accept and pay`);
   return out.join(' · ');
 }
 
@@ -82,7 +82,7 @@ function renderForm() {
           <span class="field-hint">Ahead: listed before standard families, still in fee-date order among themselves.</span></div>
         <div class="field"><label>Application fee</label><input id="p-fee" type="number" min="0" step="0.01" value="${esc(p.fee_override ?? '')}" placeholder="Normal fee${ctx.config.fee_amount != null ? ` (${fmtMoney(ctx.config.fee_amount)})` : ''}">
           <span class="field-hint">Blank = your normal fee. 0 = waived (they join the list as soon as you approve them).</span></div>
-        <div class="field"><label>Days to respond to an offer</label><input id="p-respond" type="number" min="1" step="1" value="${esc(p.respond_days_override ?? '')}" placeholder="Normal (${esc(ctx.config.respond_days)})"></div>
+        <div class="field"><label>Days to accept and pay the deposit</label><input id="p-respond" type="number" min="1" step="1" value="${esc(p.respond_days_override ?? '')}" placeholder="Normal (${esc(ctx.config.respond_days)})"></div>
         <div class="field field-wide">
           <label class="check-inline"><input id="p-passes" type="checkbox"${p.passes_count === false ? ' checked' : ''}> Passes by these families don't count toward removal</label>
           <label class="check-inline"><input id="p-pause" type="checkbox"${p.pause_allowed ? ' checked' : ''}> These families may pause without it counting against them</label>

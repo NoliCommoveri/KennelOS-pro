@@ -1,15 +1,17 @@
 // waitlistUI.js — page-side helpers shared by the three Pro-only waitlist pages
 // (waitlist / waitlist-entry / waitlist-programs; Waitlist Spec §11, End-State
 // guide §29). Which kennel's list a page shows, the kennel picker, and the
-// one-line preference summary. Pro-only like the pages (proPages.js).
+// one-line preference summary, and the offer dialogs (pick a pup, deposit received,
+// change pup, undo a pass) shared by the family page and the litter's picks panel.
+// Pro-only like the pages (proPages.js).
 import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
 import { getMyKennelId } from '../data/settings.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
-import { esc, fmtDate } from './ui.js';
+import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal } from './ui.js';
 import { PLACEMENT_TYPE, descriptor } from '../data/vocab.js';
 import { isPaused, soonNoticeText, entryName } from '../data/waitlistRules.js';
-import { markSoonNotified } from '../data/waitlistActions.js';
+import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass } from '../data/waitlistActions.js';
 import { DemoModeError } from '../data/demoMode.js';
 
 // The kennel whose list to show, in priority order: an explicit ?kennel= id (one
@@ -75,8 +77,8 @@ export function entryFlags(entry, today) {
 // A form dialog in the app's modal chrome (same markup as ui.js's dialogs).
 // `onConfirm(overlay)` reads the fields and does the work; throwing shows the
 // message inside the dialog and keeps it open. Resolves true once confirmed,
-// false on cancel/backdrop.
-export function formModal({ title, bodyHtml, confirmLabel = 'Save', danger = false, onConfirm }) {
+// false on cancel/backdrop. `onOpen(overlay)` (optional) wires live controls.
+export function formModal({ title, bodyHtml, confirmLabel = 'Save', danger = false, onConfirm }, onOpen = null) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -90,6 +92,7 @@ export function formModal({ title, bodyHtml, confirmLabel = 'Save', danger = fal
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    if (onOpen) onOpen(overlay);
     const done = (val) => { overlay.remove(); resolve(val); };
     const confirmBtn = overlay.querySelector('[data-fm-confirm]');
     confirmBtn.addEventListener('click', async () => {
@@ -214,4 +217,100 @@ function wireSoonNotice(overlay, { kennel, send, emailOf, litterIdsOf }) {
     if (recipients.length) record(recipients);
   });
   refresh();
+}
+
+// --- Offer dialogs (Spec §6.4–§6.5) ---------------------------------------------------
+// Each runs its dialog and the write, and resolves to the action's result, or null
+// when she cancels. `pupLabel(dog)` names a pup in a dropdown.
+
+const pupOptions = (pups, pupLabel) => pups.map((p) => `<option value="${esc(p.id)}">${esc(pupLabel(p))}</option>`).join('');
+
+// The family picked a pup. Usually that's all she records now: a deposit-pending
+// Sale holds the pup and the offer stays open until the deposit arrives (their
+// respond-by date is the deadline). Ticking "deposit received" does both at once.
+// Resolves { res, depositDone } or null.
+export async function pickDialog({ offer, name, pups, pupLabel }) {
+  let out = null;
+  const ok = await formModal({
+    title: `${name} picked a pup`,
+    confirmLabel: 'Record their pick',
+    bodyHtml: `<div class="field"><label>Which pup?</label><select id="pk-dog">${pupOptions(pups, pupLabel)}</select></div>
+      <div class="field"><label>Date</label><input id="pk-date" type="date" value="${esc(todayYMD())}"></div>
+      <label class="check-inline" style="display:block;margin:8px 0;"><input id="pk-paid" type="checkbox"> Their deposit is already in</label>
+      <div id="pk-paid-fields" class="form-grid" hidden>
+        <div class="field"><label>Deposit received</label><input id="pk-dep-date" type="date" value="${esc(todayYMD())}"></div>
+        <div class="field"><label>Amount</label><input id="pk-dep-amount" type="number" min="0" step="0.01" placeholder="The litter's expected deposit"></div>
+      </div>
+      <p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(fmtDate(offer.respond_by_date))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`,
+    onConfirm: async (o) => {
+      const chosenDogId = o.querySelector('#pk-dog').value;
+      const date = o.querySelector('#pk-date').value || todayYMD();
+      if (o.querySelector('#pk-paid').checked) {
+        out = { depositDone: true, res: await recordOutcome(offer.id, 'accepted', {
+          chosenDogId, date,
+          depositDate: o.querySelector('#pk-dep-date').value || date,
+          depositAmount: o.querySelector('#pk-dep-amount').value
+        }) };
+      } else {
+        out = { depositDone: false, res: await recordPick(offer.id, { chosenDogId, date }) };
+      }
+    }
+  }, (o) => {
+    const box = o.querySelector('#pk-paid');
+    box.addEventListener('change', () => { o.querySelector('#pk-paid-fields').hidden = !box.checked; });
+  });
+  return ok ? out : null;
+}
+
+// The deposit for their pick arrived: they're placed and the turn moves on.
+// `sale` (the held Sale, may be null) prefills the amount.
+export async function depositDialog({ offer, name, pupName, sale }) {
+  let res = null;
+  const ok = await formModal({
+    title: `${name}'s deposit received`,
+    confirmLabel: 'Deposit received',
+    bodyHtml: `<p style="margin-top:0;">For <strong>${esc(pupName)}</strong>.</p>
+      <div class="form-grid">
+        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || todayYMD())}"></div>
+        <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
+      </div>
+      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}</p>`,
+    onConfirm: async (o) => {
+      res = await confirmDeposit(offer.id, { date: o.querySelector('#dp-date').value || todayYMD(), amount: o.querySelector('#dp-amount').value });
+    }
+  });
+  return ok ? res : null;
+}
+
+// Switch the pup they picked (they clicked the wrong one). `pups` are the pups
+// they could switch to (waitlistRules.switchablePups).
+export async function changePickDialog({ offer, name, currentName, pups, pupLabel }) {
+  if (!pups.length) {
+    await alertModal({ title: 'No other pup to switch to', message: `No other available pup in this litter matches what ${name} wants.` });
+    return null;
+  }
+  let res = null;
+  const ok = await formModal({
+    title: `Change ${name}'s pup`,
+    confirmLabel: 'Switch pup',
+    bodyHtml: `<p style="margin-top:0;">They picked <strong>${esc(currentName)}</strong>.</p>
+      <div class="field"><label>Switch to</label><select id="cp-dog">${pupOptions(pups, pupLabel)}</select></div>
+      <p class="field-hint">The same sale moves to the new pup, and ${esc(currentName)} is available again. The price and deposit follow the new pup's expected amounts unless you changed them on the sale.</p>`,
+    onConfirm: async (o) => { res = await changePick(offer.id, { chosenDogId: o.querySelector('#cp-dog').value }); }
+  });
+  return ok ? res : null;
+}
+
+// Undo a pass / no response: the family is next in line for this litter again.
+// `holderName` names the family holding the litter's turn now (their offer is
+// voided), or null.
+export async function undoPassDialog({ offer, name, holderName = null, removed = false }) {
+  const what = offer.outcome === 'passed' ? 'pass' : 'no response';
+  const lines = [
+    `${name}'s ${what} is erased and doesn't count. Their offer reopens with a new respond-by date, so they're next in line for this litter again.`,
+    removed ? 'That pass had removed them from the list, so they go back on it in their old place.' : '',
+    holderName ? `${holderName} holds this litter's turn now. Their offer will be voided (not a pass), and they're next again after ${name}. Let them know.` : ''
+  ].filter(Boolean);
+  if (!(await confirmModal({ title: `Undo ${name}'s ${what}?`, message: lines.join('\n\n'), confirmLabel: 'Undo it' }))) return null;
+  return undoPass(offer.id);
 }

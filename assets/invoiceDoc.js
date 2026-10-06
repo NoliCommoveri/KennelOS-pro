@@ -14,6 +14,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
+import { eventRepo } from '../data/eventRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { getActiveKennel } from '../data/kennelScope.js';
@@ -68,6 +69,22 @@ async function loadSource(source, id) {
   return { record, dog, recipient, myContact, ownKennel };
 }
 
+// A Sale's due date for everything but the deposit: the soonest of its
+// balance_due_date and any scheduled placement (drop-off) event for the puppy.
+// Read LIVE every time a document is built, so editing the Sale changes the next
+// view/PDF — nothing about an invoice is stored. Also the Financials generator's
+// per-line prefill.
+export async function saleDueDate(sale) {
+  const dates = [];
+  if (sale.balance_due_date) dates.push(sale.balance_due_date);
+  if (sale.dog_id) {
+    const evs = await eventRepo.getForSubject('dog', sale.dog_id);
+    for (const e of evs) if (!e.is_archived && e.event_type === 'placement' && e.event_date) dates.push(e.event_date);
+  }
+  dates.sort();
+  return dates[0] || '';
+}
+
 // The application fee as one line item (Waitlist Spec §5.3).
 function waitlistLines(entry) {
   const amount = numOf(entry.fee_amount);
@@ -93,13 +110,19 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
   const items = isFee ? waitlistLines(record) : incomeLineItems(source, record, { feeCredit });
   const baseByKey = new Map(items.map((it) => [it.component, it.amount]));
 
+  // The record's own due date, read now: a sale's balance due / pickup date, a
+  // fee's pay-by date. A line with no dueDate of its own (the default, or a
+  // generator line she didn't change) uses it, so the document always matches the
+  // record as it is today.
+  const liveDue = isSale ? await saleDueDate(record) : (isFee ? (record.fee_due_date || '') : '');
+
   // Config — from the generator, or a full-line default (every cash line, full,
-  // nothing collected, no dates). A fee invoice's line is due by its pay-by date.
+  // nothing collected, the record's due date).
   if (!cfg) {
     cfg = {
       number: isFee ? '' : (record.invoice_number || '').trim(),
       notes: isFee ? '' : (record.invoice_notes || '').trim(),
-      lines: [...baseByKey.keys()].map((key) => ({ key, mode: 'full', collected: 0, dueDate: isFee ? (record.fee_due_date || '') : '' })),
+      lines: [...baseByKey.keys()].map((key) => ({ key, mode: 'full', collected: 0 })),
       methods: getInvoiceDefaults().acceptedMethods,
       payMethod: isFee ? (record.fee_payment_method || '') : (record.payment_method || ''),
       payReference: isFee ? (record.fee_payment_reference || '') : (record.payment_reference || '')
@@ -137,7 +160,8 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
       subtotal += amount;
       // Deposits are always due immediately; the calculated due date (expected
       // pickup / nine-weeks-of-age, or a fee's pay-by date) applies to the rest.
-      const due = line.key === 'deposit' ? 'Immediately' : (line.dueDate ? fmtDateMDY(line.dueDate) : '');
+      const dueDate = line.dueDate == null ? liveDue : line.dueDate;
+      const due = line.key === 'deposit' ? 'Immediately' : (dueDate ? fmtDateMDY(dueDate) : '');
       rows.push({ label, marker, due, amount });
     }
   }

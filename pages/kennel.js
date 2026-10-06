@@ -364,13 +364,16 @@ function waitlistCard(k) {
         <div class="field"><label>The fee is</label><select id="wl-policy">${policyOpts}</select></div>
         <div class="field"><label>Days to pay after approval</label><input id="wl-fee-days" type="number" min="1" step="1" value="${esc(c.fee_due_days ?? '')}" placeholder="No deadline">
           <span class="field-hint">Blank = no pay-by date, so nothing ever expires.</span></div>
-        <div class="field"><label>Days to respond to an offer</label><input id="wl-respond" type="number" min="1" step="1" value="${esc(c.respond_days)}"></div>
+        <div class="field"><label>Days to accept and pay the deposit</label><input id="wl-respond" type="number" min="1" step="1" value="${esc(c.respond_days)}">
+          <span class="field-hint">From the offer. A pup they pick is held until then; no deposit in time counts as no response.</span></div>
         <div class="field"><label>Passes before removal</label><input id="wl-passes" type="number" min="1" step="1" value="${esc(c.max_passes)}"></div>
         <div class="field field-wide"><label>Payment instructions</label><textarea id="wl-instructions" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions)}</textarea>
           <span class="field-hint">What you tell approved families about paying the fee.</span></div>
         <div class="field field-wide">
           <label class="check-inline"><input id="wl-noresp" type="checkbox"${c.no_response_counts_as_pass ? ' checked' : ''}> No response by the deadline counts as a pass</label>
           <label class="check-inline"><input id="wl-colors" type="checkbox"${c.color_matching ? ' checked' : ''}> Match on color (only offer pups in a color the family listed)</label>
+          <label class="check-inline"><input id="wl-auto" type="checkbox"${c.auto_offer_next ? ' checked' : ''}> Offer the next family automatically when an offer closes</label>
+          <span class="field-hint">Off: every offer is made by you, with "Offer to them" or "Offer a litter…"; the app just tells you who's next.</span>
         </div>
         <div class="field field-wide"><label for="wl-soon-text">"Almost your turn" message</label>
           <textarea id="wl-soon-text" style="min-height:130px;">${esc(c.soon_notice_text || SOON_NOTICE_DEFAULT)}</textarea>
@@ -394,6 +397,7 @@ async function onSaveWaitlist() {
     payment_instructions: q('#wl-instructions').value.trim(),
     no_response_counts_as_pass: q('#wl-noresp').checked,
     color_matching: q('#wl-colors').checked,
+    auto_offer_next: q('#wl-auto').checked,
     // Stored only when she's changed it, so the default wording stays the default.
     soon_notice_text: q('#wl-soon-text').value.trim() === SOON_NOTICE_DEFAULT.trim() ? '' : q('#wl-soon-text').value.trim()
   };

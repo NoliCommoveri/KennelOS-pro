@@ -11,7 +11,9 @@
 //   id     = <record id>
 //   doc    = 'invoice' | 'receipt'  (default 'invoice')
 //   cfg    = URL-encoded JSON built by the Financials generator modal:
-//            { number, notes, lines:[{key,mode:'full'|'partial',collected,dueDate}],
+//            { number, notes, lines:[{key,mode:'full'|'partial',collected,dueDate?}],
+//              (dueDate only when she changed it from the record's own date —
+//              absent = read the record's due date live, invoiceDoc.saleDueDate)
 //              methods:[…]  (invoice: accepted methods),
 //              payMethod, payReference  (receipt: method used) }
 //

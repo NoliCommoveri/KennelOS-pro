@@ -66,7 +66,10 @@ export const PRO_ONLY_STANDALONE = [
   // Invoice / receipt document model + its PDF renderer (Waitlist Spec §15.2),
   // used only by the Pro invoice page and the waitlist family page, and the
   // vendored jsPDF they load on demand.
-  'assets/invoiceDoc.js', 'assets/invoicePdf.js', 'vendor/jspdf.umd.min.js'
+  'assets/invoiceDoc.js', 'assets/invoicePdf.js', 'vendor/jspdf.umd.min.js',
+  // The Invoice / Receipt generator modal, opened from Financials and a Sale's
+  // page — both import it dynamically only when editionFlags.invoicing is on.
+  'assets/invoiceGenerator.js'
 ];
 
 // True when a link target (an href like "contact-import.html" or with a query string)

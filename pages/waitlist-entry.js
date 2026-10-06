@@ -22,7 +22,8 @@ import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches,
   entryName, canUndoRemoval, isPaused, rankedList, REMOVAL_UNDO_DAYS,
   eligiblePupsFor, nextFamilyForLitter, turnSpent, hasOpenOffer, isListeningFor, isPupAvailable,
-  describeOfferChanges
+  describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
+  kennelBreeds, resolveBreed
 } from '../data/waitlistRules.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired
@@ -33,7 +34,10 @@ import {
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal } from '../assets/ui.js';
-import { resolveWaitlistKennel, prefsSummary, entryFlags, formModal } from '../assets/waitlistUI.js';
+import {
+  resolveWaitlistKennel, prefsSummary, entryFlags, formModal,
+  pickDialog, depositDialog, changePickDialog, undoPassDialog
+} from '../assets/waitlistUI.js';
 
 const els = {
   title: document.getElementById('entry-title'),
@@ -76,7 +80,7 @@ const programOptions = (current) => `<option value="">— none —</option>` + [
 // --- Loading ------------------------------------------------------------------
 
 async function loadKennelContext(kennelId) {
-  const [kennel, programs, kennelEntries, contacts, litters, pairings, dogs, breeds, kennelOffers, sales] = await Promise.all([
+  const [kennel, programs, kennelEntries, contacts, litters, pairings, dogs, kennelOffers, sales] = await Promise.all([
     kennelRepo.getById(kennelId),
     waitlistProgramRepo.getMapForKennel(kennelId),
     waitlistEntryRepo.getByKennel(kennelId),
@@ -84,7 +88,6 @@ async function loadKennelContext(kennelId) {
     litterRepo.getAll({ includeArchived: true }),
     pairingRepo.getAll({ includeArchived: true }),
     dogRepo.getAll({ includeArchived: true }),
-    kennelRepo.getBreedVocabulary(),
     waitlistOfferRepo.getByKennel(kennelId),
     saleRepo.getAll({ includeArchived: true })
   ]);
@@ -93,7 +96,8 @@ async function loadKennelContext(kennelId) {
     litters: litters.filter((l) => l.kennel_id === kennelId),
     pairings: pairings.filter((p) => p.kennel_id === kennelId),
     dogsById: new Map(dogs.map((d) => [d.id, d])),
-    breeds, kennelOffers, sales
+    // The breed dropdown's choices: this kennel's breeds only (never free text).
+    breeds: kennelBreeds(kennel, dogs), kennelOffers, sales
   });
 }
 
@@ -321,7 +325,7 @@ async function onMove() {
       <label class="check-inline" style="display:block;"><input type="radio" name="mv" value="date" checked> Place them as if they paid on
         <input id="mv-date" type="date" value="${esc(e.position_anchor_date || anchorDate(e))}"></label>
       ${others.length ? `<label class="check-inline" style="display:block;margin-top:8px;"><input type="radio" name="mv" value="after"> Place them with <select id="mv-after">${otherOpts}</select></label>
-      <p class="field-hint">Places are kept by date, so this gives them that family's date. Families on the same date are ordered by approval date, so they may land just before or after.</p>` : ''}
+      <p class="field-hint">Places are kept by date, so this gives them that family's date. Families on the same date are ordered by when their fee was recorded, so they may land just before or after.</p>` : ''}
       ${e.position_anchor_date ? '<label class="check-inline" style="display:block;margin-top:8px;"><input type="radio" name="mv" value="clear"> Undo the move (back to their fee date)</label>' : ''}
       <p class="field-hint">Programs that put families ahead still come first. The real fee date is kept.</p>`,
     onConfirm: async (o) => {
@@ -363,7 +367,7 @@ function renderView() {
     <dl class="dl-meta" style="margin-top:14px;">
       ${row('Contact', contactHtml)}
       ${row('Program', program ? esc(program.name) + (program.is_archived ? ' <span class="badge badge-gray">archived</span>' : '') : '')}
-      ${row('Wants', prefsSummary(e))}
+      ${row('Wants', prefsSummary(e) + (e.pref_breed && resolveBreed(e.pref_breed, ctx.breeds) === null ? ` <span class="badge badge-red" title="No pup will match this breed. Edit to pick one of your breeds.">Unknown breed</span>` : ''))}
       ${row('Listening for', esc(listenSummary(e)))}
       ${row('Paused until', e.paused_until ? esc(fmtDate(e.paused_until)) + (e.pause_reason ? ` <span class="faint">— ${esc(e.pause_reason)}</span>` : '') : '')}
       ${row('Fee', e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : '')}
@@ -423,13 +427,19 @@ function answerField(q, value) {
 // The four preference fields. Their answers live on the entry's pref_* fields, so
 // they keep fixed element ids; `label` is her wording on the new-application form.
 function prefField(key, e, label) {
-  const breedList = ctx.breeds.map((b) => `<option value="${esc(b)}"></option>`).join('');
+  // A stored breed that isn't one of the kennel's (typed before this was a
+  // dropdown, or imported) stays selectable, flagged, so saving never clears it.
+  const current = e.pref_breed || '';
+  const known = resolveBreed(current, ctx.breeds);
+  const breedOpts = `<option value="">Any breed</option>`
+    + ctx.breeds.map((b) => `<option value="${esc(b)}"${known && b === known ? ' selected' : ''}>${esc(b)}</option>`).join('')
+    + (current && known === null ? `<option value="${esc(current)}" selected>${esc(current)} (not one of your breeds)</option>` : '');
   switch (key) {
     case 'pref_sex':
       return `<div class="field"><label>${esc(label || 'Sex')}</label><select id="f-pref_sex">${options(WAITLIST_PREF_SEX, e.pref_sex || 'any')}</select></div>`;
     case 'pref_breed':
-      return `<div class="field"><label>${esc(label || 'Breed')}</label><input id="f-pref_breed" type="text" list="breed-list" value="${esc(e.pref_breed || '')}" placeholder="Any breed"><datalist id="breed-list">${breedList}</datalist>
-        <span class="field-hint">Only pups of this breed are offered to them. Leave blank for any.</span></div>`;
+      return `<div class="field"><label>${esc(label || 'Breed')}</label><select id="f-pref_breed">${breedOpts}</select>
+        <span class="field-hint">${ctx.breeds.length ? 'Only pups of this breed are offered to them.' : 'No breeds yet: give this kennel\'s dogs a breed, or add preferred breeds on the kennel page.'}${current && known === null ? ' <strong>Their current breed doesn\'t match any of your dogs\' breeds, so no pup will match it. Pick the right one.</strong>' : ''}</span></div>`;
     case 'pref_placement':
       return `<div class="field"><label>${esc(label || 'Placement')}</label><select id="f-pref_placement_type">${options(PLACEMENT_TYPE, e.pref_placement_type || '', 'Any')}</select></div>`;
     case 'pref_colors':
@@ -610,7 +620,7 @@ async function onOfferLitter() {
     confirmLabel: 'Make the offer',
     bodyHtml: choices.length
       ? `${choices.map(rowHtml).join('')}
-         <p class="field-hint">They get ${esc(days)} days to respond. Offering someone who isn't next doesn't change anyone's place; the next family is offered once this one is settled. Nothing is sent automatically, so tell them yourself.</p>`
+         <p class="field-hint">They get ${esc(days)} days to pick a pup and send the deposit. Offering someone who isn't next doesn't change anyone's place; the next family ${ctx.config.auto_offer_next ? 'is offered' : 'is up'} once this one is settled. Nothing is sent automatically, so tell them yourself.</p>`
       : '<p class="muted">No upcoming or current litters on this kennel yet.</p>',
     onConfirm: async (o) => {
       const picked = o.querySelector('input[name="ol"]:checked');
@@ -628,38 +638,61 @@ async function onOfferLitter() {
   }) && afterAction();
 }
 
+// The turn-moves-on sentence for the outcome prompts: with automatic offers off
+// (the default) nobody is offered; she's told who's next.
+const turnNote = () => (ctx.config.auto_offer_next
+  ? 'The turn moves to the next eligible family.'
+  : 'Nobody is offered automatically; you\'ll see who\'s next.');
+
 async function onOfferOutcome(offer, outcome) {
   const e = ctx.entry;
   const name = entryName(e, ctx.contact);
   const litter = ctx.litters.find((l) => l.id === offer.litter_id);
-  if (outcome === 'accepted') {
-    const live = litter ? eligiblePupsFor(e, litter, kennelLitterPups(litter), ctx.sales, { today: todayYMD(), config: ctx.config }) : [];
+  const pups = litter ? kennelLitterPups(litter) : [];
+
+  if (outcome === 'pick') {
+    const live = litter ? eligiblePupsFor(e, litter, pups, ctx.sales, { today: todayYMD(), config: ctx.config }) : [];
     if (!live.length) { await alertModal({ title: 'No pups available', message: 'None of the pups offered to them is still available.' }); return; }
-    let saleId = null;
-    let res = null;
-    const done = await formModal({
-      title: `${name} accepted a pup`,
-      confirmLabel: 'Record and create the sale',
-      bodyHtml: `<div class="field"><label>Which pup?</label><select id="oc-dog">${live.map((p) => `<option value="${esc(p.id)}">${esc(pupLabel(p))}</option>`).join('')}</select></div>
-        <div class="field"><label>Date</label><input id="oc-date" type="date" value="${esc(todayYMD())}"></div>
-        <p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts), marks the pup placed, and marks the family placed. Any other open offers they have are voided.</p>`,
-      onConfirm: async (o) => {
-        res = await actions.recordOutcome(offer.id, 'accepted', { chosenDogId: o.querySelector('#oc-dog').value, date: o.querySelector('#oc-date').value || todayYMD() });
-        saleId = res.sale.id;
-      }
-    });
-    if (!done) return;
+    const out = await pickDialog({ offer, name, pups: live, pupLabel });
+    if (!out) return;
     await afterAction();
-    const changes = offerChangeLines(res);
-    if (await confirmModal({ title: 'Sale created', message: `${changes.length ? `${changes.join('\n\n')}\n\n` : ''}Open the sale to add the deposit and details? Their invoice and receipts are under Documents on this page.`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
+    const saleId = out.res.sale.id;
+    const message = out.depositDone
+      ? [`${name} is placed.`, ...offerChangeLines(out.res)].join('\n\n')
+      : `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${fmtDate(offer.respond_by_date)}. Send them the deposit details (the sale's invoice is under Documents on this page). Record "Deposit received" when it arrives.`;
+    if (await confirmModal({ title: out.depositDone ? 'Deposit received' : 'Pick recorded', message: `${message}\n\nOpen the sale?`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
       location.href = `sale.html?id=${encodeURIComponent(saleId)}`;
     }
     return;
   }
+  if (outcome === 'deposit') {
+    const res = await depositDialog({ offer, name, pupName: dogName(offer.chosen_dog_id), sale: ctx.sales.find((x) => x.id === offer.sale_id) || null });
+    if (!res) return;
+    await afterAction();
+    await alertModal({ title: `${name} is placed`, message: [`Deposit recorded for ${dogName(offer.chosen_dog_id)}.`, ...offerChangeLines(res)].join('\n\n') });
+    return;
+  }
+  if (outcome === 'change') {
+    const options = litter ? switchablePups(e, litter, pups, ctx.sales, { currentDogId: offer.chosen_dog_id, config: ctx.config }) : [];
+    if (await changePickDialog({ offer, name, currentName: dogName(offer.chosen_dog_id), pups: options, pupLabel })) await afterAction();
+    return;
+  }
+  if (outcome === 'undo') {
+    const holder = ctx.kennelOffers.find((o) => o.litter_id === offer.litter_id && o.outcome === 'open' && !o.is_archived && o.id !== offer.id);
+    const res = await undoPassDialog({ offer, name, holderName: holder ? familyNameById(holder.entry_id) : null, removed: e.status === 'removed' });
+    if (!res) return;
+    await afterAction();
+    await alertModal({ title: 'Their turn is back', message: [`${name} is next for ${litter ? litterLabel(litter) : 'this litter'} again, with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know; nothing is sent automatically.`, ...offerChangeLines(res)].join('\n\n') });
+    return;
+  }
+
+  const lapse = offer.chosen_dog_id ? ` Their pick lapses: the sale is cancelled and ${dogName(offer.chosen_dog_id)} is available again.` : '';
   const prompts = {
-    passed: { title: `${name} passed on this litter?`, message: 'The turn moves to the next eligible family.', confirmLabel: 'Record it' },
-    no_response: { title: `${name} didn't respond in time?`, message: 'The turn moves to the next eligible family.', confirmLabel: 'Record it' },
-    voided: { title: 'Void this offer?', message: `Use this if the offer was a mistake or the litter fell through. It never counts as a pass for ${name}, and the turn isn't moved on automatically.`, confirmLabel: 'Void it' }
+    passed: { title: `${name} passed on this litter?`, message: `${turnNote()}${lapse}`, confirmLabel: 'Record it' },
+    no_response: offer.chosen_dog_id
+      ? { title: `No deposit from ${name}?`, message: `Record that the deposit didn't arrive in time. It counts like no response. ${turnNote()}${lapse}`, confirmLabel: 'Record it' }
+      : { title: `${name} didn't respond in time?`, message: turnNote(), confirmLabel: 'Record it' },
+    voided: { title: 'Void this offer?', message: `Use this if the offer was a mistake or the litter fell through. It never counts as a pass for ${name}, and the turn isn't moved on automatically.${lapse}`, confirmLabel: 'Void it' }
   };
   if (!(await confirmModal(prompts[outcome]))) return;
   const res = await actions.recordOutcome(offer.id, outcome);
@@ -673,6 +706,22 @@ async function onOfferOutcome(offer, outcome) {
   }
 }
 
+// The buttons under one offer: what she can do with it now.
+function offerButtons(o, today) {
+  const btn = (oc, label, primary = false, title = '') => `<button class="btn ${primary ? 'btn-primary ' : ''}btn-sm" data-oc="${oc}" data-offer="${esc(o.id)}"${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</button>`;
+  let list = [];
+  if (isAwaitingDeposit(o)) {
+    list = [btn('deposit', 'Deposit received…', true), btn('change', 'Change pup…'), btn('passed', 'Passed'), btn('no_response', 'No deposit'), btn('voided', 'Void')];
+  } else if (o.outcome === 'open') {
+    list = [btn('pick', 'Picked a pup…', true), btn('passed', 'Passed'), btn('no_response', 'No response'), btn('voided', 'Void')];
+  } else if (canSwitchAcceptedPick(o, ctx.kennelOffers)) {
+    list = [btn('change', 'Change pup…', false, 'Allowed until the next family is offered this litter')];
+  } else if (!undoPassBlocker(o, ctx.entry, today)) {
+    list = [btn('undo', 'Undo…', false, 'Erase this and give them their turn back')];
+  }
+  return list.length ? `<div class="pill-row" style="margin-top:6px;">${list.join('')}</div>` : '';
+}
+
 function renderOffers() {
   if (ctx.mode !== 'view' || !ctx.offers.length) { els.offers.innerHTML = ''; return; }
   const today = todayYMD();
@@ -683,17 +732,17 @@ function renderOffers() {
         offers.map((o) => {
           const l = ctx.litters.find((x) => x.id === o.litter_id);
           const overdue = o.outcome === 'open' && o.respond_by_date && o.respond_by_date < today;
-          const buttons = o.outcome === 'open' ? `<div class="pill-row" style="margin-top:6px;">
-              <button class="btn btn-primary btn-sm" data-oc="accepted" data-offer="${esc(o.id)}">Accepted a pup…</button>
-              <button class="btn btn-sm" data-oc="passed" data-offer="${esc(o.id)}">Passed</button>
-              <button class="btn btn-sm" data-oc="no_response" data-offer="${esc(o.id)}">No response</button>
-              <button class="btn btn-sm" data-oc="voided" data-offer="${esc(o.id)}">Void</button></div>` : '';
+          const sale = o.sale_id && isAwaitingDeposit(o) ? ` · <a href="sale.html?id=${encodeURIComponent(o.sale_id)}">sale</a>` : '';
+          const status = isAwaitingDeposit(o)
+            ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>`
+            : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}`;
           return `<tr><td>${l ? `<a href="litter.html?id=${encodeURIComponent(l.id)}">${esc(litterLabel(l))}</a>` : none}</td>
             <td>${esc(fmtDate(o.offered_date))}</td><td>${o.respond_by_date ? esc(fmtDate(o.respond_by_date)) : none}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</td>
-            <td>${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${buttons}</td>
+            <td>${status}${offerButtons(o, today)}</td>
             <td>${o.counts_as_pass ? '<span class="badge badge-amber">Counts</span>' : none}${o.notes ? ` <span class="faint" title="${esc(o.notes)}">ⓘ</span>` : ''}</td></tr>`;
         }).join('')
       }</tbody></table></div>
+      <p class="field-hint" style="margin-bottom:0;">An offer is theirs to accept AND pay: a picked pup is held for them, but it's only theirs once the deposit arrives by the respond-by date.</p>
     </section>`;
   els.offers.querySelectorAll('[data-oc]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -710,6 +759,9 @@ function renderDocs() {
   if (ctx.mode !== 'view') { els.docs.innerHTML = ''; return; }
   const docs = [];
   if (e.fee_received_date && Number(e.fee_amount) > 0) docs.push({ label: 'Application fee receipt', source: 'waitlist', id: e.id, doc: 'receipt' });
+  for (const o of ctx.offers.filter((x) => isAwaitingDeposit(x) && x.sale_id && !x.is_archived)) {
+    docs.push({ label: `Puppy invoice for ${dogName(o.chosen_dog_id)} (deposit pending)`, source: 'sale', id: o.sale_id, doc: 'invoice' });
+  }
   if (e.placed_sale_id) {
     docs.push({ label: 'Puppy invoice', source: 'sale', id: e.placed_sale_id, doc: 'invoice' });
     docs.push({ label: 'Puppy receipt', source: 'sale', id: e.placed_sale_id, doc: 'receipt' });

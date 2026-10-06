@@ -37,7 +37,7 @@ import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { contactRepo } from './contactRepo.js';
-import { overdueOffers, overdueFees, canUndoRemoval, entryName, describeOfferChanges } from './waitlistRules.js';
+import { overdueOffers, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig } from './waitlistRules.js';
 import { recordOutcome, markFeeExpired, undoRemoval } from './waitlistActions.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
@@ -352,11 +352,13 @@ export async function computeNudges() {
 // A waitlist action's `run` returns the message Today shows afterwards (the turn
 // can move on to another family, who she must contact — never silently).
 async function waitlistNudges(today, litters, dogsById) {
-  const [entriesAll, offersAll, contacts] = await Promise.all([
+  const [entriesAll, offersAll, contacts, kennels] = await Promise.all([
     waitlistEntryRepo.getAll(),
     waitlistOfferRepo.getAll(),
-    contactRepo.getAll({ includeArchived: true })
+    contactRepo.getAll({ includeArchived: true }),
+    kennelRepo.getAll({ includeArchived: true })
   ]);
+  const kennelsById = new Map(kennels.map((k) => [k.id, k]));
   const entries = inScopeOnly(entriesAll);
   const offers = inScopeOnly(offersAll);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
@@ -389,11 +391,13 @@ async function waitlistNudges(today, litters, dogsById) {
     const l = littersById.get(o.litter_id);
     out.push({
       key: `waitlist-offer-overdue:${o.id}`,
-      title: `${name(e)}'s offer deadline passed`,
-      detail: `${l ? litterLabel(l, dogsById) : 'Litter'} — they had until ${o.respond_by_date}. Recording no response moves the turn on.`,
+      // A family that picked a pup but never sent the deposit: same outcome (their
+      // pick lapses and the held Sale is cancelled), worded for the deposit.
+      title: o.chosen_dog_id ? `${name(e)}'s deposit didn't arrive in time` : `${name(e)}'s offer deadline passed`,
+      detail: `${l ? litterLabel(l, dogsById) : 'Litter'} — they had until ${o.respond_by_date}${o.chosen_dog_id ? ' to send the deposit for their pick. Recording no deposit frees the pup' : '. Recording no response closes their turn'}${waitlistConfig(kennelsById.get(o.kennel_id)).auto_offer_next ? ' and offers the next family' : ''}.`,
       subjectHref: `litter.html?id=${encodeURIComponent(o.litter_id)}`,
       actions: [{
-        label: 'Record no response',
+        label: o.chosen_dog_id ? 'Record no deposit' : 'Record no response',
         run: async () => {
           const res = await recordOutcome(o.id, 'no_response');
           const fresh = new Map((await waitlistEntryRepo.getAll({ includeArchived: true })).map((x) => [x.id, x]));
@@ -407,7 +411,7 @@ async function waitlistNudges(today, litters, dogsById) {
             nameOf: (id) => (fresh.get(id) ? name(fresh.get(id)) : 'the next family'),
             litterOf: (id) => (littersById.get(id) ? litterLabel(littersById.get(id), dogsById) : 'A litter')
           }));
-          if (!res.next) lines.push('Nobody else on the list is eligible for this litter right now.');
+          if (!res.next && !res.waiting.length) lines.push('Nobody else on the list is eligible for this litter right now.');
           return { title: 'Recorded', message: lines.join('\n\n') };
         }
       }]

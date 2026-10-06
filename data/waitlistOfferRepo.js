@@ -4,7 +4,12 @@
 // `counts_as_pass` is written ONCE, by the page that records the outcome, from
 // waitlistRules.countsAsPass — stored, not derived, so a later rule or program
 // change never rewrites history. The only later change to it is the second-pass
-// undo, which forgives that one pass (Spec §0/§6.4).
+// undo, which forgives that one pass (Spec §0/§6.4), and undoing a pass outright,
+// which reopens the offer (§6.4).
+//
+// An OPEN offer may carry a pick: `chosen_dog_id` + `picked_date` + `sale_id` (the
+// deposit-pending Sale holding the pup) while the family sends the deposit
+// (§6.5). The offer only becomes `accepted` once the deposit is in.
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { WAITLIST_OFFER_REFERENCES } from './referenceRegistry.js';
@@ -26,10 +31,12 @@ function validateOffer(c) {
   }
 }
 
-// chosen_dog_id only means something on an accepted offer; clear it otherwise so a
-// voided/passed offer never keeps a pup pinned (or blocks that dog's hard delete).
+// chosen_dog_id only means something on an accepted offer or an open one holding a
+// pick; clear it otherwise so a voided/passed offer never keeps a pup pinned (or
+// blocks that dog's hard delete). The pick's date goes with it. sale_id stays: a
+// closed offer still records the Sale it created (cancelled when the pick lapsed).
 function normalize(c) {
-  return c.outcome === 'accepted' ? c : { ...c, chosen_dog_id: null };
+  return c.outcome === 'accepted' || c.outcome === 'open' ? c : { ...c, chosen_dog_id: null, picked_date: null };
 }
 
 // The offer, its family and its litter must all be on the same kennel's list.

@@ -296,11 +296,26 @@ async function renderHeaderActions() {
   const puppyRecordBtn = editionFlags.puppyRecord
     ? `<a class="btn btn-sm" id="btn-puppy-record" href="puppy-record.html?sale=${encodeURIComponent(s.id)}">Puppy Record (PDF)</a>`
     : '';
+  // Invoice / Receipt for THIS sale without a trip to Financials (Pro-only, like
+  // the Financials generator it opens; Lite never loads the module).
+  const invoiceBtn = editionFlags.invoicing
+    ? '<button class="btn btn-sm" id="btn-invoice">Invoice / Receipt</button>'
+    : '';
   els.headerActions.innerHTML = `
+    ${invoiceBtn}
     ${puppyRecordBtn}
     <button class="btn btn-sm" id="btn-archive">${archiveLabel}</button>
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
   document.getElementById('btn-archive').onclick = toggleArchive;
+  const inv = document.getElementById('btn-invoice');
+  if (inv) {
+    inv.onclick = async () => {
+      try {
+        const { openInvoiceGenerator } = await import('../assets/invoiceGenerator.js');
+        await openInvoiceGenerator({ preselect: { source: 'sale', id: s.id } });
+      } catch (err) { showError(err.message || String(err)); }
+    };
+  }
   const del = document.getElementById('btn-delete');
   if (!blockers.length) del.onclick = doDelete;
 }
