@@ -26,6 +26,7 @@
 // formats it. Bundle evolution is additive; COMPANION_BUNDLE_VERSION bumps only
 // on a breaking shape change.
 import { dogRepo } from './dogRepo.js';
+import { getSaleFeeCredit } from './incomeView.js';
 import { saleRepo } from './saleRepo.js';
 import { contractRepo } from './contractRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
@@ -344,9 +345,12 @@ export async function buildFamilyBundle(contact) {
       }
 
       // Remaining balance is COMPUTED here, never stored: price + transport fee +
-      // deferred boarding − deposit. Absent components count as 0.
+      // deferred boarding − deposit − a credited waitlist application fee already
+      // paid toward the price (Waitlist Spec §5.3; the same credit the Financials
+      // ledger and the invoice apply). Absent components count as 0.
+      const feeCredit = await getSaleFeeCredit(sale.id);
       const remainingBalance = price != null
-        ? Number(price) + Number(transportFee || 0) + deferredTotal - Number(deposit || 0)
+        ? Number(price) + Number(transportFee || 0) + deferredTotal - Number(deposit || 0) - feeCredit
         : null;
 
       // Deferred Pickup Boarding section — pinned to the top of the event history,

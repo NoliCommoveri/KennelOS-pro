@@ -59,7 +59,7 @@ const blankDog = () => ({
   call_name: '', registered_name: '', sex: '', date_of_birth: '', dob_is_estimated: false,
   date_of_death: '', breed: '', color_markings: '', registry: '', registration_number: '',
   microchip_id: '', url: '', sire_id: '', dam_id: '', ownership_type: '', owner_contact_id: '',
-  co_owner_contact_ids: [], litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', notes: '',
+  co_owner_contact_ids: [], litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_placement: '', notes: '',
   planned_tests: []
 });
 
@@ -308,6 +308,7 @@ function renderView() {
       ${row('Kennel', esc(kennelName(d.kennel_id)))}
       ${row('Status', badge(DOG_STATUS, d.status) + (d.status_date ? ` <span class="faint">since ${esc(fmtDate(d.status_date))}</span>` : ''))}
       ${d.status === 'puppy' ? row('Disposition', d.disposition ? badge(DISPOSITION, d.disposition) : '') : ''}
+      ${d.status === 'puppy' && editionFlags.waitlist ? row('Intended placement', d.intended_placement ? badge(PLACEMENT_TYPE, d.intended_placement) : '') : ''}
       ${row('Notes', d.notes ? esc(d.notes).replace(/\n/g, '<br>') : '')}
     </dl>`;
 }
@@ -347,6 +348,7 @@ function renderEdit() {
       ${field('Ownership', `<select id="f-ownership_type">${vocabOptions(editionFlags.externalOwnership ? OWNERSHIP_TYPE : OWNERSHIP_TYPE.filter((o) => ['owned', 'co_owned'].includes(o.value)), d.ownership_type, 'Select…')}</select>`, { required: true })}
       ${field('Status', `<select id="f-status">${vocabOptions(editionFlags.fullDogStatuses ? DOG_STATUS : DOG_STATUS.filter((o) => ['puppy', 'active_breeding', 'retired_breeding', 'deceased'].includes(o.value)), d.status, 'Select…')}</select>`, { required: true })}
       ${d.status === 'puppy' ? field('Disposition', `<select id="f-disposition">${vocabOptions(DISPOSITION, d.disposition || 'undecided')}</select>`, { hint: 'Keeping this puppy or offering it? Drives the prospective-families view. Puppy-only — clears when Status moves past Puppy.' }) : ''}
+      ${d.status === 'puppy' && editionFlags.waitlist ? field('Intended placement', `<select id="f-intended_placement">${vocabOptions(PLACEMENT_TYPE, d.intended_placement || '', 'Any')}</select>`, { hint: 'Pet, show, breeding rights or co-own. The waitlist only offers this pup to families wanting that placement. Leave as Any to offer it to everyone.' }) : ''}
       ${field('Sire', `<select id="f-sire_id">${dogOptions(d.sire_id, ctx.original?.id, 'male')}</select>`)}
       ${field('Dam', `<select id="f-dam_id">${dogOptions(d.dam_id, ctx.original?.id, 'female')}</select>`)}
       ${field('Litter', `<select id="f-litter_id">${litterOptions(d.litter_id)}</select>`, { hint: 'The litter this dog was born into, if born in-house.' })}
@@ -454,6 +456,11 @@ function readForm() {
     // prior life-stage, and default it to 'undecided' when the field is present
     // (e.g. Status was just switched to Puppy and the select hasn't rendered).
     disposition: val('f-status') === 'puppy' ? (val('f-disposition') || 'undecided') : null,
+    // Waitlist matching (Waitlist Spec §4.5). Only read when its field rendered,
+    // so switching Status or a Lite edit never clobbers a stored value.
+    intended_placement: document.getElementById('f-intended_placement')
+      ? (val('f-intended_placement') || null)
+      : (ctx.draft?.intended_placement ?? null),
     sire_id: val('f-sire_id') || null,
     dam_id: val('f-dam_id') || null,
     litter_id: val('f-litter_id') || null,

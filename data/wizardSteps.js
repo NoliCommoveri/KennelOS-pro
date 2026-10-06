@@ -229,6 +229,12 @@ export const WIZARD_STEPS = [
     title: 'Sales & income',
     body: 'A quick view of a litter’s sales income against what you’ve spent, so you can see the profit you’re making. For the full breakdown — calculations and income split out by type (deposit, purchase price, transport) — head to the Financials hub.'
   },
+  {
+    id: 'litter-picks', hub: 'Breeding', page: 'litter.html', anchor: 'autumnLitter',
+    selector: '#waitlist-picks-section',
+    title: 'Waitlist picks',
+    body: 'Open picks and KennelOS offers each pup to your waitlist one family at a time, in order. Families who are paused, waiting for a different litter, or have no matching pup are skipped without losing their place. Record what each family decided: accepting creates the sale, and a second pass takes a family off the list.'
+  },
 
   // --- People ------------------------------------------------------------
   {
@@ -247,6 +253,12 @@ export const WIZARD_STEPS = [
     selector: '#profile-body',
     title: 'Contact details',
     body: 'Record a contact’s communication details — phone, email — along with things like their website or associated kennel. Remember that you are the contact for your own kennel, so record your own details to drive owner-related features across the app. You’ll also see the dogs a contact owns and the contracts they hold with you.'
+  },
+  {
+    id: 'waitlist', hub: 'People', page: 'waitlist.html',
+    selector: '[data-card="list"]',
+    title: 'Your waitlist',
+    body: 'Families apply, you approve them, and they join the list once their application fee is in. Their place is set by the date the fee arrived, and programs can waive the fee or move a family ahead. Each family has preferences like sex, breed and placement, and only matching pups are offered to them.'
   },
   {
     id: 'kennels-list', hub: 'People', page: 'kennels.html',

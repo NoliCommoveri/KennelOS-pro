@@ -35,12 +35,15 @@ export async function getLitterFinances() {
   // books the gross Sales); the other party's income split is recorded as a
   // `foster_split` litter-subject Expense below, so it flows into cost naturally
   // and needs no special income handling here.
+  // A credited waitlist application fee (Waitlist Spec §5.3) also carries a
+  // litter_id once the family is placed: it's part of that pup's price (the Sale's
+  // balance was netted by it), so it adds income but not another puppy sold.
   for (const r of rows) {
-    if (r.source_type !== 'sale' || !r.litter_id) continue;
+    if (!r.litter_id || (r.source_type !== 'sale' && r.source_type !== 'waitlist')) continue;
     const a = get(r.litter_id);
     a.earned += r.earned;
     a.anticipated += r.anticipated;
-    a.puppiesSold += 1;
+    if (r.source_type === 'sale') a.puppiesSold += 1;
   }
 
   // Cost (option b): litter-subject expenses + each puppy's dog-subject expenses.

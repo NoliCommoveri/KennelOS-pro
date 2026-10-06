@@ -46,7 +46,8 @@ export const DOG_REFERENCES = [
     table: 'expenses', field: 'subject_id', label: 'subject of an expense',
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'dog'
   },
-  { table: 'documents', field: 'dog_id', label: 'has a filed document' }
+  { table: 'documents', field: 'dog_id', label: 'has a filed document' },
+  { table: 'waitlist_offers', field: 'chosen_dog_id', label: 'pup chosen on a waitlist offer' }
 ];
 
 // --- Litter: what can point at a Litter (Data Model v3 §10) -----------------
@@ -57,7 +58,9 @@ export const LITTER_REFERENCES = [
   {
     table: 'expenses', field: 'subject_id', label: 'subject of an expense',
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'litter'
-  }
+  },
+  { table: 'waitlist_offers',  field: 'litter_id',        label: 'litter on a waitlist offer' },
+  { table: 'waitlist_entries', field: 'listen_litter_ids', label: 'litter a waitlist family is listening for', multiEntry: true }
 ];
 
 // --- Pairing: what can point at a Pairing -----------------------------------
@@ -74,7 +77,8 @@ export const PAIRING_REFERENCES = [
   {
     table: 'expenses', field: 'subject_id', label: 'subject of an expense',
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'pairing'
-  }
+  },
+  { table: 'waitlist_entries', field: 'listen_pairing_ids', label: 'pairing a waitlist family is listening for', multiEntry: true }
 ];
 
 // --- Contact: what can point at a Contact -----------------------------------
@@ -89,7 +93,8 @@ export const CONTACT_REFERENCES = [
   { table: 'stud_services', field: 'referred_by_contact_id',  label: 'referrer on a stud service' },
   { table: 'events',        field: 'related_contact_id',      label: 'contact on a boarding, placement, or show event' },
   { table: 'contracts',     field: 'related_contact_id',      label: 'counterparty on a contract' },
-  { table: 'litters',       field: 'foster_partner_contact_id', label: 'foster partner on a litter' }
+  { table: 'litters',       field: 'foster_partner_contact_id', label: 'foster partner on a litter' },
+  { table: 'waitlist_entries', field: 'contact_id',             label: 'family on a waitlist' }
 ];
 
 // --- Kennel: what can point at a Kennel -------------------------------------
@@ -111,12 +116,16 @@ export const KENNEL_REFERENCES = [
   { table: 'sales',         field: 'kennel_id', label: 'kennel of a sale' },
   { table: 'stud_services', field: 'kennel_id', label: 'kennel of a stud service' },
   { table: 'contracts',     field: 'kennel_id', label: 'kennel of a contract' },
-  { table: 'documents',     field: 'kennel_id', label: 'kennel of a document' }
+  { table: 'documents',     field: 'kennel_id', label: 'kennel of a document' },
+  { table: 'waitlist_entries',  field: 'kennel_id', label: 'kennel of a waitlist entry' },
+  { table: 'waitlist_offers',   field: 'kennel_id', label: 'kennel of a waitlist offer' },
+  { table: 'waitlist_programs', field: 'kennel_id', label: 'kennel of a waitlist program' }
 ];
 
 // --- Sale: what can point at a Sale (Stage 4) -------------------------------
 export const SALE_REFERENCES = [
-  { table: 'contracts', field: 'related_sale_id', label: 'documented by a contract' }
+  { table: 'contracts', field: 'related_sale_id', label: 'documented by a contract' },
+  { table: 'waitlist_entries', field: 'placed_sale_id', label: 'placement of a waitlist family' }
 ];
 
 // --- StudService: what can point at a StudService (Stage 4) ----------------
@@ -136,6 +145,18 @@ export const CONTRACT_REFERENCES = [];
 export const EVENT_REFERENCES = [
   { table: 'expenses', field: 'event_id', label: 'linked expense' }
 ];
+
+// --- Waitlist (Waitlist Spec §4.5): an entry's offers point at it, and a
+// program is pointed at by the entries assigned to it. Offers are leaves.
+export const WAITLIST_ENTRY_REFERENCES = [
+  { table: 'waitlist_offers', field: 'entry_id', label: 'offer to this family' }
+];
+
+export const WAITLIST_PROGRAM_REFERENCES = [
+  { table: 'waitlist_entries', field: 'waitlist_program_id', label: 'family in this program' }
+];
+
+export const WAITLIST_OFFER_REFERENCES = [];
 
 // --- Expense: a leaf entity — nothing points at an Expense. Its own FKs
 // (event_id, subject_id) point OUTWARD and are guarded on those targets above.

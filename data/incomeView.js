@@ -5,6 +5,12 @@
 // Same pattern awayBoard.js uses to union rows from two repos — a read-only
 // aggregator over existing repos, storing nothing of its own (see §21).
 //
+// Received waitlist application fees (Waitlist Spec §5.3) are the third source,
+// read from waitlist_entries (Pro-only, editionFlags.waitlist). A fee whose
+// policy is `credited_to_purchase` is part of the pup's price, so once that
+// family's Sale exists (entry.placed_sale_id) the credit comes off the Sale's
+// balance here — otherwise the same money would count twice.
+//
 // Why derived, not stored: revenue already lives on Sale.price/deposit_amount/
 // transport_fee/deferred_boarding_amount and StudService.fee_amount. Duplicating
 // it into an income table (or adding an `is_earned` flag) would be a stored
@@ -14,7 +20,9 @@ import { saleRepo } from './saleRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
+import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { inScopeOnly } from './kennelScope.js';
+import { editionFlags } from './editionConfig.js';
 import { INCOME_COMPONENTS, descriptor } from './vocab.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
@@ -44,11 +52,14 @@ function balancePaid(s) {
 // the balance (collected at pickup). On a returned/cancelled sale, only what was
 // actually recorded as paid survives (as earned) — the rest is dropped, never
 // anticipated (§21). On any other status, an unpaid component is anticipated.
-function saleComponents(s) {
+// `feeCredit` is a credited waitlist application fee already received for this
+// sale (Waitlist Spec §5.3) — it was paid toward the price, so it comes off the
+// balance (never below 0).
+function saleComponents(s, feeCredit = 0) {
   const dead = ['returned', 'cancelled'].includes(s.status);
   const price = num(s.price);
   const deposit = num(s.deposit_amount);
-  const balance = Math.max(price - deposit, 0);
+  const balance = Math.max(price - deposit - num(feeCredit), 0);
   const parts = [
     { component: 'deposit', amount: deposit, paid: depositPaid(s) },
     { component: 'balance', amount: balance, paid: balancePaid(s) },
@@ -95,11 +106,40 @@ function sumBy(components, state) {
 // `pick` line (never invoiceable) and tags each item with its display label.
 // `sourceType` is 'sale' | 'stud'; the invoice page and the generator modal
 // both call this so their line items can't drift.
-export function incomeLineItems(sourceType, record) {
-  const comps = sourceType === 'sale' ? saleComponents(record) : studComponents(record);
+// `feeCredit` (sales only): a credited application fee already received — pass
+// getSaleFeeCredit(sale.id) so a document's balance matches the ledger's.
+export function incomeLineItems(sourceType, record, { feeCredit = 0 } = {}) {
+  const comps = sourceType === 'sale' ? saleComponents(record, feeCredit) : studComponents(record);
   return comps
     .filter((c) => c.state !== 'noncash')
     .map((c) => ({ ...c, label: descriptor(INCOME_COMPONENTS, c.component).label }));
+}
+
+// --- Waitlist application fees (Waitlist Spec §5.3) ------------------------------
+
+// A fee counts once it's received and above 0 (a waived fee is no money). Refunds
+// aren't tracked in W1: a refundable fee stays earned until she edits the entry.
+const feeReceived = (e) => !e.is_archived && !!e.fee_received_date && num(e.fee_amount) > 0;
+
+// saleId → credited fee amount, from placed entries whose fee is credited to the
+// purchase price.
+function feeCreditsBySale(entries) {
+  const out = new Map();
+  for (const e of entries) {
+    if (!feeReceived(e) || !e.placed_sale_id || e.fee_credit_policy !== 'credited_to_purchase') continue;
+    out.set(e.placed_sale_id, (out.get(e.placed_sale_id) || 0) + num(e.fee_amount));
+  }
+  return out;
+}
+
+async function loadWaitlistEntries(includeArchived) {
+  return editionFlags.waitlist ? waitlistEntryRepo.getAll({ includeArchived }) : [];
+}
+
+// The credited application fee for one sale (0 when none) — the invoice page
+// passes it to incomeLineItems so the document's balance matches the ledger.
+export async function getSaleFeeCredit(saleId) {
+  return feeCreditsBySale(await loadWaitlistEntries(false)).get(saleId) || 0;
 }
 
 // Build the one-per-record income rows. Each carries its component breakdown plus
@@ -111,12 +151,16 @@ export function incomeLineItems(sourceType, record) {
 // else and the active scope applies (Multi-Kennel Scope Spec §7/§8).
 export async function getIncomeRows({ includeArchived = false, kennelId = null } = {}) {
   const scopeTo = (list) => (kennelId ? list.filter((r) => r.kennel_id === kennelId) : inScopeOnly(list));
-  const [sales, studs, dogs, contacts] = await Promise.all([
+  const [sales, studs, dogs, contacts, entries] = await Promise.all([
     saleRepo.getAll({ includeArchived }),
     studServiceRepo.getAll({ includeArchived }),
     dogRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true })
+    contactRepo.getAll({ includeArchived: true }),
+    loadWaitlistEntries(includeArchived)
   ]);
+  // Credits come from ALL entries (not just in-scope ones): a sale's credit is a
+  // fact about that sale, whichever kennel the app is scoped to.
+  const creditBySale = feeCreditsBySale(entries);
   const dogById = new Map(dogs.map((d) => [d.id, d]));
   const contactById = new Map(contacts.map((c) => [c.id, c]));
   const dogName = (id) => dogById.get(id)?.call_name || '—';
@@ -131,7 +175,8 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
   // carry a stamped kennel_id (a sale inherits the dog's, a stud service OUR
   // dog's), and both are pass-throughs when unscoped.
   for (const s of scopeTo(sales)) {
-    const components = saleComponents(s);
+    const feeCredit = creditBySale.get(s.id) || 0;
+    const components = saleComponents(s, feeCredit);
     if (!components.length) continue; // no money on this sale — nothing to show
     rows.push({
       source_type: 'sale',
@@ -148,7 +193,8 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
       components,
       earned: sumBy(components, 'earned'),
       anticipated: sumBy(components, 'anticipated'),
-      pick: 0
+      pick: 0,
+      fee_credit: feeCredit
     });
   }
 
@@ -170,6 +216,34 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
       earned: sumBy(components, 'earned'),
       anticipated: sumBy(components, 'anticipated'),
       pick: sumBy(components, 'noncash')
+    });
+  }
+
+  // Received application fees — always earned (the money is in hand). The entry
+  // carries the kennel scope like every waitlist row.
+  for (const e of scopeTo(entries)) {
+    if (!feeReceived(e)) continue;
+    const components = [{ component: 'application_fee', amount: num(e.fee_amount), state: 'earned' }];
+    // A credited fee on a placed family is part of THAT pup's price, so it rolls up
+    // to the pup's litter (the Sale's balance was netted by it above — without
+    // this the litter P&L would lose the credit). Any other fee isn't litter money.
+    const creditedSale = e.placed_sale_id && e.fee_credit_policy === 'credited_to_purchase'
+      ? sales.find((x) => x.id === e.placed_sale_id) : null;
+    const pup = creditedSale ? dogById.get(creditedSale.dog_id) : null;
+    rows.push({
+      source_type: 'waitlist',
+      source_id: e.id,
+      href: `waitlist-entry.html?id=${encodeURIComponent(e.id)}`,
+      dog: pup ? pup.call_name : '—',
+      dog_id: pup ? pup.id : null,
+      litter_id: pup ? pup.litter_id || null : null,
+      counterparty: e.contact_id ? contactName(e.contact_id) : ((e.application && e.application.name) || '—'),
+      status: e.status,
+      date: e.fee_received_date,
+      components,
+      earned: num(e.fee_amount),
+      anticipated: 0,
+      pick: 0
     });
   }
 

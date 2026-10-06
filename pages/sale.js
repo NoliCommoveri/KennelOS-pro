@@ -2,6 +2,7 @@
 // (contracts.related_sale_id = this sale — canonical on Contract, never a
 // Sale.contract_id, Stage4 Revision v2 §5). Buyer is a Contact (no Buyer table).
 import { saleRepo, ReferenceBlockedError } from '../data/saleRepo.js';
+import { expectedPricing } from '../data/saleDefaults.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
@@ -66,16 +67,9 @@ function applyExpectedPricing() {
   const dog = ctx.dogsById.get(ctx.draft.dog_id);
   const litter = dog && dog.litter_id ? ctx.littersById.get(dog.litter_id) : null;
   if (!litter) return;
-  if (!ctx.draft.price) {
-    const expected = dog.sex === 'male' ? litter.expected_price_male
-      : dog.sex === 'female' ? litter.expected_price_female : null;
-    if (expected != null) ctx.draft.price = expected;
-  }
-  if (!ctx.draft.deposit_amount) {
-    const expected = dog.sex === 'male' ? litter.expected_deposit_male
-      : dog.sex === 'female' ? litter.expected_deposit_female : null;
-    if (expected != null) ctx.draft.deposit_amount = expected;
-  }
+  const expected = expectedPricing(dog, litter);
+  if (!ctx.draft.price && expected.price != null) ctx.draft.price = expected.price;
+  if (!ctx.draft.deposit_amount && expected.deposit_amount != null) ctx.draft.deposit_amount = expected.deposit_amount;
 }
 
 function dogName(id) {

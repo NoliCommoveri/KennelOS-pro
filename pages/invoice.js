@@ -31,7 +31,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { getActiveKennel } from '../data/kennelScope.js';
-import { incomeLineItems } from '../data/incomeView.js';
+import { incomeLineItems, getSaleFeeCredit } from '../data/incomeView.js';
 import { getMyContactId, getInvoiceDefaults } from '../data/settings.js';
 import { PLACEMENT_TYPE, FEE_STRUCTURE, INVOICE_LINE_LABELS, descriptor } from '../data/vocab.js';
 import { esc, param, fmtMoney } from '../assets/ui.js';
@@ -112,7 +112,10 @@ async function main() {
     || null;
 
   // Base amounts by component key, always recomputed from the record.
-  const baseByKey = new Map(incomeLineItems(source, record).map((it) => [it.component, it.amount]));
+  // A credited waitlist application fee (Waitlist Spec §5.3) already paid part of
+  // the price, so the balance line is reduced by it and says so.
+  const feeCredit = source === 'sale' ? await getSaleFeeCredit(record.id) : 0;
+  const baseByKey = new Map(incomeLineItems(source, record, { feeCredit }).map((it) => [it.component, it.amount]));
 
   // Config — from the generator, or a full-line default when the page is opened
   // directly (every cash line, full, nothing collected, no dates).
@@ -141,6 +144,7 @@ async function main() {
     const collected = numOf(line.collected);
     const partial = line.mode === 'partial';
     let label = INVOICE_LINE_LABELS[line.key] || line.key;
+    if (line.key === 'balance' && feeCredit > 0) label += ` (after ${money(feeCredit)} application fee credit)`;
     const marker = isSale && !isReceipt ? (FOOTNOTE[line.key] || '') : '';
     if (marker) markersUsed.add(marker);
 

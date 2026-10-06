@@ -5,7 +5,9 @@ import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo, ReferenceBlockedError } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
-import { CONTACT_TYPE, DOG_STATUS, WAITLIST_STATUS, SALE_STATUS, PLACEMENT_TYPE } from '../data/vocab.js';
+import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
+import { editionFlags } from '../data/editionConfig.js';
+import { CONTACT_TYPE, DOG_STATUS, WAITLIST_STATUS, SALE_STATUS, PLACEMENT_TYPE, WAITLIST_ENTRY_STATUS } from '../data/vocab.js';
 import { esc, badge, badges, param, confirmModal, promptModal } from '../assets/ui.js';
 
 const els = {
@@ -15,6 +17,7 @@ const els = {
   body: document.getElementById('profile-body'),
   error: document.getElementById('page-error'),
   dogs: document.getElementById('dogs-section'),
+  waitlist: document.getElementById('waitlist-section'),
   sales: document.getElementById('sales-section')
 };
 
@@ -25,6 +28,10 @@ const blank = () => ({
 
 const ctx = {
   mode: 'view', original: null, draft: null, kennels: [], firstContactSources: [],
+  // This contact's waitlist entries. When any exist, Contact.waitlist_status is
+  // kept in step by waitlistEntryRepo (Waitlist Spec §0), so the form's dropdown
+  // goes read-only rather than letting a hand edit fight the derived value.
+  waitlistEntries: [],
   // Collapsible card state — tracks which cards are expanded (mirrors dog.js)
   expandedCards: new Set()
 };
@@ -137,7 +144,9 @@ function renderEdit() {
       </div>
       <div class="field"><label>Phone</label><input id="f-phone" type="text" value="${esc(c.phone)}"></div>
       <div class="field"><label>Email</label><input id="f-email" type="email" value="${esc(c.email)}"></div>
-      <div class="field"><label>Waitlist</label><select id="f-waitlist_status">${waitlistOpts}</select></div>
+      ${ctx.waitlistEntries.length
+        ? `<div class="field"><label>Waitlist</label><div>${c.waitlist_status && c.waitlist_status !== 'none' ? badge(WAITLIST_STATUS, c.waitlist_status) : '<span class="faint">None</span>'}</div><span class="field-hint">Kept up to date from their waitlist entries.</span></div>`
+        : `<div class="field"><label>Waitlist</label><select id="f-waitlist_status">${waitlistOpts}</select></div>`}
       <div class="field"><label>First contact source</label><input id="f-first_contact_source" type="text" list="source-list" value="${esc(c.first_contact_source)}"><datalist id="source-list">${sourceList}</datalist></div>
       <div class="field field-wide"><label>Type</label><div class="check-group">${typeChecks}</div></div>
       <div class="field field-wide"><label>Address</label><textarea id="f-address">${esc(c.address)}</textarea></div>
@@ -158,7 +167,8 @@ function readForm() {
     contact_type: types,
     phone: val('f-phone').trim(),
     email: val('f-email').trim(),
-    waitlist_status: val('f-waitlist_status') || 'none',
+    // Absent when entries drive it (read-only) — keep the stored value then.
+    waitlist_status: document.getElementById('f-waitlist_status') ? (val('f-waitlist_status') || 'none') : ctx.draft.waitlist_status,
     first_contact_source: val('f-first_contact_source').trim(),
     address: val('f-address').trim(),
     notes: val('f-notes'),
@@ -199,6 +209,22 @@ async function renderDogsSection() {
     tr.addEventListener('click', () => { location.href = `dog.html?id=${encodeURIComponent(tr.dataset.id)}`; });
   });
   setupCollapsibleCard('dogs');
+}
+
+// --- Waitlist entries (Waitlist Spec §4.1) ------------------------------------
+// Every run this family has made through any of your kennels' lists, newest
+// first. Pro-only (editionFlags.waitlist). Hidden when there are none.
+async function renderWaitlistSection() {
+  if (!els.waitlist) return;
+  if (ctx.mode !== 'view' || !ctx.original || !editionFlags.waitlist || !ctx.waitlistEntries.length) { els.waitlist.innerHTML = ''; return; }
+  const entries = [...ctx.waitlistEntries].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  const bodyHtml = `<ul class="linked-list" style="margin:14px 0 0; padding:0; list-style:none;">` + entries.map((e) => `
+      <li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
+        <span><strong>${esc(kennelName(e.kennel_id))}</strong> ${badge(WAITLIST_ENTRY_STATUS, e.status)}${e.applied_date ? ` <span class="faint">applied ${esc(e.applied_date)}</span>` : ''}${e.is_archived ? ' <span class="badge badge-gray">Archived</span>' : ''}</span>
+        <a class="btn btn-sm" href="waitlist-entry.html?id=${encodeURIComponent(e.id)}">Open →</a>
+      </li>`).join('') + `</ul>`;
+  els.waitlist.innerHTML = renderCollapsibleCard('Waitlist', bodyHtml, '', { sectionKey: 'waitlist', hasContent: true });
+  setupCollapsibleCard('waitlist');
 }
 
 // --- Sales (as buyer) list -------------------------------------------------
@@ -261,6 +287,7 @@ function enterEdit() {
   renderEdit();
   renderProfileActions();
   renderDogsSection();
+  renderWaitlistSection();
   renderSalesSection();
 }
 
@@ -271,6 +298,7 @@ function cancel() {
   renderView();
   renderProfileActions();
   renderDogsSection();
+  renderWaitlistSection();
   renderSalesSection();
 }
 
@@ -299,6 +327,7 @@ async function doSave() {
       return;
     }
     ctx.original = await contactRepo.update(ctx.original.id, candidate);
+    ctx.waitlistEntries = await waitlistEntryRepo.getByContact(ctx.original.id);
     ctx.mode = 'view';
     renderAll();
   } catch (e) {
@@ -340,6 +369,7 @@ function renderAll() {
   if (ctx.mode === 'view') renderView();
   else renderEdit();
   renderDogsSection();
+  renderWaitlistSection();
   renderSalesSection();
 }
 
@@ -358,6 +388,7 @@ async function main() {
   const contact = await contactRepo.getById(id);
   if (!contact) { showError('Contact not found.'); return; }
   ctx.original = contact;
+  ctx.waitlistEntries = await waitlistEntryRepo.getByContact(contact.id);
   ctx.mode = 'view';
   renderAll();
 }

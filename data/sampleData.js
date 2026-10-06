@@ -23,6 +23,10 @@ import { saleRepo } from './saleRepo.js';
 import { contractRepo } from './contractRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { expenseRepo } from './expenseRepo.js';
+import { waitlistEntryRepo } from './waitlistEntryRepo.js';
+import { waitlistOfferRepo } from './waitlistOfferRepo.js';
+import { waitlistProgramRepo } from './waitlistProgramRepo.js';
+import { editionFlags } from './editionConfig.js';
 import { monthsFromToday, daysFromToday } from './dateUtils.js';
 import {
   findBlockingReferences, DOG_REFERENCES, PAIRING_REFERENCES, LITTER_REFERENCES,
@@ -68,7 +72,8 @@ export async function seedSampleData() {
   const manifest = {
     seededAt: new Date().toISOString(),
     dogs: [], events: [], contacts: [], kennels: [], pairings: [], litters: [],
-    sales: [], contracts: [], stud_services: [], expenses: []
+    sales: [], contracts: [], stud_services: [], expenses: [],
+    waitlist_programs: [], waitlist_entries: [], waitlist_offers: []
   };
 
   const BREED = 'Boston Terrier';
@@ -968,6 +973,13 @@ export async function seedSampleData() {
   // records); clearSampleData resets them back to defaults alongside the records.
   seedCompanionSettings();
 
+  // Waitlist (Waitlist Spec §11 "Demo"): a small per-kennel list on Thornfield so
+  // the Demo and the Pro tour can show it. Pro-only (editionFlags.waitlist) — Lite
+  // has its own seed (lite/editionTour.js) and no waitlist at all.
+  if (editionFlags.waitlist) {
+    await seedWaitlist(manifest, { thornfield, owen, priya, hazelSale, litter, autumnLitter, expectedLitter, fern, wrenPup, asterPup });
+  }
+
   // Named ids (Wizard Runtime Spec v1 §3.2) — the guided tour's step catalog is a
   // static import (data/wizardSteps.js) that hard-names anchor records in its copy
   // ("Juniper", "the Autumn litter", …) but still needs the *current* seed's real
@@ -997,6 +1009,110 @@ export async function seedSampleData() {
 
   setSampleDataManifest(manifest);
   return manifest;
+}
+
+// The sample waitlist: one family in a program (paused for treatment, so skipped
+// without losing their place), one with an OPEN offer on the Autumn litter (picks
+// open), one with a pass already used, a listen-only family waiting for the
+// Winter litter, one approved family whose fee is due, one new application, and a
+// past run that ended placed (Hazel — its credited fee nets off her sale in
+// Financials). Everything goes through the repos, like the rest of the seed.
+async function seedWaitlist(manifest, r) {
+  await kennelRepo.update(r.thornfield.id, {
+    waitlist_config: {
+      fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_due_days: 14,
+      payment_instructions: 'Venmo @thornfield-kennels, or a check to Thornfield Kennels.',
+      respond_days: 3, max_passes: 2, no_response_counts_as_pass: true, color_matching: false
+    }
+  });
+  const treatment = await waitlistProgramRepo.create({
+    kennel_id: r.thornfield.id, name: 'Treatment family', priority: 'ahead', fee_override: 0,
+    passes_count: false, pause_allowed: true, respond_days_override: 7,
+    public_description: 'For families going through medical treatment: no fee, and passes never count.'
+  });
+  manifest.waitlist_programs.push(treatment.id);
+
+  const contact = async (data) => {
+    const c = await contactRepo.create({ contact_type: ['buyer'], ...data });
+    manifest.contacts.push(c.id);
+    return c;
+  };
+  const entry = async (data) => {
+    const e = await waitlistEntryRepo.create({ kennel_id: r.thornfield.id, ...data });
+    manifest.waitlist_entries.push(e.id);
+    return e;
+  };
+  const offer = async (data) => {
+    const o = await waitlistOfferRepo.create({ kennel_id: r.thornfield.id, ...data });
+    manifest.waitlist_offers.push(o.id);
+    return o;
+  };
+  const app = (name, email, extra = {}) => ({ name, email, location: 'Vermont', heard_from: 'Instagram', ...extra });
+
+  const mia = await contact({ name: 'Mia Torres', email: 'mia.torres@example.com', phone: '555-0141' });
+  await entry({
+    contact_id: mia.id, status: 'active', waitlist_program_id: treatment.id,
+    applied_date: daysFromToday(-220), approved_date: daysFromToday(-215), fee_received_date: daysFromToday(-215),
+    fee_amount: 0, fee_payment_method: 'Waived', pref_sex: 'female', pref_breed: 'Boston Terrier',
+    paused_until: daysFromToday(60), pause_reason: 'Treatment — back in touch in two months',
+    application: app('Mia Torres', 'mia.torres@example.com', { about: 'Our family wants a calm companion while I finish treatment.' })
+  });
+
+  const owenEntry = await entry({
+    contact_id: r.owen.id, status: 'active', applied_date: daysFromToday(-170), approved_date: daysFromToday(-165),
+    fee_received_date: daysFromToday(-160), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Venmo',
+    pref_breed: 'Boston Terrier', application: app('Owen Farrow', 'owen.farrow@example.com', { heard_from: 'Referral' })
+  });
+
+  const rachel = await contact({ name: 'Rachel Kim', email: 'rachel.kim@example.com', phone: '555-0142' });
+  const rachelEntry = await entry({
+    contact_id: rachel.id, status: 'active', applied_date: daysFromToday(-140), approved_date: daysFromToday(-138),
+    fee_received_date: daysFromToday(-130), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Zelle',
+    pref_sex: 'female', application: app('Rachel Kim', 'rachel.kim@example.com')
+  });
+
+  const alders = await contact({ name: 'Ben & Kate Alder', email: 'alders@example.com' });
+  await entry({
+    contact_id: alders.id, status: 'active', applied_date: daysFromToday(-110), approved_date: daysFromToday(-108),
+    fee_received_date: daysFromToday(-100), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Check',
+    listen_mode: 'selected', listen_litter_ids: [r.expectedLitter.id],
+    application: app('Ben & Kate Alder', 'alders@example.com', { timing: 'Only the Winter litter — we love Juniper' })
+  });
+
+  const hannah = await contact({ name: 'Hannah Moore', email: 'hannah.moore@example.com' });
+  await entry({
+    contact_id: hannah.id, status: 'approved', applied_date: daysFromToday(-9), approved_date: daysFromToday(-5),
+    fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_due_date: daysFromToday(9),
+    application: app('Hannah Moore', 'hannah.moore@example.com')
+  });
+
+  // A new application, typed in — no contact yet (approving links or creates one).
+  await entry({
+    status: 'applied', applied_date: daysFromToday(-2), pref_sex: 'male',
+    application: app('Leo Grant', 'leo.grant@example.com', { household: 'Two adults, one teenager', other_pets: 'An older cat', about: 'First Boston, lots of reading done!' })
+  });
+
+  // Priya's earlier run ended placed with Hazel.
+  await entry({
+    contact_id: r.priya.id, status: 'placed', placed_sale_id: r.hazelSale.id,
+    applied_date: '2025-05-20', approved_date: '2025-05-22', fee_received_date: '2025-06-01',
+    fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Venmo',
+    application: app('Priya Shah', 'priya.shah@example.com')
+  });
+
+  // Rachel passed on Fern (Summer litter) — her one counted pass so far.
+  await offer({
+    entry_id: rachelEntry.id, litter_id: r.litter.id, offered_date: daysFromToday(-45), respond_by_date: daysFromToday(-42),
+    eligible_dog_ids: [r.fern.id], outcome: 'passed', outcome_date: daysFromToday(-43), counts_as_pass: true
+  });
+
+  // Picks are open on the Autumn litter: Mia is paused (skipped, nothing held
+  // against her), so it's Owen's turn — respond by in two days. Rachel is next.
+  await litterRepo.update(r.autumnLitter.id, { picks_opened_date: daysFromToday(-1) });
+  await offer({
+    entry_id: owenEntry.id, litter_id: r.autumnLitter.id, offered_date: daysFromToday(-1), respond_by_date: daysFromToday(2),
+    eligible_dog_ids: [r.wrenPup.id, r.asterPup.id], outcome: 'open'
+  });
 }
 
 // Layer-1 companion config for the demo — Thornfield identity across all three
@@ -1087,7 +1203,12 @@ async function findContaminatingReferences(manifest) {
     // documents point at the sample kennel, and without these sets every one of
     // them would read as a real, contaminating reference and block every clear.
     contacts: new Set(manifest.contacts || []),
-    documents: new Set(manifest.documents || [])
+    documents: new Set(manifest.documents || []),
+    // The seed's own waitlist rows point at the sample kennel, litters, a sale and
+    // pups — they're the demo's own references, not contamination.
+    waitlist_entries: new Set(manifest.waitlist_entries || []),
+    waitlist_offers: new Set(manifest.waitlist_offers || []),
+    waitlist_programs: new Set(manifest.waitlist_programs || [])
   };
 
   // conflicts: Map key `${entityType}:${id}` -> { entityType, id, refs: [{label, row}] }
@@ -1134,6 +1255,9 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
   manifest.contracts = manifest.contracts || [];
   manifest.stud_services = manifest.stud_services || [];
   manifest.expenses = manifest.expenses || [];
+  manifest.waitlist_entries = manifest.waitlist_entries || [];
+  manifest.waitlist_offers = manifest.waitlist_offers || [];
+  manifest.waitlist_programs = manifest.waitlist_programs || [];
 
   const conflicts = await findContaminatingReferences(manifest);
 
@@ -1174,6 +1298,7 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
     dogs: dogIdsToDelete.length,
     contacts: manifest.contacts.length,
     kennels: kennelIdsToDelete.length,
+    waitlist_entries: manifest.waitlist_entries.length,
     archived: archivedIds.dog.length + archivedIds.pairing.length + archivedIds.litter.length
       + archivedIds.sale.length + archivedIds.stud_service.length + archivedIds.kennel.length
   };
@@ -1187,7 +1312,12 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
   // unreferenced set, so it bypasses the single-record hardDelete guard (which
   // exists to protect one record at a time, not to bulk-clear a whole known
   // set — brief §5).
-  await db.transaction('rw', db.expenses, db.events, db.contracts, db.litters, db.stud_services, db.pairings, db.sales, db.dogs, db.contacts, db.kennels, async () => {
+  await db.transaction('rw', [db.expenses, db.events, db.contracts, db.litters, db.stud_services, db.pairings, db.sales, db.dogs, db.contacts, db.kennels, db.waitlist_offers, db.waitlist_entries, db.waitlist_programs], async () => {
+    // Waitlist rows first: offers point at entries/litters/pups, entries at
+    // contacts/sales/litters/programs, programs at the kennel.
+    if (manifest.waitlist_offers.length) await db.waitlist_offers.bulkDelete(manifest.waitlist_offers);
+    if (manifest.waitlist_entries.length) await db.waitlist_entries.bulkDelete(manifest.waitlist_entries);
+    if (manifest.waitlist_programs.length) await db.waitlist_programs.bulkDelete(manifest.waitlist_programs);
     // Expenses first: they point at events AND dogs/litters/pairings/kennels, so
     // they must clear before any of those (same dependency discipline as below).
     if (manifest.expenses.length) await db.expenses.bulkDelete(manifest.expenses);

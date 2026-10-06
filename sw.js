@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v32';
+const CACHE_NAME = 'kennelos-pro-shell-v33';
 
 const PRECACHE_URLS = [
   './',
@@ -40,6 +40,8 @@ const PRECACHE_URLS = [
   'assets/licenseGate.js',
   'assets/ui.js',
   'assets/upgradeNudge.js',
+  'assets/waitlistPicksPanel.js',
+  'assets/waitlistUI.js',
   'assets/wizardUI.js',
   'assets/icons/apple-touch-icon.png',
   'assets/icons/favicon-32.png',
@@ -87,6 +89,7 @@ const PRECACHE_URLS = [
   'data/referenceRegistry.js',
   'data/repoBase.js',
   'data/rosterCount.js',
+  'data/saleDefaults.js',
   'data/saleRepo.js',
   'data/sampleData.js',
   'data/scopePredicates.js',
@@ -95,6 +98,11 @@ const PRECACHE_URLS = [
   'data/settings.js',
   'data/studServiceRepo.js',
   'data/vocab.js',
+  'data/waitlistActions.js',
+  'data/waitlistEntryRepo.js',
+  'data/waitlistOfferRepo.js',
+  'data/waitlistProgramRepo.js',
+  'data/waitlistRules.js',
   'data/wizardState.js',
   'data/wizardSteps.js',
   'pages/active-breeding.html',
@@ -200,6 +208,14 @@ const PRECACHE_URLS = [
   'pages/today.js',
   'pages/upcoming.html',
   'pages/upcoming.js',
+  'pages/waitlist-entry.html',
+  'pages/waitlist-entry.js',
+  'pages/waitlist-import.html',
+  'pages/waitlist-import.js',
+  'pages/waitlist-programs.html',
+  'pages/waitlist-programs.js',
+  'pages/waitlist.html',
+  'pages/waitlist.js',
   'vendor/dexie.min.mjs',
   'vendor/gsi/client.js',
   'vendor/lz-string.min.mjs',

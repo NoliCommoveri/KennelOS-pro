@@ -16,7 +16,10 @@
 // stud→pairing (§4.7), the overdue-pairing rule, three litter-lifecycle
 // rules (litter→sold / reopen / close) grouped over each litter's roster below,
 // and the Pro-only show-track-complete → "log the title?" rule (Show Tracking
-// Spec §5.4, gated on editionFlags.shows).
+// Spec §5.4, gated on editionFlags.shows). Plus the Pro-only waitlist rules
+// (Waitlist Spec §6.5, gated on editionFlags.waitlist): new applications, an
+// offer past its deadline, a fee past its pay-by date, and the 7-day undo on a
+// second-pass removal — each a one-tap suggestion, never an automatic write.
 //   { key, title, detail, subjectHref, actions: [{ label, run: async () => {} }] }
 import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
@@ -26,10 +29,15 @@ import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from './kennelScope.js';
-import { todayYMD, monthsBetween } from './dateUtils.js';
+import { todayYMD, monthsBetween, addDaysToYMD } from './dateUtils.js';
 import { descriptor, PAIRING_STATUS, LITTER_STATUS } from './vocab.js';
 import { editionFlags } from './editionConfig.js';
 import { showRecordFrom } from './showPoints.js';
+import { waitlistEntryRepo } from './waitlistEntryRepo.js';
+import { waitlistOfferRepo } from './waitlistOfferRepo.js';
+import { contactRepo } from './contactRepo.js';
+import { overdueOffers, overdueFees, canUndoRemoval, entryName } from './waitlistRules.js';
+import { recordOutcome, markFeeExpired, undoRemoval } from './waitlistActions.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
@@ -331,5 +339,78 @@ export async function computeNudges() {
     }
   }
 
+  if (editionFlags.waitlist) nudges.push(...(await waitlistNudges(today, litters, dogsById)));
+
   return nudges;
+}
+
+// --- Waitlist (Waitlist Spec §0/§6.5) -------------------------------------------
+// W1 has no server, so nothing on the waitlist moves while she's away: these
+// surface what needs a decision, and she confirms with one tap. Scoped like every
+// rule (the waitlist is per kennel, so entries/offers carry kennel_id).
+async function waitlistNudges(today, litters, dogsById) {
+  const [entriesAll, offersAll, contacts] = await Promise.all([
+    waitlistEntryRepo.getAll(),
+    waitlistOfferRepo.getAll(),
+    contactRepo.getAll({ includeArchived: true })
+  ]);
+  const entries = inScopeOnly(entriesAll);
+  const offers = inScopeOnly(offersAll);
+  const contactsById = new Map(contacts.map((c) => [c.id, c]));
+  const entriesById = new Map(entriesAll.map((e) => [e.id, e]));
+  const littersById = new Map(litters.map((l) => [l.id, l]));
+  const name = (e) => entryName(e, contactsById.get(e.contact_id));
+  const out = [];
+
+  // New applications — one nudge per kennel's queue. The key carries the newest
+  // application's id, so dismissing it hides this batch but a new one resurfaces.
+  const byKennel = new Map();
+  for (const e of entries.filter((x) => x.status === 'applied')) {
+    if (!byKennel.has(e.kennel_id)) byKennel.set(e.kennel_id, []);
+    byKennel.get(e.kennel_id).push(e);
+  }
+  for (const [kennelId, list] of byKennel) {
+    const newest = [...list].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+    out.push({
+      key: `waitlist-applications:${kennelId}:${newest.id}`,
+      title: list.length === 1 ? `New waitlist application from ${name(newest)}` : `${list.length} new waitlist applications`,
+      detail: 'Review and approve or decline.',
+      subjectHref: `waitlist.html?kennel=${encodeURIComponent(kennelId)}`,
+      actions: [{ label: 'Review', run: async () => { location.href = `waitlist.html?kennel=${encodeURIComponent(kennelId)}`; } }]
+    });
+  }
+
+  for (const o of overdueOffers(offers, today)) {
+    const e = entriesById.get(o.entry_id);
+    if (!e) continue;
+    const l = littersById.get(o.litter_id);
+    out.push({
+      key: `waitlist-offer-overdue:${o.id}`,
+      title: `${name(e)}'s offer deadline passed`,
+      detail: `${l ? litterLabel(l, dogsById) : 'Litter'} — they had until ${o.respond_by_date}. Recording no response moves the turn on.`,
+      subjectHref: `litter.html?id=${encodeURIComponent(o.litter_id)}`,
+      actions: [{ label: 'Record no response', run: async () => { await recordOutcome(o.id, 'no_response'); } }]
+    });
+  }
+
+  for (const e of overdueFees(entries, today)) {
+    out.push({
+      key: `waitlist-fee-overdue:${e.id}`,
+      title: `${name(e)} hasn't paid the application fee`,
+      detail: `The pay-by date was ${e.fee_due_date}. Close the application, or mark the fee received on their page.`,
+      subjectHref: `waitlist-entry.html?id=${encodeURIComponent(e.id)}`,
+      actions: [{ label: 'Close application', run: async () => { await markFeeExpired(e.id); } }]
+    });
+  }
+
+  for (const e of entries.filter((x) => canUndoRemoval(x, today))) {
+    out.push({
+      key: `waitlist-removed:${e.id}:${e.removed_date}`,
+      title: `Removed ${name(e)} from the waitlist after their second pass`,
+      detail: `You can undo this until ${addDaysToYMD(e.removed_date, 7)}. Undoing forgives that pass and puts them back in their old place.`,
+      subjectHref: `waitlist-entry.html?id=${encodeURIComponent(e.id)}`,
+      actions: [{ label: 'Undo', run: async () => { await undoRemoval(e.id, { today }); } }]
+    });
+  }
+  return out;
 }

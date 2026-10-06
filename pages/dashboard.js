@@ -12,7 +12,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
+import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { getAwayBoardRows } from '../data/awayBoard.js';
@@ -41,12 +41,12 @@ function card(title, tilesHtml, subtitle) {
 }
 
 async function main() {
-  const [allDogsAll, littersAll, pairingsAll, sales, contacts, reminders, upcoming, boardRows] = await Promise.all([
+  const [allDogsAll, littersAll, pairingsAll, sales, waitlistEntries, reminders, upcoming, boardRows] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: false }),
     pairingRepo.getAll({ includeArchived: false }),
     saleRepo.getAll({ includeArchived: false }),
-    contactRepo.getAll({ includeArchived: false }),
+    editionFlags.waitlist ? waitlistEntryRepo.getAll({ includeArchived: false }) : [],
     eventRepo.getReminders(),
     eventRepo.getUpcoming(),
     getAwayBoardRows()
@@ -98,9 +98,11 @@ async function main() {
   const upcomingPlacements = upcoming.filter((e) => e.event_type === 'placement' && eventInScope(e)).length;
   // Already scoped by getAwayBoardRows() — the one place that decision lives.
   const awayCount = boardRows.length;
-  // NOT scoped, deliberately (§7): the contact pool is program-wide, so the
-  // waitlist is one queue across the program rather than a per-kennel line.
-  const waitlistActive = contacts.filter((c) => c.waitlist_status === 'active').length;
+  // The waitlist is per kennel (Waitlist Spec §0), so these count waitlist
+  // ENTRIES under the active scope — not contacts, whose pool is program-wide.
+  const scopedWaitlist = inScopeOnly(waitlistEntries);
+  const waitlistOnList = scopedWaitlist.filter((e) => e.status === 'active').length;
+  const waitlistNew = scopedWaitlist.filter((e) => e.status === 'applied').length;
 
   body.innerHTML =
     card('Dogs by status', statusTiles, 'Active (non-archived) dogs grouped by status. Archived is a separate flag, never mixed in with a status.') +
@@ -114,7 +116,8 @@ async function main() {
       stat(dueSoon, `Due within ${DUE_SOON_DAYS} days`, { href: 'reminders.html', tone: 'warn' }),
       stat(upcomingPlacements, 'Upcoming placements', { href: 'scheduled-placements.html' }),
       stat(awayCount, 'Dogs away (boarding)', { href: 'board.html' }),
-      editionFlags.contactsSection ? stat(waitlistActive, 'Active waitlist', { href: 'contacts.html?group=clients' }) : ''
+      editionFlags.waitlist ? stat(waitlistNew, 'New waitlist applications', { href: 'waitlist.html', tone: waitlistNew ? 'warn' : undefined }) : '',
+      editionFlags.waitlist ? stat(waitlistOnList, 'Families on the waitlist', { href: 'waitlist.html' }) : ''
     ].join(''), 'Live counts you can act on — each tile opens the full list.');
 }
 

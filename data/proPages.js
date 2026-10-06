@@ -40,6 +40,8 @@ export const PRO_ONLY_PAGES = [
   'puppy-record.html',
   // Show tracking — the Shows page (Show Tracking Spec §5.2/§7)
   'shows.html',
+  // Waitlist (Waitlist Spec §11) — the list, one family, and programs
+  'waitlist.html', 'waitlist-entry.html', 'waitlist-programs.html', 'waitlist-import.html',
 ];
 
 // Standalone Pro files that live outside pages/ (no nav entry) — also excluded from
@@ -52,7 +54,13 @@ export const PRO_ONLY_PAGES = [
 // `data/companionExport.js` ships to Lite while `companion.html` does not.)
 export const PRO_ONLY_STANDALONE = [
   'companion-view.html', 'assistant.html', 'assistant.js',
-  'assets/documentModal.js', 'assets/kennelCardUI.js'
+  'assets/documentModal.js', 'assets/kennelCardUI.js',
+  // Page-side helpers for the waitlist pages only. Its data layer (repos, rules,
+  // actions) stays shared, like every repo.
+  'assets/waitlistUI.js',
+  // The Litter page's waitlist picks panel — litter.js imports it dynamically only
+  // when editionFlags.waitlist is on, so Lite never requests it.
+  'assets/waitlistPicksPanel.js'
 ];
 
 // True when a link target (an href like "contact-import.html" or with a query string)

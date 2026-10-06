@@ -94,6 +94,7 @@ export const editionFlags = {
   assistant: true,
   feedingSchedule: true,
   shows: true,             // Show tracking (Show Tracking Spec §7)
+  waitlist: true,         // Per-kennel waitlist (Waitlist Spec)
   // Multi-kennel scope (Multi-Kennel Scope Spec §12) — Pro is the edition that
   // gets more than one own kennel and the active-kennel switcher.
   multiKennel: true,

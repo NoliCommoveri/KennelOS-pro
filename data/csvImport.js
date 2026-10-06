@@ -12,7 +12,7 @@
 // never silently created — they land in "needs review," where the user decides.
 import Papa from '../vendor/papaparse.min.mjs';
 import { dogRepo } from './dogRepo.js';
-import { resolveKennelIdForWrite, SCOPED_OWNERSHIP } from './kennelScope.js';
+import { resolveKennelIdForWrite, SCOPED_OWNERSHIP, ownKennels } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { pairingRepo } from './pairingRepo.js';
@@ -21,11 +21,13 @@ import { saleRepo } from './saleRepo.js';
 import { HistoryEvent } from './eventRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { expenseRepo, mileageAmount } from './expenseRepo.js';
+import { waitlistEntryRepo } from './waitlistEntryRepo.js';
+import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
   LITTER_STATUS, PLACEMENT_TYPE, SALE_STATUS, eventTypesFor, STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS,
-  EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES
+  EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, WAITLIST_PREF_SEX, WAITLIST_OPEN_STATUSES
 } from './vocab.js';
 
 // --- Parsing --------------------------------------------------------------
@@ -1361,9 +1363,179 @@ const EXPENSE_MAPPING = {
   repo: expenseRepo
 };
 
+// =========================================================================
+// Waitlist application mapping (Waitlist Spec §5.1, W1d)
+// =========================================================================
+// Each row is an application, e.g. a Google Form export, landing as an `applied`
+// entry on one of your own kennels' lists. Natural key: EMAIL (applicants are
+// people you've never recorded, so there's no name+date key to lean on).
+//  - no email or no name → needs review (keyless; never silently created);
+//  - email matches a still-`applied` entry on that kennel → update (refresh the
+//    answers while it's still under review);
+//  - email matches an approved / on-the-list entry → needs review, default Skip
+//    (they're already on the list; don't touch a live family from an old row).
+// Contacts are NOT matched here: approval offers the match (Spec §5.2), the same
+// "offered, never automatic" rule.
+const APP_COLUMNS = [
+  ['phone', 'phone', 'phone_number', 'telephone'],
+  ['location', 'location', 'city_state', 'city', 'city_/_state', 'where_do_you_live'],
+  ['timing', 'timing', 'when', 'when_are_you_hoping_to_bring_a_puppy_home'],
+  ['heard_from', 'heard_from', 'how_did_you_hear_about_us', 'referral', 'source'],
+  ['household', 'household', 'household_members', 'tell_us_about_your_household'],
+  ['other_pets', 'other_pets', 'pets', 'current_pets'],
+  ['experience', 'experience', 'breed_experience', 'dog_experience'],
+  ['about', 'about', 'about_your_family', 'tell_us_about_your_family', 'anything_else']
+];
+
+const WAITLIST_MAPPING = {
+  entity: 'waitlist',
+  label: 'Waitlist applications',
+  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_placement', 'pref_colors', 'program', 'timing', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'notes'],
+  requiredForCreate: ['name', 'email'],
+
+  async loadExisting() {
+    const [entries, own, programs, contacts] = await Promise.all([
+      waitlistEntryRepo.getAll(),
+      ownKennels(),
+      waitlistProgramRepo.getAll(),
+      contactRepo.getAll({ includeArchived: true })
+    ]);
+    this._own = own;
+    this._programs = programs;
+    this._contactsById = new Map(contacts.map((c) => [c.id, c]));
+    // The import page sets `preferredKennelId` from its kennel picker; otherwise
+    // the active/sole kennel, like every other import.
+    this._defaultKennelId = this.preferredKennelId || await resolveKennelIdForWrite();
+    // The review picker offers still-open runs only.
+    return entries.filter((e) => WAITLIST_OPEN_STATUSES.includes(e.status));
+  },
+
+  buildIndex(existing) {
+    const lc = (v) => String(v ?? '').trim().toLowerCase();
+    const byKennelEmail = new Map();
+    for (const e of existing) {
+      const contact = e.contact_id ? this._contactsById.get(e.contact_id) : null;
+      for (const email of [e.application && e.application.email, contact && contact.email].map(lc).filter(Boolean)) {
+        byKennelEmail.set(`${e.kennel_id}|${email}`, e);
+      }
+    }
+    const kennelByName = new Map(this._own.map((k) => [lc(k.kennel_name), k]));
+    const programByKey = new Map(this._programs.map((p) => [`${p.kennel_id}|${lc(p.name)}`, p]));
+    return { byKennelEmail, kennelByName, programByKey };
+  },
+
+  classify(row, index, i) {
+    const reasons = [];
+    const name = col(row, 'name', 'full_name', 'your_name', 'applicant_name');
+    const email = col(row, 'email', 'email_address', 'your_email');
+    const application = {};
+    if (name) application.name = name;
+    if (email) application.email = email;
+    for (const [key, ...aliases] of APP_COLUMNS) {
+      const v = col(row, ...aliases);
+      if (v) application[key] = v;
+    }
+    const record = { status: 'applied', application };
+
+    // Kennel: a named own kennel, else the active/sole kennel.
+    const kName = col(row, 'kennel_name', 'kennel');
+    if (kName) {
+      const hit = index.kennelByName.get(kName.toLowerCase());
+      if (hit) record.kennel_id = hit.id;
+      else reasons.push(`"${kName}" isn't one of your kennels.`);
+    } else if (this._defaultKennelId) {
+      record.kennel_id = this._defaultKennelId;
+    }
+
+    // Applied date: a Google Form "Timestamp" carries a time — keep the date part.
+    const rawDate = col(row, 'applied_date', 'timestamp', 'date', 'submitted');
+    if (rawDate) {
+      const d = normDate(rawDate.split(/[ T]/)[0]);
+      if (d) record.applied_date = d;
+      else reasons.push(`Unrecognized applied_date "${rawDate}" (left blank).`);
+    }
+
+    const sexRaw = col(row, 'pref_sex', 'sex', 'preferred_sex', 'male_or_female');
+    if (sexRaw) {
+      const v = normEnum(WAITLIST_PREF_SEX, sexRaw, { either: 'any', no_preference: 'any', none: 'any', boy: 'male', girl: 'female' });
+      if (v) record.pref_sex = v;
+      else reasons.push(`Unrecognized sex preference "${sexRaw}" (left as either).`);
+    }
+    const breed = col(row, 'pref_breed', 'breed', 'preferred_breed');
+    if (breed) record.pref_breed = breed;
+    const placementRaw = col(row, 'pref_placement', 'pref_placement_type', 'placement', 'placement_type');
+    if (placementRaw) {
+      const v = normEnum(PLACEMENT_TYPE, placementRaw);
+      if (v) record.pref_placement_type = v;
+      else reasons.push(`Unrecognized placement "${placementRaw}" (left as any).`);
+    }
+    const colors = splitList(col(row, 'pref_colors', 'colors', 'color', 'preferred_color'));
+    if (colors.length) record.pref_colors = colors;
+    const notes = col(row, 'notes');
+    if (notes) record.notes = notes;
+
+    // Program by name, on that kennel only (unresolved → flagged, never invented).
+    const progName = col(row, 'program');
+    if (progName && record.kennel_id) {
+      const p = index.programByKey.get(`${record.kennel_id}|${progName.toLowerCase()}`);
+      if (p) record.waitlist_program_id = p.id;
+      else reasons.push(`Program "${progName}" not found on that kennel (left blank).`);
+    }
+
+    let status_ = 'create';
+    let match = null;
+    let decision = 'create';
+    if (!record.kennel_id) {
+      status_ = 'review';
+      reasons.push('No kennel: add a kennel_name column, or switch the app to one kennel.');
+    } else if (!name) {
+      status_ = 'review';
+      reasons.push('No name.');
+    } else if (!email) {
+      status_ = 'review';
+      reasons.push('No email, so it can\'t be checked for duplicates.');
+    } else {
+      match = index.byKennelEmail.get(`${record.kennel_id}|${email.toLowerCase()}`) || null;
+      if (match && match.status === 'applied') status_ = 'update';
+      else if (match) {
+        status_ = 'review';
+        reasons.push(`Already ${match.status === 'active' ? 'on the list' : 'approved'} on this kennel — not changed.`);
+      }
+    }
+    if (status_ === 'review') decision = 'skip';
+    else decision = status_;
+
+    // An update only refreshes the answers and preferences of an application
+    // still under review — never its kennel, status or dates.
+    const changes = match ? {
+      application: { ...(match.application || {}), ...application },
+      ...Object.fromEntries(['pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors', 'waitlist_program_id', 'notes']
+        .filter((k) => record[k] !== undefined).map((k) => [k, record[k]]))
+    } : { ...record };
+
+    return {
+      index: i, raw: row, entity: 'waitlist', display: name || email || `(row ${i + 2})`,
+      record, changes,
+      status: status_, match, matchLabel: match ? this.describe(match) : '',
+      reasons,
+      decision,
+      decisionTarget: match ? match.id : null
+    };
+  },
+
+  describe(e) {
+    const contact = e.contact_id && this._contactsById ? this._contactsById.get(e.contact_id) : null;
+    const nm = (contact && contact.name) || (e.application && e.application.name) || '(unnamed)';
+    return `${nm} — ${e.status}${e.application && e.application.email ? ` (${e.application.email})` : ''}`;
+  },
+
+  repo: waitlistEntryRepo
+};
+
 const MAPPINGS = {
   dog: DOG_MAPPING, contact: CONTACT_MAPPING, pairing: PAIRING_MAPPING, litter: LITTER_MAPPING,
-  sale: SALE_MAPPING, event: EVENT_MAPPING, stud_service: STUD_SERVICE_MAPPING, expense: EXPENSE_MAPPING
+  sale: SALE_MAPPING, event: EVENT_MAPPING, stud_service: STUD_SERVICE_MAPPING, expense: EXPENSE_MAPPING,
+  waitlist: WAITLIST_MAPPING
 };
 
 export function getMapping(entity) {

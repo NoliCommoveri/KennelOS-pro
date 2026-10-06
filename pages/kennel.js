@@ -20,7 +20,9 @@ import { contactRepo } from '../data/contactRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { getIncomeRows, summarize } from '../data/incomeView.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
-import { DOG_STATUS, LITTER_STATUS, SALE_STATUS } from '../data/vocab.js';
+import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY } from '../data/vocab.js';
+import { editionFlags } from '../data/editionConfig.js';
+import { waitlistConfig } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { renderKennelCardSection } from '../assets/kennelCardUI.js';
@@ -340,8 +342,62 @@ async function renderOverview() {
 // same gating both panels carried on the old Kennels-list rows.
 function renderConfig() {
   if (!kennel.is_own_kennel) { els.config.innerHTML = ''; return; }
-  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard();
+  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + waitlistCard(kennel);
   wireConfig();
+  // Deep link from the Waitlist page's "Settings" button.
+  if (location.hash === '#waitlist-settings') document.getElementById('waitlist-settings')?.scrollIntoView();
+}
+
+// Waitlist settings (Waitlist Spec §4.6) — stored as one Kennel.waitlist_config
+// object so they ride the JSON backup (never settings.js/localStorage). One list
+// per kennel, so one config per kennel. Pro-only (editionFlags.waitlist).
+function waitlistCard(k) {
+  if (!editionFlags.waitlist) return '';
+  const c = waitlistConfig(k);
+  const policyOpts = FEE_CREDIT_POLICY.map((o) => `<option value="${esc(o.value)}"${o.value === c.fee_credit_policy ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+  return `
+    <section class="card" id="waitlist-settings">
+      <div class="row-between"><h2 style="margin:0;">Waitlist settings</h2><a class="btn btn-sm" href="waitlist.html?kennel=${encodeURIComponent(k.id)}">Open waitlist →</a></div>
+      <p class="field-hint">How ${esc(k.kennel_name)}'s waitlist works. Programs can change the fee and response window for particular families.</p>
+      <div class="form-grid">
+        <div class="field"><label>Application fee</label><input id="wl-fee" type="number" min="0" step="0.01" value="${esc(c.fee_amount ?? '')}" placeholder="No fee"></div>
+        <div class="field"><label>The fee is</label><select id="wl-policy">${policyOpts}</select></div>
+        <div class="field"><label>Days to pay after approval</label><input id="wl-fee-days" type="number" min="1" step="1" value="${esc(c.fee_due_days ?? '')}" placeholder="No deadline">
+          <span class="field-hint">Blank = no pay-by date, so nothing ever expires.</span></div>
+        <div class="field"><label>Days to respond to an offer</label><input id="wl-respond" type="number" min="1" step="1" value="${esc(c.respond_days)}"></div>
+        <div class="field"><label>Passes before removal</label><input id="wl-passes" type="number" min="1" step="1" value="${esc(c.max_passes)}"></div>
+        <div class="field field-wide"><label>Payment instructions</label><textarea id="wl-instructions" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions)}</textarea>
+          <span class="field-hint">What you tell approved families about paying the fee.</span></div>
+        <div class="field field-wide">
+          <label class="check-inline"><input id="wl-noresp" type="checkbox"${c.no_response_counts_as_pass ? ' checked' : ''}> No response by the deadline counts as a pass</label>
+          <label class="check-inline"><input id="wl-colors" type="checkbox"${c.color_matching ? ' checked' : ''}> Match on color (only offer pups in a color the family listed)</label>
+        </div>
+      </div>
+      <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
+    </section>`;
+}
+
+async function onSaveWaitlist() {
+  clearError();
+  const q = (sel) => els.config.querySelector(sel);
+  const num = (sel) => (q(sel).value === '' ? null : Number(q(sel).value));
+  const waitlist_config = {
+    ...(kennel.waitlist_config || {}),
+    fee_amount: num('#wl-fee'),
+    fee_credit_policy: q('#wl-policy').value,
+    fee_due_days: num('#wl-fee-days'),
+    respond_days: num('#wl-respond'),
+    max_passes: num('#wl-passes'),
+    payment_instructions: q('#wl-instructions').value.trim(),
+    no_response_counts_as_pass: q('#wl-noresp').checked,
+    color_matching: q('#wl-colors').checked
+  };
+  if (waitlist_config.max_passes != null && waitlist_config.max_passes < 1) { showError('Passes before removal must be at least 1.'); return; }
+  try {
+    await kennelRepo.update(kennel.id, { waitlist_config });
+    await reloadKennel();
+    renderConfig();
+  } catch (err) { showError(err.message || String(err)); }
 }
 
 // Feeding Schedules (§27.2) — per-breed feeding grids, edited on their own page
@@ -458,6 +514,8 @@ function applyToDogsPanel() {
 function wireConfig() {
   const saveNudges = els.config.querySelector('[data-act="save-nudges"]');
   if (saveNudges) saveNudges.addEventListener('click', onSaveNudges);
+  const saveWaitlist = els.config.querySelector('[data-act="save-waitlist"]');
+  if (saveWaitlist) saveWaitlist.addEventListener('click', onSaveWaitlist);
 
   els.config.querySelectorAll('[data-remove-test]').forEach((cb) => {
     cb.addEventListener('change', async (e) => {

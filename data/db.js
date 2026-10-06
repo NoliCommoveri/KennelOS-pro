@@ -110,6 +110,13 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    field, filtered in JS like the foster fields) is the per-litter override
 //    that takes priority over the breed default in the seed packet — both are
 //    Pro-only (editionFlags.feedingSchedule).
+//  - `waitlist_entries` / `waitlist_offers` / `waitlist_programs` are the per-kennel
+//    waitlist (Waitlist Spec §4; End-State guide §29). Every FK is indexed so its
+//    referenceRegistry probe is a lookup, never a scan — including the two
+//    MULTI-ENTRY listen lists (`*listen_pairing_ids`, `*listen_litter_ids`), which
+//    the rules engine never queries by key but the hard-delete guard does.
+//    `kennel_id` on all three is the kennel scope (one list per kennel). Position is
+//    DERIVED (waitlistRules.js), never stored; so are passes (counted from offers).
 db.version(1).stores({
   dogs:          'id, sire_id, dam_id, litter_id, breeder_kennel_id, owner_contact_id, *co_owner_contact_ids, status, ownership_type, sex, breed, kennel_id, is_archived',
   events:        'id, [subject_type+subject_id], event_type, event_date, reminder_date, related_dog_id, related_contact_id, is_archived',
@@ -123,7 +130,10 @@ db.version(1).stores({
   stud_services: 'id, kennel_id, our_dog_id, partner_dog_id, partner_contact_id, referred_by_contact_id, direction, status, pairing_id, is_archived',
   documents:     'id, kennel_id, dog_id, doc_type, doc_date, is_archived',
   files:         'id, created_at',
-  breed_feeding_schedules: 'id, breed, is_archived'
+  breed_feeding_schedules: 'id, breed, is_archived',
+  waitlist_entries:  'id, kennel_id, contact_id, status, waitlist_program_id, *listen_pairing_ids, *listen_litter_ids, placed_sale_id, is_archived',
+  waitlist_offers:   'id, entry_id, litter_id, kennel_id, chosen_dog_id, outcome, is_archived',
+  waitlist_programs: 'id, kennel_id, is_archived'
 });
 
 // --- First-run storage durability ----------------------------------------

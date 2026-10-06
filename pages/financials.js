@@ -35,7 +35,7 @@ import { esc, badge, fmtDate, fmtMoney, todayYMD, param } from '../assets/ui.js'
 import {
   EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, INCOME_SOURCE_TYPES, INCOME_COMPONENTS,
   INCOME_STATES, SALE_STATUS, STUD_SERVICE_STATUS, BOARDING_FREQUENCY_OPTIONS,
-  PAYMENT_METHODS, INVOICE_LINE_LABELS, descriptor
+  PAYMENT_METHODS, INVOICE_LINE_LABELS, WAITLIST_ENTRY_STATUS, descriptor
 } from '../data/vocab.js';
 
 const SUBJECT_PAGE = { dog: 'dog.html', litter: 'litter.html', pairing: 'pairing.html', kennel: 'kennel.html' };
@@ -474,7 +474,8 @@ function makeIncomeBox(mountId, state, onChanged) {
     csvFilename: `income-${state}-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dog or counterparty…', text: (r) => `${r.dog} ${r.counterparty}` },
     filters: [
-      { id: 'source_type', label: 'Source', options: INCOME_SOURCE_TYPES, match: (r, v) => r.source_type === v },
+      // The waitlist-fee source exists only where the waitlist does (Pro).
+      { id: 'source_type', label: 'Source', options: INCOME_SOURCE_TYPES.filter((o) => o.value !== 'waitlist' || editionFlags.waitlist), match: (r, v) => r.source_type === v },
       { id: 'year', label: 'Year', options: [], match: (r, v) => year(r) === v }
     ],
     columns: [
@@ -486,11 +487,13 @@ function makeIncomeBox(mountId, state, onChanged) {
       // and reportView takes a single vocab array, so render the resolved label
       // as plain text rather than a colored badge here.
       { header: 'Status',
-        value: (r) => descriptor(r.source_type === 'sale' ? SALE_STATUS : STUD_SERVICE_STATUS, r.status).label,
+        value: (r) => descriptor(r.source_type === 'sale' ? SALE_STATUS : r.source_type === 'waitlist' ? WAITLIST_ENTRY_STATUS : STUD_SERVICE_STATUS, r.status).label,
         csv: (r) => r.status || '' },
       { header: 'Amount', value: (r) => fmtMoney(amountOf(r)), csv: (r) => String(amountOf(r) || '') }
     ],
-    onRowClick: (r) => openAdjust(r, onChanged),
+    // A waitlist fee has nothing to adjust here — its fee lives on the family's
+    // waitlist entry, so open that instead.
+    onRowClick: (r) => (r.source_type === 'waitlist' ? (location.href = r.href) : openAdjust(r, onChanged)),
     load: async () => {
       const rows = (await getIncomeRows({ includeArchived: false })).filter((r) => amountOf(r) > 0);
       const years = [...new Set(rows.map(year).filter(Boolean))].sort().reverse();
@@ -806,7 +809,7 @@ async function openGenerateModal() {
     const record = row.source_type === 'sale'
       ? await saleRepo.getById(row.source_id)
       : await studServiceRepo.getById(row.source_id);
-    const items = incomeLineItems(row.source_type, record);
+    const items = incomeLineItems(row.source_type, record, { feeCredit: row.fee_credit || 0 });
     const soonest = row.source_type === 'sale' ? await soonestDueFor(record) : '';
     st.source = row.source_type;
     st.record = record;

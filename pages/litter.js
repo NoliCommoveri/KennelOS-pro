@@ -36,6 +36,7 @@ const els = {
   body: document.getElementById('profile-body'),
   error: document.getElementById('page-error'),
   roster: document.getElementById('roster-section'),
+  picks: document.getElementById('waitlist-picks-section'),
   timeline: document.getElementById('timeline-section'),
   expenses: document.getElementById('expenses-section'),
   income: document.getElementById('income-section')
@@ -489,6 +490,7 @@ function enterEdit() {
   renderEdit();
   renderProfileActions();
   renderRosterSection();
+  renderPicksSection().catch((e) => showError(e.message || String(e)));
   renderTimelineSection();
   renderExpensesSection();
   renderIncomeSection();
@@ -501,6 +503,7 @@ function cancel() {
   renderView();
   renderProfileActions();
   renderRosterSection();
+  renderPicksSection().catch((e) => showError(e.message || String(e)));
   renderTimelineSection();
   renderExpensesSection();
   renderIncomeSection();
@@ -701,6 +704,28 @@ async function renderRosterSection() {
   }
 }
 
+// --- Waitlist picks (Waitlist Spec §6.5) ----------------------------------
+// Pro-only: the panel module is imported dynamically ONLY when the flag is on, so
+// the Lite build (which doesn't ship assets/waitlistPicksPanel.js) never asks
+// for it. Its writes change this litter (picks_opened_date) and its pups (a Sale
+// on accept), so refresh ctx.original and the roster after each one — otherwise a
+// later Edit → Save would write a stale picks_opened_date back.
+async function renderPicksSection() {
+  if (!els.picks) return;
+  if (!editionFlags.waitlist || ctx.mode !== 'view' || !ctx.original) { els.picks.innerHTML = ''; return; }
+  const { renderWaitlistPicksPanel } = await import('../assets/waitlistPicksPanel.js');
+  await renderWaitlistPicksPanel({
+    mount: els.picks,
+    litter: ctx.original,
+    onChange: async () => {
+      ctx.original = await litterRepo.getById(ctx.original.id);
+      await loadRefs();
+      renderRosterSection();
+      renderPicksSection();
+    }
+  });
+}
+
 // After adding puppies the roster (and dog names cached in ctx) may have changed.
 async function refreshRosterAndCounts() {
   await loadRefs();
@@ -825,6 +850,7 @@ function renderAll() {
   if (ctx.mode === 'view') renderView();
   else renderEdit();
   renderRosterSection();
+  renderPicksSection().catch((e) => showError(e.message || String(e)));
   renderTimelineSection();
   renderExpensesSection();
   renderIncomeSection();
