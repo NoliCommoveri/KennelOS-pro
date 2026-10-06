@@ -356,7 +356,7 @@ export const WIZARD_STEPS = [
     id: 'invoice-doc', hub: 'Financials', page: 'invoice.html', anchor: 'cedarSale',
     selector: '#inv-root',
     title: 'A generated invoice',
-    body: 'What comes out of the generator: an itemized bill with due dates, a running balance, and the payment methods you accept — ready to Print / Save as PDF. Switch the doc type in the generator to produce a receipt the same way, for money already collected.'
+    body: 'What comes out of the generator: an itemized bill with due dates, a running balance, and the payment methods you accept — ready to download as a PDF or print. Switch the doc type in the generator to produce a receipt the same way, for money already collected.'
   },
 
   // --- Sharing: Companion ---------------------------------------------------

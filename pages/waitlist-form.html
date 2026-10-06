@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Application form — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+  <style>
+    /* waitlist-form.js's question editor */
+    .wf-q { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-top: 10px; background: var(--surface); }
+    .wf-q-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .wf-q-head .wf-num { font-weight: 700; color: var(--text-muted); min-width: 1.6em; }
+    .wf-q-head input.wf-label { flex: 1 1 220px; min-width: 0; }
+    .wf-q-head select { flex: 0 1 220px; min-width: 0; }
+    .wf-q-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 12px; margin-top: 8px; }
+    .wf-q textarea { min-height: 64px; }
+    .wf-q textarea[data-f="help"] { min-height: 110px; }
+    .wf-move { display: flex; gap: 4px; margin-left: auto; }
+    .wf-import-row td { vertical-align: top; }
+    .wf-import-row select, .wf-import-row input { max-width: 100%; }
+    .wf-sample { font-size: 12px; color: var(--text-muted); max-width: 220px; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <a class="muted" id="back-link" href="waitlist.html">← Waitlist</a>
+        <h1 id="wf-title">Application form</h1>
+        <p class="page-subtitle">The questions families answer when they apply. Questions marked 🔒 drive the list (matching, approval, the public list): you can reword them but not remove them. Everything else is yours.</p>
+      </div>
+      <div class="pill-row">
+        <label class="btn" for="wf-csv">Import questions from a CSV…</label>
+        <input id="wf-csv" type="file" accept=".csv,text/csv" hidden>
+        <button class="btn btn-primary" id="wf-save">Save form</button>
+      </div>
+    </div>
+    <div id="page-error"></div>
+    <div id="wf-kennel-picker"></div>
+    <div id="wf-import"></div>
+    <div id="wf-body"></div>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./waitlist-form.js"></script>
+</body>
+</html>

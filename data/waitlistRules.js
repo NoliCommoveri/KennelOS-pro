@@ -225,6 +225,11 @@ export function hasOpenOffer(offers, litterId) {
 // an offer is already open on the litter (one at a time), or nobody is left.
 // Skipped families (paused, listen-only, no matching pup) have nothing recorded
 // against them — they simply aren't in the queue.
+// Has this family already used its turn on this litter (an offer that wasn't voided)?
+export function turnSpent(offers, litterId, entryId) {
+  return offers.some((o) => !o.is_archived && o.litter_id === litterId && o.entry_id === entryId && SPENT_OUTCOMES.includes(o.outcome));
+}
+
 export function nextFamilyForLitter(entries, offers, litter, pups, sales, opts = {}) {
   if (hasOpenOffer(offers, litter.id)) return null;
   const spent = new Set(
@@ -318,4 +323,46 @@ export function contactMatches(application, contacts) {
 // The family's display name: the linked contact's, else the applicant's own.
 export function entryName(entry, contact) {
   return (contact && contact.name) || (entry.application && entry.application.name) || 'Unnamed applicant';
+}
+
+// --- The public list (Spec §15.3) ------------------------------------------------
+
+// "Jane S." from "Jane Smith" (first word + last word's initial). One word stays as
+// is; a blank name becomes "Family". Contact details never appear (§15.3).
+export function publicName(fullName) {
+  const words = String(fullName ?? '').trim().split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+  if (!words.length) return 'Family';
+  if (words.length === 1) return words[0];
+  const last = words[words.length - 1];
+  return `${words[0]} ${[...last][0].toUpperCase()}.`;
+}
+
+// The public list for one kennel: the allow-listed fields only (position, first
+// name + last initial, sex preference, date added). Positions are the REAL §6.1
+// positions; paused families are left out and their numbers skipped (#1, #2, #4),
+// so nobody's public number shifts when a pause ends (decided 2026-10-06).
+// Listen-only families show, with no marker. Programs, notes and money never do.
+// `nameOf(entry)` returns the family's full name.
+export function publicList(entries, kennelId, programsById = new Map(), { today, nameOf = (e) => entryName(e, null) } = {}) {
+  return rankedList(entries, kennelId, programsById)
+    .map((e, i) => ({ entry: e, position: i + 1 }))
+    .filter(({ entry }) => !isPaused(entry, today))
+    .map(({ entry, position }) => ({
+      position,
+      name: publicName(nameOf(entry)),
+      pref_sex: entry.pref_sex || 'any',
+      added: anchorDate(entry)
+    }));
+}
+
+const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
+
+// The public list as plain text for a Facebook post or website (the W1 stand-in
+// for the public link). `fmtDate` formats a YYYY-MM-DD for display.
+export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d) => d } = {}) {
+  const head = `${kennelName ? `${kennelName} waitlist` : 'Waitlist'}${today ? ` (updated ${fmtDate(today)})` : ''}`;
+  if (!rows.length) return `${head}\nNobody is on the list yet.`;
+  const lines = rows.map((r) => `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`);
+  const gaps = rows.some((r, i) => r.position !== i + 1);
+  return [head, '', ...lines, ...(gaps ? ['', 'A skipped number is a family who has paused. They keep their place.'] : [])].join('\n');
 }

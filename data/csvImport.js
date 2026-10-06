@@ -23,6 +23,8 @@ import { studServiceRepo } from './studServiceRepo.js';
 import { expenseRepo, mileageAmount } from './expenseRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
+import { formQuestions, isAnswerQuestion, snapshotQuestions, columnsFor, IMPORT_ALIASES } from './waitlistForm.js';
+import { waitlistConfig } from './waitlistRules.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
@@ -1376,17 +1378,9 @@ const EXPENSE_MAPPING = {
 //    (they're already on the list; don't touch a live family from an old row).
 // Contacts are NOT matched here: approval offers the match (Spec §5.2), the same
 // "offered, never automatic" rule.
-const APP_COLUMNS = [
-  ['phone', 'phone', 'phone_number', 'telephone'],
-  ['location', 'location', 'city_state', 'city', 'city_/_state', 'where_do_you_live'],
-  ['timing', 'timing', 'when', 'when_are_you_hoping_to_bring_a_puppy_home'],
-  ['heard_from', 'heard_from', 'how_did_you_hear_about_us', 'referral', 'source'],
-  ['household', 'household', 'household_members', 'tell_us_about_your_household'],
-  ['other_pets', 'other_pets', 'pets', 'current_pets'],
-  ['experience', 'experience', 'breed_experience', 'dog_experience'],
-  ['about', 'about', 'about_your_family', 'tell_us_about_your_family', 'anything_else']
-];
-
+// The columns each question reads come from waitlistForm.js: her own form's
+// imported column (`source_header`, Spec §15.1) first, then the built-in aliases,
+// so a Google Form export lines up with the questions she imported from it.
 const WAITLIST_MAPPING = {
   entity: 'waitlist',
   label: 'Waitlist applications',
@@ -1401,6 +1395,7 @@ const WAITLIST_MAPPING = {
       contactRepo.getAll({ includeArchived: true })
     ]);
     this._own = own;
+    this._formByKennel = new Map(own.map((k) => [k.id, formQuestions(waitlistConfig(k))]));
     this._programs = programs;
     this._contactsById = new Map(contacts.map((c) => [c.id, c]));
     // The import page sets `preferredKennelId` from its kennel picker; otherwise
@@ -1426,18 +1421,10 @@ const WAITLIST_MAPPING = {
 
   classify(row, index, i) {
     const reasons = [];
-    const name = col(row, 'name', 'full_name', 'your_name', 'applicant_name');
-    const email = col(row, 'email', 'email_address', 'your_email');
-    const application = {};
-    if (name) application.name = name;
-    if (email) application.email = email;
-    for (const [key, ...aliases] of APP_COLUMNS) {
-      const v = col(row, ...aliases);
-      if (v) application[key] = v;
-    }
-    const record = { status: 'applied', application };
+    const record = { status: 'applied' };
 
-    // Kennel: a named own kennel, else the active/sole kennel.
+    // Kennel first (a named own kennel, else the active/sole kennel): its form
+    // decides which columns hold which answers.
     const kName = col(row, 'kennel_name', 'kennel');
     if (kName) {
       const hit = index.kennelByName.get(kName.toLowerCase());
@@ -1446,6 +1433,23 @@ const WAITLIST_MAPPING = {
     } else if (this._defaultKennelId) {
       record.kennel_id = this._defaultKennelId;
     }
+    const form = (this._formByKennel && this._formByKennel.get(record.kennel_id)) || formQuestions({});
+    const colsFor = (id) => {
+      const question = form.find((x) => x.id === id);
+      return question ? columnsFor(question) : (IMPORT_ALIASES[id] || [id]);
+    };
+
+    // Answers, keyed by question id, with the wording they were imported under.
+    const application = {};
+    for (const question of form.filter(isAnswerQuestion)) {
+      const v = col(row, ...columnsFor(question));
+      if (!v) continue;
+      application[question.id] = question.type === 'checkboxes' ? v.split(/,\s+|;\s*/).map((x) => x.trim()).filter(Boolean) : v;
+    }
+    const name = application.name || '';
+    const email = application.email || '';
+    record.application = application;
+    record.application_questions = snapshotQuestions(form);
 
     // Applied date: a Google Form "Timestamp" carries a time — keep the date part.
     const rawDate = col(row, 'applied_date', 'timestamp', 'date', 'submitted');
@@ -1455,21 +1459,21 @@ const WAITLIST_MAPPING = {
       else reasons.push(`Unrecognized applied_date "${rawDate}" (left blank).`);
     }
 
-    const sexRaw = col(row, 'pref_sex', 'sex', 'preferred_sex', 'male_or_female');
+    const sexRaw = col(row, ...colsFor('pref_sex'));
     if (sexRaw) {
       const v = normEnum(WAITLIST_PREF_SEX, sexRaw, { either: 'any', no_preference: 'any', none: 'any', boy: 'male', girl: 'female' });
       if (v) record.pref_sex = v;
       else reasons.push(`Unrecognized sex preference "${sexRaw}" (left as either).`);
     }
-    const breed = col(row, 'pref_breed', 'breed', 'preferred_breed');
+    const breed = col(row, ...colsFor('pref_breed'));
     if (breed) record.pref_breed = breed;
-    const placementRaw = col(row, 'pref_placement', 'pref_placement_type', 'placement', 'placement_type');
+    const placementRaw = col(row, ...colsFor('pref_placement'));
     if (placementRaw) {
       const v = normEnum(PLACEMENT_TYPE, placementRaw);
       if (v) record.pref_placement_type = v;
       else reasons.push(`Unrecognized placement "${placementRaw}" (left as any).`);
     }
-    const colors = splitList(col(row, 'pref_colors', 'colors', 'color', 'preferred_color'));
+    const colors = splitList(col(row, ...colsFor('pref_colors')));
     if (colors.length) record.pref_colors = colors;
     const notes = col(row, 'notes');
     if (notes) record.notes = notes;
@@ -1509,6 +1513,7 @@ const WAITLIST_MAPPING = {
     // still under review — never its kennel, status or dates.
     const changes = match ? {
       application: { ...(match.application || {}), ...application },
+      application_questions: record.application_questions,
       ...Object.fromEntries(['pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors', 'waitlist_program_id', 'notes']
         .filter((k) => record[k] !== undefined).map((k) => [k, record[k]]))
     } : { ...record };

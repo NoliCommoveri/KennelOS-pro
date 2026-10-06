@@ -1,20 +1,19 @@
-// invoice.js — Invoice / Receipt print-PDF view (§24). Renders a printable
-// financial document for one income record (a Sale or an outgoing StudService),
-// covering all five cash income types (deposit, remaining purchase price,
-// transport, boarding, stud fee). Like the Puppy Record, "download" is the
-// browser's own Print → Save as PDF — no vendored PDF library.
+// invoice.js — Invoice / Receipt view (§24). Renders the printable financial
+// document for one income record: a Sale or an outgoing StudService (all five
+// cash income types: deposit, remaining purchase price, transport, boarding, stud
+// fee), or a waitlist family's application fee (Waitlist Spec §15.2). What the
+// document SAYS is built by assets/invoiceDoc.js; this page draws it as HTML and
+// "Download PDF" draws the same model as a real PDF file (assets/invoicePdf.js,
+// vendored jsPDF). "Print" is the browser's own print.
 //
 // Query params:
-//   source = 'sale' | 'stud'   which income record this bills
+//   source = 'sale' | 'stud' | 'waitlist'   which record this bills
 //   id     = <record id>
 //   doc    = 'invoice' | 'receipt'  (default 'invoice')
 //   cfg    = URL-encoded JSON built by the Financials generator modal:
 //            { number, notes, lines:[{key,mode:'full'|'partial',collected,dueDate}],
 //              methods:[…]  (invoice: accepted methods),
 //              payMethod, payReference  (receipt: method used) }
-//
-// The document never prints itself — the owner triggers the browser's
-// Print → Save as PDF with the page's "Print / Save as PDF" button.
 //
 // Full vs Partial per line (owner's model):
 //   • Partial → the line prints "<Name> (partial)" and its amount IS the entered
@@ -24,50 +23,10 @@
 //     the remaining (base − collected) and the collected is not printed.
 // Line base amounts always come from incomeView.incomeLineItems so they stay
 // truthful to the record; cfg only carries the per-line choices.
-import { saleRepo } from '../data/saleRepo.js';
-import { studServiceRepo } from '../data/studServiceRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
-import { litterRepo } from '../data/litterRepo.js';
-import { kennelRepo } from '../data/kennelRepo.js';
-import { getActiveKennel } from '../data/kennelScope.js';
-import { incomeLineItems, getSaleFeeCredit } from '../data/incomeView.js';
-import { getMyContactId, getInvoiceDefaults } from '../data/settings.js';
-import { PLACEMENT_TYPE, FEE_STRUCTURE, INVOICE_LINE_LABELS, descriptor } from '../data/vocab.js';
-import { esc, param, fmtMoney } from '../assets/ui.js';
+import { buildInvoiceDoc, fmtDateMDY, money } from '../assets/invoiceDoc.js';
+import { esc, param } from '../assets/ui.js';
 
 const root = document.getElementById('inv-root');
-
-// Footnote markers on a SALE invoice: deposit is refundability (*), the rest of
-// the puppy-sale money is due-date driven (**). Stud fees carry neither.
-const FOOTNOTE = { deposit: '*', balance: '**', transport: '**', boarding: '**' };
-const NOTE_STAR = 'All deposit fees are non-refundable except where exclusions from contract apply.';
-const NOTE_DBL = 'Transport, boarding, and purchase price balance due dates are calculated based on either expected pickup date or when puppy reaches nine weeks of age, whichever comes first. Date may change based on rescheduling pick-up dates. Any and all remaining unpaid fees are immediately due upon pickup if earlier than the above listed dates.';
-
-function fmtDateMDY(ymd) {
-  if (!ymd) return '';
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd);
-  if (!m) return ymd;
-  return `${m[2]}/${m[3]}/${m[1]}`;
-}
-
-const todayYMD = () => new Date().toISOString().slice(0, 10);
-const money = (v) => fmtMoney(v) || '$0.00';
-const numOf = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-
-function payRow(label, value) {
-  if (value == null || value === '') return '';
-  return `<div class="inv-row"><span class="inv-k">${esc(label)}</span><span>${value}</span></div>`;
-}
-
-function partyCard(role, name, lines) {
-  const detail = lines.filter(Boolean).join('<br>');
-  return `<div class="inv-party">
-    <div class="inv-party-role">${esc(role)}</div>
-    <div class="inv-name">${name || '<span class="inv-empty">—</span>'}</div>
-    ${detail ? `<div class="inv-detail">${detail}</div>` : ''}
-  </div>`;
-}
 
 function parseCfg() {
   const raw = param('cfg');
@@ -75,199 +34,77 @@ function parseCfg() {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-async function main() {
-  const source = param('source') === 'stud' ? 'stud' : 'sale';
-  const doc = param('doc') === 'receipt' ? 'receipt' : 'invoice';
-  const id = param('id');
-  const isReceipt = doc === 'receipt';
+const request = () => ({
+  source: param('source') || 'sale',
+  id: param('id'),
+  doc: param('doc') === 'receipt' ? 'receipt' : 'invoice',
+  cfg: parseCfg()
+});
 
-  if (!id) { root.innerHTML = '<p class="inv-empty">No record specified.</p>'; return; }
+function partyCard(role, name, lines) {
+  const detail = lines.map(esc).join('<br>');
+  return `<div class="inv-party">
+    <div class="inv-party-role">${esc(role)}</div>
+    <div class="inv-name">${name ? esc(name) : '<span class="inv-empty">—</span>'}</div>
+    ${detail ? `<div class="inv-detail">${detail}</div>` : ''}
+  </div>`;
+}
 
-  const record = source === 'sale' ? await saleRepo.getById(id) : await studServiceRepo.getById(id);
-  if (!record) { root.innerHTML = '<p class="inv-empty">Record not found.</p>'; return; }
-  // The back button keeps its HTML default (financials.html?view=income) to
-  // match its "← Back to Financials" label — the generator always opens this
-  // page from the Financials hub.
+function render(d) {
+  const r = d.isReceipt;
+  const itemsBody = d.rows.length
+    ? d.rows.map((row) => r
+        ? `<tr><td>${esc(row.label)}</td><td class="num">${esc(money(row.amount))}</td></tr>`
+        : `<tr>
+            <td>${esc(row.label)}${row.marker ? `<sup>${esc(row.marker)}</sup>` : ''}</td>
+            <td>${row.due ? esc(row.due) : '<span class="faint">—</span>'}</td>
+            <td class="num">${esc(money(row.amount))}</td>
+          </tr>`).join('')
+    : `<tr><td colspan="${r ? 2 : 3}" class="inv-empty">No line items.</td></tr>`;
+  const foot = d.totals.map((t) => {
+    const amount = t.amount < 0 ? `−${esc(money(-t.amount))}` : esc(money(t.amount));
+    return `<tr${t.total ? ' class="total"' : ''}><td${r ? '' : ' colspan="2"'}>${esc(t.label)}</td><td class="num">${amount}</td></tr>`;
+  }).join('');
 
-  const dogId = source === 'sale' ? record.dog_id : record.our_dog_id;
-  const recipientId = source === 'sale' ? record.buyer_contact_id : record.partner_contact_id;
-  const [dog, recipient, kennels, myContact, activeKennel] = await Promise.all([
-    dogId ? dogRepo.getById(dogId) : null,
-    recipientId ? contactRepo.getById(recipientId) : null,
-    kennelRepo.getAll({ includeArchived: true }),
-    (() => { const cid = getMyContactId(); return cid ? contactRepo.getById(cid) : null; })(),
-    getActiveKennel()
-  ]);
-  if (source === 'sale' && dog && dog.litter_id) await litterRepo.getById(dog.litter_id);
-
-  // The record's own kennel wins — a sale/stud service carries a real
-  // kennel_id as of Multi-Kennel Scope Spec §4 (a stud service inherits it from
-  // OUR dog, never the partner's, so this is never the recipient's kennel).
-  // Falls back to the dog's own kennel, then the active kennel scope, then the
-  // sole own kennel as a last resort (Lite, or "All kennels" with just one).
-  const ownKennel = (record.kennel_id && kennels.find((k) => k.id === record.kennel_id))
-    || (dog && dog.kennel_id && kennels.find((k) => k.id === dog.kennel_id))
-    || activeKennel
-    || kennels.find((k) => k.is_own_kennel && !k.is_archived)
-    || null;
-
-  // Base amounts by component key, always recomputed from the record.
-  // A credited waitlist application fee (Waitlist Spec §5.3) already paid part of
-  // the price, so the balance line is reduced by it and says so.
-  const feeCredit = source === 'sale' ? await getSaleFeeCredit(record.id) : 0;
-  const baseByKey = new Map(incomeLineItems(source, record, { feeCredit }).map((it) => [it.component, it.amount]));
-
-  // Config — from the generator, or a full-line default when the page is opened
-  // directly (every cash line, full, nothing collected, no dates).
-  let cfg = parseCfg();
-  if (!cfg) {
-    cfg = {
-      number: (record.invoice_number || '').trim(),
-      notes: (record.invoice_notes || '').trim(),
-      lines: [...baseByKey.keys()].map((key) => ({ key, mode: 'full', collected: 0, dueDate: '' })),
-      methods: getInvoiceDefaults().acceptedMethods,
-      payMethod: record.payment_method || '',
-      payReference: record.payment_reference || ''
-    };
-  }
-
-  const isSale = source === 'sale';
-  const rowsHtml = [];
-  const markersUsed = new Set();
-  let subtotal = 0;       // invoice: sum of printed line amounts
-  let collectedFull = 0;  // invoice: already-collected on full lines (reduces balance)
-  let paidTotal = 0;      // receipt: sum of amounts received
-
-  for (const line of (cfg.lines || [])) {
-    const base = baseByKey.get(line.key);
-    if (base == null || base <= 0) continue;
-    const collected = numOf(line.collected);
-    const partial = line.mode === 'partial';
-    let label = INVOICE_LINE_LABELS[line.key] || line.key;
-    if (line.key === 'balance' && feeCredit > 0) label += ` (after ${money(feeCredit)} application fee credit)`;
-    const marker = isSale && !isReceipt ? (FOOTNOTE[line.key] || '') : '';
-    if (marker) markersUsed.add(marker);
-
-    if (isReceipt) {
-      const amount = partial ? collected : Math.max(base - collected, 0);
-      // Partial → "(partial)". Full but with a prior partial payment already
-      // collected → this line is the remaining balance, so print "(balance)".
-      if (partial) label += ' (partial)';
-      else if (collected > 0) label += ' (balance)';
-      paidTotal += amount;
-      rowsHtml.push(`<tr><td>${esc(label)}</td><td class="num">${esc(money(amount))}</td></tr>`);
-    } else {
-      const amount = partial ? collected : base;
-      if (partial) label += ' (partial)';
-      if (!partial) collectedFull += collected;
-      subtotal += amount;
-      // Deposits are always due immediately; the calculated due date (expected
-      // pickup / nine-weeks-of-age) applies only to the other four line types.
-      const due = line.key === 'deposit'
-        ? 'Immediately'
-        : (line.dueDate ? esc(fmtDateMDY(line.dueDate)) : '<span class="faint">—</span>');
-      rowsHtml.push(`<tr>
-        <td>${esc(label)}${marker ? `<sup>${esc(marker)}</sup>` : ''}</td>
-        <td>${due}</td>
-        <td class="num">${esc(money(amount))}</td>
-      </tr>`);
-    }
-  }
-
-  const balance = Math.max(subtotal - collectedFull, 0);
-  const itemsBody = rowsHtml.length
-    ? rowsHtml.join('')
-    : `<tr><td colspan="${isReceipt ? 2 : 3}" class="inv-empty">No line items.</td></tr>`;
-
-  const foot = isReceipt
-    ? `<tr class="total"><td>Total paid</td><td class="num">${esc(money(paidTotal))}</td></tr>`
-    : `<tr><td colspan="2">Subtotal</td><td class="num">${esc(money(subtotal))}</td></tr>
-       ${collectedFull > 0 ? `<tr><td colspan="2">Less amount already collected</td><td class="num">−${esc(money(collectedFull))}</td></tr>` : ''}
-       <tr class="total"><td colspan="2">Balance</td><td class="num">${esc(money(balance))}</td></tr>`;
-
-  // Document number.
-  const docNumber = (cfg.number || '').trim()
-    || `${isReceipt ? 'RCT' : 'INV'}-${todayYMD().replace(/-/g, '')}-${String(id).slice(0, 6).toUpperCase()}`;
-
-  // Payment block.
   let payBox = '';
-  if (isReceipt) {
-    const paymentDate = isSale
-      ? (record.balance_paid_date || record.deposit_date || record.sale_date || '')
-      : (record.returned_date || record.sent_date || '');
-    const rows = [
-      payRow('Payment method', cfg.payMethod ? esc(cfg.payMethod) : ''),
-      payRow('Reference', cfg.payReference ? esc(cfg.payReference) : ''),
-      payRow('Payment date', paymentDate ? esc(fmtDateMDY(paymentDate)) : '')
-    ].filter(Boolean).join('');
-    const note = cfg.payMethod ? `Paid via ${esc(cfg.payMethod)}. Thank you!` : 'Thank you for your payment!';
-    payBox = `<div class="inv-pay"><h3>Payment received</h3>${rows}<p class="inv-detail" style="margin:6px 0 0;">${note}</p></div>`;
-  } else {
-    const methods = (cfg.methods || []).filter(Boolean);
-    if (methods.length) {
-      const boxes = methods.map((m) => `<span class="inv-method">&#9633; ${esc(m)}</span>`).join('');
-      payBox = `<div class="inv-pay"><h3>Payment may be made using one of the following methods:</h3>
-        <div class="inv-methods">${boxes}</div></div>`;
-    }
+  if (d.pay) {
+    const rows = d.pay.rows.map(([k, v]) => `<div class="inv-row"><span class="inv-k">${esc(k)}</span><span>${esc(v)}</span></div>`).join('');
+    const methods = d.pay.methods.length
+      ? `<div class="inv-methods">${d.pay.methods.map((m) => `<span class="inv-method">&#9633; ${esc(m)}</span>`).join('')}</div>` : '';
+    const note = d.pay.note ? `<p class="inv-detail" style="margin:6px 0 0;white-space:pre-line;">${esc(d.pay.note)}</p>` : '';
+    payBox = `<div class="inv-pay"><h3>${esc(d.pay.title)}</h3>${rows}${methods}${note}</div>`;
   }
 
-  // Issuer / recipient.
-  const issuerName = esc(ownKennel?.kennel_name || 'Kennel');
-  const issuerLines = [
-    myContact && myContact.name && myContact.name !== ownKennel?.kennel_name ? esc(myContact.name) : '',
-    ownKennel?.location ? esc(ownKennel.location) : '',
-    myContact?.email ? esc(myContact.email) : '',
-    myContact?.phone ? esc(myContact.phone) : '',
-    ownKennel?.website ? esc(ownKennel.website) : ''
-  ];
-  const logoHtml = ownKennel?.logo_data_url
-    ? `<img class="inv-logo" src="${esc(ownKennel.logo_data_url)}" alt="${issuerName} logo">`
-    : '';
-  const recipientLines = recipient ? [
-    recipient.address ? esc(recipient.address) : '',
-    recipient.email ? esc(recipient.email) : '',
-    recipient.phone ? esc(recipient.phone) : ''
-  ] : [];
-
-  const reText = isSale
-    ? `Re: ${dog?.call_name || 'Puppy'}${dog?.registered_name ? ` (${dog.registered_name})` : ''} — ${descriptor(PLACEMENT_TYPE, record.placement_type).label} placement`
-    : `Re: Stud service — ${dog?.call_name || 'our dog'} × ${recipient?.name || 'partner'}${record.fee_structure ? ` (${descriptor(FEE_STRUCTURE, record.fee_structure).label})` : ''}`;
-
-  // Footer: custom note, then the standing disclaimers whose markers appear above.
-  const footnotes = [];
-  if (markersUsed.has('*')) footnotes.push(`<div><sup>*</sup> ${esc(NOTE_STAR)}</div>`);
-  if (markersUsed.has('**')) footnotes.push(`<div><sup>**</sup> ${esc(NOTE_DBL)}</div>`);
-
-  document.title = `${isReceipt ? 'Receipt' : 'Invoice'} ${docNumber} — KennelOS`;
-
+  const logoHtml = d.issuer.logo ? `<img class="inv-logo" src="${esc(d.issuer.logo)}" alt="${esc(d.issuer.name)} logo">` : '';
+  document.title = `${d.docType} ${d.number} — KennelOS`;
   root.innerHTML = `
     <div class="inv-top">
       <div class="inv-issuer">
         ${logoHtml}
         <div>
-          <h1>${issuerName}</h1>
-          ${issuerLines.filter(Boolean).length ? `<div class="inv-sub">${issuerLines.filter(Boolean).join('\n')}</div>` : ''}
+          <h1>${esc(d.issuer.name)}</h1>
+          ${d.issuer.lines.length ? `<div class="inv-sub">${d.issuer.lines.map(esc).join('\n')}</div>` : ''}
         </div>
       </div>
       <div class="inv-meta">
-        <div class="inv-doctype">${isReceipt ? 'Receipt' : 'Invoice'}</div>
-        <div class="inv-line"><strong>#${esc(docNumber)}</strong></div>
-        <div class="inv-line">Date ${esc(fmtDateMDY(todayYMD()))}</div>
-        ${isReceipt ? '<div class="inv-paid-stamp">Paid</div>' : ''}
+        <div class="inv-doctype">${esc(d.docType)}</div>
+        <div class="inv-line"><strong>#${esc(d.number)}</strong></div>
+        <div class="inv-line">Date ${esc(fmtDateMDY(d.date))}</div>
+        ${r ? '<div class="inv-paid-stamp">Paid</div>' : ''}
       </div>
     </div>
 
     <div class="inv-parties">
-      ${partyCard(isReceipt ? 'Received from' : 'Bill to', recipient ? esc(recipient.name) : '', recipientLines)}
+      ${partyCard(d.partyRole, d.recipient.name, d.recipient.lines)}
     </div>
 
-    <p class="inv-re">${esc(reText)}</p>
+    <p class="inv-re">${esc(d.re)}</p>
 
     <table class="inv-items">
       <thead>
         <tr>
           <th>Description</th>
-          ${isReceipt ? '' : '<th>Due by</th>'}
+          ${r ? '' : '<th>Due by</th>'}
           <th class="num">Amount</th>
         </tr>
       </thead>
@@ -277,13 +114,39 @@ async function main() {
 
     ${payBox}
 
-    ${cfg.notes ? `<div class="inv-notes">${esc(cfg.notes)}</div>` : ''}
-    ${footnotes.length ? `<div class="inv-footnotes">${footnotes.join('')}</div>` : ''}
+    ${d.notes ? `<div class="inv-notes">${esc(d.notes)}</div>` : ''}
+    ${d.footnotes.length ? `<div class="inv-footnotes">${d.footnotes.map((f) => `<div><sup>${esc(f.marker)}</sup> ${esc(f.text)}</div>`).join('')}</div>` : ''}
 
-    <div class="inv-generated">Generated ${esc(fmtDateMDY(todayYMD()))} · KennelOS</div>
+    <div class="inv-generated">Generated ${esc(fmtDateMDY(d.date))} · KennelOS</div>
   `;
 }
 
+async function main() {
+  const req = request();
+  if (!req.id) { root.innerHTML = '<p class="inv-empty">No record specified.</p>'; return; }
+  // Opened from a waitlist family's page → back goes there, not to Financials.
+  if (req.source === 'waitlist') {
+    const back = document.getElementById('inv-back');
+    back.href = `waitlist-entry.html?id=${encodeURIComponent(req.id)}`;
+    back.textContent = '← Back to the family';
+  }
+  const d = await buildInvoiceDoc(req);
+  if (!d) { root.innerHTML = '<p class="inv-empty">Record not found.</p>'; return; }
+  render(d);
+}
+
 document.getElementById('inv-print').addEventListener('click', () => window.print());
+document.getElementById('inv-pdf').addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget;
+  btn.disabled = true;
+  try {
+    const { downloadInvoicePdf } = await import('../assets/invoicePdf.js');
+    await downloadInvoicePdf(request());
+  } catch (e) {
+    root.insertAdjacentHTML('afterbegin', `<div class="inline-error no-print">${esc(e.message || String(e))}</div>`);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 main();

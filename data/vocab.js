@@ -187,6 +187,19 @@ export const WAITLIST_PREF_SEX = [
   { value: 'female', label: 'Female',  badge: 'badge-purple' }
 ];
 
+// Answer types for her own application questions (Waitlist Spec §15.1). The
+// locked questions use three more internal types (email, preference, notice)
+// that she can't pick, so they aren't listed here.
+export const WAITLIST_QUESTION_TYPE = [
+  { value: 'short_text',    label: 'Short answer' },
+  { value: 'long_text',     label: 'Paragraph' },
+  { value: 'single_choice', label: 'Multiple choice (pick one)' },
+  { value: 'checkboxes',    label: 'Checkboxes (pick any)' },
+  { value: 'yes_no',        label: 'Yes / no' },
+  { value: 'number',        label: 'Number' },
+  { value: 'date',          label: 'Date' }
+];
+
 export const FEE_CREDIT_POLICY = [
   { value: 'credited_to_purchase', label: 'Credited to purchase price', badge: 'badge-green' },
   { value: 'non_refundable',       label: 'Non-refundable',             badge: 'badge-amber' },

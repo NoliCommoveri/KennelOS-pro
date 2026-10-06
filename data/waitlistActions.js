@@ -19,7 +19,8 @@ import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
 import {
   waitlistConfig, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
-  nextFamilyForLitter, respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable
+  nextFamilyForLitter, respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
+  hasOpenOffer, turnSpent, eligiblePupsFor
 } from './waitlistRules.js';
 
 async function load(entryId) {
@@ -222,6 +223,36 @@ export async function offerNext(litterId, { today = todayYMD() } = {}) {
     respond_by_date: respondByDate(today, c.config, program),
     eligible_dog_ids: next.eligibleDogs.map((d) => d.id),
     outcome: 'open'
+  });
+}
+
+// Offer one family a litter from their own page (Spec §15.2): the waitlist as the
+// main workflow. Opens picks on the litter if they aren't open yet. The family
+// must be eligible for at least one available pup, nobody else may hold an open
+// offer on the litter (one at a time, §6.5), and the family's turn on it mustn't
+// already be spent. Offering out of order is allowed — the page confirms it with
+// her first and passes `note` saying who was next — and nothing about anyone
+// else's place changes. Returns the new offer.
+export async function offerTo(litterId, entryId, { today = todayYMD(), note = '' } = {}) {
+  const c = await litterContext(litterId);
+  if (c.litter.is_archived) throw new Error('That litter is archived.');
+  const entry = c.entries.find((e) => e.id === entryId);
+  if (!entry || entry.status !== 'active') throw new Error('Only families on the list can be offered a litter.');
+  if (hasOpenOffer(c.offers, litterId)) throw new Error('Another family already has an open offer on this litter. Record how it ended first.');
+  if (turnSpent(c.offers, litterId, entryId)) throw new Error('This family has already had their turn on this litter.');
+  const eligible = eligiblePupsFor(entry, c.litter, c.pups, c.sales, { today, config: c.config });
+  if (!eligible.length) throw new Error('No available pup in this litter matches this family right now.');
+  if (!c.litter.picks_opened_date) await litterRepo.update(litterId, { picks_opened_date: today });
+  const program = c.programsById.get(entry.waitlist_program_id) || null;
+  return waitlistOfferRepo.create({
+    entry_id: entry.id,
+    litter_id: litterId,
+    kennel_id: c.litter.kennel_id,
+    offered_date: today,
+    respond_by_date: respondByDate(today, c.config, program),
+    eligible_dog_ids: eligible.map((d) => d.id),
+    outcome: 'open',
+    notes: note || ''
   });
 }
 

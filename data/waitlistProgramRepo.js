@@ -22,7 +22,7 @@ function validateProgram(c) {
 }
 
 function withDefaults(data) {
-  return { priority: 'standard', applicable_on_form: false, pause_allowed: false, passes_count: true, fee_override: null, ...data };
+  return { priority: 'standard', pause_allowed: false, passes_count: true, fee_override: null, ...data };
 }
 
 export const waitlistProgramRepo = {

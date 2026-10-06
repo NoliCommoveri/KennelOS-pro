@@ -860,7 +860,7 @@ async function openGenerateModal() {
       if (st.doc === 'receipt') { persist.payment_method = st.payMethod.trim() || null; persist.payment_reference = st.payReference.trim() || null; }
       await repo.update(st.record.id, persist);
       // Navigate to the document but don't auto-print — the owner triggers the
-      // actual download/print themselves with the page's "Print / Save as PDF"
+      // actual download/print themselves with the page's "Download PDF" or "Print"
       // button.
       const url = `invoice.html?source=${encodeURIComponent(st.source)}&id=${encodeURIComponent(st.record.id)}`
         + `&doc=${encodeURIComponent(st.doc)}&cfg=${encodeURIComponent(JSON.stringify(cfg))}`;

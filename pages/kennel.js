@@ -357,7 +357,7 @@ function waitlistCard(k) {
   const policyOpts = FEE_CREDIT_POLICY.map((o) => `<option value="${esc(o.value)}"${o.value === c.fee_credit_policy ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
   return `
     <section class="card" id="waitlist-settings">
-      <div class="row-between"><h2 style="margin:0;">Waitlist settings</h2><a class="btn btn-sm" href="waitlist.html?kennel=${encodeURIComponent(k.id)}">Open waitlist →</a></div>
+      <div class="row-between"><h2 style="margin:0;">Waitlist settings</h2><span class="pill-row"><a class="btn btn-sm" href="waitlist-form.html?kennel=${encodeURIComponent(k.id)}">Application form →</a><a class="btn btn-sm" href="waitlist.html?kennel=${encodeURIComponent(k.id)}">Open waitlist →</a></span></div>
       <p class="field-hint">How ${esc(k.kennel_name)}'s waitlist works. Programs can change the fee and response window for particular families.</p>
       <div class="form-grid">
         <div class="field"><label>Application fee</label><input id="wl-fee" type="number" min="0" step="0.01" value="${esc(c.fee_amount ?? '')}" placeholder="No fee"></div>

@@ -35,7 +35,6 @@ function adjustments(p) {
   if (p.passes_count === false) out.push('Passes don\'t count');
   if (p.pause_allowed) out.push('May pause');
   if (p.respond_days_override) out.push(`${esc(p.respond_days_override)} days to respond`);
-  if (p.applicable_on_form) out.push('Applicants can pick it');
   return out.join(' · ');
 }
 
@@ -87,7 +86,6 @@ function renderForm() {
         <div class="field field-wide">
           <label class="check-inline"><input id="p-passes" type="checkbox"${p.passes_count === false ? ' checked' : ''}> Passes by these families don't count toward removal</label>
           <label class="check-inline"><input id="p-pause" type="checkbox"${p.pause_allowed ? ' checked' : ''}> These families may pause without it counting against them</label>
-          <label class="check-inline"><input id="p-form" type="checkbox"${p.applicable_on_form ? ' checked' : ''}> Applicants can choose this program (used once the online form exists)</label>
         </div>
         <div class="field field-wide"><label>Description for families</label><textarea id="p-public">${esc(p.public_description || '')}</textarea>
           <span class="field-hint">Shown to families only if you fill it in. Leave blank to keep the program private.</span></div>
@@ -119,7 +117,6 @@ function readForm() {
     respond_days_override: v('#p-respond') === '' ? null : Number(v('#p-respond')),
     passes_count: !c('#p-passes'),
     pause_allowed: c('#p-pause'),
-    applicable_on_form: c('#p-form'),
     public_description: v('#p-public').trim(),
     notes: v('#p-notes')
   };
