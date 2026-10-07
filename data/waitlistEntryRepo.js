@@ -11,7 +11,8 @@ import { makeRepo } from './repoBase.js';
 import { WAITLIST_ENTRY_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
-import { deriveContactWaitlistStatus } from './waitlistRules.js';
+import { deriveContactWaitlistStatus, prefChangeLines } from './waitlistRules.js';
+import { todayYMD } from './dateUtils.js';
 import { WAITLIST_ENTRY_STATUS, WAITLIST_LISTEN_MODE, WAITLIST_PREF_SEX } from './vocab.js';
 
 const base = makeRepo('waitlist_entries', WAITLIST_ENTRY_REFERENCES);
@@ -91,6 +92,11 @@ export const waitlistEntryRepo = {
     if (changes.kennel_id !== undefined && changes.kennel_id !== existing.kennel_id) {
       await assertOwnKennel(merged.kennel_id, 'Waitlist entry');
     }
+    // Every change to the matching answers once the family is past review goes in
+    // their history (Spec §15.9), so changing one and back is visible to her.
+    // While an application is still under review it's just being filled in.
+    const lines = existing.status === 'applied' ? [] : prefChangeLines(existing, changes, { date: todayYMD() });
+    if (lines.length) changes = { ...changes, pref_change_log: [...(existing.pref_change_log || []), ...lines] };
     const saved = await base.update(id, changes);
     // archive()/unarchive() route through here too, so is_archived changes resync.
     await syncContact(saved.contact_id);

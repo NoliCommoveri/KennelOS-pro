@@ -395,6 +395,79 @@ export function soonFamiliesForKennel(entries, offers, litters, pups, sales, opt
   return [...byEntry.values()].sort((a, b) => (order.get(a.entry.id) || 0) - (order.get(b.entry.id) || 0));
 }
 
+// --- Changes to the matching answers (Spec §15.9) --------------------------------
+
+// The entry fields behind the answers that decide which pups a family is offered
+// (or, for readiness, when). Families can't change these themselves (W2 makes it a
+// request she approves); every change is kept in `pref_change_log` so changing an
+// answer and changing it back is visible to her.
+export const PREF_CHANGE_FIELDS = ['pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors', 'ready_timing'];
+
+const holdMonths = (v) => WAITLIST_READY_TIMING.find((t) => t.value === v)?.hold_months || 0;
+// One field's value in a comparable form: blank/'any' alike, breed and colors
+// case-insensitive, colors order-free.
+function prefValueKey(field, v) {
+  if (field === 'pref_colors') return [...new Set(prefColorTokens({ pref_colors: v }))].sort().join(',');
+  if (field === 'pref_sex') return key(v) || 'any';
+  return key(v);
+}
+// The value as stored in the log: colors as a clean array, the rest as a string
+// ('' for blank; sex blank → 'any').
+function prefLogValue(field, v) {
+  if (field === 'pref_colors') return (Array.isArray(v) ? v : String(v ?? '').split(',')).map((c) => String(c).trim()).filter(Boolean);
+  if (field === 'pref_sex') return String(v ?? '').trim() || 'any';
+  return String(v ?? '').trim();
+}
+
+// The log lines for `changes` written over `before`: one per tracked field present
+// in `changes` whose value actually differs. `by` is 'breeder' (her edit or her
+// import) or, from W2, 'request' (a family's request she approved).
+export function prefChangeLines(before, changes, { date, by = 'breeder' } = {}) {
+  return PREF_CHANGE_FIELDS
+    .filter((f) => changes[f] !== undefined && prefValueKey(f, before[f]) !== prefValueKey(f, changes[f]))
+    .map((f) => ({ date, field: f, from: prefLogValue(f, before[f]), to: prefLogValue(f, changes[f]), by }));
+}
+
+// Which tracked fields got NARROWER from `before` to `after`: the new answer rules
+// out a pup (or, for readiness, a month) the old one allowed. Colors only count
+// while color matching is on (otherwise they're notes).
+export function narrowedPrefs(before, after, config = WAITLIST_CONFIG_DEFAULTS) {
+  const narrower = (f) => {
+    const a = prefValueKey(f, before[f]);
+    const b = prefValueKey(f, after[f]);
+    if (a === b) return false;
+    if (f === 'ready_timing') return holdMonths(after[f]) > holdMonths(before[f]);
+    if (f === 'pref_colors') {
+      if (!config.color_matching || !b) return false;
+      const now = b.split(',');
+      return !a || a.split(',').some((c) => !now.includes(c));
+    }
+    const any = f === 'pref_sex' ? 'any' : '';
+    return b !== any; // any → specific, or one specific → another
+  };
+  return PREF_CHANGE_FIELDS.filter((f) => after[f] !== undefined && narrower(f));
+}
+
+// What narrowing this family's answers would do right now (Spec §15.9, W1 warning):
+// the fields narrowed, their open offers (which stay open: a change never closes
+// one), and the litters they're next for now that they'd be skipped on after.
+// `litters` are the kennel's live litters; the rest is as for nextFamilyForLitter.
+export function prefChangeEffect(entry, after, { litters = [], entries = [], offers = [], pups = [], sales = [], today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map() } = {}) {
+  const narrowed = narrowedPrefs(entry, after, config);
+  if (!narrowed.length) return { narrowed, openOffers: [], skippedLitters: [] };
+  const changed = { ...entry, ...after };
+  const others = entries.filter((x) => x.id !== entry.id);
+  const opts = { today, config, programsById };
+  const openOffers = offers.filter((o) => !o.is_archived && o.entry_id === entry.id && o.outcome === 'open');
+  const skippedLitters = litters.filter((l) => {
+    const now = nextFamilyForLitter([...others, entry], offers, l, pups, sales, opts);
+    if (!now || now.entry.id !== entry.id) return false;
+    const then = nextFamilyForLitter([...others, changed], offers, l, pups, sales, opts);
+    return !then || then.entry.id !== entry.id;
+  });
+  return { narrowed, openOffers, skippedLitters };
+}
+
 // --- Passes and removal (Spec §6.4) ---------------------------------------------
 
 // Whether an offer outcome counts as a pass, decided ONCE when it's recorded and

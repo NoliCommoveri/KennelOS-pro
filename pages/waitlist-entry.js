@@ -23,10 +23,11 @@ import {
   entryName, canUndoRemoval, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, rankedList, REMOVAL_UNDO_DAYS,
   eligiblePupsFor, nextFamilyForLitter, turnSpent, hasOpenOffer, isListeningFor, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
-  kennelBreeds, resolveBreed
+  kennelBreeds, resolveBreed, prefChangeEffect
 } from '../data/waitlistRules.js';
 import {
-  formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq, READY_TIMING_LABEL
+  formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq, READY_TIMING_LABEL,
+  MATCHING_NOTICE, matchingPrefKeys
 } from '../data/waitlistForm.js';
 import {
   WAITLIST_ENTRY_STATUS, WAITLIST_PREF_SEX, WAITLIST_LISTEN_MODE, WAITLIST_OFFER_OUTCOME,
@@ -54,10 +55,11 @@ const els = {
 
 const LIVE_PAIRING = ['planned', 'bred', 'confirmed_pregnant'];
 const LIVE_LITTER = ['expected', 'whelped', 'weaning', 'ready'];
-// A family picks which sires and dams they're listening for only once they've been
-// approved: before that there's nothing to listen for, and after they leave the
+// A family picks which sires and dams they're listening for only once they're ON
+// the list: approved AND their fee received (or waived, which makes them active at
+// approval). Before that there's nothing to listen for, and after they leave the
 // list it no longer matters (their picks are kept, just not shown for editing).
-const LISTEN_STATUSES = ['approved', 'active'];
+const LISTEN_STATUSES = ['active'];
 
 const ctx = {
   mode: 'view', entry: null, draft: null, kennel: null, config: null,
@@ -386,6 +388,28 @@ function readySummary(e) {
   return `${esc(t.label)} <span class="faint">— ${held ? 'no offers until' : 'hold ended'} ${esc(fmtDate(from))} (${esc(t.hold_months)} month${t.hold_months === 1 ? '' : 's'} from ${base})</span>`;
 }
 
+// Her changes to the matching answers (Spec §15.9), for the history and the
+// narrowing warning.
+const PREF_FIELD_LABEL = {
+  pref_sex: 'Sex', pref_breed: 'Breed', pref_placement_type: 'Placement', pref_colors: 'Colors', ready_timing: 'Ready to buy'
+};
+function prefValueText(field, v) {
+  switch (field) {
+    case 'pref_sex': return descriptor(WAITLIST_PREF_SEX, v || 'any').label;
+    case 'pref_breed': return v || 'Any breed';
+    case 'pref_placement_type': return v ? descriptor(PLACEMENT_TYPE, v).label : 'Any';
+    case 'pref_colors': return (Array.isArray(v) ? v : []).join(', ') || 'None';
+    case 'ready_timing': return v ? descriptor(WAITLIST_READY_TIMING, v).label : 'Not answered';
+    default: return String(v ?? '');
+  }
+}
+// Newest first, so changing an answer and back shows as neighbouring lines.
+function prefHistory(e) {
+  const log = e.pref_change_log || [];
+  if (!log.length) return '';
+  return [...log].reverse().map((x) => `${esc(fmtDate(x.date))} · ${esc(PREF_FIELD_LABEL[x.field] || x.field)}: ${esc(prefValueText(x.field, x.from))} → ${esc(prefValueText(x.field, x.to))}${x.by === 'request' ? ' <span class="faint">(they asked)</span>' : ''}`).join('<br>');
+}
+
 function renderView() {
   const e = ctx.entry;
   const app = e.application || {};
@@ -399,6 +423,7 @@ function renderView() {
       ${row('Program', program ? esc(program.name) + (program.is_archived ? ' <span class="badge badge-gray">archived</span>' : '') : '')}
       ${row('Wants', prefsSummary(e) + (e.pref_breed && resolveBreed(e.pref_breed, ctx.breeds) === null ? ` <span class="badge badge-red" title="No pup will match this breed. Edit to pick one of your breeds.">Unknown breed</span>` : ''))}
       ${row('Ready to buy', readySummary(e))}
+      ${row('Answer changes', prefHistory(e))}
       ${row('Listening for', LISTEN_STATUSES.includes(e.status) || (e.listen_mode || 'all') === 'selected' ? listenSummary(e) : '')}
       ${row('Paused until', e.paused_until ? esc(fmtDate(e.paused_until)) + (e.pause_reason ? ` <span class="faint">— ${esc(e.pause_reason)}</span>` : '') : '')}
       ${row('Fee', e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : '')}
@@ -518,8 +543,13 @@ function renderEdit() {
   // A new application follows her form, in her order and wording, so typing one in
   // matches what families will see online. The public-list notice is shown so she
   // can tell the family.
+  // Her matching notice heads the first preference question that filters offers.
+  const matchKeys = matchingPrefKeys(ctx.config);
+  const firstMatch = ctx.form.find((q) => matchKeys.includes(q.key));
+  const matchNotice = `<div class="field field-wide"><div class="card" style="margin:0;padding:10px 12px;">
+      <strong>Matching you with a pup</strong><p style="margin:6px 0 0;">${esc(MATCHING_NOTICE)}</p></div></div>`;
   const newForm = () => ctx.form.map((q) => {
-    if (q.type === 'preference') return prefField(q.key, e, q.label);
+    if (q.type === 'preference') return (q === firstMatch ? matchNotice : '') + prefField(q.key, e, q.label);
     if (q.type === 'notice') {
       return `<div class="field field-wide"><div class="card" style="margin:0;padding:10px 12px;background:var(--surface-2, transparent);">
         <strong>${esc(q.label)}</strong><p style="margin:6px 0 0;white-space:pre-line;">${esc(q.help)}</p>
@@ -557,7 +587,7 @@ function renderEdit() {
         <label>Sires</label><div class="check-group">${checkList(sires, selSires, 'data-sire')}</div>
         <label style="margin-top:8px;">Dams</label><div class="check-group">${checkList(dams, selDams, 'data-dam')}</div>
         <span class="field-hint">Any litter or pairing with one of these parents counts: picking a sire and a dam means either one, not only the two together.</span>
-      </div>` : ''}
+      </div>` : e.status === 'approved' ? `<div class="field field-wide"><span class="field-hint">Listening for certain sires and dams opens once they're on the list (fee received).</span></div>` : ''}
       <div class="field"><label>Paused until</label><input id="f-paused_until" type="date" value="${esc(e.paused_until || '')}">
         <span class="field-hint">Not offered pups until after this date. They keep their place, but don't appear on the public list while paused.</span></div>
       <div class="field"><label>Pause reason</label><input id="f-pause_reason" type="text" value="${esc(e.pause_reason || '')}"></div>
@@ -880,6 +910,27 @@ function renderProfileActions() {
   }
 }
 
+// Narrowing an answer while the family has an open offer, or is next for a litter,
+// is what a family could use to dodge a pass (Spec §15.9), so she confirms it.
+// Widening, or narrowing with nothing at stake, saves without asking.
+async function confirmNarrowing(changes) {
+  const e = ctx.entry;
+  const fx = prefChangeEffect(e, changes, {
+    litters: ctx.litters.filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status)),
+    entries: ctx.kennelEntries, offers: ctx.kennelOffers, pups: [...ctx.dogsById.values()], sales: ctx.sales,
+    today: todayYMD(), config: ctx.config, programsById: ctx.programs
+  });
+  if (!fx.openOffers.length && !fx.skippedLitters.length) return true;
+  const lines = [`Narrower: ${fx.narrowed.map((f) => PREF_FIELD_LABEL[f]).join(', ')}.`];
+  for (const l of fx.skippedLitters) lines.push(`They're next for ${litterLabel(l)}. This skips them there, with no pass counted.`);
+  for (const o of fx.openOffers) {
+    const l = ctx.litters.find((x) => x.id === o.litter_id);
+    lines.push(`Their open offer on ${l ? litterLabel(l) : 'a litter'}${o.respond_by_date ? ` (until ${fmtDate(o.respond_by_date)})` : ''} stays open. Passing on it still counts as a pass.`);
+  }
+  lines.push('Make sure this is a real change and not a way around a pass. It goes in their answer history.');
+  return confirmModal({ title: `Narrow what ${entryName(e, ctx.contact)} asked for?`, message: lines.join('\n\n'), confirmLabel: 'Save anyway' });
+}
+
 async function save() {
   const btn = document.getElementById('btn-save');
   if (btn?.disabled) return;
@@ -892,6 +943,7 @@ async function save() {
       location.href = `waitlist-entry.html?id=${encodeURIComponent(saved.id)}`;
       return;
     }
+    if (!(await confirmNarrowing(changes))) return;
     await waitlistEntryRepo.update(ctx.entry.id, changes);
     ctx.mode = 'view';
     await reload();

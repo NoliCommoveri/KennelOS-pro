@@ -43,6 +43,18 @@ export const PREFERENCE_FIELDS = {
 // decide the readiness hold.
 export const READY_TIMING_LABEL = 'What is the soonest you are able to commit to the purchase of a puppy, should one become available?';
 
+// Her wording (2026-10-07), shown just above the preference questions that
+// decide which pups a family is offered at all (MATCHING_PREF_KEYS), so applicants
+// know a narrow answer narrows their offers.
+export const MATCHING_NOTICE = 'The following questions are designed to match you with your perfect pup. Please note that only puppies matching your answers below will be offered. When in doubt, select the wider option.';
+
+// The preference questions that filter offers (waitlistRules.pupMatchesPrefs): sex,
+// breed and placement always; colors only when she has color matching on. Readiness
+// is a hold, not a match, so it isn't one of them.
+export function matchingPrefKeys(config) {
+  return ['pref_sex', 'pref_breed', 'pref_placement', ...(config && config.color_matching ? ['pref_colors'] : [])];
+}
+
 const q = (o) => Object.freeze({ required: false, help: '', options: [], ...o });
 
 export const DEFAULT_FORM_QUESTIONS = Object.freeze([
