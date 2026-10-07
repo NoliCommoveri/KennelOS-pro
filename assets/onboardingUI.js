@@ -13,6 +13,7 @@ import { shouldOfferFirstRunPrompt, declineSampleData } from '../data/sampleData
 import { seedSampleData } from '../data/editionTour.js';
 import { startWizard } from '../data/wizardState.js';
 import { showKennelSetupModal } from './kennelSetupUI.js';
+import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
 // A single onboarding card: a dimmed, non-dismissible overlay (no backdrop close,
 // no X — the only way onward is a button) with body HTML and one or more buttons.
@@ -35,6 +36,13 @@ function onboardCard({ bodyHtml, buttons }) {
     });
   });
 }
+
+const welcomeHtml = () => WELCOME_HTML.replace(
+  'Everything lives securely on this device — no account, no cloud, nothing leaves your browser.',
+  isCloudAvailable()
+    ? 'Everything lives securely on this device, and no account is needed. Free cloud backup is optional, and off unless you turn it on.'
+    : 'Everything lives securely on this device — no account, no cloud, nothing leaves your browser.'
+);
 
 const WELCOME_HTML = `
   <h2 class="onboard-title">🐾 Welcome to KennelOS!</h2>
@@ -77,17 +85,37 @@ export async function runFirstRunOnboarding() {
   if (!(await shouldOfferFirstRunPrompt())) return false;
 
   await onboardCard({
-    bodyHtml: WELCOME_HTML,
+    bodyHtml: welcomeHtml(),
     buttons: [{ label: 'Get started →', value: 'go', primary: true }]
   });
 
-  const choice = await onboardCard({
-    bodyHtml: TOUR_OFFER_HTML,
-    buttons: [
-      { label: 'Show me around!', value: 'tour', primary: true },
-      { label: 'No thanks, I’ll explore', value: 'explore' }
-    ]
-  });
+  // A third way in when this edition has a cloud server (Cloud Phase 1 plan
+  // §2.3): someone moving to a new phone signs in and restores, skipping both
+  // the tour and kennel setup (the restored records carry the kennel). Backing
+  // out of sign-in returns to this choice.
+  const buttons = [
+    { label: 'Show me around!', value: 'tour', primary: true },
+    { label: 'No thanks, I’ll explore', value: 'explore' }
+  ];
+  if (isCloudAvailable()) buttons.push({ label: 'I already use KennelOS → sign in and restore', value: 'restore' });
+
+  let choice;
+  for (;;) {
+    choice = await onboardCard({ bodyHtml: TOUR_OFFER_HTML, buttons });
+    if (choice !== 'restore') break;
+    const { runSignInAndRestore } = await import('./cloudBackupUI.js');
+    const restored = await runSignInAndRestore();
+    if (restored === true) {
+      location.reload();
+      return true;
+    }
+    if (restored === 'empty') {
+      // Signed in, backup on, but nothing to restore yet: a blank kennel, as below.
+      declineSampleData();
+      showKennelSetupModal({ mode: 'required' });
+      return true;
+    }
+  }
 
   if (choice === 'tour') {
     await seedSampleData();   // load Thornfield so the tour has live records to point at

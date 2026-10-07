@@ -5,6 +5,7 @@
 // regardless of whether it started as an upload or a camera capture.
 import { db } from './db.js';
 import { assertWritable } from './demoMode.js';
+import { markDataChanged } from './settings.js';
 
 // fileRepo bypasses repoBase (it stores blobs, not the standard record shape), so
 // it carries the demo write-guard itself — same lever as the entity repos.
@@ -23,6 +24,7 @@ export const fileRepo = {
       thumbnail: thumbnail || '',
       created_at: new Date().toISOString()
     });
+    markDataChanged();
     return id;
   },
 
@@ -45,7 +47,10 @@ export const fileRepo = {
 
   async remove(id) {
     assertWritable();
-    if (id) await db.files.delete(id);
+    if (id) {
+      await db.files.delete(id);
+      markDataChanged();
+    }
   },
 
   // Metadata only (no blob) — for the document list, which needs a file's
@@ -60,5 +65,6 @@ export const fileRepo = {
   async putRaw(record) {
     assertWritable(); // restore path; never runs in demo (import is stripped there)
     await db.files.put(record);
+    markDataChanged();
   }
 };

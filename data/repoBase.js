@@ -7,6 +7,7 @@
 import { db } from './db.js';
 import { findBlockingReferences } from './referenceRegistry.js';
 import { assertWritable } from './demoMode.js';
+import { markDataChanged } from './settings.js';
 
 export function newId() {
   return crypto.randomUUID();
@@ -75,6 +76,7 @@ export function makeRepo(tableName, references = null) {
         updated_at: now
       };
       await table().add(record);
+      markDataChanged(); // cloud backup dirty signal (Cloud Phase 1 §3.2)
       return record;
     },
 
@@ -90,6 +92,7 @@ export function makeRepo(tableName, references = null) {
         updated_at: nowIso()
       };
       await table().put(record);
+      markDataChanged(); // cloud backup dirty signal (Cloud Phase 1 §3.2)
       return record;
     },
 
@@ -119,6 +122,7 @@ export function makeRepo(tableName, references = null) {
         if (blockers.length > 0) throw new ReferenceBlockedError(tableName, blockers);
       }
       await table().delete(id);
+      markDataChanged(); // cloud backup dirty signal (Cloud Phase 1 §3.2)
     }
   };
 

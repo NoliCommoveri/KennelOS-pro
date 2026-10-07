@@ -9,6 +9,7 @@ import {
 import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js';
 import { esc } from './ui.js';
 import { renderBreedPicker } from './breedTestPicker.js';
+import { setCloudOfferPending } from '../data/settings.js';
 
 // The mandatory first-run gate (Multi-Kennel Scope Spec §3.2), called from
 // app.js's boot on every page. Async because the gate's condition is a db read
@@ -94,6 +95,9 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
     try {
       const { kennel } = await completeKennelSetup({ kennelName, ownerName });
       if (selectedBreeds.size) await applySeedToKennel(kennel.id, seedGroups, selectedBreeds);
+      // First kennel saved: offer cloud backup once, on the load after this reload
+      // (cloudBackupUI's bootCloud; a no-op in an edition without a server).
+      if (required) setCloudOfferPending(true);
       location.reload();
     } catch (e) {
       errorBox.innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;

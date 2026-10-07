@@ -870,3 +870,11 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 .onboard-list li { margin: 6px 0; }
 .onboard-rule { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .onboard-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+
+/* --- Cloud backup service notices (assets/cloudBackupUI.js) ------------- */
+/* The in-app shutdown/notice channel (Cloud Phase 1 plan §2.1). A strip at the
+   top of every page, shown only to a device signed in to cloud backup. */
+.cloud-notice { text-align: center; padding: 7px 16px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.cloud-notice-info { background: var(--accent-soft); color: var(--accent-dark); }
+.cloud-notice-warning { background: var(--warn-soft); color: var(--warn); }
+.cloud-notice-shutdown { background: var(--danger-soft); color: var(--danger); }

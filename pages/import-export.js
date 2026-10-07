@@ -13,6 +13,11 @@ import { isProOnlyPage } from '../data/proPages.js';
 import { isDropboxConnected } from '../data/dropbox.js';
 import { mountDropboxConnect, dropboxRequiredNotice } from '../assets/dropboxConnectUI.js';
 import { pushToDropbox, fetchDropboxBackup } from '../data/assistantSync.js';
+import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+
+// Cloud backup UI, loaded only when this edition has a server (`cloudUrl` set),
+// so an edition without one never even loads the cloud modules (plan §7).
+const cloudUI = isCloudAvailable() ? await import('../assets/cloudBackupUI.js') : null;
 
 const msg = document.getElementById('page-msg');
 function flash(text, kind = 'ok') {
@@ -311,6 +316,7 @@ function showResetAppModal() {
         <label>Type <strong>${RESET_PHRASE}</strong> to confirm</label>
         <input id="reset-confirm-input" type="text" autocomplete="off" placeholder="${RESET_PHRASE}">
       </div>
+      ${cloudUI ? cloudUI.resetSignOutFieldHtml() : ''}
       <div id="reset-error"></div>
       <div class="form-actions">
         <button class="btn btn-danger" id="reset-confirm-btn" disabled>Delete everything</button>
@@ -334,6 +340,9 @@ function showResetAppModal() {
     confirmBtn.textContent = 'Deleting…';
     try {
       await resetApp();
+      // Plan §3.3: resetApp() always turns cloud backup off; signing out too is
+      // the user's choice (ticked by default).
+      if (cloudUI) await cloudUI.signOutAfterResetIfChecked(overlay);
       overlay.querySelector('.modal').innerHTML = `<h2 style="margin-top:0;">Reset complete</h2>
         <p class="muted">Reloading…</p>`;
       setTimeout(() => location.reload(), 800);
@@ -452,6 +461,9 @@ licenseReleaseBtn.addEventListener('click', async () => {
 });
 
 renderLicenseSection();
+
+if (cloudUI) cloudUI.mountCloudBackupCard(document.getElementById('cloud-backup'));
+else document.getElementById('cloud-backup')?.remove();
 
 // Dropbox sync + KennelAssistant is Pro (§26). In Lite there is no second
 // destination at all, so the whole Dropbox axis disappears and the card renders

@@ -28,6 +28,7 @@ import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/editionLinks.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { todayYMD, daysFromToday, addDaysToYMD } from '../data/dateUtils.js';
+import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
 const DUE_SOON_DAYS = 30; // shared window with the reminder buckets (§3.3)
 
@@ -40,6 +41,7 @@ const availableEl = document.getElementById('today-available');
 const nudgesEl = document.getElementById('today-nudges');
 const overviewEl = document.getElementById('today-overview');
 const editionsEl = document.getElementById('today-editions');
+const cloudEl = document.getElementById('today-cloud');
 
 // Subject-resolution context, loaded once. Shared by every section.
 //
@@ -452,6 +454,11 @@ function renderEditionFooter() {
 
 async function main() {
   renderEditionFooter();
+  // "Turn on free cloud backup" / "backup is paused" — only with a server, and
+  // only then is the cloud UI loaded at all (plan §7).
+  if (isCloudAvailable()) {
+    import('../assets/cloudBackupUI.js').then((m) => m.renderTodayCloudNudge(cloudEl)).catch(() => {});
+  }
 
   const [allDogs, litters, pairings, sales, contacts, upcoming, boardRows] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),

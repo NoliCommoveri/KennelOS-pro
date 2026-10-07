@@ -4,7 +4,7 @@
 // & Reset brief v1 covers clearing just the sample manifest; this is the
 // superset — real data included, no reference guard, since nothing survives).
 import { db, existingTableNames } from './db.js';
-import { clearAllSettings } from './settings.js';
+import { clearAllSettings, getCloudBackupState, updateCloudBackupState } from './settings.js';
 import { clearAll as clearNudgeDismissals } from './nudgeState.js';
 
 // Live counts for the confirmation UI, across whatever tables exist at the
@@ -25,4 +25,20 @@ export async function resetApp() {
   });
   clearAllSettings();
   clearNudgeDismissals();
+  stopCloudBackupAfterReset();
+}
+
+// Cloud Phase 1 plan §3.3: a reset ALWAYS turns cloud backup off on this device,
+// so an emptied program can't overwrite the cloud copy. It also forgets which
+// snapshot this device was in step with, so turning backup back on meets the
+// server's 409 and goes through "restore that backup here / replace it"
+// (plan §3.4) instead of pushing an empty program on a matching base. The
+// sign-in itself is kept; signing out is the UI's separate choice
+// (cloudAuth.signOut).
+export function stopCloudBackupAfterReset() {
+  const state = getCloudBackupState();
+  if (!state.enabled && !state.lastSnapshotId) return;
+  updateCloudBackupState({
+    enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null
+  });
 }

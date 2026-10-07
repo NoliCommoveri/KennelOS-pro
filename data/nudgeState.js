@@ -26,6 +26,18 @@ export function isDismissed(key) {
   return Object.prototype.hasOwnProperty.call(readAll(), key);
 }
 
+// When `key` was dismissed (ISO string), or null. For nudges that come back
+// after a while (the cloud-backup nudge returns after 30 days).
+export function dismissedAt(key) {
+  return readAll()[key] || null;
+}
+
+export function undismiss(key) {
+  const state = readAll();
+  delete state[key];
+  writeAll(state);
+}
+
 export function dismiss(key) {
   const state = readAll();
   state[key] = new Date().toISOString();

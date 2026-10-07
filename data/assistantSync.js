@@ -22,7 +22,7 @@
 import { db } from './db.js';
 import { exportAll, inspectBackup } from './importExport.js';
 import { dropboxUploadJson, dropboxDownloadJson, DROPBOX_PATHS } from './dropbox.js';
-import { setLastBackupDate, setAssistantFeedPushedAt } from './settings.js';
+import { setLastBackupDate, setAssistantFeedPushedAt, markDataChanged } from './settings.js';
 import { assertWritable } from './demoMode.js';
 import { EVENT_TYPES, ASSISTANT_EVENT_TYPES, descriptor } from './vocab.js';
 
@@ -161,7 +161,10 @@ export async function importAssistantEvents(rows) {
       updated_at: new Date().toISOString()
     };
   });
-  if (records.length) await db.events.bulkPut(records);
+  if (records.length) {
+    await db.events.bulkPut(records);
+    markDataChanged();
+  }
   return {
     imported: records.length,
     skipped: rows.length - importable.length

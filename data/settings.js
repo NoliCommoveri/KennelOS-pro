@@ -19,7 +19,11 @@ const KEYS = {
   dropbox: 'kennelOS.dropbox',
   assistantLastSync: 'kennelOS.assistantLastSync',
   assistantFeedPushedAt: 'kennelOS.assistantFeedPushedAt',
-  furever: 'kennelOS.furever'
+  furever: 'kennelOS.furever',
+  cloudDirtyAt: 'kennelOS.cloudDirtyAt',
+  cloudDirtySince: 'kennelOS.cloudDirtySince',
+  cloudOfferPending: 'kennelOS.cloudOfferPending',
+  cloudRestoredAt: 'kennelOS.cloudRestoredAt'
 };
 
 export function getLastBackupDate() {
@@ -429,6 +433,80 @@ export function setAssistantFeedPushedAt(iso = new Date().toISOString()) {
   return iso;
 }
 
+// --- Cloud backup dirty signal (Cloud Phase 1 plan §3.2) ---------------------
+// `cloudDirtyAt` is the ISO time of the latest local data change. Set by ONE
+// helper, markDataChanged(), which every data write calls: repoBase's
+// create/update/hardDelete and the direct writers (fileRepo, expenseRepo,
+// assistantSync, importExport.restoreBackup). tests/cloudDirty.test.js fails if
+// a new direct db writer appears without it. The backup scheduler pushes only
+// while this is set, and clears it with clearCloudDirty(the value it pushed),
+// so a change that lands mid-push keeps the flag for the next one. In KEYS, so
+// Reset App clears it (an empty program has nothing to push).
+//
+// `cloudDirtySince` is the FIRST unpushed change: the scheduler's 5-minute timer
+// runs from it (plan §2.2), so later changes ride the same push. A change
+// event is also dispatched on the window (CLOUD_DATA_CHANGED_EVENT) so a running
+// scheduler can start its timer without polling.
+export const CLOUD_DATA_CHANGED_EVENT = 'kennelos:datachanged';
+
+export function markDataChanged(iso = new Date().toISOString()) {
+  try {
+    localStorage.setItem(KEYS.cloudDirtyAt, iso);
+    if (!localStorage.getItem(KEYS.cloudDirtySince)) localStorage.setItem(KEYS.cloudDirtySince, iso);
+  } catch {
+    /* storage unavailable: the next start-up push still sees the change */
+  }
+  try {
+    globalThis.dispatchEvent?.(new Event(CLOUD_DATA_CHANGED_EVENT));
+  } catch {
+    /* no window (tests) */
+  }
+  return iso;
+}
+
+export function getCloudDirtyAt() {
+  return localStorage.getItem(KEYS.cloudDirtyAt); // ISO string or null
+}
+
+export function getCloudDirtySince() {
+  return localStorage.getItem(KEYS.cloudDirtySince) || localStorage.getItem(KEYS.cloudDirtyAt);
+}
+
+// Clears the flag only if it still holds `ifAt` (omit to clear unconditionally).
+// When a newer change landed meanwhile, the flag stays and `since` moves up to
+// that change, so its push is timed from when it happened.
+export function clearCloudDirty(ifAt) {
+  const current = localStorage.getItem(KEYS.cloudDirtyAt);
+  if (ifAt === undefined || current === ifAt) {
+    localStorage.removeItem(KEYS.cloudDirtyAt);
+    localStorage.removeItem(KEYS.cloudDirtySince);
+  } else if (current) {
+    localStorage.setItem(KEYS.cloudDirtySince, current);
+  }
+}
+
+// The one-time "Protect your records: turn on free cloud backup" offer (Cloud
+// Phase 1 plan §2.1), armed when the first kennel is saved and shown on the next
+// load (the save reloads the page). And when this device was last restored from
+// the cloud, for the "private details aren't in cloud backup" hint (§2.3).
+export function isCloudOfferPending() {
+  return localStorage.getItem(KEYS.cloudOfferPending) === '1';
+}
+
+export function setCloudOfferPending(on) {
+  if (on) localStorage.setItem(KEYS.cloudOfferPending, '1');
+  else localStorage.removeItem(KEYS.cloudOfferPending);
+}
+
+export function getCloudRestoredAt() {
+  return localStorage.getItem(KEYS.cloudRestoredAt);
+}
+
+export function setCloudRestoredAt(iso) {
+  if (iso) localStorage.setItem(KEYS.cloudRestoredAt, iso);
+  else localStorage.removeItem(KEYS.cloudRestoredAt);
+}
+
 // Full app reset (Reset App to Start): drop every key this app owns in
 // localStorage, so the next load has no memory of sample data, kennel setup,
 // or backup history — same blank slate as a browser that's never visited.
@@ -461,6 +539,76 @@ export function setProLicense(record) {
 
 export function clearProLicense() {
   localStorage.removeItem(PRO_LICENSE_KEY);
+}
+
+// --- Cloud backup session, state and device id (Cloud Phase 1 plan §3.3) -----
+// Outside KEYS, so Reset App's clearAllSettings() doesn't drop them: appReset.js
+// handles them explicitly instead. A reset always turns backup OFF and forgets
+// which snapshot this device was in step with (so turning it back on goes
+// through the restore-or-replace choice, plan §3.4), but it keeps the sign-in
+// unless the user also chooses to sign out.
+//   cloudSession     { token, email, programId, deviceId } — email stays on this
+//                    device only; the server keeps a keyed hash (plan §2.1)
+//   cloudBackupState { enabled, lastPushedAt, lastAttemptAt, lastSnapshotId,
+//                      lastCounts, lastContentHash, lastError }
+//   cloudDeviceId    this browser's id on the cloud account, minted here and sent
+//                    on every sign-in so signing in again doesn't make the
+//                    backing device a stranger. Separate from the license's
+//                    deviceId below, which has one documented purpose.
+const CLOUD_SESSION_KEY = 'kennelOS.cloudSession';
+const CLOUD_BACKUP_STATE_KEY = 'kennelOS.cloudBackupState';
+const CLOUD_DEVICE_ID_KEY = 'kennelOS.cloudDeviceId';
+
+const CLOUD_BACKUP_STATE_DEFAULTS = {
+  enabled: false, lastPushedAt: null, lastAttemptAt: null, lastSnapshotId: null,
+  lastCounts: null, lastContentHash: null, lastError: null
+};
+
+function readJsonKey(key) {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+export function getCloudSession() {
+  return readJsonKey(CLOUD_SESSION_KEY);
+}
+
+export function setCloudSession(session) {
+  localStorage.setItem(CLOUD_SESSION_KEY, JSON.stringify(session));
+  return session;
+}
+
+export function clearCloudSession() {
+  localStorage.removeItem(CLOUD_SESSION_KEY);
+}
+
+export function getCloudBackupState() {
+  return { ...CLOUD_BACKUP_STATE_DEFAULTS, ...(readJsonKey(CLOUD_BACKUP_STATE_KEY) || {}) };
+}
+
+// Merges `patch` into the stored state and returns the result.
+export function updateCloudBackupState(patch) {
+  const next = { ...getCloudBackupState(), ...patch };
+  localStorage.setItem(CLOUD_BACKUP_STATE_KEY, JSON.stringify(next));
+  return next;
+}
+
+export function clearCloudBackupState() {
+  localStorage.removeItem(CLOUD_BACKUP_STATE_KEY);
+}
+
+export function getCloudDeviceId() {
+  let id = localStorage.getItem(CLOUD_DEVICE_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(CLOUD_DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
+export function setCloudDeviceId(id) {
+  localStorage.setItem(CLOUD_DEVICE_ID_KEY, id);
 }
 
 // --- Device id (Pro license gate — data/license.js) --------------------------

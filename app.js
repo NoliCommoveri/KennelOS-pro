@@ -14,6 +14,7 @@ import { runFirstRunOnboarding } from './assets/onboardingUI.js';
 import { isDemo, withSeedAllowed } from './data/demoMode.js';
 import { seedSampleData } from './data/editionTour.js';
 import { isLicenseGated, ensureLicensed } from './assets/licenseGate.js';
+import { isCloudAvailable } from './data/cloud/cloudConfig.js';
 
 async function firstRunPersistence() {
   if (wasPersistRequested()) return;
@@ -115,7 +116,14 @@ async function boot() {
   renderKennelBanner();
   renderWizardMenuEntry();
   runWizardStep();
-  firstRunFlow();
+  // Cloud backup (Cloud Phase 1 plan §2): the background scheduler, service
+  // notices, and the one-time post-setup offer. After the first-run flow, so the
+  // offer never lands on top of it. Only with a server, and only then is any
+  // cloud UI loaded (an edition with cloudUrl null never imports it).
+  firstRunFlow().finally(() => {
+    if (!isCloudAvailable()) return;
+    import('./assets/cloudBackupUI.js').then((m) => m.bootCloud()).catch((e) => console.warn('KennelOS: cloud backup', e));
+  });
 }
 
 if (document.readyState === 'loading') {

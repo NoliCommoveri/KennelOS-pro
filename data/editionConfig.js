@@ -19,6 +19,12 @@ export const upgradeUrl = null;
 // hasEditionLinks() is false and the nav/Today footer render nothing.
 export const demoUrl = null;
 
+// Cloud backup API (Cloud Phase 1 plan §7). Null until production is live (plan
+// §9 step 6), when it becomes 'https://api.kennelos.app'. `devCloudUrl` applies
+// only when served from localhost (the staging Worker); see data/cloud/cloudConfig.js.
+export const cloudUrl = null;
+export const devCloudUrl = 'https://kennelos-api-staging.admin-kennelos.workers.dev';
+
 // --- License gate (editions plan §Licensing) -------------------------------
 // Pro is a Lemon Squeezy subscription unlocked by a browser-validated license
 // key (data/license.js + assets/licenseGate.js). This config is read only when

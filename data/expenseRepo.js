@@ -15,7 +15,7 @@ import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { EXPENSE_REFERENCES } from './referenceRegistry.js';
 import { EXPENSE_SUBJECT_TYPES, defaultExpenseCategoryFor } from './vocab.js';
-import { getExpensesMigrated, markExpensesMigrated } from './settings.js';
+import { getExpensesMigrated, markExpensesMigrated, markDataChanged } from './settings.js';
 import { fileRepo } from './fileRepo.js';
 
 const base = makeRepo('expenses', EXPENSE_REFERENCES);
@@ -171,7 +171,7 @@ export const expenseRepo = {
       const amount = Number(ev.cost);
       // Skip if a linked expense already exists (double-run protection) or the
       // stored value isn't a real number.
-      if (!Number.isFinite(amount)) { await db.events.update(ev.id, { cost: null }); continue; }
+      if (!Number.isFinite(amount)) { await db.events.update(ev.id, { cost: null }); markDataChanged(); continue; }
       const already = await db.expenses.where('event_id').equals(ev.id).count();
       if (already === 0) {
         await base.create({
@@ -186,6 +186,7 @@ export const expenseRepo = {
         });
       }
       await db.events.update(ev.id, { cost: null });
+      markDataChanged();
     }
     markExpensesMigrated();
   },
