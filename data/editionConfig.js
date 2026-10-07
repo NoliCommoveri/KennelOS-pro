@@ -20,8 +20,9 @@ export const upgradeUrl = null;
 export const demoUrl = null;
 
 // Cloud backup API (Cloud Phase 1 plan §7). Null until production is live (plan
-// §9 step 6), when it becomes 'https://api.kennelos.app'. `devCloudUrl` applies
-// only when served from localhost (the staging Worker); see data/cloud/cloudConfig.js.
+// §9 step 6), when it becomes 'https://api.kennelos.app'. `devCloudUrl` (the staging
+// Worker) applies when served from localhost, or in a browser that opted in with
+// ?cloud=staging (the test-server switch); see data/cloud/cloudConfig.js.
 export const cloudUrl = null;
 export const devCloudUrl = 'https://kennelos-api-staging.admin-kennelos.workers.dev';
 

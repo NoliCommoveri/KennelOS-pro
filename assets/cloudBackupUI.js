@@ -59,6 +59,7 @@ export function snapshotLabel(iso, now = new Date(), { seconds = false } = {}) {
 
 // The status line on the card and the nudge (plan §2.2).
 export function statusLine(status, now = Date.now()) {
+  if (!status.enabled && status.movedToEdition === 'pro') return 'Backup is off on this device: your records moved to KennelOS Pro.';
   if (!status.enabled) return 'Backup is off on this device.';
   if (!status.lastPushedAt) return status.lastError?.code === 'offline' ? 'Not backed up yet: no internet?' : 'Not backed up yet.';
   const age = now - Date.parse(status.lastPushedAt);
@@ -71,7 +72,8 @@ export function statusLine(status, now = Date.now()) {
 
 function pausedReason(lastError) {
   switch (lastError?.code) {
-    case 'conflict': return lastError.ownDevice
+    case 'conflict': if (lastError.movedToEdition === 'pro') return 'Your records moved to KennelOS Pro.';
+      return lastError.ownDevice
       ? 'The cloud already has a backup from this device, made before it was reset.'
       : `Backups are coming from ${lastError.backingDevice?.label || 'another device'}.`;
     case 'shrink': return 'This device has far fewer records than your last backup.';
@@ -321,7 +323,10 @@ export async function handlePushResult(result) {
 }
 
 // One backup device at a time (plan §3.4): restore theirs here, or replace it.
-async function conflictDialog(result) {
+// A Lite device whose program is now backed up from Pro gets movedToProDialog
+// first: that's an upgrade, not a second device.
+async function conflictDialog(result, { skipMoved = false } = {}) {
+  if (!skipMoved && result.movedToEdition === 'pro') return movedToProDialog(result);
   const kennel = (await getMyKennelName()) || 'your program';
   const who = result.backingDevice?.label || 'another device';
   const when = result.backingDevice?.lastPushAt ? ` (last backup ${relativeTime(result.backingDevice.lastPushAt)})` : '';
@@ -359,6 +364,32 @@ async function conflictDialog(result) {
       await alertModal({ title: "That didn't work", message: errorText(e) });
     }
   }
+}
+
+// Editions Plan, "Converting Lite → Pro": the owner restored this program into
+// Pro, which now backs it up. The answer is to stop backing up here, not to
+// fight over it. "Other choices…" still reaches the usual restore / replace.
+async function movedToProDialog(result) {
+  const kennel = (await getMyKennelName()) || 'your program';
+  const who = result.backingDevice?.label;
+  const when = result.backingDevice?.lastPushAt ? `, last backup ${relativeTime(result.backingDevice.lastPushAt)}` : '';
+  const choice = await new Promise((resolve) => {
+    const overlay = openModal(`
+      <h2 style="margin-top:0;">Your records moved to KennelOS Pro</h2>
+      <p class="muted">${esc(`${kennel} is now backed up from KennelOS Pro${who ? ` (${who}${when})` : ''}. Keep working in Pro; changes made here in Lite won't reach it.`)}</p>
+      <p class="muted">Turning off backup here leaves your Pro backup exactly as it is. Your records on this device stay too.</p>
+      <div class="form-actions">
+        <button class="btn btn-primary" data-v="off">Turn off backup here</button>
+        <button class="btn" data-v="other">Other choices…</button>
+        <button class="btn" data-v="cancel">Not now</button>
+      </div>`, { width: 520 });
+    overlay.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => { overlay.remove(); resolve(b.dataset.v); }));
+  });
+  if (choice === 'off') {
+    disableBackup({ movedToEdition: 'pro' });
+    window.dispatchEvent(new CustomEvent(CLOUD_BACKUP_EVENT, { detail: { status: 'skipped' } }));
+  }
+  if (choice === 'other') return conflictDialog(result, { skipMoved: true });
 }
 
 async function restoreAndTakeOverFlow() {
@@ -659,7 +690,7 @@ export function renderTodayCloudNudge(el) {
             <div class="muted" style="font-size:13px;">${esc(paused || 'Your sign-in has expired.')}</div></div>
           <div class="pill-row"><a class="btn btn-sm btn-primary" href="import-export.html#cloud-backup">Resolve</a></div>
         </div>`;
-    } else if (!status.enabled) {
+    } else if (!status.enabled && status.movedToEdition !== 'pro') {
       const at = dismissedAt(NUDGE_KEY);
       if (at && Date.now() - Date.parse(at) < NUDGE_SNOOZE_MS) return;
       if (at) undismiss(NUDGE_KEY); // 30 days passed: show again

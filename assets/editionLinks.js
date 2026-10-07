@@ -8,14 +8,16 @@
 //     trigger the JSON backup export, THEN head to checkout (which redirects into
 //     Pro post-purchase to import it). This is the SAME action the cap upgrade
 //     nudge runs, so both go through runUpgradeBridge() below (one source of truth
-//     for the export-first sequence).
+//     for the export-first sequence). An owner signed in to cloud backup is also
+//     told they can sign in on Pro with the same email and restore, after this
+//     device's latest changes are backed up.
 //
 // These render in two spots (decided): the nav "More" menu (every page) and a
 // footer on Today. Both are driven entirely by demoUrl / upgradeUrl from
 // editionConfig, which are null in Pro/Demo — so hasEditionLinks() is false there
 // and nothing renders. This keeps the module edition-agnostic like the rest of
 // shared/, with the Lite-only URLs living in Lite's editionConfig overlay.
-import { esc } from './ui.js';
+import { esc, alertModal } from './ui.js';
 import { demoUrl, upgradeUrl } from '../data/editionConfig.js';
 
 // True only when this edition exposes at least one outbound link (i.e. Lite).
@@ -34,11 +36,41 @@ export function hasEditionLinks() {
 export async function runUpgradeBridge() {
   const { downloadBackup } = await import('../data/importExport.js');
   await downloadBackup();
+  await cloudUpgradeNote();
   if (upgradeUrl) {
     window.location.assign(upgradeUrl);
     return 'redirecting';
   }
   return 'exported';
+}
+
+// Editions Plan, "Converting Lite → Pro": with cloud backup on, Pro can restore
+// the program by signing in with the same email. Cloud backup holds only the
+// kennel-records tier (Cloud Phase 1 plan §5), so the file still matters: it
+// brings prices, Financials, contacts' details and notes. Until the private
+// vault, the file stays the complete path and this is an addition to it.
+// Silent (no modal) unless this device is signed in; the cloud modules are
+// loaded only when the edition has a server.
+async function cloudUpgradeNote() {
+  const { isCloudAvailable } = await import('../data/cloud/cloudConfig.js');
+  if (!isCloudAvailable()) return;
+  const { currentAccount } = await import('../data/cloud/cloudAuth.js');
+  const account = currentAccount();
+  if (!account?.signedIn) return;
+  const { getBackupStatus, pushIfDirty } = await import('../data/cloud/cloudBackup.js');
+  const status = getBackupStatus();
+  // Pro restores the latest backup, so bring it up to date first. A paused
+  // backup (another device, a shrink warning) is left for the owner to resolve.
+  if (status.enabled && status.dirty && !status.paused) {
+    try { await pushIfDirty({ force: true }); } catch { /* the file still has everything */ }
+  }
+  await alertModal({
+    title: 'Your backup file is downloading',
+    message: `You also use cloud backup (${account.email || 'your email'}), so there's an easier way in.\n\n`
+      + `After you buy Pro, open KennelOS Pro, choose "I already use KennelOS → sign in and restore", and sign in with the same email. Your dogs, litters, pairings, health records and contact names come straight back.\n\n`
+      + `Then, in Pro, go to Import / Export, choose this file and "Merge into current data" to add what cloud backup doesn't hold: prices and payments, Financials, contacts' phone, email and address, and your notes.`,
+    okLabel: 'Continue to Pro'
+  });
 }
 
 // HTML for the two links. `variant` only changes presentation:

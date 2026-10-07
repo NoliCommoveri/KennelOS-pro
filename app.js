@@ -14,7 +14,7 @@ import { runFirstRunOnboarding } from './assets/onboardingUI.js';
 import { isDemo, withSeedAllowed } from './data/demoMode.js';
 import { seedSampleData } from './data/editionTour.js';
 import { isLicenseGated, ensureLicensed } from './assets/licenseGate.js';
-import { isCloudAvailable } from './data/cloud/cloudConfig.js';
+import { isCloudAvailable, isUsingTestServer } from './data/cloud/cloudConfig.js';
 
 async function firstRunPersistence() {
   if (wasPersistRequested()) return;
@@ -72,6 +72,19 @@ function renderDemoBanner() {
   document.body.insertBefore(bar, document.body.firstChild);
 }
 
+// While this browser backs up to the staging server from a real origin (the
+// ?cloud=staging switch in data/cloud/cloudConfig.js), every page says so, so a
+// test sign-in is never mistaken for the real service. Rendered here rather
+// than in cloudBackupUI so it shows even while a first-run modal is open.
+function renderCloudTestBanner() {
+  if (!isUsingTestServer()) return;
+  const bar = document.createElement('div');
+  bar.className = 'cloud-notice cloud-notice-warning';
+  bar.setAttribute('role', 'status');
+  bar.innerHTML = '<strong>Cloud backup: TEST SERVER.</strong> Backups from this browser go to the staging server and may be wiped. <a href="?cloud=off">Turn off</a>';
+  document.body.insertBefore(bar, document.body.firstChild);
+}
+
 async function boot() {
   // Pro license gate (editions plan §Licensing): before rendering the app, make
   // sure this device has an active subscription. A painted wall (no key yet, or
@@ -108,6 +121,7 @@ async function boot() {
 
   renderNav();
   registerServiceWorker();
+  renderCloudTestBanner();
   firstRunPersistence();
   // One-time fold of legacy Event.cost values into the Financials ledger. Guarded
   // by a settings flag inside the repo, so it's a cheap no-op after the first run.

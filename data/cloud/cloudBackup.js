@@ -247,7 +247,8 @@ async function pushNow({ force, allowShrink, onProgress }) {
       base_snapshot_id: state.lastSnapshotId || null,
       size: gz.size,
       counts: envelope.counts,
-      files: files.map((f) => f.sha256)
+      files: files.map((f) => f.sha256),
+      edition // named in a 409 to other devices, so Lite can recognise an upgrade to Pro
     };
     let created;
     try {
@@ -274,6 +275,13 @@ async function pushNow({ force, allowShrink, onProgress }) {
   }
 }
 
+// A Lite device whose program is now backed up from Pro: the owner upgraded
+// (Editions Plan, "Converting Lite → Pro"), so the UI says "your records moved
+// to KennelOS Pro" instead of treating it as a second device. 'pro' or null.
+export function movedToEdition(backingDevice, ownDevice = false, thisEdition = edition) {
+  return !ownDevice && thisEdition === 'lite' && backingDevice?.edition === 'pro' ? 'pro' : null;
+}
+
 function failFromError(err) {
   if (err instanceof api.CloudOfflineError || err instanceof api.CloudUnavailableError) {
     updateCloudBackupState({ lastError: { code: 'offline', at: new Date().toISOString() } });
@@ -288,7 +296,8 @@ function failFromError(err) {
     return fail('conflict', err, {
       backingDevice: err.backingDevice || null,
       latestSnapshotId: err.latestSnapshotId || null,
-      ownDevice: !!own
+      ownDevice: !!own,
+      movedToEdition: movedToEdition(err.backingDevice, own)
     });
   }
   if (err && err.name === 'CloudKeyError') return fail('error', { code: 'unexpected_key' }, { message: err.message });
@@ -300,13 +309,15 @@ function failFromError(err) {
 // backup from another device (or from before a reset) comes back 'conflict'.
 export async function enableBackup({ onProgress } = {}) {
   if (!isCloudAvailable()) return { status: 'skipped', reason: 'unavailable' };
-  updateCloudBackupState({ enabled: true, lastError: null });
+  updateCloudBackupState({ enabled: true, lastError: null, movedToEdition: null });
   return pushIfDirty({ force: true, onProgress });
 }
 
 // "Turn off backup on this device": stops pushing; the cloud copy stays.
-export function disableBackup() {
-  updateCloudBackupState({ enabled: false });
+// `movedToEdition` ('pro') records that this Lite device stopped because the
+// program moved to Pro, so it isn't nudged to turn backup back on.
+export function disableBackup({ movedToEdition = null } = {}) {
+  updateCloudBackupState({ enabled: false, lastError: null, movedToEdition });
 }
 
 // "Delete my cloud data": snapshots, files and the account, server-side. Local
@@ -330,6 +341,7 @@ export function getBackupStatus() {
     lastPushedAt: state.lastPushedAt,
     lastAttemptAt: state.lastAttemptAt,
     lastError: state.lastError,
+    movedToEdition: state.movedToEdition || null,
     paused: isBackupBlocked(state),
     dirty: !!getCloudDirtyAt()
   };

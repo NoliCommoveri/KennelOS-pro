@@ -550,7 +550,9 @@ export function clearProLicense() {
 //   cloudSession     { token, email, programId, deviceId } — email stays on this
 //                    device only; the server keeps a keyed hash (plan §2.1)
 //   cloudBackupState { enabled, lastPushedAt, lastAttemptAt, lastSnapshotId,
-//                      lastCounts, lastContentHash, lastError }
+//                      lastCounts, lastContentHash, lastError, movedToEdition }
+//                    (movedToEdition: 'pro' once a Lite device stopped backing
+//                    up because the program moved to Pro)
 //   cloudDeviceId    this browser's id on the cloud account, minted here and sent
 //                    on every sign-in so signing in again doesn't make the
 //                    backing device a stranger. Separate from the license's
@@ -561,7 +563,7 @@ const CLOUD_DEVICE_ID_KEY = 'kennelOS.cloudDeviceId';
 
 const CLOUD_BACKUP_STATE_DEFAULTS = {
   enabled: false, lastPushedAt: null, lastAttemptAt: null, lastSnapshotId: null,
-  lastCounts: null, lastContentHash: null, lastError: null
+  lastCounts: null, lastContentHash: null, lastError: null, movedToEdition: null
 };
 
 function readJsonKey(key) {
@@ -609,6 +611,22 @@ export function getCloudDeviceId() {
 
 export function setCloudDeviceId(id) {
   localStorage.setItem(CLOUD_DEVICE_ID_KEY, id);
+}
+
+// --- Cloud test-server switch (data/cloud/cloudConfig.js) --------------------
+// '1' while this browser is pointed at the edition's staging server
+// (devCloudUrl) on a deployed origin, turned on by visiting any page with
+// ?cloud=staging and off with ?cloud=off. Outside KEYS so Reset App keeps it:
+// it says which server this browser talks to, not anything about the program.
+const CLOUD_TEST_SERVER_KEY = 'kennelOS.cloudTestServer';
+
+export function isCloudTestServerOn() {
+  return localStorage.getItem(CLOUD_TEST_SERVER_KEY) === '1';
+}
+
+export function setCloudTestServer(on) {
+  if (on) localStorage.setItem(CLOUD_TEST_SERVER_KEY, '1');
+  else localStorage.removeItem(CLOUD_TEST_SERVER_KEY);
 }
 
 // --- Device id (Pro license gate — data/license.js) --------------------------
