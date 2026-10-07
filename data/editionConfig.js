@@ -19,11 +19,12 @@ export const upgradeUrl = null;
 // hasEditionLinks() is false and the nav/Today footer render nothing.
 export const demoUrl = null;
 
-// Cloud backup API (Cloud Phase 1 plan §7). Null until production is live (plan
-// §9 step 6), when it becomes 'https://api.kennelos.app'. `devCloudUrl` (the staging
-// Worker) applies when served from localhost, or in a browser that opted in with
-// ?cloud=staging (the test-server switch); see data/cloud/cloudConfig.js.
-export const cloudUrl = null;
+// Cloud backup API (Cloud Phase 1 plan §7): production, live since the go-live
+// change (plan §9 step 6). Back to null is how a shutdown release turns every
+// cloud feature off. `devCloudUrl` (the staging Worker) applies when served from
+// localhost, or in a browser that opted in with ?cloud=staging (the test-server
+// switch); see data/cloud/cloudConfig.js.
+export const cloudUrl = 'https://api.kennelos.app';
 export const devCloudUrl = 'https://kennelos-api-staging.admin-kennelos.workers.dev';
 
 // --- License gate (editions plan §Licensing) -------------------------------

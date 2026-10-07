@@ -17,6 +17,7 @@ import { getSampleDataManifest } from '../data/settings.js';
 import { clearSampleData } from '../data/sampleData.js';
 import { showKennelSetupModal } from './kennelSetupUI.js';
 import { alertModal, esc } from './ui.js';
+import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
 function rootPrefix() {
   return location.pathname.includes('/pages/') ? '../' : '';
@@ -300,6 +301,10 @@ function observeReflow(card, target, token) {
   reflowObserver.observe(document.documentElement);
 }
 
+// A step may carry `cloudBody` for an edition with a cloud server (the
+// Import/Export step: "there's no cloud storage" stops being true there).
+const stepBody = (step) => (step.cloudBody && isCloudAvailable() ? step.cloudBody : step.body);
+
 // Card contents. Intro steps show one primary button (step.button); highlight
 // steps show the step counter and Back / Skip tour / Next (Finish on the last).
 function cardInner(step) {
@@ -309,7 +314,7 @@ function cardInner(step) {
     return `
       ${eyebrow}
       <h3 class="wizard-tooltip-title">${esc(step.title)}</h3>
-      <div class="wizard-tooltip-body wizard-scroll">${esc(step.body)}</div>
+      <div class="wizard-tooltip-body wizard-scroll">${esc(stepBody(step))}</div>
       <div class="wizard-tooltip-actions">
         <button type="button" class="btn btn-primary btn-sm" data-act="next">${esc(step.button || 'Next')}</button>
       </div>`;
@@ -320,7 +325,7 @@ function cardInner(step) {
   return `
     <div class="wizard-step-count">Step ${n} of ${total}</div>
     <h3 class="wizard-tooltip-title">${esc(step.title)}</h3>
-    <div class="wizard-tooltip-body wizard-scroll">${esc(step.body)}</div>
+    <div class="wizard-tooltip-body wizard-scroll">${esc(stepBody(step))}</div>
     <div class="wizard-tooltip-actions">
       <button type="button" class="btn btn-sm" data-act="back">Back</button>
       <button type="button" class="btn btn-sm" data-act="skip">Skip tour</button>
