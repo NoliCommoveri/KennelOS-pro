@@ -8,7 +8,8 @@
 // Two kinds of question:
 //  - LOCKED questions carry a `key` because something depends on them: name and
 //    email (contact matching, approval), the four preferences (eligibility, §6.2),
-//    and the public-list notice (§15.3). She can reword them but can't delete them
+//    how soon they could buy (`ready_timing`, the readiness hold, §15.8), and the
+//    public-list notice (§15.3). She can reword them but can't delete them
 //    or change their type. Programs are never on the form: only she assigns them.
 //  - Everything else is hers: add, delete, reorder, retype. The W1 defaults
 //    (phone, city/state, household…) are ordinary questions whose ids happen to be
@@ -32,8 +33,15 @@ export const PREFERENCE_FIELDS = {
   pref_sex: 'pref_sex',
   pref_breed: 'pref_breed',
   pref_placement: 'pref_placement_type',
-  pref_colors: 'pref_colors'
+  pref_colors: 'pref_colors',
+  ready_timing: 'ready_timing'
 };
+
+// Default wording for the locked readiness question (her wording,
+// 2026-10-07). She
+// can reword it; its answers are fixed (vocab WAITLIST_READY_TIMING) because they
+// decide the readiness hold.
+export const READY_TIMING_LABEL = 'What is the soonest you are able to commit to the purchase of a puppy, should one become available?';
 
 const q = (o) => Object.freeze({ required: false, help: '', options: [], ...o });
 
@@ -46,7 +54,7 @@ export const DEFAULT_FORM_QUESTIONS = Object.freeze([
   q({ id: 'pref_breed', key: 'pref_breed', label: 'Which breed?', type: 'preference' }),
   q({ id: 'pref_placement', key: 'pref_placement', label: 'Pet, show, or breeding?', type: 'preference' }),
   q({ id: 'pref_colors', key: 'pref_colors', label: 'Any color preferences?', type: 'preference' }),
-  q({ id: 'timing', label: 'When are you hoping to bring a puppy home?', type: 'short_text' }),
+  q({ id: 'ready_timing', key: 'ready_timing', label: READY_TIMING_LABEL, type: 'preference', required: true }),
   q({ id: 'household', label: 'Tell us about your household', type: 'long_text' }),
   q({ id: 'other_pets', label: 'Other pets', type: 'long_text' }),
   q({ id: 'experience', label: 'Experience with the breed', type: 'long_text' }),
@@ -207,7 +215,6 @@ export const IMPORT_ALIASES = {
   email: ['email', 'email_address', 'your_email'],
   phone: ['phone', 'phone_number', 'telephone'],
   location: ['location', 'city_state', 'city', 'city_/_state', 'where_do_you_live'],
-  timing: ['timing', 'when', 'when_are_you_hoping_to_bring_a_puppy_home'],
   heard_from: ['heard_from', 'how_did_you_hear_about_us', 'referral', 'source'],
   household: ['household', 'household_members', 'tell_us_about_your_household'],
   other_pets: ['other_pets', 'pets', 'current_pets'],
@@ -216,7 +223,9 @@ export const IMPORT_ALIASES = {
   pref_sex: ['pref_sex', 'sex', 'preferred_sex', 'male_or_female', 'gender', 'gender_preference'],
   pref_breed: ['pref_breed', 'breed', 'preferred_breed'],
   pref_placement: ['pref_placement', 'pref_placement_type', 'placement', 'placement_type'],
-  pref_colors: ['pref_colors', 'colors', 'color', 'preferred_color']
+  pref_colors: ['pref_colors', 'colors', 'color', 'preferred_color'],
+  ready_timing: ['ready_timing', 'ready', 'readiness', 'ready_to_purchase', 'how_soon', 'soonest', 'when_can_you_commit',
+    'what_is_the_soonest_you_are_able_to_commit_to_the_purchase_of_a_puppy,_should_one_become_available?']
 };
 
 // Headers that are the form tool's own bookkeeping, not a question.
@@ -307,4 +316,34 @@ export function applyQuestionImport(questions, proposals) {
 // imported column first, then the built-in aliases for that id.
 export function columnsFor(question) {
   return [question.source_header, ...(IMPORT_ALIASES[question.id] || [])].filter(Boolean);
+}
+
+// --- The application FAQ (Spec §15.8) ----------------------------------------------
+
+// Her questions and answers shown at the top of the application (price range, how
+// the waitlist works…), stored as `waitlist_config.application_faq`: an ordered
+// list of { id, question, answer }. Nothing depends on it, so it's entirely hers.
+// The cleaned list: items with neither a question nor an answer are dropped.
+export function formFaq(config) {
+  const stored = config && Array.isArray(config.application_faq) ? config.application_faq : [];
+  return stored
+    .filter((x) => x && typeof x === 'object')
+    .map((x, i) => ({ id: clean(x.id) || `faq_${i + 1}`, question: clean(x.question), answer: String(x.answer ?? '').trim() }))
+    .filter((x) => x.question || x.answer);
+}
+
+// Problems that block saving the FAQ: an answer with no question, or the reverse.
+export function validateFaq(items) {
+  const problems = [];
+  items.forEach((x, i) => {
+    const has = (v) => clean(v) !== '';
+    if (has(x.question) !== has(x.answer) && (has(x.question) || has(x.answer))) {
+      problems.push(`FAQ ${i + 1} needs both a question and an answer.`);
+    }
+  });
+  return problems;
+}
+
+export function newFaqItem(makeId = () => crypto.randomUUID().slice(0, 8)) {
+  return { id: `faq_${makeId()}`, question: '', answer: '' };
 }

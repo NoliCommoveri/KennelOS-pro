@@ -42,6 +42,17 @@ export function addDaysToYMD(ymd, n) {
   return formatYMD(date);
 }
 
+// n calendar months after a YYYY-MM-DD date. A day the target month doesn't have
+// lands on its last day (Jan 31 + 1 month = Feb 28/29), never spilling into the
+// month after the way Date.setMonth does. Local calendar components, like above.
+export function addMonthsToYMD(ymd, n) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const target = new Date(y, m - 1 + n, 1);
+  const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(d, last));
+  return formatYMD(target);
+}
+
 // Whole months between two YYYY-MM-DD strings (fromYMD earlier, toYMD later),
 // day-of-month aware — used by the promote-lifecycle nudge (Data Integrity
 // Brief §4.3) to turn date_of_birth into an age threshold can compare against.

@@ -29,7 +29,7 @@ import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
   LITTER_STATUS, PLACEMENT_TYPE, SALE_STATUS, eventTypesFor, STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS,
-  EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, WAITLIST_PREF_SEX, WAITLIST_OPEN_STATUSES
+  EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, WAITLIST_PREF_SEX, WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING
 } from './vocab.js';
 
 // --- Parsing --------------------------------------------------------------
@@ -1384,7 +1384,7 @@ const EXPENSE_MAPPING = {
 const WAITLIST_MAPPING = {
   entity: 'waitlist',
   label: 'Waitlist applications',
-  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_placement', 'pref_colors', 'program', 'timing', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'notes'],
+  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_placement', 'pref_colors', 'ready_timing', 'program', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'notes'],
   requiredForCreate: ['name', 'email'],
 
   async loadExisting() {
@@ -1482,6 +1482,16 @@ const WAITLIST_MAPPING = {
       if (v) record.pref_placement_type = v;
       else reasons.push(`Unrecognized placement "${placementRaw}" (left as any).`);
     }
+    // The soonest they can commit (the readiness hold, Spec §15.8). "1", "1 month",
+    // "3 months", "6+ months", "ASAP" all read; anything else is flagged and left blank.
+    const readyRaw = col(row, ...colsFor('ready_timing'));
+    if (readyRaw) {
+      const k = readyRaw.toLowerCase().replace(/\s*months?\b/, '').replace(/\s+/g, '').trim();
+      const v = { asap: 'asap', immediately: 'asap', now: 'asap', '1': '1_month', '3': '3_months', '6': '6_plus_months', '6+': '6_plus_months', '6plus': '6_plus_months' }[k]
+        || normEnum(WAITLIST_READY_TIMING, readyRaw);
+      if (v) record.ready_timing = v;
+      else reasons.push(`Unrecognized "ready to purchase" answer "${readyRaw}" (left blank). Pick it on their page.`);
+    }
     const colors = splitList(col(row, ...colsFor('pref_colors')));
     if (colors.length) record.pref_colors = colors;
     const notes = col(row, 'notes');
@@ -1523,7 +1533,7 @@ const WAITLIST_MAPPING = {
     const changes = match ? {
       application: { ...(match.application || {}), ...application },
       application_questions: record.application_questions,
-      ...Object.fromEntries(['pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors', 'waitlist_program_id', 'notes']
+      ...Object.fromEntries(['pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors', 'ready_timing', 'waitlist_program_id', 'notes']
         .filter((k) => record[k] !== undefined).map((k) => [k, record[k]]))
     } : { ...record };
 

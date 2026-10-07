@@ -149,7 +149,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
           : `<button class="btn btn-primary btn-sm" data-pk="open"${available.length ? '' : ' disabled title="No pups available to offer."'}>Open picks</button>`}</div>
       </div>
       <p class="field-hint" style="margin:6px 0 0;">${picksOpen
-        ? `Picks opened ${esc(fmtDate(litter.picks_opened_date))}. One family at a time, in list order; families with no matching pup, paused, or listening for other litters are skipped and nothing is held against them. A pup is only theirs once the deposit is in. ${d.config.auto_offer_next ? 'When an offer closes, the next family is offered automatically.' : 'When an offer closes, you offer the next family with "Offer to them".'} Nothing is sent automatically, so tell each family yourself.`
+        ? `Picks opened ${esc(fmtDate(litter.picks_opened_date))}. One family at a time, in list order; families with no matching pup, paused, or listening only for other sires or dams are skipped and nothing is held against them. A pup is only theirs once the deposit is in. ${d.config.auto_offer_next ? 'When an offer closes, the next family is offered automatically.' : 'When an offer closes, you offer the next family with "Offer to them".'} Nothing is sent automatically, so tell each family yourself.`
         : `${available.length} pup${available.length === 1 ? '' : 's'} available. Opening picks offers the first eligible family their turn (${esc(d.config.respond_days)} days to pick and pay the deposit).`}</p>
       ${openHtml}
       ${nextHtml}

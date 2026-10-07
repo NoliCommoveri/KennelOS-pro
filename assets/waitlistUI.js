@@ -10,7 +10,7 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal } from './ui.js';
 import { PLACEMENT_TYPE, descriptor } from '../data/vocab.js';
-import { isPaused, soonNoticeText, entryName } from '../data/waitlistRules.js';
+import { isManuallyPaused, isReadyHeld, readyFromDate, soonNoticeText, entryName } from '../data/waitlistRules.js';
 import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass } from '../data/waitlistActions.js';
 import { DemoModeError } from '../data/demoMode.js';
 
@@ -66,10 +66,11 @@ export function prefsSummary(entry) {
   return parts.length ? esc(parts.join(' · ')) : '<span class="faint">Any pup</span>';
 }
 
-// Small flags for the list row: paused / listen-only. Escaped HTML.
+// Small flags for the list row: paused / not ready yet / listen-only. Escaped HTML.
 export function entryFlags(entry, today) {
   const out = [];
-  if (isPaused(entry, today)) out.push(`<span class="badge badge-amber" title="${esc(entry.pause_reason || '')}">Paused to ${esc(entry.paused_until)}</span>`);
+  if (isManuallyPaused(entry, today)) out.push(`<span class="badge badge-amber" title="${esc(entry.pause_reason || '')}">Paused to ${esc(entry.paused_until)}</span>`);
+  if (isReadyHeld(entry, today)) out.push(`<span class="badge badge-amber" title="They said they won't be ready to buy yet, so they aren't offered pups until then.">Not ready until ${esc(readyFromDate(entry))}</span>`);
   if ((entry.listen_mode || 'all') === 'selected') out.push('<span class="badge badge-blue">Listen-only</span>');
   return out.join(' ');
 }
@@ -153,7 +154,7 @@ export function openSoonNotice({ kennel, config, rows, contactsById, litterLabel
     title: "It's almost your turn",
     confirmLabel: 'Done',
     bodyHtml: send.length ? `
-      <p class="field-hint" style="margin-top:0;">These families' turn should come up for the pups available now: one family per pup, in line order, skipping anyone paused, listening for other litters, or with no matching pup.</p>
+      <p class="field-hint" style="margin-top:0;">These families' turn should come up for the pups available now: one family per pup, in line order, skipping anyone paused, listening only for other sires or dams, or with no matching pup.</p>
       ${sendRows}${heldHtml}
       <div class="field" style="margin-top:10px;"><label for="sn-text">Message</label>
         <textarea id="sn-text" style="width:100%;min-height:170px;font-family:inherit;">${esc(text)}</textarea>

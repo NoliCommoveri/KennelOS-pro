@@ -1014,7 +1014,8 @@ export async function seedSampleData() {
 // The sample waitlist: one family in a program (paused for treatment, so skipped
 // without losing their place), one with an OPEN offer on the Autumn litter (picks
 // open), one with a pass already used, a listen-only family waiting for the
-// Winter litter, one approved family whose fee is due, one new application, and a
+// Winter litter, one on the list but on a readiness hold (can't commit for 3
+// months), one approved family whose fee is due, one new application, and a
 // past run that ended placed (Hazel — its credited fee nets off her sale in
 // Financials). Everything goes through the repos, like the rest of the seed.
 async function seedWaitlist(manifest, r) {
@@ -1022,7 +1023,11 @@ async function seedWaitlist(manifest, r) {
     waitlist_config: {
       fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_due_days: 14,
       payment_instructions: 'Venmo @thornfield-kennels, or a check to Thornfield Kennels.',
-      respond_days: 3, max_passes: 2, no_response_counts_as_pass: true, color_matching: false
+      respond_days: 3, max_passes: 2, no_response_counts_as_pass: true, color_matching: false,
+      application_faq: [
+        { id: 'faq_price', question: 'What do your puppies cost?', answer: 'Pet homes are usually $2,500–$2,800. Show and breeding prospects are priced per pup.' },
+        { id: 'faq_how', question: 'How does the waitlist work?', answer: 'Once you\'re approved, a $300 fee holds your place. When a litter\'s picks open, families are offered a pup in list order. You can pass twice before you\'re taken off the list.' }
+      ]
     }
   });
   const treatment = await waitlistProgramRepo.create({
@@ -1053,7 +1058,7 @@ async function seedWaitlist(manifest, r) {
   await entry({
     contact_id: mia.id, status: 'active', waitlist_program_id: treatment.id,
     applied_date: daysFromToday(-220), approved_date: daysFromToday(-215), fee_received_date: daysFromToday(-215),
-    fee_amount: 0, fee_payment_method: 'Waived', pref_sex: 'female', pref_breed: 'Boston Terrier',
+    fee_amount: 0, fee_payment_method: 'Waived', pref_sex: 'female', pref_breed: 'Boston Terrier', ready_timing: 'asap',
     paused_until: daysFromToday(60), pause_reason: 'Treatment — back in touch in two months',
     application: app('Mia Torres', 'mia.torres@example.com', { about: 'Our family wants a calm companion while I finish treatment.' })
   });
@@ -1061,34 +1066,43 @@ async function seedWaitlist(manifest, r) {
   const owenEntry = await entry({
     contact_id: r.owen.id, status: 'active', applied_date: daysFromToday(-170), approved_date: daysFromToday(-165),
     fee_received_date: daysFromToday(-160), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Venmo',
-    pref_breed: 'Boston Terrier', application: app('Owen Farrow', 'owen.farrow@example.com', { heard_from: 'Referral' })
+    pref_breed: 'Boston Terrier', ready_timing: 'asap', application: app('Owen Farrow', 'owen.farrow@example.com', { heard_from: 'Referral' })
   });
 
   const rachel = await contact({ name: 'Rachel Kim', email: 'rachel.kim@example.com', phone: '555-0142' });
   const rachelEntry = await entry({
     contact_id: rachel.id, status: 'active', applied_date: daysFromToday(-140), approved_date: daysFromToday(-138),
     fee_received_date: daysFromToday(-130), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Zelle',
-    pref_sex: 'female', application: app('Rachel Kim', 'rachel.kim@example.com')
+    pref_sex: 'female', ready_timing: 'asap', application: app('Rachel Kim', 'rachel.kim@example.com')
   });
 
   const alders = await contact({ name: 'Ben & Kate Alder', email: 'alders@example.com' });
   await entry({
     contact_id: alders.id, status: 'active', applied_date: daysFromToday(-110), approved_date: daysFromToday(-108),
     fee_received_date: daysFromToday(-100), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Check',
-    listen_mode: 'selected', listen_litter_ids: [r.expectedLitter.id],
-    application: app('Ben & Kate Alder', 'alders@example.com', { timing: 'Only the Winter litter — we love Juniper' })
+    listen_mode: 'selected', listen_dam_ids: [r.expectedLitter.dam_id], ready_timing: 'asap',
+    application: app('Ben & Kate Alder', 'alders@example.com', { about: 'Only a Juniper litter — we love her' })
   });
 
   const hannah = await contact({ name: 'Hannah Moore', email: 'hannah.moore@example.com' });
   await entry({
     contact_id: hannah.id, status: 'approved', applied_date: daysFromToday(-9), approved_date: daysFromToday(-5),
-    fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_due_date: daysFromToday(9),
+    fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_due_date: daysFromToday(9), ready_timing: '1_month',
     application: app('Hannah Moore', 'hannah.moore@example.com')
+  });
+
+  // On the list but can't commit for 3 months: the readiness hold keeps them
+  // from being offered (and using up passes) until 3 months after their fee.
+  const riveras = await contact({ name: 'Sam & Jo Rivera', email: 'riveras@example.com' });
+  await entry({
+    contact_id: riveras.id, status: 'active', applied_date: daysFromToday(-30), approved_date: daysFromToday(-28),
+    fee_received_date: daysFromToday(-20), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Zelle',
+    ready_timing: '3_months', application: app('Sam & Jo Rivera', 'riveras@example.com', { about: 'Moving house this spring, so we\'ll be ready after that.' })
   });
 
   // A new application, typed in — no contact yet (approving links or creates one).
   await entry({
-    status: 'applied', applied_date: daysFromToday(-2), pref_sex: 'male',
+    status: 'applied', applied_date: daysFromToday(-2), pref_sex: 'male', ready_timing: '6_plus_months',
     application: app('Leo Grant', 'leo.grant@example.com', { household: 'Two adults, one teenager', other_pets: 'An older cat', about: 'First Boston, lots of reading done!' })
   });
 
@@ -1096,7 +1110,7 @@ async function seedWaitlist(manifest, r) {
   await entry({
     contact_id: r.priya.id, status: 'placed', placed_sale_id: r.hazelSale.id,
     applied_date: '2025-05-20', approved_date: '2025-05-22', fee_received_date: '2025-06-01',
-    fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Venmo',
+    fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Venmo', ready_timing: 'asap',
     application: app('Priya Shah', 'priya.shah@example.com')
   });
 

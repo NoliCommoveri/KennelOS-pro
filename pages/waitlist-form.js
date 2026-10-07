@@ -4,13 +4,15 @@
 // email, the four preferences, the public-list notice) can only be reworded. Plus
 // "Import questions from a CSV": a responses export from her old form provider
 // becomes questions she reviews before anything is saved. Programs are never on
-// the form — only she assigns them. Pro-only page (proPages.js).
+// the form — only she assigns them. Above the questions, her FAQ
+// (waitlist_config.application_faq, Spec §15.8): questions and answers shown at the
+// top of the application. Pro-only page (proPages.js).
 import Papa from '../vendor/papaparse.min.mjs';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { WAITLIST_QUESTION_TYPE, descriptor } from '../data/vocab.js';
 import {
   formQuestions, validateQuestions, newQuestion, isLocked, isChoice, DEFAULT_FORM_QUESTIONS,
-  proposeQuestionImport, applyQuestionImport
+  proposeQuestionImport, applyQuestionImport, formFaq, validateFaq, newFaqItem
 } from '../data/waitlistForm.js';
 import { esc, param, confirmModal, alertModal } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker } from '../assets/waitlistUI.js';
@@ -26,7 +28,7 @@ const els = {
   csv: document.getElementById('wf-csv')
 };
 
-const ctx = { kennel: null, questions: [], dirty: false, proposals: null, csvRows: [] };
+const ctx = { kennel: null, questions: [], faq: [], dirty: false, proposals: null, csvRows: [] };
 const showError = (msg) => { els.error.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; };
 const clearError = () => { els.error.innerHTML = ''; };
 
@@ -38,6 +40,7 @@ const LOCKED_TYPE_LABEL = {
   pref_breed: 'Breed · decides which pups they\'re offered',
   pref_placement: 'Pet / Show / Breeding rights / Co-own · decides which pups they\'re offered',
   pref_colors: 'Colors · notes, or matching if you turn color matching on',
+  ready_timing: 'ASAP / 1 month / 3 months / 6+ months · anything but ASAP is on hold that long',
   public_notice: 'Shown to every applicant · no answer'
 };
 
@@ -85,11 +88,57 @@ function questionHtml(x, i, total) {
     </div>`;
 }
 
+// --- The FAQ -----------------------------------------------------------------------
+
+function faqHtml() {
+  const items = ctx.faq.map((x, i) => `
+    <div class="wf-q" data-faq="${i}">
+      <div class="wf-q-head"><span class="wf-num">${i + 1}</span>
+        <input class="wf-label" data-ff="question" type="text" value="${esc(x.question)}" placeholder="Question, e.g. What's your price range?" aria-label="FAQ question">
+        <div class="wf-move">
+          <button class="btn btn-sm" data-faq-up="${i}" title="Move up"${i === 0 ? ' disabled' : ''}>↑</button>
+          <button class="btn btn-sm" data-faq-down="${i}" title="Move down"${i === ctx.faq.length - 1 ? ' disabled' : ''}>↓</button>
+          <button class="btn btn-sm btn-danger" data-faq-del="${i}" title="Delete this FAQ">✕</button>
+        </div></div>
+      <div class="field" style="margin-top:8px;"><label>Answer</label><textarea data-ff="answer">${esc(x.answer)}</textarea></div>
+    </div>`).join('');
+  return `
+    <section class="card" style="margin-bottom:16px;">
+      <h2 style="margin:0;">FAQ</h2>
+      <p class="field-hint" style="margin-top:4px;">Shown at the top of the application, before the questions: your usual price range, how the waitlist works, anything families always ask.</p>
+      <div id="wf-faq">${items || '<p class="faint" style="margin:8px 0 0;">No FAQ yet.</p>'}</div>
+      <div class="pill-row" style="margin-top:12px;"><button class="btn btn-sm" id="wf-faq-add">+ Add a question &amp; answer</button></div>
+    </section>`;
+}
+
+function wireFaq() {
+  els.body.querySelectorAll('[data-faq]').forEach((box) => {
+    const x = ctx.faq[Number(box.dataset.faq)];
+    box.querySelectorAll('[data-ff]').forEach((input) => input.addEventListener('input', () => { x[input.dataset.ff] = input.value; markDirty(); }));
+  });
+  const swap = (a, b) => { [ctx.faq[a], ctx.faq[b]] = [ctx.faq[b], ctx.faq[a]]; markDirty(); render(); };
+  els.body.querySelectorAll('[data-faq-up]').forEach((b) => b.addEventListener('click', () => swap(Number(b.dataset.faqUp), Number(b.dataset.faqUp) - 1)));
+  els.body.querySelectorAll('[data-faq-down]').forEach((b) => b.addEventListener('click', () => swap(Number(b.dataset.faqDown), Number(b.dataset.faqDown) + 1)));
+  els.body.querySelectorAll('[data-faq-del]').forEach((b) => b.addEventListener('click', () => {
+    ctx.faq.splice(Number(b.dataset.faqDel), 1);
+    markDirty();
+    render();
+  }));
+  els.body.querySelector('#wf-faq-add').addEventListener('click', () => {
+    ctx.faq.push(newFaqItem());
+    markDirty();
+    render();
+    els.body.querySelector(`[data-faq="${ctx.faq.length - 1}"] input`)?.focus();
+  });
+}
+
 function render() {
   const qs = ctx.questions;
   els.body.innerHTML = `
+    ${faqHtml()}
     <section class="card">
-      <p class="field-hint" style="margin-top:0;">"Required" applies to the online form (coming with the public form). When you type an application in yourself, only the name is required.</p>
+      <h2 style="margin:0 0 8px;">Questions</h2>
+      <p class="field-hint" style="margin-top:0;">"Required" applies to the online form (coming with the public form). When you type an application in yourself, only the name and how soon they could buy are required.</p>
       <div id="wf-list">${qs.map((x, i) => questionHtml(x, i, qs.length)).join('')}</div>
       <div class="pill-row" style="margin-top:14px;align-items:center;">
         <label for="wf-new-type" class="muted">Add a question:</label>
@@ -99,6 +148,7 @@ function render() {
       </div>
     </section>`;
 
+  wireFaq();
   const list = els.body.querySelector('#wf-list');
   list.querySelectorAll('.wf-q').forEach((box) => {
     const i = Number(box.dataset.i);
@@ -153,14 +203,16 @@ function render() {
 
 async function save() {
   clearError();
-  const problems = validateQuestions(ctx.questions);
+  const problems = [...validateFaq(ctx.faq), ...validateQuestions(ctx.questions)];
   if (problems.length) { showError(problems.join(' ')); return; }
   els.save.disabled = true;
   try {
     const form_questions = formQuestions({ form_questions: ctx.questions });
-    await kennelRepo.update(ctx.kennel.id, { waitlist_config: { ...(ctx.kennel.waitlist_config || {}), form_questions } });
+    const application_faq = formFaq({ application_faq: ctx.faq });
+    await kennelRepo.update(ctx.kennel.id, { waitlist_config: { ...(ctx.kennel.waitlist_config || {}), form_questions, application_faq } });
     ctx.kennel = await kennelRepo.getById(ctx.kennel.id);
     ctx.questions = formQuestions(ctx.kennel.waitlist_config);
+    ctx.faq = formFaq(ctx.kennel.waitlist_config);
     ctx.dirty = false;
     els.save.textContent = 'Saved ✓';
     setTimeout(() => { if (!ctx.dirty) els.save.textContent = 'Save form'; }, 1800);
@@ -260,6 +312,7 @@ async function main() {
   els.back.href = `waitlist.html?kennel=${encodeURIComponent(kennel.id)}`;
   if (own.length > 1) els.title.textContent = `Application form — ${kennel.kennel_name}`;
   ctx.questions = formQuestions(kennel.waitlist_config);
+  ctx.faq = formFaq(kennel.waitlist_config);
   els.save.addEventListener('click', save);
   els.csv.addEventListener('change', () => {
     const file = els.csv.files && els.csv.files[0];

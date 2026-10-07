@@ -38,6 +38,8 @@ export const DOG_REFERENCES = [
   { table: 'pairings',      field: 'dam_id',         label: 'dam in a pairing' },
   { table: 'litters',       field: 'sire_id',        label: 'sire of a litter' },
   { table: 'litters',       field: 'dam_id',         label: 'dam of a litter' },
+  { table: 'waitlist_entries', field: 'listen_sire_ids', label: 'sire a waitlist family is listening for', multiEntry: true },
+  { table: 'waitlist_entries', field: 'listen_dam_ids',  label: 'dam a waitlist family is listening for', multiEntry: true },
   { table: 'sales',         field: 'dog_id',         label: 'placed via a sale' },
   { table: 'stud_services', field: 'our_dog_id',     label: 'our dog in a stud service' },
   { table: 'stud_services', field: 'partner_dog_id', label: 'partner dog in a stud service' },
@@ -59,8 +61,7 @@ export const LITTER_REFERENCES = [
     table: 'expenses', field: 'subject_id', label: 'subject of an expense',
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'litter'
   },
-  { table: 'waitlist_offers',  field: 'litter_id',        label: 'litter on a waitlist offer' },
-  { table: 'waitlist_entries', field: 'listen_litter_ids', label: 'litter a waitlist family is listening for', multiEntry: true }
+  { table: 'waitlist_offers',  field: 'litter_id',        label: 'litter on a waitlist offer' }
 ];
 
 // --- Pairing: what can point at a Pairing -----------------------------------
@@ -77,8 +78,7 @@ export const PAIRING_REFERENCES = [
   {
     table: 'expenses', field: 'subject_id', label: 'subject of an expense',
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'pairing'
-  },
-  { table: 'waitlist_entries', field: 'listen_pairing_ids', label: 'pairing a waitlist family is listening for', multiEntry: true }
+  }
 ];
 
 // --- Contact: what can point at a Contact -----------------------------------

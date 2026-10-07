@@ -113,7 +113,7 @@ export const db = new Dexie('KennelOSBreedingApp');
 //  - `waitlist_entries` / `waitlist_offers` / `waitlist_programs` are the per-kennel
 //    waitlist (Waitlist Spec §4; End-State guide §29). Every FK is indexed so its
 //    referenceRegistry probe is a lookup, never a scan — including the two
-//    MULTI-ENTRY listen lists (`*listen_pairing_ids`, `*listen_litter_ids`), which
+//    MULTI-ENTRY listen lists (`*listen_sire_ids`, `*listen_dam_ids`), which
 //    the rules engine never queries by key but the hard-delete guard does.
 //    `kennel_id` on all three is the kennel scope (one list per kennel). Position is
 //    DERIVED (waitlistRules.js), never stored; so are passes (counted from offers).
@@ -131,7 +131,7 @@ db.version(1).stores({
   documents:     'id, kennel_id, dog_id, doc_type, doc_date, is_archived',
   files:         'id, created_at',
   breed_feeding_schedules: 'id, breed, is_archived',
-  waitlist_entries:  'id, kennel_id, contact_id, status, waitlist_program_id, *listen_pairing_ids, *listen_litter_ids, placed_sale_id, is_archived',
+  waitlist_entries:  'id, kennel_id, contact_id, status, waitlist_program_id, *listen_sire_ids, *listen_dam_ids, placed_sale_id, is_archived',
   waitlist_offers:   'id, entry_id, litter_id, kennel_id, chosen_dog_id, sale_id, outcome, is_archived',
   waitlist_programs: 'id, kennel_id, is_archived'
 });

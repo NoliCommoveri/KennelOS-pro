@@ -49,8 +49,8 @@ function withDefaults(data) {
   return {
     listen_mode: 'all',
     pref_sex: 'any',
-    listen_pairing_ids: [],
-    listen_litter_ids: [],
+    listen_sire_ids: [],
+    listen_dam_ids: [],
     ...data
   };
 }
