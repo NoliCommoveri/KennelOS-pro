@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v42';
+const CACHE_NAME = 'kennelos-pro-shell-v43';
 
 const PRECACHE_URLS = [
   './',
@@ -241,10 +241,15 @@ const PRECACHE_URLS = [
   'resources/common_tests_by_breed_seed.csv',
 ];
 
+// Every file is fetched with `cache: 'reload'`, past the browser's HTTP cache.
+// A plain addAll could take a stale copy of a file the browser still held (the
+// host lets browsers keep files for minutes), and that stale copy would then be
+// served from this cache until the next CACHE_NAME bump: the go-live deploy
+// left a browser on the old editionConfig.js (cloudUrl null) this way.
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+      .then((cache) => cache.addAll(PRECACHE_URLS.map((url) => new Request(url, { cache: 'reload' }))))
       .then(() => self.skipWaiting())
   );
 });
