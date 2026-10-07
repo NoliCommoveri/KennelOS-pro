@@ -10,6 +10,7 @@ import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js
 import { esc } from './ui.js';
 import { renderBreedPicker } from './breedTestPicker.js';
 import { setCloudOfferPending } from '../data/settings.js';
+import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
 // The mandatory first-run gate (Multi-Kennel Scope Spec §3.2), called from
 // app.js's boot on every page. Async because the gate's condition is a db read
@@ -63,6 +64,7 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
       <div class="form-actions">
         <button class="btn btn-primary" data-act="save">Save</button>
         ${required ? '' : '<button class="btn" data-act="cancel">Cancel</button>'}
+        ${required && isCloudAvailable() ? '<button class="btn" data-act="signin">Sign in to existing account</button>' : ''}
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -103,6 +105,22 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
       errorBox.innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
     }
   });
+  // The same "I already use KennelOS" way in the welcome cards offer, here too:
+  // the required gate is also reached directly (wizard exit, Clear Sample Data,
+  // a reload mid-onboarding), and someone on a new device shouldn't have to make
+  // a throwaway kennel to get to their restore. Only when this edition has a
+  // cloud server; the module is imported on click, as everywhere else.
+  overlay.querySelector('[data-act="signin"]')?.addEventListener('click', async () => {
+    overlay.style.display = 'none';
+    const { runSignInAndRestore } = await import('./cloudBackupUI.js');
+    const restored = await runSignInAndRestore();
+    // true: records are back, and the restored kennel lifts this gate on reload.
+    // 'empty' (signed in, nothing backed up yet) or backed out: still no kennel,
+    // so the gate stays, with backup now on if they did sign in.
+    if (restored === true) { location.reload(); return; }
+    overlay.style.display = '';
+  });
+
   if (required) {
     // No dismiss control at all, and neither of the two ambient escapes the app's
     // other modals honour: a backdrop click and Escape both close `.modal-overlay`
