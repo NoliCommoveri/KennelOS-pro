@@ -3,14 +3,15 @@
 // same first-run state a browser that's never visited would see (Sample Data
 // & Reset brief v1 covers clearing just the sample manifest; this is the
 // superset — real data included, no reference guard, since nothing survives).
-import { db, existingTableNames } from './db.js';
+import { db, existingTableNames, dataTables } from './db.js';
 import { clearAllSettings, clearAllAppStorage, getCloudBackupState, updateCloudBackupState } from './settings.js';
 import { clearAll as clearNudgeDismissals } from './nudgeState.js';
 
-// Live counts for the confirmation UI, across whatever tables exist at the
-// current stage (stays correct as later stages add tables).
+// Live counts for the confirmation UI, across whatever data tables exist at the
+// current stage (stays correct as later stages add tables). Device-only tables
+// aren't records, so they aren't counted, though resetApp clears them.
 export async function getResetCounts() {
-  const names = existingTableNames();
+  const names = dataTables().map((t) => t.name);
   const counts = {};
   for (const name of names) {
     counts[name] = await db.table(name).count();
@@ -18,6 +19,8 @@ export async function getResetCounts() {
   return counts;
 }
 
+// Clears EVERY table, device-only ones included: the private-vault key
+// (device_secrets) goes too, so a reset device has to unlock again.
 export async function resetApp() {
   const names = existingTableNames();
   await db.transaction('rw', names.map((n) => db.table(n)), async () => {
@@ -39,7 +42,8 @@ export function stopCloudBackupAfterReset() {
   const state = getCloudBackupState();
   if (!state.enabled && !state.lastSnapshotId) return;
   updateCloudBackupState({
-    enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null
+    enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null,
+    vault: null // the vault key went with the tables; cloudVault.vaultStatus() re-learns the rest
   });
 }
 

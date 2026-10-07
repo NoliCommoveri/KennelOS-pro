@@ -2,13 +2,14 @@
 // Lives in the data layer, so unlike pages it may use `db` directly for the
 // cross-table bulk/transaction work that restore needs.
 //
-// The export iterates whatever tables exist in the schema, so it stays correct
-// as later stages add tables — no hardcoded table list (Data Model doc §9).
-import { db } from './db.js';
+// The export iterates whatever data tables exist in the schema (dataTables():
+// every table but the device-only ones, db.js), so it stays correct as later
+// stages add tables — no hardcoded table list (Data Model doc §9).
+import { db, dataTables } from './db.js';
 import { setLastBackupDate, markDataChanged } from './settings.js';
 import { assertWritable } from './demoMode.js';
 import { enforceImportDogCap } from './editionConfig.js';
-import { SYNC_REGISTRY, overlayCloudFields, snapshotRowToLocal } from './syncRegistry.js';
+import { SYNC_REGISTRY, overlayCloudFields, snapshotRowToLocal, isCloudField } from './syncRegistry.js';
 
 // Bumped only when the on-disk backup shape changes in a way that needs a
 // migration. Tied to the Dexie schema version so an older file can be detected.
@@ -80,8 +81,9 @@ export async function exportAll({ encodeBlobs = true } = {}) {
   // inside the Dexie transaction could let it auto-commit; the Blobs stay
   // readable after the transaction closes, so encode outside it.
   const raw = {};
-  await db.transaction('r', db.tables, async () => {
-    for (const table of db.tables) {
+  const tables = dataTables();
+  await db.transaction('r', tables, async () => {
+    for (const table of tables) {
       raw[table.name] = await table.toArray();
     }
   });
@@ -131,7 +133,7 @@ export function inspectBackup(obj) {
       `this app understands up to v${BACKUP_FORMAT_VERSION}). Update the app, then restore.`
     );
   }
-  const known = new Set(db.tables.map((t) => t.name));
+  const known = new Set(dataTables().map((t) => t.name));
   const counts = {};
   const unknownTables = [];
   for (const [name, rows] of Object.entries(obj.collections)) {
@@ -145,6 +147,8 @@ export function inspectBackup(obj) {
 // Restore a parsed backup.
 //   mode 'cloud-merge' — a cloud snapshot (data/cloud/cloudBackup.js); see
 //                    restoreCloudMerge below. Takes `opts`.
+//   mode 'vault-merge' — a decrypted private-vault payload; see
+//                    restoreVaultMerge below. Takes `opts`.
 //   mode 'replace' — wipe EVERY known table, then load the file's rows, so the
 //                    result is exactly the backup's contents. A table the backup
 //                    omits ends up empty (a full export always includes all
@@ -155,8 +159,9 @@ export async function restoreBackup(obj, mode, opts = {}) {
   assertWritable(); // restore is a full-DB write — inert in demo (defense-in-depth;
                     // the Import/Export page is also excluded from the demo build)
   if (mode === 'cloud-merge') return restoreCloudMerge(obj, opts);
+  if (mode === 'vault-merge') return restoreVaultMerge(obj, opts);
   inspectBackup(obj);
-  const known = new Set(db.tables.map((t) => t.name));
+  const known = new Set(dataTables().map((t) => t.name));
   const entries = Object.entries(obj.collections).filter(([name]) => known.has(name));
 
   // Edition bulk-import cap (cap spec §9). No-op in Pro/Demo; in Lite it throws a
@@ -170,11 +175,13 @@ export async function restoreBackup(obj, mode, opts = {}) {
     : [];
   await enforceImportDogCap({ incomingDogs, mode });
 
-  await db.transaction('rw', db.tables, async () => {
+  const tables = dataTables();
+  await db.transaction('rw', tables, async () => {
     // Replace is a full swap: clear every known table first so tables the backup
-    // doesn't mention are emptied too, not just the ones it carries.
+    // doesn't mention are emptied too, not just the ones it carries. Device-only
+    // tables (the vault key) aren't records and are left alone.
     if (mode === 'replace') {
-      for (const table of db.tables) await table.clear();
+      for (const table of tables) await table.clear();
     }
     for (const [name, rows] of entries) {
       if (rows.length) await db.table(name).bulkPut(rows.map(decodeRowBlobs));
@@ -226,7 +233,7 @@ function assertCloudSnapshot(snapshot) {
 // be rolled back" number for "Restore as of…" (plan §4.3).
 export async function planCloudMerge(snapshot, { overwrite = false } = {}) {
   assertCloudSnapshot(snapshot);
-  const known = new Set(db.tables.map((t) => t.name));
+  const known = new Set(dataTables().map((t) => t.name));
   const writes = {};
   const summary = {};
   for (const [name, rows] of Object.entries(snapshot.collections)) {
@@ -280,6 +287,137 @@ export async function restoreCloudMerge(snapshot, { overwrite = false, fetchFile
   }
 
   // The Lite cap sees the dogs exactly as they'll be after the merge.
+  if (writes.dogs && writes.dogs.length) {
+    await enforceImportDogCap({ incomingDogs: writes.dogs.map((w) => w.row), mode: 'merge' });
+  }
+
+  const tables = Object.keys(writes).filter((n) => writes[n].length);
+  if (tables.length) {
+    await db.transaction('rw', tables.map((n) => db.table(n)), async () => {
+      for (const n of tables) await db.table(n).bulkPut(writes[n].map((w) => w.row));
+    });
+    markDataChanged();
+  }
+  return { summary, missingFiles };
+}
+
+// --- 'vault-merge' (Private Vault Plan §4.4) ---------------------------------
+// The vault payload holds COMPLETE rows (the exportAll rows, sample data dropped,
+// §4.1), so this is a row merge, newer wins, with one twist for the device that
+// restored the kennel tier while locked and edited since:
+//   - missing local row: insert the vault row.
+//   - vault row as new as the local one or newer (the usual case: a restore
+//     right after the 'cloud-merge' of the same snapshot, where updated_at
+//     matches), or overwrite: true ("Restore as of…"): the vault row, whole.
+//   - local row newer: keep it, but fill its BLANK private fields (and missing
+//     keys of its object fields) from the vault row. Cloud fields stay exactly
+//     local. So a record edited while locked keeps the edit and gets its
+//     private details back, and a private field typed in while locked wins.
+//   - local rows not in the vault: left alone. Restore never deletes.
+//   - files: rows carry `vault_file` { sha256, plain_sha256, encrypted } in
+//     place of the blob. A file the device doesn't have is fetched through
+//     `opts.fetchFile(vaultFile, row) → Blob` (decryption lives in the cloud
+//     modules); an existing local file is left alone; a failed fetch is listed
+//     in `missingFiles`, as for 'cloud-merge'.
+//   - Lite cap: enforceImportDogCap over the merged dogs.
+// Reads and fetches happen before the write transaction.
+
+export const VAULT_PAYLOAD_FORMAT = 1;
+
+function assertVaultPayload(payload) {
+  if (!payload || typeof payload !== 'object' || !payload.collections || typeof payload.collections !== 'object') {
+    throw new Error('This does not look like a private-vault backup (missing "collections").');
+  }
+  if (payload.vault_format !== VAULT_PAYLOAD_FORMAT) {
+    throw new Error(
+      `This private backup uses format v${payload.vault_format}; this app understands ` +
+      `v${VAULT_PAYLOAD_FORMAT}. Update the app, then restore.`
+    );
+  }
+}
+
+const isBlank = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+const isPlainObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Blob);
+
+function fillPrivateBlanks(table, local, vaultRow) {
+  const out = { ...local };
+  for (const [k, v] of Object.entries(vaultRow)) {
+    if (isCloudField(table, k)) {
+      // A cloud object field (events.details) may hold private keys: add the
+      // ones the local object lacks, never touching a key it has.
+      if (isPlainObj(out[k]) && isPlainObj(v)) {
+        const missing = Object.keys(v).filter((key) => !(key in out[k]));
+        if (missing.length) out[k] = { ...out[k], ...Object.fromEntries(missing.map((key) => [key, v[key]])) };
+      }
+      continue;
+    }
+    if (isBlank(out[k]) && !isBlank(v)) out[k] = v;
+    else if (isPlainObj(out[k]) && isPlainObj(v)) {
+      const missing = Object.keys(v).filter((key) => !(key in out[k]));
+      if (missing.length) out[k] = { ...out[k], ...Object.fromEntries(missing.map((key) => [key, v[key]])) };
+    }
+  }
+  return out;
+}
+
+function vaultRowToLocal(row) {
+  const { vault_file, ...rest } = row;
+  return rest;
+}
+
+export async function planVaultMerge(payload, { overwrite = false } = {}) {
+  assertVaultPayload(payload);
+  const known = new Set(dataTables().map((t) => t.name));
+  const writes = {};
+  const summary = {};
+  for (const [name, rows] of Object.entries(payload.collections)) {
+    if (!known.has(name) || !Array.isArray(rows)) continue;
+    const s = { inserted: 0, updated: 0, keptLocal: 0, unchanged: 0 };
+    const out = [];
+    for (const vaultRow of rows) {
+      if (!vaultRow || !vaultRow.id) continue;
+      const local = await db.table(name).get(vaultRow.id);
+      if (!local) {
+        out.push({ row: vaultRowToLocal(vaultRow), insert: true, vaultRow });
+        s.inserted++;
+        continue;
+      }
+      if (name === 'files') { s.unchanged++; continue; }
+      const row = vaultRowToLocal(vaultRow);
+      const asNew = String(row.updated_at ?? '') >= String(local.updated_at ?? '');
+      const merged = overwrite || asNew ? row : fillPrivateBlanks(name, local, row);
+      if (JSON.stringify(merged) === JSON.stringify(local)) {
+        if (overwrite || asNew) s.unchanged++; else s.keptLocal++;
+        continue;
+      }
+      out.push({ row: merged, insert: false, vaultRow });
+      s.updated++;
+    }
+    writes[name] = out;
+    summary[name] = s;
+  }
+  return { writes, summary };
+}
+
+export async function restoreVaultMerge(payload, { overwrite = false, fetchFile = null } = {}) {
+  assertWritable();
+  const { writes, summary } = await planVaultMerge(payload, { overwrite });
+
+  const missingFiles = [];
+  if (writes.files) {
+    const fetched = [];
+    for (const w of writes.files) {
+      let blob = null;
+      if (fetchFile && w.vaultRow.vault_file) {
+        try { blob = await fetchFile(w.vaultRow.vault_file, w.row); } catch { blob = null; }
+      }
+      if (blob) fetched.push({ ...w, row: { ...w.row, blob } });
+      else missingFiles.push(w.row.id);
+    }
+    writes.files = fetched;
+    if (summary.files) summary.files.inserted = fetched.length;
+  }
+
   if (writes.dogs && writes.dogs.length) {
     await enforceImportDogCap({ incomingDogs: writes.dogs.map((w) => w.row), mode: 'merge' });
   }

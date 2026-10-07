@@ -19,7 +19,10 @@
 //   CloudRequestError     — any other refusal, with the server's `code`
 //                           (bad_email, invalid_code, too_many_attempts,
 //                           rate_limited, email_unavailable, email_failed,
-//                           missing_files, …) and its extra fields.
+//                           missing_files, vault_required, no_vault, …) and
+//                           its extra fields. (The vault's 409s, vault_exists
+//                           and vault_key_stale, arrive as CloudConflictError
+//                           with that `code`.)
 //
 // Bodies are never logged (plan §6.4): no email, code, token or record leaves
 // this module except in the request itself.
@@ -174,6 +177,46 @@ export const listSnapshots = (token) => getJson('/snapshots', { token });
 
 export const getSnapshot = (token, snapshotId) =>
   send(`/snapshots/${snapshotId}`, { token, timeoutMs: UPLOAD_TIMEOUT_MS }).then((r) => r.blob());
+
+// With the private vault on: the encrypted vault part, uploaded BEFORE the body
+// (Private Vault Plan §6.1). `bytes` is a Uint8Array or Blob.
+export const uploadSnapshotVault = (token, snapshotId, bytes) =>
+  send(`/snapshots/${snapshotId}/vault`, {
+    method: 'PUT', token, body: bytes instanceof Blob ? bytes : new Blob([bytes]),
+    contentType: 'application/octet-stream', timeoutMs: UPLOAD_TIMEOUT_MS
+  }).then((r) => r.json());
+
+export const getSnapshotVault = (token, snapshotId) =>
+  send(`/snapshots/${snapshotId}/vault`, { token, timeoutMs: UPLOAD_TIMEOUT_MS }).then((r) => r.blob());
+
+// --- The private vault (Private Vault Plan §6.1, §6.4) ---------------------------
+// → { enabled, keyId?, createdAt?, wraps: [{ id, kind, label, createdAt, credentialId?, prfSalt? }] }
+export const getVault = (token) => getJson('/vault', { token });
+// → the same shape as getVault. 409 'vault_exists' when another device got there first.
+export const enableVault = (token, { keyId, recoveryWrap }) =>
+  getJson('/vault', { method: 'POST', token, json: { keyId, recoveryWrap } });
+// `reauth` = { email, code } when this sign-in is older than 15 minutes.
+export const disableVault = (token, reauth = {}) => getJson('/vault', { method: 'DELETE', token, json: reauth });
+// → { id, kind, keyId, wrapped, credentialId?, prfSalt? }
+export const getVaultWrap = (token, wrapId) => getJson(`/vault/wraps/${encodeURIComponent(wrapId)}`, { token });
+export const addVaultWrap = (token, wrap) => getJson('/vault/wraps', { method: 'POST', token, json: wrap });
+export const replaceRecoveryWrap = (token, { keyId, wrapped }, reauth = {}) =>
+  getJson('/vault/wraps/recovery', { method: 'PUT', token, json: { keyId, wrapped, ...reauth } });
+export const removeVaultWrap = (token, wrapId, reauth = {}) =>
+  getJson(`/vault/wraps/${encodeURIComponent(wrapId)}`, { method: 'DELETE', token, json: reauth });
+
+// Unlocking from another device (Private Vault Plan §5.3). The new device asks:
+// → { pairingId, expiresAt }. 429 'too_many_pairings' / 'rate_limited'.
+export const createPairing = (token, { publicKey, label = null }) =>
+  getJson('/vault/pairings', { method: 'POST', token, json: { publicKey, label } });
+// An unlocked device lists what it can approve:
+// → { pairings: [{ id, deviceLabel, publicKey, createdAt, expiresAt }] }
+export const listPairings = (token) => getJson('/vault/pairings', { token });
+export const approvePairing = (token, pairingId, { approverKey, wrapped, keyId }) =>
+  getJson(`/vault/pairings/${encodeURIComponent(pairingId)}/approve`, { method: 'POST', token, json: { approverKey, wrapped, keyId } });
+// The asking device polls: → { status: 'waiting', expiresAt } or
+// { status: 'approved', approverKey, wrapped, keyId } (once: the row goes as it's read).
+export const pollPairing = (token, pairingId) => getJson(`/vault/pairings/${encodeURIComponent(pairingId)}`, { token });
 
 // --- Public -------------------------------------------------------------------
 // Service notices (the shutdown channel). → [{ id, level, message, until }]

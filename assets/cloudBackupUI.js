@@ -12,10 +12,15 @@
 //   resetSignOutFieldHtml() / signOutAfterResetIfChecked()   Reset App's question
 //   devicesModal()              "Your devices": erase a lost one, free its Pro license
 //   openDevicesFromLicenseWall() the Pro activation wall's "Lost a device?" link
+//   renderPrivateGapHint()      record pages: "private details are blank here" after a
+//                               restore that didn't bring them back (bootCloud)
+//
+// The private vault's screens are cloudVaultUI.js, imported from here only when
+// needed (vaultUI()).
 //
 // Layering: talks to data/cloud/* only (never cloudApi's fetch directly, never db).
 import { esc, confirmModal, alertModal, selectModal, promptModal } from './ui.js';
-import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { isCloudAvailable, isVaultOffered } from '../data/cloud/cloudConfig.js';
 import {
   startSignIn, verifySignIn, currentAccount, signOut, signOutOtherDevices, defaultDeviceLabel
 } from '../data/cloud/cloudAuth.js';
@@ -26,13 +31,18 @@ import {
 } from '../data/cloud/cloudBackup.js';
 import { listDevices, requestErase, cancelErase, releaseDeviceLicense } from '../data/cloud/cloudDevices.js';
 import { CloudOfflineError, CloudRequestError, CloudAuthError } from '../data/cloud/cloudApi.js';
-import { isCloudOfferPending, setCloudOfferPending, getCloudRestoredAt, setCloudRestoredAt, getProLicense } from '../data/settings.js';
+import {
+  isCloudOfferPending, setCloudOfferPending, getCloudRestoredAt, setCloudRestoredAt, getProLicense, getLastBackupDate
+} from '../data/settings.js';
 import { isLicenseGated } from '../data/license.js';
 import { hasSampleData } from '../data/sampleData.js';
 import { getMyKennelName, shouldRequireKennelSetup } from '../data/kennelSetup.js';
 import { dismiss, dismissedAt, undismiss } from '../data/nudgeState.js';
 
 // --- Small helpers --------------------------------------------------------------
+
+// The vault's screens (Private Vault Plan §2), loaded on first use.
+const vaultUI = () => import('./cloudVaultUI.js');
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -61,6 +71,16 @@ export function snapshotLabel(iso, now = new Date(), { seconds = false } = {}) {
   return `${date} ${time}`;
 }
 
+// The card's first line: statusLine as the end of "Kennel records: …".
+const asTail = (line) => line.charAt(0).toLowerCase() + line.slice(1).replace(/\.$/, '');
+
+// The card's second line (Private Vault Plan §2.2): the private tier.
+export function privateLine(status, lastFileBackup = null, now = Date.now()) {
+  if (status.vault === 'on') return status.vaultPushedAt ? `encrypted backup, ${relativeTime(status.vaultPushedAt, now)}` : 'encrypted backup is on';
+  if (status.vault === 'locked') return 'locked on this device';
+  return `only on this device · last file backup ${lastFileBackup ? relativeTime(lastFileBackup, now) : 'never'}`;
+}
+
 // The status line on the card and the nudge (plan §2.2).
 export function statusLine(status, now = Date.now()) {
   if (!status.enabled && status.movedToEdition === 'pro') return 'Backup is off on this device: your records moved to KennelOS Pro.';
@@ -82,11 +102,14 @@ function pausedReason(lastError) {
       : `Backups are coming from ${lastError.backingDevice?.label || 'another device'}.`;
     case 'shrink': return 'This device has far fewer records than your last backup.';
     case 'auth': return 'Your sign-in has expired.';
+    case 'vault_locked': return lastError.stale
+      ? 'Private backup was turned off and on again on another device. Unlock it here with the new recovery code.'
+      : 'Your private info is locked on this device. Unlock it to keep backing up.';
     default: return null;
   }
 }
 
-function errorText(e) {
+export function errorText(e) {
   if (e instanceof CloudOfflineError) return 'No internet connection (or cloud backup is briefly down for maintenance). Try again shortly.';
   if (e instanceof CloudAuthError) return 'Your cloud sign-in has expired. Sign in again.';
   if (e instanceof CloudRequestError) {
@@ -110,7 +133,7 @@ function errorText(e) {
 }
 
 // A modal shell matching ui.js's (.modal-overlay > .modal). Returns the overlay.
-function openModal(innerHtml, { width = 460, dismissible = true } = {}) {
+export function openModal(innerHtml, { width = 460, dismissible = true } = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:${width}px;">${innerHtml}</div>`;
@@ -120,7 +143,7 @@ function openModal(innerHtml, { width = 460, dismissible = true } = {}) {
 }
 
 // A typed confirmation ("type REPLACE"). Resolves true/false.
-function typedConfirm({ title, message, phrase, confirmLabel }) {
+export function typedConfirm({ title, message, phrase, confirmLabel }) {
   return new Promise((resolve) => {
     const overlay = openModal(`
       <h2 style="margin-top:0;">${esc(title)}</h2>
@@ -144,7 +167,7 @@ function typedConfirm({ title, message, phrase, confirmLabel }) {
 }
 
 // A "working…" modal with an optional progress bar. Returns { update, close }.
-function progressModal(title) {
+export function progressModal(title) {
   const overlay = openModal(`
     <h2 style="margin-top:0;">${esc(title)}</h2>
     <p class="muted" id="pg-text">Working…</p>
@@ -163,7 +186,7 @@ function progressModal(title) {
 const NUDGE_KEY = 'cloud-backup-offer';
 const NUDGE_SNOOZE_MS = 30 * DAY;
 
-const notify = () => { try { window.dispatchEvent(new CustomEvent(CLOUD_BACKUP_EVENT, { detail: { status: 'ui' } })); } catch { /* fine */ } };
+export const notify = () => { try { window.dispatchEvent(new CustomEvent(CLOUD_BACKUP_EVENT, { detail: { status: 'ui' } })); } catch { /* fine */ } };
 
 // --- Sign-in (plan §2.1) ------------------------------------------------------------
 // Email → code. A typed code, not a link: an iPhone home-screen app has its own
@@ -259,8 +282,9 @@ function whatGetsBackedUpModal() {
       <p><strong>Stays only on this device:</strong> contacts' phone, email and address, prices and
         payments (including waitlist fees paid), Financials, contracts, receipts, the rest of each
         application's answers, and your private notes.</p>
-      <p class="muted">To keep a copy of those too, download a file backup now and then from
-        <a href="import-export.html">Import / Export</a>.</p>
+      <p class="muted">${isVaultOffered()
+        ? 'Next, you can also back those up <strong>encrypted</strong>, so only you can open them. Or download a file backup now and then from <a href="import-export.html">Import / Export</a>.'
+        : 'To keep a copy of those too, download a file backup now and then from <a href="import-export.html">Import / Export</a>.'}</p>
       <p class="field-hint">Backups run automatically after you make changes. The last 30 days are kept,
         so you can roll back to an earlier day.</p>
       <div class="form-actions">
@@ -299,7 +323,12 @@ export async function turnOnFlow() {
     if (!account) return false;
   }
   if (!(await whatGetsBackedUpModal())) return false;
-  await pushWithProgress((onProgress) => enableBackup({ onProgress }));
+  const result = await pushWithProgress((onProgress) => enableBackup({ onProgress }));
+  // Private Vault Plan §2.1: offered after the first backup succeeds.
+  if (result?.status === 'pushed' && isVaultOffered() && getBackupStatus().vault !== 'on') {
+    const ui = await vaultUI();
+    if ((await ui.refreshVaultState()) === 'off') await ui.turnOnVaultFlow({ offer: true });
+  }
   return true;
 }
 
@@ -319,6 +348,16 @@ export async function handlePushResult(result) {
     case 'shrink':
       await shrinkDialog(result);
       return;
+    case 'vault_locked': {
+      const unlocked = await (await vaultUI()).unlockModal({
+        merge: true,
+        intro: result.stale
+          ? 'Private backup was turned off and on again on another device, so it has a new recovery code. Unlock it here to keep backing up.'
+          : 'This account backs up private info, encrypted. Unlock it on this device to keep backing up.'
+      });
+      if (unlocked) await pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress }));
+      return;
+    }
     case 'auth': {
       const account = await signInModal({ title: 'Sign in again', intro: 'Your cloud sign-in has expired. Backup is paused until you sign in again. Your records on this device are untouched.' });
       if (account) await pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress }));
@@ -400,6 +439,7 @@ async function movedToProDialog(result) {
 }
 
 async function restoreAndTakeOverFlow() {
+  if (isVaultOffered()) await (await vaultUI()).unlockBeforeRestore();
   const pg = progressModal('Restoring the backup…');
   try {
     const { restored, push } = await restoreLatestAndTakeOver({
@@ -483,7 +523,9 @@ async function restoreAsOfFlow() {
     message: [
       updated ? `${updated} record(s) will be rolled back to how they were then.` : '',
       inserted ? `${inserted} record(s) missing here will be added back.` : '',
-      'Their private details (phone numbers, prices, notes…) keep their current values: those aren\'t in cloud backup, so they can\'t roll back.',
+      chosen.vaultKeyId && getBackupStatus().vault === 'on'
+        ? 'Their private details (phone numbers, prices, notes…) roll back too, from the encrypted backup.'
+        : 'Their private details (phone numbers, prices, notes…) keep their current values: those aren\'t in this backup, so they can\'t roll back.',
       'Records added since then stay. Archive them by hand if you don\'t want them.'
     ].filter(Boolean).join('\n\n'),
     confirmLabel: 'Roll back',
@@ -512,11 +554,17 @@ export function mountCloudBackupCard(el) {
   const render = () => renderCard(el);
   window.addEventListener(CLOUD_BACKUP_EVENT, render);
   render();
+  // Learn the vault's state from the server once per visit (another device may
+  // have turned it on or off); refreshVaultState re-renders through the event.
+  if (isVaultOffered() && currentAccount()?.signedIn) vaultUI().then((ui) => ui.refreshVaultState()).catch(() => {});
   // Keep "Backed up 4 minutes ago" honest without re-rendering the card (which
   // would close an open <details> or drop focus).
   setInterval(() => {
+    const status = getBackupStatus();
     const line = el.querySelector('[data-status-line]');
-    if (line) line.textContent = statusLine(getBackupStatus());
+    if (line) line.textContent = line.dataset.tail ? asTail(statusLine(status)) : statusLine(status);
+    const priv = el.querySelector('[data-private-line]');
+    if (priv) priv.textContent = privateLine(status, getLastBackupDate());
   }, MINUTE);
 }
 
@@ -532,7 +580,7 @@ function renderCard(el) {
       <p class="muted">Back up your kennel records automatically, free. If this device is lost or replaced,
         sign in on the new one with your email and everything comes back.</p>
       <p class="field-hint">Contacts' phone, email and address, prices, Financials, contracts and your private notes
-        stay on this device only. Keep a file backup for those.</p>
+        stay on this device${isVaultOffered() ? ', unless you also turn on <strong>private backup</strong>, which encrypts them so only you can open them' : '. Keep a file backup for those'}.</p>
       <div class="form-actions"><button class="btn btn-primary" data-act="on">☁️ Turn on cloud backup</button>
         <button class="btn" data-act="restore-new">I already have a backup: sign in and restore</button></div>`;
   } else if (!account.signedIn) {
@@ -543,9 +591,16 @@ function renderCard(el) {
         <button class="btn" data-act="signout">Sign out</button></div>`;
   } else {
     const line = statusLine(status);
+    const priv = privateLine(status, getLastBackupDate());
+    // Two lines once the vault is offered (or this program has one); Phase 1's single line otherwise.
+    const twoLines = isVaultOffered() || status.vault === 'on' || status.vault === 'locked';
+    const privAction = status.vault === 'locked' && status.lastError?.code !== 'vault_locked' // the pause line has its own Unlock
+      ? '<button class="btn btn-sm" data-act="vault-unlock" style="margin-left:6px;">Unlock</button>'
+      : status.vault === 'off' && status.enabled ? '<button class="btn btn-sm" data-act="vault-on" style="margin-left:6px;">Turn on</button>' : '';
     main = `
-      <p><strong data-status-line>${esc(line)}</strong>${status.enabled && status.dirty && !paused ? ' <span class="faint">Recent changes will back up shortly.</span>' : ''}</p>
-      ${paused ? `<div class="inline-warn">Backup is paused: ${esc(paused)} <button class="btn btn-sm" data-act="resolve" style="margin-left:6px;">Resolve…</button></div>` : ''}
+      <p${twoLines ? ' style="margin-bottom:4px;"' : ''}>${twoLines ? 'Kennel records: ' : ''}<strong data-status-line data-tail="${twoLines ? '1' : ''}">${esc(twoLines ? asTail(line) : line)}</strong>${status.enabled && status.dirty && !paused ? ' <span class="faint">Recent changes will back up shortly.</span>' : ''}</p>
+      ${twoLines ? `<p>Private info: <strong data-private-line>${esc(priv)}</strong>${privAction}</p>` : ''}
+      ${paused ? `<div class="inline-warn">Backup is paused: ${esc(paused)} <button class="btn btn-sm" data-act="resolve" style="margin-left:6px;">${status.lastError?.code === 'vault_locked' ? 'Unlock…' : 'Resolve…'}</button></div>` : ''}
       <p class="field-hint">Signed in as ${esc(account.email || '')}${account.deviceLabel ? ` · this device: ${esc(account.deviceLabel)}` : ''}</p>
       <div class="form-actions">
         ${status.enabled
@@ -555,6 +610,13 @@ function renderCard(el) {
           : `<button class="btn btn-primary" data-act="on">Turn on backup on this device</button>
              <button class="btn" data-act="asof">Restore as of…</button>`}
       </div>
+      ${status.vault === 'on' ? `<details style="margin-top:10px;"><summary class="muted">Private backup</summary>
+        <div class="form-actions">
+          <button class="btn btn-sm" data-act="vault-approve">Unlock another device…</button>
+          <button class="btn btn-sm" data-act="vault-code">New recovery code…</button>
+          <button class="btn btn-sm btn-danger" data-act="vault-off">Turn off private backup…</button>
+        </div>
+      </details>` : ''}
       <details style="margin-top:10px;"><summary class="muted">Account</summary>
         <div class="form-actions">
           <button class="btn btn-sm" data-act="devices">Your devices…</button>
@@ -568,8 +630,10 @@ function renderCard(el) {
   el.innerHTML = `
     <h2 style="margin-top:0;">☁️ Cloud backup</h2>
     ${restoredAt ? `<div class="inline-warn" style="margin-bottom:10px;">Restored from cloud backup ${esc(relativeTime(restoredAt))}.
-      Private details (contacts' phone, email and address, prices, notes) aren't in cloud backup, so they're blank on
-      this device. If you have a file backup, restore it with <strong>Merge</strong> above to bring them back.
+      Private details (contacts' phone, email and address, prices, notes) are blank on this device.
+      ${status.vault === 'locked'
+        ? 'Unlock your private info to bring them back.'
+        : 'If you have a file backup, restore it with <strong>Merge</strong> above to bring them back.'}
       <button class="btn btn-sm" data-act="hide-restored" style="margin-left:6px;">Got it</button></div>` : ''}
     ${main}
     <div id="cloud-msg"></div>`;
@@ -587,7 +651,14 @@ function renderCard(el) {
     const acc = await signInModal({ title: 'Sign in again' });
     if (acc) await pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress }));
   });
-  act('resolve', () => pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress })));
+  act('resolve', () => (status.lastError?.code === 'vault_locked'
+    ? handlePushResult({ status: 'vault_locked', stale: !!status.lastError.stale })
+    : pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress }))));
+  act('vault-unlock', async () => { await (await vaultUI()).unlockModal({ merge: true }); });
+  act('vault-on', async () => { await (await vaultUI()).turnOnVaultFlow(); });
+  act('vault-approve', async () => { await (await vaultUI()).approveDevicesModal(); });
+  act('vault-code', async () => { await (await vaultUI()).newRecoveryCodeFlow(); });
+  act('vault-off', async () => { await (await vaultUI()).turnOffVaultFlow(); });
   act('now', () => pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress })));
   act('asof', restoreAsOfFlow);
   act('off', async () => {
@@ -752,7 +823,7 @@ async function eraseDeviceFlow(d) {
 // account, so a stolen phone that is still signed in can't do them (plan
 // §2.5). Runs `fn` as is; on reauth_required, asks for a code and runs it
 // again with { email, code }. Resolves fn's result, or null on cancel.
-async function withFreshSignIn(fn, { purpose, confirmLabel }) {
+export async function withFreshSignIn(fn, { purpose, confirmLabel }) {
   try {
     return await fn({});
   } catch (e) {
@@ -828,6 +899,8 @@ export async function runSignInAndRestore({ fromCard = false } = {}) {
     intro: 'Sign in with the email you used for cloud backup. Your records come back on this device.'
   });
   if (!account) return false;
+  // Private Vault Plan §2.3: the unlock step, when the program has a vault.
+  if (isVaultOffered()) await (await vaultUI()).unlockBeforeRestore();
   const pg = progressModal('Restoring your records…');
   try {
     const { restored } = await restoreOnNewDevice({
@@ -839,10 +912,17 @@ export async function runSignInAndRestore({ fromCard = false } = {}) {
       return fromCard ? true : 'empty';
     }
     const n = Object.values(restored.summary).reduce((t, s) => t + (s.inserted || 0) + (s.updated || 0), 0);
+    const vault = restored.vault?.status;
+    const privateNote = vault === 'restored'
+      ? 'Your private info came back too.'
+      : vault === 'locked'
+        ? "Private details (contacts' phone, email and address, prices, notes) are blank until you unlock them: Import / Export → Cloud backup → Unlock. Backups from this device are paused until then."
+        : "Private details (contacts' phone, email and address, prices, notes) weren't in this backup. If you have a file backup, restore it from Import / Export with Merge to bring those back.";
+    const missing = (restored.missingFiles?.length || 0) + (restored.vault?.missingFiles?.length || 0);
     await alertModal({
       title: 'Your records are back',
-      message: `Restored ${n} record(s). Private details (contacts' phone, email and address, prices, notes) aren't in cloud backup. If you have a file backup, restore it from Import / Export with Merge to bring those back.`
-        + (restored.missingFiles?.length ? `\n\n${restored.missingFiles.length} document file(s) couldn't be downloaded yet.` : '')
+      message: `Restored ${n} record(s). ${privateNote}`
+        + (missing ? `\n\n${missing} document file(s) couldn't be downloaded yet.` : '')
     });
     return true;
   } catch (e) {
@@ -938,6 +1018,31 @@ async function renderServiceNotices() {
   }
 }
 
+// --- Record pages: private details blank after a restore (Private Vault Plan §2.3) -----
+// Phase 1 §2.3's per-record hint: after a cloud restore that didn't bring the
+// private tier back, the pages that hold private details say why they're blank,
+// and how to get them back (unlock, or a file backup). Gone once they're back
+// (an unlock clears cloudRestoredAt) or the user says "Got it" on the card.
+const PRIVATE_DETAIL_PAGES = new Set([
+  'contact.html', 'contacts.html', 'dog.html', 'sale.html', 'sales.html', 'contract.html', 'contracts.html',
+  'stud-service.html', 'litter.html', 'financials.html', 'waitlist-entry.html', 'documents.html'
+]);
+
+export function renderPrivateGapHint() {
+  const page = location.pathname.split('/').pop();
+  if (!PRIVATE_DETAIL_PAGES.has(page) || !getCloudRestoredAt()) return;
+  const main = document.querySelector('main');
+  if (!main || main.querySelector('.private-gap-hint')) return;
+  const locked = getBackupStatus().vault === 'locked';
+  const hint = document.createElement('div');
+  hint.className = 'inline-warn private-gap-hint';
+  hint.style.marginBottom = '12px';
+  hint.innerHTML = locked
+    ? 'Private details (phone, email, address, prices, notes) are blank on this device until you unlock them. <a href="import-export.html#cloud-backup">Unlock your private info</a>'
+    : 'Private details (phone, email, address, prices, notes) weren\'t in the cloud backup this device was restored from, so they\'re blank here. <a href="import-export.html">Restore a file backup</a> with Merge to bring them back.';
+  main.insertBefore(hint, main.firstChild);
+}
+
 // --- Reset App's question (plan §3.3) ------------------------------------------------------
 // The checkbox for the Reset App modal: '' when there's no cloud sign-in on
 // this device. Ticked by default, because a typed "erase" may mean the device is
@@ -965,5 +1070,6 @@ export async function bootCloud() {
   if (!isCloudAvailable()) return;
   startBackupScheduler();
   renderServiceNotices().catch(() => {});
+  try { renderPrivateGapHint(); } catch { /* a hint only */ }
   await maybeRunCloudOffer().catch(() => {});
 }

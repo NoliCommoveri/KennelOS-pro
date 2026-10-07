@@ -12,7 +12,9 @@
   <link rel="icon" href="assets/icons/favicon-32.png" sizes="32x32">
   <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
   <meta name="theme-color" content="#122138">
-  <script>location.replace('pages/today.html');</script>
+  <!-- Keeps the query and hash, so a link like /?cloud=staging (the cloud
+       test-server switch) still reaches the app. -->
+  <script>location.replace('pages/today.html' + location.search + location.hash);</script>
 </head>
 <body>
   <p style="font-family:system-ui,sans-serif; padding:24px;">

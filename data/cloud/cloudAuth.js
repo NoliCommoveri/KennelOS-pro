@@ -42,7 +42,8 @@ export async function verifySignIn(email, code, { deviceLabel = defaultDeviceLab
   if (previous && previous.programId && previous.programId !== res.programId) {
     // A different account on this device: this device's backup position was
     // for the other program, so forget it.
-    updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null });
+    // (The vault key here is tagged with the other program, so it's never used.)
+    updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null, vault: null });
   }
   return setCloudSession({ token: res.token, email: cleanEmail, programId: res.programId, deviceId: res.deviceId, deviceLabel: deviceLabel || null });
 }

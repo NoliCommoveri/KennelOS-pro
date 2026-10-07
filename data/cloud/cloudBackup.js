@@ -8,12 +8,17 @@
 //   - Restoring: listSnapshots, downloadSnapshot, previewRestore and
 //     restoreSnapshot, through importExport's 'cloud-merge' mode (§4.3).
 //   - The scheduler (§2.2): startBackupScheduler().
+//   - The private vault (Private Vault Plan §3.4, §4): with the vault on and
+//     this device unlocked, every push also uploads the encrypted vault part
+//     (buildVaultPayload, sealVaultPayload), and a restore merges it. On but
+//     locked here, pushes pause ('vault_locked') until the device is unlocked
+//     (cloudVault.js).
 // Every entry point checks isCloudAvailable() first, so `cloudUrl: null` never
 // makes a request.
 //
 // Data layer: reads through importExport.exportAll, never db directly. Network
 // only through cloudApi.
-import { exportAll, restoreBackup, planCloudMerge } from '../importExport.js';
+import { exportAll, restoreBackup, planCloudMerge, VAULT_PAYLOAD_FORMAT } from '../importExport.js';
 import {
   getSampleDataManifest, getCloudDirtyAt, getCloudDirtySince, clearCloudDirty,
   getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT,
@@ -24,6 +29,8 @@ import { isCloudAvailable } from './cloudConfig.js';
 import * as api from './cloudApi.js';
 import { currentAccount, sessionToken, markSessionExpired, signOut } from './cloudAuth.js';
 import { checkIn, cacheNotices, NOTICE_CACHE } from './cloudDevices.js';
+import { getVaultKey, clearVaultKey } from './vaultKeyStore.js';
+import { encryptPayload, decryptPayload, encryptFile, decryptFile, readVaultHeader } from './vaultCrypto.js';
 import {
   filterCollectionsForCloud, assertCloudCollections, REGISTRY_TABLES
 } from '../syncRegistry.js';
@@ -47,8 +54,11 @@ export const SNAPSHOT_FORMAT = 1;
 //   deviceId — the server-issued device id from the cloud session;
 //   manifest — the sample-data manifest (defaults to the stored one);
 //   now      — the snapshot time.
-export async function buildCloudSnapshot({ deviceId = null, manifest = getSampleDataManifest(), now = new Date() } = {}) {
-  const backup = await exportAll({ encodeBlobs: false });
+//   backup   — an exportAll({ encodeBlobs: false }) result to reuse (a push
+//              builds the vault payload from the same read);
+//   shaCache — Map(file id → sha256), shared with buildVaultPayload.
+export async function buildCloudSnapshot({ deviceId = null, manifest = getSampleDataManifest(), now = new Date(), backup = null, shaCache = new Map() } = {}) {
+  backup = backup || await exportAll({ encodeBlobs: false });
   const real = dropSampleRows(backup.collections, manifest);
   const collections = filterCollectionsForCloud(real);
 
@@ -62,7 +72,7 @@ export async function buildCloudSnapshot({ deviceId = null, manifest = getSample
     for (const row of collections.files) {
       const blob = sourceById.get(row.id)?.blob;
       if (!(blob instanceof Blob)) continue; // no bytes on this device: nothing to back up
-      const sha256 = await sha256Hex(blob);
+      const sha256 = await cachedSha(shaCache, row.id, blob);
       kept.push({ ...row, sha256 });
       if (!bySha.has(sha256)) {
         bySha.set(sha256, { sha256, size: blob.size, mime: blob.type || row.mime || 'application/octet-stream', blob });
@@ -84,6 +94,87 @@ export async function buildCloudSnapshot({ deviceId = null, manifest = getSample
     collections
   };
   return { envelope, files };
+}
+
+async function cachedSha(cache, id, blob) {
+  if (!cache.has(id)) cache.set(id, await sha256Hex(blob));
+  return cache.get(id);
+}
+
+// --- The vault payload (Private Vault Plan §4.1, §4.2) ----------------------
+// The COMPLETE rows (exportAll, sample rows dropped), not the private
+// complement: nothing to keep in step with syncRegistry, and restore is a row
+// merge. Built in two halves so the "unchanged" check never encrypts anything:
+//   buildVaultPayload — the plaintext envelope. Each `files` row has its blob
+//     replaced by `vault_file: { plain_sha256 }`; the blobs come back beside it.
+//   sealVaultPayload — fills in each file's upload id and encrypts: a file the
+//     cloud tier already uploads (a pedigree, a health test) is referenced by
+//     its plain sha256 and not stored twice; every other file (contracts,
+//     "other" documents, receipts) is encrypted deterministically (vaultCrypto
+//     encryptFile), so an unchanged one has the same /files id every push.
+//     Then the envelope is gzipped and encrypted.
+// Returns { envelope, blobs: Map(file id → Blob) }.
+export async function buildVaultPayload({ keyId, manifest = getSampleDataManifest(), now = new Date(), backup = null, shaCache = new Map() } = {}) {
+  backup = backup || await exportAll({ encodeBlobs: false });
+  const collections = dropSampleRows(backup.collections, manifest);
+  const blobs = new Map();
+  if (collections.files) {
+    const rows = [];
+    for (const row of collections.files) {
+      const { blob, ...rest } = row;
+      if (!(blob instanceof Blob)) { rows.push(rest); continue; } // no bytes here: the row alone
+      blobs.set(row.id, blob);
+      rows.push({ ...rest, vault_file: { plain_sha256: await cachedSha(shaCache, row.id, blob) } });
+    }
+    collections.files = rows;
+  }
+  const envelope = {
+    vault_format: VAULT_PAYLOAD_FORMAT,
+    key_id: keyId,
+    schema_version: backup.schema_version,
+    created_at: now.toISOString(),
+    collections
+  };
+  return { envelope, blobs };
+}
+
+// → { bytes (the encrypted vault part), files: [{ sha256, size, mime, blob }] to
+// upload (encrypted, deduped), fileIds: every /files id the vault references }.
+// `cloudShas` is the set of sha256s the cloud tier already uploads.
+export async function sealVaultPayload({ envelope, blobs }, vault, cloudShas = new Set()) {
+  const files = new Map();
+  const fileIds = new Set();
+  const collections = { ...envelope.collections };
+  if (collections.files) {
+    const rows = [];
+    for (const row of collections.files) {
+      const plain = row.vault_file?.plain_sha256;
+      if (!plain) { rows.push(row); continue; }
+      if (cloudShas.has(plain)) {
+        rows.push({ ...row, vault_file: { sha256: plain, plain_sha256: plain, encrypted: false } });
+        fileIds.add(plain);
+        continue;
+      }
+      const blob = blobs.get(row.id);
+      const sealed = await encryptFile(vault.key, vault.keyId, new Uint8Array(await blob.arrayBuffer()));
+      rows.push({ ...row, vault_file: { sha256: sealed.sha256, plain_sha256: plain, encrypted: true } });
+      fileIds.add(sealed.sha256);
+      if (!files.has(sealed.sha256)) {
+        files.set(sealed.sha256, { sha256: sealed.sha256, size: sealed.bytes.length, mime: 'application/octet-stream', blob: new Blob([sealed.bytes], { type: 'application/octet-stream' }) });
+      }
+    }
+    collections.files = rows;
+  }
+  const gz = await gzipJson({ ...envelope, collections });
+  const bytes = await encryptPayload(vault.key, vault.keyId, new Uint8Array(await gz.arrayBuffer()));
+  return { bytes, files: [...files.values()], fileIds };
+}
+
+// The vault part back to its plaintext envelope. Throws VaultLockedError when
+// `vault` (this device's key) doesn't open it.
+export async function openVaultPayload(bytes, vault) {
+  const plain = await decryptPayload(vault.key, vault.keyId, bytes);
+  return gunzipJson(new Blob([plain]));
 }
 
 // Rows whose id is in the manifest's list for their table are sample data.
@@ -162,7 +253,12 @@ export function checkShrink(previousCounts, nextCounts) {
 // scheduler doesn't retry them every five minutes; a push the user starts
 // (force) goes ahead.
 
-const BLOCKING = new Set(['conflict', 'shrink', 'auth']);
+//   'vault_locked' the program has a private vault and this device can't open
+//                 it (restored with "Not now", or the vault was re-keyed on
+//                 another device). Pushing without the vault part would let
+//                 retention forget the last good one, so pushes pause until
+//                 the device is unlocked (Private Vault Plan §3.4).
+const BLOCKING = new Set(['conflict', 'shrink', 'auth', 'vault_locked']);
 const LOCK_NAME = 'kennelos-cloud-push';
 
 export function isBackupBlocked(state = getCloudBackupState()) {
@@ -181,8 +277,14 @@ function exclusive(fn) {
   return next;
 }
 
-async function contentHash(collections) {
-  return sha256Hex(new Blob([JSON.stringify(collections)]));
+// With the vault unlocked the hash covers the vault's plaintext rows too (with
+// each file's plain sha256), so a private-only edit pushes (§4.3). Without it,
+// the cloud tier alone, exactly as before the vault existed.
+async function contentHash(collections, vaultEnvelope = null) {
+  const subject = vaultEnvelope
+    ? { cloud: collections, vault: vaultEnvelope.collections, keyId: vaultEnvelope.key_id }
+    : collections;
+  return sha256Hex(new Blob([JSON.stringify(subject)]));
 }
 
 function fail(status, error, extra = {}) {
@@ -210,7 +312,7 @@ export function pushIfDirty({ force = false, allowShrink = false, onProgress = n
   });
 }
 
-async function pushNow({ force, allowShrink, onProgress }) {
+async function pushNow({ force, allowShrink, onProgress, retried = false }) {
   const progress = (phase, done, total) => { try { onProgress?.({ phase, done, total }); } catch { /* UI only */ } };
   if (!isCloudAvailable()) return { status: 'skipped', reason: 'unavailable' };
   const state = getCloudBackupState();
@@ -224,17 +326,26 @@ async function pushNow({ force, allowShrink, onProgress }) {
   const account = currentAccount();
   updateCloudBackupState({ lastAttemptAt: new Date().toISOString() });
   try {
-    const { envelope, files } = await buildCloudSnapshot({ deviceId: account.deviceId });
+    const backup = await exportAll({ encodeBlobs: false });
+    const shaCache = new Map();
+    const { envelope, files: cloudFiles } = await buildCloudSnapshot({ deviceId: account.deviceId, backup, shaCache });
 
     const shrink = checkShrink(state.lastCounts, envelope.counts);
     if (!shrink.ok && !allowShrink) return fail('shrink', null, { shrink });
 
-    const hash = await contentHash(envelope.collections);
+    const vault = await getVaultKey(account.programId);
+    const vaultPlain = vault ? await buildVaultPayload({ keyId: vault.keyId, backup, shaCache }) : null;
+
+    const hash = await contentHash(envelope.collections, vaultPlain?.envelope);
     if (!force && state.lastSnapshotId && hash === state.lastContentHash) {
       clearCloudDirty(dirtyAt);
       updateCloudBackupState({ lastError: null });
       return { status: 'unchanged' };
     }
+
+    const sealed = vault ? await sealVaultPayload(vaultPlain, vault, new Set(cloudFiles.map((f) => f.sha256))) : null;
+    const files = [...cloudFiles, ...(sealed?.files || [])];
+    const fileIds = [...new Set([...cloudFiles.map((f) => f.sha256), ...(sealed?.fileIds || [])])];
 
     // Files first: the server refuses a snapshot that references a file it
     // doesn't have, and retention only spares files for a day (cloud/README).
@@ -248,8 +359,9 @@ async function pushNow({ force, allowShrink, onProgress }) {
       base_snapshot_id: state.lastSnapshotId || null,
       size: gz.size,
       counts: envelope.counts,
-      files: files.map((f) => f.sha256),
-      edition // named in a 409 to other devices, so Lite can recognise an upgrade to Pro
+      files: fileIds,
+      edition, // named in a 409 to other devices, so Lite can recognise an upgrade to Pro
+      ...(sealed ? { vault: { size: sealed.bytes.length, keyId: vault.keyId } } : {})
     };
     let created;
     try {
@@ -262,18 +374,52 @@ async function pushNow({ force, allowShrink, onProgress }) {
       for (const f of files) if (missing.has(f.sha256)) await api.putFile(token, f.sha256, f.blob, f.mime);
       created = await api.createSnapshot(token, description);
     }
+    // The vault part lands before the body, whose PUT commits (§6.1).
+    if (sealed) await api.uploadSnapshotVault(token, created.snapshotId, sealed.bytes);
     await api.uploadSnapshotBody(token, created.snapshotId, gz);
 
     const now = new Date().toISOString();
     updateCloudBackupState({
       lastPushedAt: now, lastSnapshotId: created.snapshotId, lastCounts: envelope.counts,
-      lastContentHash: hash, lastError: null
+      lastContentHash: hash, lastError: null,
+      vault: sealed ? 'on' : 'off', // the server took it, so it agrees
+      ...(sealed ? { vaultPushedAt: now } : {})
     });
     if (dirtyAt) clearCloudDirty(dirtyAt);
-    return { status: 'pushed', snapshotId: created.snapshotId, counts: envelope.counts };
+    return { status: 'pushed', snapshotId: created.snapshotId, counts: envelope.counts, vault: !!sealed };
   } catch (err) {
+    const vaultOutcome = await vaultRefusal(err);
+    if (vaultOutcome === 'retry' && !retried) return pushNow({ force: true, allowShrink, onProgress, retried: true });
+    if (vaultOutcome === 'locked') return fail('vault_locked', err, { stale: err.code === 'vault_key_stale' });
     return failFromError(err);
   }
+}
+
+// The server's vault refusals (Private Vault Plan §6.4), at the POST or at the
+// body PUT that commits:
+//   vault_required  — the program has a vault and this device sent no part:
+//                     it's locked here → 'locked'.
+//   vault_key_stale — the vault was turned off and on again elsewhere, so the
+//                     key here no longer opens it: forget it → 'locked'.
+//   no_vault        — the vault was turned off elsewhere: forget the key and
+//                     push again without it → 'retry'.
+async function vaultRefusal(err) {
+  if (!(err instanceof api.CloudError)) return null;
+  if (err.code === 'vault_required') {
+    updateCloudBackupState({ vault: 'locked' });
+    return 'locked';
+  }
+  if (err.code === 'vault_key_stale') {
+    await clearVaultKey();
+    updateCloudBackupState({ vault: 'locked' });
+    return 'locked';
+  }
+  if (err.code === 'no_vault') {
+    await clearVaultKey();
+    updateCloudBackupState({ vault: 'off' });
+    return 'retry';
+  }
+  return null;
 }
 
 // A Lite device whose program is now backed up from Pro: the owner upgraded
@@ -345,6 +491,11 @@ export function getBackupStatus() {
     lastAttemptAt: state.lastAttemptAt,
     lastError: state.lastError,
     movedToEdition: state.movedToEdition || null,
+    // The private vault as this device last saw it: 'on' (unlocked here, part
+    // of every push), 'locked' (on, but this device can't open it), 'off', or
+    // null (not known yet; cloudVault.vaultStatus() asks the server).
+    vault: state.vault || null,
+    vaultPushedAt: state.vaultPushedAt || null,
     paused: isBackupBlocked(state),
     dirty: !!getCloudDirtyAt()
   };
@@ -408,9 +559,15 @@ export async function listSnapshots() {
   return (await api.listSnapshots(requireToken())).snapshots || [];
 }
 
+// Remembers which snapshot each downloaded envelope came from, so
+// restoreSnapshot can fetch the same snapshot's vault part.
+const envelopeIds = new WeakMap();
+
 export async function downloadSnapshot(snapshotId) {
   if (!isCloudAvailable()) throw new api.CloudUnavailableError();
-  return gunzipJson(await api.getSnapshot(requireToken(), snapshotId));
+  const envelope = await gunzipJson(await api.getSnapshot(requireToken(), snapshotId));
+  if (envelope && typeof envelope === 'object') envelopeIds.set(envelope, snapshotId);
+  return envelope;
 }
 
 // The confirmation screen's numbers, without writing (plan §4.3).
@@ -421,11 +578,16 @@ export function previewRestore(envelope, { overwrite = false } = {}) {
 // overwrite: false — new device / takeover (newer wins).
 // overwrite: true  — "Restore as of…" (a deliberate rollback).
 // Missing files are fetched by sha256; `onProgress(done, total)` reports them.
+// For an envelope from downloadSnapshot, the same snapshot's vault part is
+// merged too when this device is unlocked (Private Vault Plan §4.4): the
+// result's `vault` is { status: 'restored', summary, missingFiles }, or
+// { status } 'none' (no vault part), 'locked' (one this device can't open yet),
+// or 'stale' (made under a key that has since been replaced).
 export async function restoreSnapshot(envelope, { overwrite = false, onProgress } = {}) {
   const token = requireToken();
   const total = (envelope.collections?.files || []).length;
   let done = 0;
-  return restoreBackup(envelope, 'cloud-merge', {
+  const result = await restoreBackup(envelope, 'cloud-merge', {
     overwrite,
     fetchFile: async (sha256) => {
       const blob = await api.getFile(token, sha256);
@@ -434,6 +596,43 @@ export async function restoreSnapshot(envelope, { overwrite = false, onProgress 
       return blob;
     }
   });
+  const snapshotId = envelopeIds.get(envelope);
+  return { ...result, vault: snapshotId ? await restoreSnapshotVault(snapshotId, { overwrite, onProgress }) : { status: 'none' } };
+}
+
+// The 'vault-merge' of one snapshot's vault part. Also how an unlock merges the
+// private tier in after a "Not now" restore (cloudVault.js).
+export async function restoreSnapshotVault(snapshotId, { overwrite = false, onProgress } = {}) {
+  const token = requireToken();
+  const vault = await getVaultKey(currentAccount()?.programId);
+  // Locked here: say so without downloading what can't be opened.
+  if (!vault) return { status: (await api.getVault(token)).enabled ? 'locked' : 'none' };
+  let bytes;
+  try {
+    bytes = new Uint8Array(await (await api.getSnapshotVault(token, snapshotId)).arrayBuffer());
+  } catch (err) {
+    if (err instanceof api.CloudRequestError && err.status === 404) return { status: 'none' };
+    throw err;
+  }
+  if (readVaultHeader(bytes)?.keyId !== vault.keyId) return { status: 'stale' };
+  const payload = await openVaultPayload(bytes, vault);
+  const total = (payload.collections?.files || []).length;
+  let done = 0;
+  const r = await restoreBackup(payload, 'vault-merge', {
+    overwrite,
+    fetchFile: async (vf, row) => {
+      const blob = await api.getFile(token, vf.sha256);
+      let out = blob;
+      if (vf.encrypted) {
+        const plain = await decryptFile(vault.key, vault.keyId, new Uint8Array(await blob.arrayBuffer()), { plainSha256: vf.plain_sha256 });
+        out = new Blob([plain], { type: row.mime || 'application/octet-stream' });
+      }
+      done++;
+      if (onProgress) onProgress(done, total);
+      return out;
+    }
+  });
+  return { status: 'restored', ...r };
 }
 
 // New phone (first-run "I already use KennelOS → sign in and restore", plan
@@ -445,7 +644,9 @@ export async function restoreOnNewDevice(opts = {}) {
   const result = await restoreLatestAndTakeOver(opts);
   markSampleDataCleared();
   if (result.restored) {
-    setCloudRestoredAt(new Date().toISOString());
+    // "Private details are blank here" (the card and record-page hint), unless
+    // the private vault came back too. An unlock later clears it (cloudVault).
+    setCloudRestoredAt(result.restored.vault?.status === 'restored' ? null : new Date().toISOString());
     if (!getMyKennelId()) {
       const own = (await exportAll({ encodeBlobs: false })).collections.kennels
         ?.find((k) => k.is_own_kennel && !k.is_archived);

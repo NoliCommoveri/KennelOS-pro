@@ -554,6 +554,9 @@ export function clearProLicense() {
 //                    (movedToEdition: 'pro' once a Lite device stopped backing
 //                    up because the program moved to Pro)
 //                    (lastCheckInAt: the last device check-in, plan §2.5)
+//                    (vault: 'on' | 'locked' | 'off' | null, and vaultPushedAt:
+//                    the private vault as this device last saw it, Private
+//                    Vault Plan §2.2; the key itself is in device_secrets)
 //   cloudDeviceId    this browser's id on the cloud account, minted here and sent
 //                    on every sign-in so signing in again doesn't make the
 //                    backing device a stranger. Separate from the license's
@@ -565,7 +568,7 @@ const CLOUD_DEVICE_ID_KEY = 'kennelOS.cloudDeviceId';
 const CLOUD_BACKUP_STATE_DEFAULTS = {
   enabled: false, lastPushedAt: null, lastAttemptAt: null, lastSnapshotId: null,
   lastCounts: null, lastContentHash: null, lastError: null, movedToEdition: null,
-  lastCheckInAt: null
+  lastCheckInAt: null, vault: null, vaultPushedAt: null
 };
 
 function readJsonKey(key) {

@@ -133,8 +133,23 @@ db.version(1).stores({
   breed_feeding_schedules: 'id, breed, is_archived',
   waitlist_entries:  'id, kennel_id, contact_id, status, waitlist_program_id, *listen_sire_ids, *listen_dam_ids, placed_sale_id, is_archived',
   waitlist_offers:   'id, entry_id, litter_id, kennel_id, chosen_dog_id, sale_id, outcome, is_archived',
-  waitlist_programs: 'id, kennel_id, is_archived'
+  waitlist_programs: 'id, kennel_id, is_archived',
+  device_secrets:    'id'
 });
+
+// --- Device-only tables ---------------------------------------------------
+// `device_secrets` holds this device's unlocked private-vault key as a
+// CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js is its only
+// reader/writer). It is NOT kennel data: it is never in exportAll, the JSON/
+// Dropbox backups, the cloud snapshot, a file restore or the sample manifest,
+// and it has no syncRegistry entry. Reset App and remote erase still clear it
+// (appReset.js clears every table). Code that means "the kennel's records"
+// iterates dataTables(), not db.tables.
+export const DEVICE_ONLY_TABLES = Object.freeze(['device_secrets']);
+
+export function dataTables() {
+  return db.tables.filter((t) => !DEVICE_ONLY_TABLES.includes(t.name));
+}
 
 // --- First-run storage durability ----------------------------------------
 // Ask the browser to keep this origin's data from being evicted under storage
@@ -151,8 +166,9 @@ export async function requestPersistentStorage() {
 }
 
 // Convenience: the list of table names that actually exist in the current schema
-// version. referenceRegistry / import-export use this so stage-aware code never
-// probes a table that doesn't exist yet.
+// version, device-only tables included (Reset App clears them too).
+// referenceRegistry uses this so stage-aware code never probes a table that
+// doesn't exist yet.
 export function existingTableNames() {
   return db.tables.map((t) => t.name);
 }
