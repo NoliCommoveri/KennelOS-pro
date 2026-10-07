@@ -81,12 +81,14 @@ export async function signOut() {
   updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null });
 }
 
-// "Sign out other devices". Returns how many sessions were revoked.
-export async function signOutOtherDevices() {
+// "Sign out other devices". Returns how many sessions were revoked. Throws
+// CloudRequestError 'reauth_required' when this sign-in is more than 15
+// minutes old: send a code (startSignIn) and pass { email, code } (plan §2.5).
+export async function signOutOtherDevices(reauth = {}) {
   requireCloud();
   const token = sessionToken();
   if (!token) throw new api.CloudAuthError({ status: 401, code: 'unauthorized' });
-  return (await api.signOutOthers(token)).revoked ?? 0;
+  return (await api.signOutOthers(token, reauth)).revoked ?? 0;
 }
 
 // A readable default for the device label ("iPhone", "Mac", …). The UI lets the

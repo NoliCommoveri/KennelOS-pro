@@ -623,6 +623,9 @@ table.data tr.row-detail .dl-meta { margin: 0; }
   overflow-y: auto;
   z-index: 100;
 }
+/* A modal opened from the Pro license wall ("Lost a device? Free its slot"):
+   appended after the wall, so it must sit above it. */
+.license-wall-overlay ~ .modal-overlay { z-index: 11001; }
 .modal {
   background: var(--surface);
   border-radius: var(--radius);

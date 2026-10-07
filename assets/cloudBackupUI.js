@@ -10,9 +10,11 @@
 //   renderTodayCloudNudge(el)   Today: "turn it on" while off, or "paused"
 //   runSignInAndRestore()       first-run "I already use KennelOS"
 //   resetSignOutFieldHtml() / signOutAfterResetIfChecked()   Reset App's question
+//   devicesModal()              "Your devices": erase a lost one, free its Pro license
+//   openDevicesFromLicenseWall() the Pro activation wall's "Lost a device?" link
 //
 // Layering: talks to data/cloud/* only (never cloudApi's fetch directly, never db).
-import { esc, confirmModal, alertModal, selectModal } from './ui.js';
+import { esc, confirmModal, alertModal, selectModal, promptModal } from './ui.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import {
   startSignIn, verifySignIn, currentAccount, signOut, signOutOtherDevices, defaultDeviceLabel
@@ -22,8 +24,10 @@ import {
   replaceCloudWithThisDevice, listSnapshots, downloadSnapshot, previewRestore, restoreSnapshot,
   restoreOnNewDevice, deleteCloudData, startBackupScheduler, getServiceNotices, CLOUD_BACKUP_EVENT
 } from '../data/cloud/cloudBackup.js';
+import { listDevices, requestErase, cancelErase, releaseDeviceLicense } from '../data/cloud/cloudDevices.js';
 import { CloudOfflineError, CloudRequestError, CloudAuthError } from '../data/cloud/cloudApi.js';
-import { isCloudOfferPending, setCloudOfferPending, getCloudRestoredAt, setCloudRestoredAt } from '../data/settings.js';
+import { isCloudOfferPending, setCloudOfferPending, getCloudRestoredAt, setCloudRestoredAt, getProLicense } from '../data/settings.js';
+import { isLicenseGated } from '../data/license.js';
 import { hasSampleData } from '../data/sampleData.js';
 import { getMyKennelName, shouldRequireKennelSetup } from '../data/kennelSetup.js';
 import { dismiss, dismissedAt, undismiss } from '../data/nudgeState.js';
@@ -93,6 +97,9 @@ function errorText(e) {
       case 'rate_limited': return 'Too many codes requested. Wait an hour, then try again.';
       case 'email_unavailable': return "Sign-in isn't available right now. Try again later.";
       case 'email_failed': return "We couldn't send the email. Try again in a minute.";
+      case 'this_device': return "That's this device. Use Reset App to erase it.";
+      case 'not_pending': return 'That device has already erased itself, so there is nothing to cancel.';
+      case 'not_found': return "That device isn't on this account any more.";
       default: return `Cloud backup refused that (${e.code || e.status}).`;
     }
   }
@@ -550,6 +557,7 @@ function renderCard(el) {
       </div>
       <details style="margin-top:10px;"><summary class="muted">Account</summary>
         <div class="form-actions">
+          <button class="btn btn-sm" data-act="devices">Your devices…</button>
           <button class="btn btn-sm" data-act="others">Sign out other devices</button>
           <button class="btn btn-sm" data-act="signout">Sign out</button>
           <button class="btn btn-sm btn-danger" data-act="delete">Delete my cloud data…</button>
@@ -585,9 +593,11 @@ function renderCard(el) {
   act('off', async () => {
     if (await confirmModal({ title: 'Turn off backup on this device?', message: 'Changes on this device stop backing up. The cloud copy stays, and you can turn it back on any time.', confirmLabel: 'Turn off' })) disableBackup();
   });
+  act('devices', () => devicesModal());
   act('others', async () => {
-    if (!(await confirmModal({ title: 'Sign out other devices?', message: 'Every other device signed in to this account is signed out. They keep their records but stop backing up until they sign in again.', confirmLabel: 'Sign them out' }))) return;
-    const n = await signOutOtherDevices();
+    if (!(await confirmModal({ title: 'Sign out other devices?', message: 'Every other device signed in to this account is signed out. They keep their records but stop backing up until they sign in again.\n\nLost a device? Use Your devices → Erase instead, which also deletes the records on it.', confirmLabel: 'Sign them out' }))) return;
+    const n = await withFreshSignIn((reauth) => signOutOtherDevices(reauth), { purpose: 'sign out your other devices', confirmLabel: 'Sign them out' });
+    if (n === null) return;
     await alertModal({ title: 'Done', message: n ? `Signed out ${n} other device(s).` : 'No other devices were signed in.' });
   });
   act('signout', async () => {
@@ -601,10 +611,210 @@ function renderCard(el) {
       confirmLabel: 'Delete cloud data'
     });
     if (!ok) return;
-    await deleteCloudData();
+    if ((await withFreshSignIn((reauth) => deleteCloudData(reauth).then(() => true), { purpose: 'delete your cloud data', confirmLabel: 'Delete cloud data' })) === null) return;
     await alertModal({ title: 'Cloud data deleted', message: 'Your cloud backups and account are gone. Everything on this device is still here.' });
   });
   act('hide-restored', () => setCloudRestoredAt(null));
+}
+
+// --- Your devices: a lost one (plan §2.5) --------------------------------------------
+// Erase: that device deletes every record on it the next time it opens KennelOS
+// online. Free its Pro license: this browser calls Lemon Squeezy with the key
+// and that device's activation id, so its slot comes back now.
+function deviceStatusText(d) {
+  if (d.erase?.confirmedAt) return `Erased ${relativeTime(d.erase.confirmedAt)}.`;
+  if (d.erase) return `Erase requested ${snapshotLabel(d.erase.requestedAt)}. It happens the next time that device opens KennelOS with an internet connection.`;
+  const seen = d.lastSeenAt ? `Last used ${relativeTime(d.lastSeenAt)}` : '';
+  if (d.status === 'signed-in') return `${seen || 'Signed in'}.`;
+  if (d.status === 'signed-out-here') return `Signed out on that device${seen ? ` · ${seen.toLowerCase()}` : ''}. It can't be erased from here.`;
+  return `Signed out${seen ? ` · ${seen.toLowerCase()}` : ''}.`;
+}
+
+export function devicesModal({ key = '' } = {}) {
+  return new Promise((resolve) => {
+    const overlay = openModal('<div id="dv-body"><p class="muted">Loading your devices…</p></div>', { width: 560 });
+    const body = overlay.querySelector('#dv-body');
+    const done = () => { overlay.remove(); resolve(); };
+    const proHere = isLicenseGated();
+    let licenseKey = key;
+
+    const render = async () => {
+      let devices;
+      try {
+        devices = await listDevices();
+      } catch (e) {
+        body.innerHTML = `<h2 style="margin-top:0;">Your devices</h2><div class="inline-error">${esc(errorText(e))}</div>
+          <div class="form-actions"><button class="btn" id="dv-close">Close</button></div>`;
+        body.querySelector('#dv-close').addEventListener('click', done);
+        return;
+      }
+      const rows = devices.map((d) => {
+        const tags = [d.thisDevice ? 'this device' : '', d.backing ? 'backs up your records' : ''].filter(Boolean)
+          .map((t) => `<span class="faint">· ${esc(t)}</span>`).join(' ');
+        const canErase = !d.thisDevice && !d.erase && d.status !== 'signed-out-here';
+        const canCancel = !!d.erase && !d.erase.confirmedAt;
+        const canFree = proHere && !d.thisDevice && !!d.licenseInstanceId;
+        const actions = [
+          canErase ? `<button class="btn btn-sm btn-danger" data-erase="${esc(d.id)}">Erase…</button>` : '',
+          canFree ? `<button class="btn btn-sm" data-free="${esc(d.id)}">Free its Pro license</button>` : '',
+          canCancel ? `<button class="btn btn-sm" data-cancel="${esc(d.id)}">Found it: cancel the erase</button>` : ''
+        ].join('');
+        return `<li style="padding:10px 0;border-top:1px solid var(--border);">
+            <strong>${esc(d.label || 'Unnamed device')}</strong> ${tags}
+            <div class="field-hint">${esc(deviceStatusText(d))}</div>
+            ${actions ? `<div class="form-actions" style="margin-top:6px;">${actions}</div>` : ''}
+          </li>`;
+      }).join('');
+      body.innerHTML = `
+        <h2 style="margin-top:0;">Your devices</h2>
+        <p class="muted">Every device signed in to this cloud account. Lost one? <strong>Erase</strong> it: the next time it
+          opens KennelOS with an internet connection, every record on it is deleted.</p>
+        ${proHere ? '<p class="field-hint"><strong>Free its Pro license</strong> gives that device\'s slot back, so you can activate Pro on another one.</p>' : ''}
+        <ul style="list-style:none;padding:0;margin:0;">${rows || '<li class="muted">No devices.</li>'}</ul>
+        <div id="dv-msg"></div>
+        <div class="form-actions"><button class="btn" id="dv-close">Close</button></div>`;
+      body.querySelector('#dv-close').addEventListener('click', done);
+
+      const byId = new Map(devices.map((d) => [d.id, d]));
+      const wire = (attr, fn) => body.querySelectorAll(`[${attr}]`).forEach((btn) => btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const msg = await fn(byId.get(btn.getAttribute(attr)));
+          await render();
+          if (msg) body.querySelector('#dv-msg').innerHTML = `<div class="inline-warn">${esc(msg)}</div>`;
+        } catch (e) {
+          await alertModal({ title: "That didn't work", message: errorText(e) });
+          if (btn.isConnected) btn.disabled = false;
+        }
+      }));
+      wire('data-erase', async (d) => {
+        if (!(await eraseDeviceFlow(d))) return null;
+        let msg = `${d.label || 'That device'} will be erased the next time it opens KennelOS online.`;
+        if (proHere && d.licenseInstanceId) {
+          const freed = await freeLicenseFlow(d);
+          if (freed === true) msg += ' Its Pro license is free.';
+          else if (freed === false) msg += " Its Pro license couldn't be freed yet; try Free its Pro license again.";
+        }
+        return msg;
+      });
+      wire('data-free', async (d) => {
+        const freed = await freeLicenseFlow(d);
+        if (freed === null) return null;
+        return freed ? `${d.label || 'That device'}'s Pro license is free. You can activate Pro on another device now.`
+          : "Lemon Squeezy didn't release it. Check the key and your connection. If you've already freed it, there's nothing more to do.";
+      });
+      wire('data-cancel', async (d) => {
+        await cancelErase(d.id);
+        return `${d.label || 'That device'} won't be erased. It stays signed out: sign in on it again to keep backing up.`;
+      });
+    };
+
+    // The key: the one this device is activated with, else the one typed on
+    // the activation wall, else ask.
+    async function freeLicenseFlow(d) {
+      let k = getProLicense()?.key || licenseKey;
+      if (!k) {
+        k = await promptModal({
+          title: 'Your Pro license key',
+          message: 'Enter the license key from your purchase confirmation. It goes to Lemon Squeezy only, never to cloud backup.',
+          label: 'License key',
+          placeholder: 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
+          confirmLabel: 'Free the license'
+        });
+        if (!k) return null;
+        licenseKey = k;
+      }
+      return releaseDeviceLicense(d, k);
+    }
+
+    render();
+  });
+}
+
+async function eraseDeviceFlow(d) {
+  const name = d.label || 'that device';
+  const ok = await typedConfirm({
+    title: `Erase ${name}?`,
+    message: `The next time ${name} opens KennelOS with an internet connection, every record on it is deleted and it's signed out.`
+      + `\n\nUntil then nothing happens to it. If it stays offline or never opens KennelOS again, its records stay on it. Your phone's own Find My (iPhone) or Find My Device (Android) can erase the whole phone.`
+      + `\n\nPrivate details (contacts' phone, email and address, prices, Financials, contracts, private notes) aren't in cloud backup. If ${name} has the only copy of them, erasing it loses them, unless you have a file backup that includes them.`
+      + `\n\nYour cloud backup isn't touched.`,
+    phrase: 'ERASE',
+    confirmLabel: `Erase ${name}`
+  });
+  if (!ok) return false;
+  return withFreshSignIn((reauth) => requestErase(d.id, reauth), { purpose: 'erase the device', confirmLabel: 'Erase it' })
+    .then((r) => r !== null);
+}
+
+// Erasing a device, signing out the others and deleting the cloud data need a
+// fresh sign-in: one in the last 15 minutes, or a code just emailed to the
+// account, so a stolen phone that is still signed in can't do them (plan
+// §2.5). Runs `fn` as is; on reauth_required, asks for a code and runs it
+// again with { email, code }. Resolves fn's result, or null on cancel.
+async function withFreshSignIn(fn, { purpose, confirmLabel }) {
+  try {
+    return await fn({});
+  } catch (e) {
+    if (!(e instanceof CloudRequestError && e.code === 'reauth_required')) throw e;
+  }
+  const reauth = await confirmCodeModal({ purpose, confirmLabel });
+  if (!reauth) return null;
+  return fn(reauth);
+}
+
+// Resolves { email, code }, or null on cancel.
+function confirmCodeModal({ purpose, confirmLabel }) {
+  const email = currentAccount()?.email || '';
+  return new Promise((resolve) => {
+    const overlay = openModal('<div id="cc-body"></div>');
+    const body = overlay.querySelector('#cc-body');
+    const done = (v) => { overlay.remove(); resolve(v); };
+    const show = (errorMsg = '', note = '') => {
+      body.innerHTML = `
+        <h2 style="margin-top:0;">Confirm it's you</h2>
+        <p class="muted">We sent a 6-digit code to <strong>${esc(email)}</strong>. Type it here within 10 minutes to ${esc(purpose)}.</p>
+        <div class="field"><label for="cc-code">Code</label>
+          <input id="cc-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" style="font-size:20px;letter-spacing:4px;max-width:180px;"></div>
+        ${note ? `<p class="field-hint">${esc(note)}</p>` : ''}
+        ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
+        <p class="field-hint">Didn't get it? Check your spam folder, or <a href="#" id="cc-resend">send a new code</a>.</p>
+        <div class="form-actions">
+          <button class="btn btn-danger" id="cc-ok">${esc(confirmLabel)}</button>
+          <button class="btn" id="cc-cancel">Cancel</button>
+        </div>`;
+      const input = body.querySelector('#cc-code');
+      const ok = () => {
+        const code = input.value.replace(/\s/g, '');
+        if (!/^\d{6}$/.test(code)) { show('Type the 6-digit code from the email.'); return; }
+        done({ email, code });
+      };
+      body.querySelector('#cc-ok').addEventListener('click', ok);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); });
+      body.querySelector('#cc-resend').addEventListener('click', async (e) => {
+        e.preventDefault();
+        try { await startSignIn(email); show('', 'A new code is on its way. Only the newest code works.'); } catch (err) { show(errorText(err)); }
+      });
+      body.querySelector('#cc-cancel').addEventListener('click', () => done(null));
+      input.focus();
+    };
+    startSignIn(email).then(() => show(), (err) => show(errorText(err)));
+  });
+}
+
+// The Pro activation wall's "Lost a device?" link (licenseGate.js): sign in
+// to cloud backup if needed, then the device list, to free the lost device's
+// slot. `key` is whatever was typed in the wall's key field.
+export async function openDevicesFromLicenseWall({ key = '' } = {}) {
+  if (!isCloudAvailable()) return;
+  if (!currentAccount()?.signedIn) {
+    const account = await signInModal({
+      title: 'Free a lost device',
+      intro: 'Sign in to your cloud backup account to see the devices on it, then free the Pro license of the one you lost. This works for devices that had cloud backup turned on.'
+    });
+    if (!account) return;
+  }
+  await devicesModal({ key });
 }
 
 // --- First run: "I already use KennelOS → sign in and restore" (plan §2.3) -------------

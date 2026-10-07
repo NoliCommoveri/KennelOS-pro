@@ -86,6 +86,14 @@ function renderCloudTestBanner() {
 }
 
 async function boot() {
+  // Lost device (Cloud Phase 1 plan §2.5): a signed-in device checks in so an
+  // erase its owner sent from another device reaches it. First, and not
+  // awaited: a Pro device whose license was already released walls below, and
+  // must still hear the erase. Only with a server; nothing loads otherwise.
+  if (isCloudAvailable()) {
+    import('./data/cloud/cloudDevices.js').then((m) => m.bootDeviceCheck()).catch((e) => console.warn('KennelOS: device check', e));
+  }
+
   // Pro license gate (editions plan §Licensing): before rendering the app, make
   // sure this device has an active subscription. A painted wall (no key yet, or
   // lapsed past the grace window) returns false and boot stops. Active only in the

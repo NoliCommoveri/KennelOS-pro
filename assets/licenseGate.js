@@ -15,6 +15,7 @@ import { esc } from './ui.js';
 import { licenseConfig } from '../data/editionConfig.js';
 import { activate, validate, resetLicense, evaluateLicense } from '../data/license.js';
 import { getProLicense } from '../data/settings.js';
+import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
 export { isLicenseGated } from '../data/license.js';
 
@@ -71,6 +72,7 @@ function renderActivationWall() {
       </div>
     </form>
     <p class="license-note">Your key covers a set number of devices. Naming this one makes it easy to tell your devices apart later — you can release a device from <strong>Import/Export</strong> when you stop using it, which frees its slot.</p>
+    ${isCloudAvailable() ? `<p class="license-note">Lost a device, and every slot is used? <a href="#" class="license-link" id="license-lost-device">Free a lost device's slot</a> through your cloud backup account (for devices that had cloud backup on).</p>` : ''}
     <p class="license-note">Just upgrading from Lite? After activating, use <strong>Import</strong> to bring in the backup you exported.</p>
   `);
   wireActivationForm(card);
@@ -79,6 +81,17 @@ function renderActivationWall() {
 function wireActivationForm(card) {
   const form = card.querySelector('#license-form');
   const input = card.querySelector('#license-key-input');
+  // Cloud Phase 1 plan §2.5: the wall can't reach Import/Export, so the lost
+  // device's slot is freed from here. Loaded only when clicked.
+  card.querySelector('#license-lost-device')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      const { openDevicesFromLicenseWall } = await import('./cloudBackupUI.js');
+      await openDevicesFromLicenseWall({ key: input.value.trim() });
+    } catch (err) {
+      console.warn('KennelOS: lost device', err);
+    }
+  });
   const deviceInput = card.querySelector('#license-device-input');
   const errorSlot = card.querySelector('#license-error');
   const button = card.querySelector('#license-activate');

@@ -9,6 +9,10 @@
 //                           later; never shown as a failure (plan §6.1).
 //   CloudAuthError        — 401: the session expired or was revoked. The app
 //                           asks for a new code; local data is untouched.
+//   CloudErasedError      — 401 device_erased: the owner erased this device from
+//                           another one (plan §2.5). A CloudAuthError too, so
+//                           every caller already stops; the handler registered
+//                           with setErasedHandler does the erasing.
 //   CloudConflictError    — 409: another device is backing up this program, or
 //                           this device's base is stale (plan §3.4). Carries
 //                           `backingDevice` and `latestSnapshotId`.
@@ -39,6 +43,9 @@ export class CloudOfflineError extends CloudError {
 export class CloudAuthError extends CloudError {
   constructor(opts) { super('Cloud sign-in has expired. Sign in again.', opts); this.name = 'CloudAuthError'; }
 }
+export class CloudErasedError extends CloudAuthError {
+  constructor(opts) { super(opts); this.name = 'CloudErasedError'; }
+}
 export class CloudConflictError extends CloudError {
   constructor(opts) { super('Another device is backing up this program.', opts); this.name = 'CloudConflictError'; }
 }
@@ -56,7 +63,7 @@ async function readError(res) {
   const extra = body && typeof body === 'object' ? { ...body } : {};
   delete extra.error;
   const opts = { status: res.status, code, extra };
-  if (res.status === 401) return new CloudAuthError(opts);
+  if (res.status === 401) return code === 'device_erased' ? new CloudErasedError(opts) : new CloudAuthError(opts);
   if (res.status === 409) return new CloudConflictError(opts);
   if (res.status === 503 && body && body.maintenance) return new CloudOfflineError('Cloud backup is in maintenance.', opts);
   if (res.status >= 500 && (!code || code === 'internal')) return new CloudOfflineError(`Cloud backup answered ${res.status}.`, opts);
@@ -89,8 +96,19 @@ async function send(path, { method = 'GET', token = null, json, body, contentTyp
     clearTimeout(timer);
   }
   if (res.ok || okStatuses.includes(res.status)) return res;
-  throw await readError(res);
+  const err = await readError(res);
+  if (err instanceof CloudErasedError && erasedHandler) {
+    const handler = erasedHandler;
+    queueMicrotask(() => { Promise.resolve(handler(token)).catch(() => {}); });
+  }
+  throw err;
 }
+
+// Whatever request first hears device_erased hands its token to this handler
+// (cloudDevices.js registers it), so the erase happens from any call site, not
+// only the check-in. The token is passed because callers drop it on any 401.
+let erasedHandler = null;
+export function setErasedHandler(fn) { erasedHandler = fn; }
 
 const getJson = async (path, opts) => (await send(path, opts)).json();
 
@@ -103,13 +121,31 @@ export const verifyCode = ({ email, code, deviceId, deviceLabel }) =>
 
 // --- Auth (token) --------------------------------------------------------------
 export const signOut = (token) => getJson('/auth/signout', { method: 'POST', token, json: {} });
-export const signOutOthers = (token) => getJson('/auth/signout-others', { method: 'POST', token, json: {} });
+// `reauth` = { email, code } when this sign-in is older than 15 minutes (plan §2.5).
+export const signOutOthers = (token, reauth = {}) => getJson('/auth/signout-others', { method: 'POST', token, json: reauth });
 
 // --- Program -------------------------------------------------------------------
 // → { programId, thisDeviceId, backingDevice: {id,label,lastPushAt}|null, latestSnapshotId, latestSnapshot }
 export const getProgram = (token) => getJson('/program', { token });
 export const takeOverBacking = (token) => getJson('/program/backing-device', { method: 'POST', token, json: {} });
-export const deleteAccount = (token) => getJson('/account', { method: 'DELETE', token, json: { confirm: 'DELETE' } });
+export const deleteAccount = (token, reauth = {}) => getJson('/account', { method: 'DELETE', token, json: { ...reauth, confirm: 'DELETE' } });
+
+// --- Devices (plan §2.5) ------------------------------------------------------
+// → { ok, notices: [{ id, level, message, until }] }
+export const checkIn = (token, { licenseInstanceId = null } = {}) =>
+  getJson('/devices/check-in', { method: 'POST', token, json: { licenseInstanceId } });
+// → { devices: [{ id, label, lastSeenAt, status, licenseInstanceId, erase, thisDevice, backing }] }
+export const listDevices = (token) => getJson('/devices', { token });
+// `reauth` = { email, code } when this sign-in is older than 15 minutes
+// (otherwise CloudRequestError 'reauth_required').
+export const eraseDevice = (token, deviceId, reauth = {}) =>
+  getJson(`/devices/${encodeURIComponent(deviceId)}/erase`, { method: 'POST', token, json: reauth });
+export const cancelErase = (token, deviceId) =>
+  getJson(`/devices/${encodeURIComponent(deviceId)}/erase`, { method: 'DELETE', token });
+export const ackErase = (token, { licenseReleased = false } = {}) =>
+  getJson('/devices/erase-ack', { method: 'POST', token, json: { licenseReleased } });
+export const markLicenseReleased = (token, deviceId) =>
+  getJson(`/devices/${encodeURIComponent(deviceId)}/license-released`, { method: 'POST', token, json: {} });
 
 // --- Files (content-addressed) ------------------------------------------------
 export async function hasFile(token, sha256) {

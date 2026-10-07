@@ -553,6 +553,7 @@ export function clearProLicense() {
 //                      lastCounts, lastContentHash, lastError, movedToEdition }
 //                    (movedToEdition: 'pro' once a Lite device stopped backing
 //                    up because the program moved to Pro)
+//                    (lastCheckInAt: the last device check-in, plan §2.5)
 //   cloudDeviceId    this browser's id on the cloud account, minted here and sent
 //                    on every sign-in so signing in again doesn't make the
 //                    backing device a stranger. Separate from the license's
@@ -563,7 +564,8 @@ const CLOUD_DEVICE_ID_KEY = 'kennelOS.cloudDeviceId';
 
 const CLOUD_BACKUP_STATE_DEFAULTS = {
   enabled: false, lastPushedAt: null, lastAttemptAt: null, lastSnapshotId: null,
-  lastCounts: null, lastContentHash: null, lastError: null, movedToEdition: null
+  lastCounts: null, lastContentHash: null, lastError: null, movedToEdition: null,
+  lastCheckInAt: null
 };
 
 function readJsonKey(key) {
@@ -611,6 +613,42 @@ export function getCloudDeviceId() {
 
 export function setCloudDeviceId(id) {
   localStorage.setItem(CLOUD_DEVICE_ID_KEY, id);
+}
+
+// --- Erased by its owner (Cloud Phase 1 plan §2.5) --------------------------
+// After a remote erase wipes this device, the one thing written back is the
+// dead token, kept only until the server has heard "erased" (it may have gone
+// offline mid-erase). It opens nothing: the server answers it on the ack route
+// alone. Then clearAllAppStorage() is what "every key this app owns" means
+// for the erase: KEYS, and everything deliberately outside them (the license,
+// the cloud session and ids, the test switch), in both storages.
+const ERASE_ACK_KEY = 'kennelOS.eraseAck';
+const APP_PREFIX = 'kennelOS.';
+
+export function getPendingEraseAck() {
+  return localStorage.getItem(ERASE_ACK_KEY);
+}
+
+export function setPendingEraseAck(token) {
+  localStorage.setItem(ERASE_ACK_KEY, token);
+}
+
+export function clearPendingEraseAck() {
+  localStorage.removeItem(ERASE_ACK_KEY);
+}
+
+export function clearAllAppStorage() {
+  for (const store of [globalThis.localStorage, globalThis.sessionStorage]) {
+    if (!store) continue;
+    try {
+      const keys = [];
+      for (let i = 0; i < store.length; i++) {
+        const k = store.key(i);
+        if (k && k.startsWith(APP_PREFIX)) keys.push(k);
+      }
+      for (const k of keys) store.removeItem(k);
+    } catch { /* storage unavailable: nothing to clear */ }
+  }
 }
 
 // --- Cloud test-server switch (data/cloud/cloudConfig.js) --------------------
