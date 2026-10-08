@@ -210,7 +210,7 @@ function renderStatus() {
 // --- From their status page (W2 step 5) ------------------------------------------
 // What the family asked for on their status page (a pause, a narrower listen-only
 // choice, a change to a matching answer: each waits for her Approve / Decline,
-// the same buttons as on Today) and their messages and activity, newest first.
+// the same buttons as on Today; a Companion link request waits for Mark sent) and their messages and activity, newest first.
 // Hidden for a family who never used it.
 
 function listenText(r) {
@@ -239,6 +239,12 @@ function pendingRequests(e) {
     out.push({ kind: 'listen', text: `Asked ${esc(fmtDate(r.requested_date))} to ${except ? 'wait for' : 'wait only for'}: <strong>${esc(listenText(r))}</strong> <span class="faint">(now: ${esc(listenText(e))})</span>.`, note: '',
       hint: `Narrower, so it needs you: they wouldn't be offered ${except ? 'those' : 'other'} litters. An open offer stays open.` });
   }
+  if (actions.hasPendingRequest(e, 'companion_request')) {
+    const r = e.companion_request;
+    out.push({ kind: 'companion', text: `Asked ${esc(fmtDate(r.requested_date))} for <strong>their Companion link</strong>.`, note: r.note,
+      hint: 'Send it from the Companion page (Current families), then mark it sent so their status page says so.',
+      buttons: '<a class="btn btn-sm" href="companion.html?type=family">Open Companion</a><button class="btn btn-sm btn-primary" data-req="companion:sent">Mark sent</button><button class="btn btn-sm" data-req="companion:decline">Decline</button>' });
+  }
   return out;
 }
 
@@ -250,7 +256,7 @@ function renderOnline() {
   const unread = messages.filter((m) => !m.read).length;
   const reqHtml = requests.map((r) => `<div class="row-between" style="gap:8px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
       <div><p style="margin:0;">${r.text}</p>${r.note ? `<p class="faint" style="margin:2px 0 0;">They said: "${esc(r.note)}"</p>` : ''}<p class="field-hint" style="margin:2px 0 0;">${esc(r.hint)}</p></div>
-      <span class="pill-row"><button class="btn btn-sm btn-primary" data-req="${r.kind}:approve">Approve</button><button class="btn btn-sm" data-req="${r.kind}:decline">Decline</button></span>
+      <span class="pill-row">${r.buttons || `<button class="btn btn-sm btn-primary" data-req="${r.kind}:approve">Approve</button><button class="btn btn-sm" data-req="${r.kind}:decline">Decline</button>`}</span>
     </div>`).join('');
   const msgHtml = messages.slice(0, 50).map((m) => `<li style="padding:6px 0;border-top:1px solid var(--border);">
       <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.at).slice(0, 10)))} · ${m.kind === 'message' ? 'Message' : 'On their status page'}${m.read ? '' : ' <span class="badge badge-blue">New</span>'}</div>
@@ -267,7 +273,8 @@ function renderOnline() {
   const handlers = {
     'pause:approve': () => actions.approvePauseRequest(e.id), 'pause:decline': () => actions.declinePauseRequest(e.id),
     'pref:approve': () => actions.approvePrefChange(e.id), 'pref:decline': () => actions.declinePrefChange(e.id),
-    'listen:approve': () => actions.approveListenChange(e.id), 'listen:decline': () => actions.declineListenChange(e.id)
+    'listen:approve': () => actions.approveListenChange(e.id), 'listen:decline': () => actions.declineListenChange(e.id),
+    'companion:sent': () => actions.markCompanionLinkSent(e.id), 'companion:decline': () => actions.declineCompanionRequest(e.id)
   };
   els.online.querySelectorAll('[data-req]').forEach((btn) => btn.addEventListener('click', () => run(handlers[btn.dataset.req])));
 }

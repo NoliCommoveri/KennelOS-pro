@@ -8,16 +8,15 @@ import { makeRepo } from './repoBase.js';
 import { SALE_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
+import { isOpenSale } from './vocab.js';
 
 const base = makeRepo('sales', SALE_REFERENCES);
 
 const REQUIRED_FIELDS = ['dog_id', 'buyer_contact_id', 'placement_type', 'status'];
 
-// Statuses that close a sale out. A closed sale no longer makes its buyer a
-// current "family" and never appears in that family's companion bundle — applied
-// identically to membership (companion.js) and bundle contents (companionExport.js)
-// via isOpenSale so the two can't drift.
-export const TERMINAL_SALE_STATUSES = ['delivered', 'returned', 'cancelled'];
+// Statuses that close a sale out (vocab.js, with the isOpenSale predicate that
+// membership, the companion bundle and the waitlist all share).
+export { TERMINAL_SALE_STATUSES } from './vocab.js';
 
 function validateSale(candidate) {
   for (const f of REQUIRED_FIELDS) {
@@ -71,7 +70,7 @@ export const saleRepo = {
   // (companionExport.js): a non-archived sale with a status that has not reached
   // a terminal state (delivered/returned/cancelled).
   isOpenSale(s) {
-    return !!s && !s.is_archived && !!s.status && !TERMINAL_SALE_STATUSES.includes(s.status);
+    return isOpenSale(s);
   },
 
   // Distinct lead_source values already entered — feeds the free-text

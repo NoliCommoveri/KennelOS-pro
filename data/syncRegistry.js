@@ -246,7 +246,10 @@ export const SYNC_REGISTRY = Object.freeze({
       // "Not this litter" with the family's reason (Spec §16.2): private like a pass reason.
       'prepasses',
       // "Ready now?" (Spec §16.7): their answer and a not-yet reason, private like pause_reason.
-      'ready_check'
+      'ready_check',
+      // A Companion link request from their status page (Spec §8.3), with their
+      // optional note: private like pause_request.
+      'companion_request'
     ],
     pending: []
   },

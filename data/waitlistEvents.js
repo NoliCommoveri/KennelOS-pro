@@ -19,13 +19,15 @@
 //  - a pause, a NARROWER listen-only change and any change to a matching answer
 //    → a request on the entry; nothing changes until she taps Approve
 //  - a WIDER listen-only change → applied at once (it can't dodge an offer)
+//  - a Companion link request (a family with an open sale) → a request on the
+//    entry; she sends the link from the Companion page and marks it sent
 // Events the server makes itself (deadlines and automatic offers, step 7) are
 // not handled yet: they're skipped here, and no server writes any before step 7.
-import { WAITLIST_OPEN_STATUSES } from './vocab.js';
+import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
 
-export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready'];
+export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready', 'companion_request'];
 export const NOTE_MAX = 500;
 
 const clean = (v) => String(v ?? '').trim().slice(0, NOTE_MAX);
@@ -52,6 +54,7 @@ export const activityId = (event) => `event-${event.seq}`;
 //   op 'prepass'        { prepass }  → "Not this litter" on the entry (§16.2)
 //   op 'unprepass'      { target }   → taken back
 //   op 'ready'          { answer, until, reason } → "Ready now?" answered (§16.7)
+//   op 'companion_request' { request } → entry.companion_request
 // `date` is the day the family acted, in the kennel's time zone; `activity` the
 // line for their entry's activity ({ id, at, body }), or null.
 export function planFamilyEvent(event, ctx) {
@@ -156,6 +159,15 @@ export function planFamilyEvent(event, ctx) {
             : 'Added parents to the litters they\'re waiting for, on their status page.') };
       }
       return { op: 'listen_request', date, activity: null, request: { requested_date: date, ...next } };
+    }
+    case 'companion_request': {
+      // Only while they have an open sale (the Companion family package's rule): a
+      // sale delivered or cancelled since leaves a line, not a request.
+      const why = clean(p.note);
+      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+        return note(`Asked for their Companion link, but they have no open sale now, so there's no family link to send.${why ? ` They said: "${why}"` : ''}`);
+      }
+      return { op: 'companion_request', date, activity: null, request: { requested_date: date, note: why } };
     }
     case 'pref_change': {
       if (!open) return skip('not_on_list');

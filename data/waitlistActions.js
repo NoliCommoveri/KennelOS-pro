@@ -849,6 +849,7 @@ export async function applyFamilyPlan(entryId, plan) {
       case 'ready': await recordReadyAnswer(entryId, { answer: plan.answer, until: plan.until, reason: plan.reason, date, by: 'family' }); break;
       case 'listen_request': await waitlistEntryRepo.update(entryId, { listen_change_request: plan.request }); break;
       case 'pref_request': await waitlistEntryRepo.update(entryId, { pref_change_request: plan.request }); break;
+      case 'companion_request': await waitlistEntryRepo.update(entryId, { companion_request: plan.request }); break;
       case 'listen_apply': await waitlistEntryRepo.update(entryId, plan.changes); break;
       case 'note': case 'skip': break;
       default: throw new Error(`Unknown plan "${plan.op}".`);
@@ -914,6 +915,19 @@ export async function approveListenChange(entryId, { date = todayYMD() } = {}) {
 export async function declineListenChange(entryId, { date = todayYMD() } = {}) {
   const entry = await load(entryId);
   return waitlistEntryRepo.update(entryId, { listen_change_request: decided(loadPending(entry, 'listen_change_request', 'listen-only'), 'declined', date) });
+}
+
+// Their Companion link request (Spec §8.3). She sends the link herself from the
+// Companion page (her device builds it; it never goes through the server), then
+// marks the request sent, or declines it. Either way their page shows it.
+export async function markCompanionLinkSent(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  return waitlistEntryRepo.update(entryId, { companion_request: decided(loadPending(entry, 'companion_request', 'Companion link'), 'sent', date) });
+}
+
+export async function declineCompanionRequest(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  return waitlistEntryRepo.update(entryId, { companion_request: decided(loadPending(entry, 'companion_request', 'Companion link'), 'declined', date) });
 }
 
 // "Not this litter" (Spec §16.2): a pending pass on a litter (or an upcoming

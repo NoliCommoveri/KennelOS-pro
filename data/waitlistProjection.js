@@ -25,7 +25,7 @@ import {
   rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, whelpNotes, readyCheck
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
-import { WAITLIST_OPEN_STATUSES } from './vocab.js';
+import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
 
 export const PROJECTION_FORMAT = 1;
@@ -69,6 +69,17 @@ function requestsView(entry, today) {
   };
 }
 
+// Their Companion link (Companion family package): only for a family with an
+// open sale (vocab.isOpenSale, the same rule as the Companion page), from a pick
+// held by a deposit-pending sale until the pup goes home. `available` lets them
+// ask for it; `request` is their last request as their page shows it ('sent' or
+// 'declined' once she's dealt with it). The link itself never comes through here:
+// she sends it from her device (Companion page), so the server never holds it.
+function companionView(entry, ctx) {
+  if (!entry.contact_id || !ctx.openSaleBuyers.has(entry.contact_id)) return null;
+  return { available: true, request: requestView(entry.companion_request, ctx.today, () => ({})) };
+}
+
 // A pup as a family may see it: call name, sex, color. Nothing else.
 const publicPup = (d) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings) });
 
@@ -79,6 +90,8 @@ function entryView(entry, ctx) {
   const contact = ctx.contactsById.get(entry.contact_id) || null;
   const view = { name: entryName(entry, contact), email: entryEmail(entry, contact), status: entry.status };
   if (entry.status_token) view.status_token = entry.status_token;
+  const companion = companionView(entry, ctx);
+  if (companion) view.companion = companion; // absent without an open sale
   if (!WAITLIST_OPEN_STATUSES.includes(entry.status)) return view;
 
   const program = ctx.programsById.get(entry.waitlist_program_id) || null;
@@ -305,7 +318,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const upcoming = upcomingSection(kennel, config, { litters, pairings, dogsById, titles: titlesByDog(events) });
   const ctx = {
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
-    positions: overallPositions(live, kennel.id, programsById), matches, litterLabels, hidden, notes
+    positions: overallPositions(live, kennel.id, programsById), matches, litterLabels, hidden, notes,
+    openSaleBuyers: new Set(sales.filter((x) => x.buyer_contact_id && isOpenSale(x)).map((x) => x.buyer_contact_id))
   };
   const entryViews = {};
   for (const e of [...live].sort(byId)) entryViews[e.id] = entryView(e, ctx);

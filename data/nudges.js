@@ -48,7 +48,8 @@ import {
 } from './waitlistRules.js';
 import {
   recordOutcome, markFeeExpired, openPicks, recordReadyAnswer, undoRemoval, hasPendingRequest, markMessagesRead,
-  approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange
+  approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange,
+  markCompanionLinkSent, declineCompanionRequest
 } from './waitlistActions.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
@@ -572,6 +573,20 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         subjectHref: href(e),
         actions: decide(() => approveListenChange(e.id, { date: today }), () => declineListenChange(e.id, { date: today }),
           `${name(e)} now ${r.listen_mode === 'except' ? 'skips' : 'waits only for'} those litters. Let them know.`)
+      });
+    }
+    if (hasPendingRequest(e, 'companion_request')) {
+      const r = e.companion_request;
+      out.push({
+        key: `waitlist-companion-request:${e.id}:${r.requested_date}`,
+        title: `${name(e)} asked for their Companion link`,
+        detail: `Send it from the Companion page (Current families), then mark it sent so their status page says so.${said(r.note)}`,
+        subjectHref: href(e),
+        actions: [
+          { label: 'Open Companion', run: async () => { location.href = 'companion.html?type=family'; } },
+          { label: 'Mark sent', run: async () => { await markCompanionLinkSent(e.id, { date: today }); return { title: 'Marked sent', message: `${name(e)}'s status page now says their link was sent.` }; } },
+          { label: 'Decline', run: async () => { await declineCompanionRequest(e.id, { date: today }); return { title: 'Declined', message: 'Their status page says you didn\'t send one. Let them know why.' }; } }
+        ]
       });
     }
     const unread = (e.messages || []).filter((m) => !m.read);

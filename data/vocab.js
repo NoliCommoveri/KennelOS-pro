@@ -256,6 +256,15 @@ export const SALE_STATUS = [
   { value: 'cancelled',     label: 'Cancelled',     badge: 'badge-gray' }
 ];
 
+// Statuses that close a sale out. A closed sale no longer makes its buyer a
+// current "family": not in the Companion family package (companion.js), not in
+// its bundle (companionExport.js), and no Companion link request from their
+// status page (waitlistProjection.js). All of them go through isOpenSale (via
+// saleRepo.isOpenSale in the app) so they can't drift. Here, not in saleRepo,
+// so the pure waitlist modules can use it without Dexie.
+export const TERMINAL_SALE_STATUSES = ['delivered', 'returned', 'cancelled'];
+export const isOpenSale = (s) => !!s && !s.is_archived && !!s.status && !TERMINAL_SALE_STATUSES.includes(s.status);
+
 export const CONTRACT_TYPE = [
   { value: 'sale',         label: 'Sale',         badge: 'badge-blue' },
   { value: 'stud_service', label: 'Stud service', badge: 'badge-purple' },
