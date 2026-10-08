@@ -56,10 +56,12 @@ export function isVaultOffered() {
   return isCloudAvailable() && (VAULT_RELEASED || isLocalDev() || testServerOn());
 }
 
-// The waitlist online's release switch (Waitlist W2 Plan §9, D7). Until its last
-// step it stays false: "Put the list online" and the publishing behind it are
+// The waitlist online's release switch (Waitlist W2 Plan §9, D7). Released
+// 2026-10-08, ahead of steps 6 (email) and 7 (server deadlines and automatic
+// offers): "Put the list online" and the publishing behind it are offered
+// wherever cloud backup is. Set back to false to hide them again; then they're
 // offered only where cloud backup talks to STAGING (localhost, or ?cloud=staging).
-export const WAITLIST_ONLINE_RELEASED = false;
+export const WAITLIST_ONLINE_RELEASED = true;
 
 export function isWaitlistOnlineOffered() {
   return isCloudAvailable() && (WAITLIST_ONLINE_RELEASED || isLocalDev() || testServerOn());
