@@ -44,13 +44,13 @@ export function isCloudAvailable() {
   return cloudBaseUrl() !== null;
 }
 
-// The private vault's release switch (Private Vault Plan §9). Until it ships,
-// its screens are offered only where cloud backup talks to STAGING: localhost,
-// and a browser with the test-server switch on (?cloud=staging). Everyone else
-// sees Phase 1's cloud backup exactly as before. Flip to true to release it.
-// The data layer doesn't read this: a program that has a vault (made on
-// staging) is still handled correctly wherever it's opened.
-export const VAULT_RELEASED = false;
+// The private vault's release switch (Private Vault Plan §9). Released
+// 2026-10-08: the vault's screens are offered wherever cloud backup is. Set back
+// to false to hide them again; then they're offered only where cloud backup
+// talks to STAGING (localhost, or the ?cloud=staging test switch). The data
+// layer doesn't read this: a program that has a vault is handled correctly
+// wherever it's opened, switch or not.
+export const VAULT_RELEASED = true;
 
 export function isVaultOffered() {
   return isCloudAvailable() && (VAULT_RELEASED || isLocalDev() || testServerOn());
