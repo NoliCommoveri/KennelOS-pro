@@ -133,6 +133,17 @@ export const getProgram = (token) => getJson('/program', { token });
 export const takeOverBacking = (token) => getJson('/program/backing-device', { method: 'POST', token, json: {} });
 export const deleteAccount = (token, reauth = {}) => getJson('/account', { method: 'DELETE', token, json: { ...reauth, confirm: 'DELETE' } });
 
+// --- The Pro license link (License Link Plan §5) ---------------------------------
+// → { pro, plan, until, source, lapsed, linkedEmails }
+export const getEntitlement = (token) => getJson('/account/entitlement', { token });
+// A code to `email` (a Pro purchase made with another address). Always {ok:true}
+// for a well-formed address; 400 own_email for the account's own.
+export const startLicenseLink = (token, email) => getJson('/account/license-links/start', { method: 'POST', token, json: { email } });
+// → the new entitlement
+export const verifyLicenseLink = (token, { email, code }) =>
+  getJson('/account/license-links/verify', { method: 'POST', token, json: { email, code } });
+export const removeLicenseLinks = (token, reauth = {}) => getJson('/account/license-links', { method: 'DELETE', token, json: reauth });
+
 // --- Devices (plan §2.5) ------------------------------------------------------
 // → { ok, notices: [{ id, level, message, until }] }
 export const checkIn = (token, { licenseInstanceId = null } = {}) =>

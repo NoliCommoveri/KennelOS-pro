@@ -14,6 +14,8 @@
 //   openDevicesFromLicenseWall() the Pro activation wall's "Lost a device?" link
 //   renderPrivateGapHint()      record pages: "private details are blank here" after a
 //                               restore that didn't bring them back (bootCloud)
+//   proLineText()               Pro only: the Account section's "Pro on this account"
+//                               line, and Link a Pro purchase email… (License Link Plan §6)
 //
 // The private vault's screens are cloudVaultUI.js, imported from here only when
 // needed (vaultUI()).
@@ -30,6 +32,9 @@ import {
   restoreOnNewDevice, deleteCloudData, startBackupScheduler, getServiceNotices, CLOUD_BACKUP_EVENT
 } from '../data/cloud/cloudBackup.js';
 import { listDevices, requestErase, cancelErase, releaseDeviceLicense } from '../data/cloud/cloudDevices.js';
+import {
+  entitlement, cachedEntitlement, startPurchaseLink, finishPurchaseLink, unlinkPurchaseEmails
+} from '../data/cloud/cloudEntitlement.js';
 import { CloudOfflineError, CloudRequestError, CloudAuthError } from '../data/cloud/cloudApi.js';
 import {
   isCloudOfferPending, setCloudOfferPending, getCloudRestoredAt, setCloudRestoredAt, getProLicense, getLastBackupDate
@@ -123,6 +128,7 @@ export function errorText(e) {
       case 'this_device': return "That's this device. Use Reset App to erase it.";
       case 'not_pending': return 'That device has already erased itself, so there is nothing to cancel.';
       case 'not_found': return "That device isn't on this account any more.";
+      case 'own_email': return "That's the email this account signs in with. Use the address you bought Pro with.";
       default: return `Cloud backup refused that (${e.code || e.status}).`;
     }
   }
@@ -613,12 +619,16 @@ function renderCard(el) {
       ${status.vault === 'on' ? `<details style="margin-top:10px;"><summary class="muted">Private backup</summary>
         <div class="form-actions">
           <button class="btn btn-sm" data-act="vault-approve">Unlock another device…</button>
+          <button class="btn btn-sm" data-act="vault-passkeys">Passkeys…</button>
           <button class="btn btn-sm" data-act="vault-code">New recovery code…</button>
           <button class="btn btn-sm btn-danger" data-act="vault-off">Turn off private backup…</button>
         </div>
       </details>` : ''}
       <details style="margin-top:10px;"><summary class="muted">Account</summary>
+        ${isLicenseGated() ? `<p class="field-hint" data-pro-line>${esc(proLineText(cachedEntitlement()))}</p>` : ''}
         <div class="form-actions">
+          ${isLicenseGated() ? `<button class="btn btn-sm" data-act="pro-link"${cachedEntitlement()?.pro ? ' hidden' : ''}>Link a Pro purchase email…</button>
+          <button class="btn btn-sm" data-act="pro-unlink"${cachedEntitlement()?.linkedEmails ? '' : ' hidden'}>Unlink purchase emails</button>` : ''}
           <button class="btn btn-sm" data-act="devices">Your devices…</button>
           <button class="btn btn-sm" data-act="others">Sign out other devices</button>
           <button class="btn btn-sm" data-act="signout">Sign out</button>
@@ -657,6 +667,7 @@ function renderCard(el) {
   act('vault-unlock', async () => { await (await vaultUI()).unlockModal({ merge: true }); });
   act('vault-on', async () => { await (await vaultUI()).turnOnVaultFlow(); });
   act('vault-approve', async () => { await (await vaultUI()).approveDevicesModal(); });
+  act('vault-passkeys', async () => { await (await vaultUI()).passkeysModal(); });
   act('vault-code', async () => { await (await vaultUI()).newRecoveryCodeFlow(); });
   act('vault-off', async () => { await (await vaultUI()).turnOffVaultFlow(); });
   act('now', () => pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress })));
@@ -686,6 +697,128 @@ function renderCard(el) {
     await alertModal({ title: 'Cloud data deleted', message: 'Your cloud backups and account are gone. Everything on this device is still here.' });
   });
   act('hide-restored', () => setCloudRestoredAt(null));
+  act('pro-link', () => linkPurchaseModal());
+  act('pro-unlink', async () => {
+    if (!(await confirmModal({
+      title: 'Unlink purchase emails?',
+      message: 'Pro purchases made with other email addresses stop counting for this account. The purchases themselves are untouched, and you can link them again.',
+      confirmLabel: 'Unlink'
+    }))) return;
+    await withFreshSignIn((reauth) => unlinkPurchaseEmails({ reauth }), { purpose: 'unlink purchase emails', confirmLabel: 'Unlink' });
+  });
+
+  if (el.querySelector('[data-pro-line]')) fillProLine(el);
+}
+
+// --- Pro on this account (License Link Plan §5, §6) ------------------------------------
+// Whether the SERVER knows this account is Pro: it decides the online features
+// that need Pro (the waitlist's), never the app itself, which the license key
+// unlocks as before.
+const PLAN_LABEL = { monthly: 'monthly', yearly: 'yearly', lifetime: 'lifetime' };
+
+export function proLineText(e, { offline = false } = {}) {
+  if (offline) return "Pro on this account: couldn't check (no internet?).";
+  if (!e) return 'Pro on this account: checking…';
+  if (e.pro) {
+    const plan = PLAN_LABEL[e.plan] ? ` (${PLAN_LABEL[e.plan]})` : '';
+    const until = e.until ? `, until ${new Date(e.until).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
+    return `Pro on this account${plan}${until}${e.source === 'linked' ? ', through a linked purchase email' : ''}.`;
+  }
+  if (e.lapsed) return "Your Pro purchase for this account has ended, so online features that need Pro are off. Renew it, and they're back.";
+  return "This account isn't linked to a Pro purchase yet. Bought Pro with another email address? Link it here.";
+}
+
+async function fillProLine(el) {
+  let e = null;
+  let offline = false;
+  try { e = await entitlement(); } catch { offline = true; }
+  const line = el.querySelector('[data-pro-line]');
+  if (!line) return; // re-rendered meanwhile
+  line.textContent = proLineText(e, { offline });
+  const link = el.querySelector('[data-act="pro-link"]');
+  const unlink = el.querySelector('[data-act="pro-unlink"]');
+  if (link) link.hidden = offline || !!e?.pro;
+  if (unlink) unlink.hidden = !e?.linkedEmails;
+}
+
+// Two steps, like sign-in: the purchase email, then the code sent to it.
+// Resolves the new entitlement, or null on cancel.
+export function linkPurchaseModal() {
+  return new Promise((resolve) => {
+    const overlay = openModal('<div id="pl-body"></div>');
+    const body = overlay.querySelector('#pl-body');
+    const done = (v) => { overlay.remove(); resolve(v); };
+    let email = '';
+
+    const showEmail = (errorMsg = '') => {
+      body.innerHTML = `
+        <h2 style="margin-top:0;">Link a Pro purchase email</h2>
+        <p class="muted">If you bought KennelOS Pro with a different email address from the one you sign in with,
+          type it here. We'll send a code to it, to check it's yours.</p>
+        <div class="field field-wide"><label for="pl-email">Email you bought Pro with</label>
+          <input id="pl-email" type="email" autocomplete="email" inputmode="email" value="${esc(email)}" placeholder="you@example.com"></div>
+        <p class="field-hint">We use it to send the code, and don't keep it.</p>
+        ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
+        <div class="form-actions">
+          <button class="btn btn-primary" id="pl-send">Email me a code</button>
+          <button class="btn" id="pl-cancel">Cancel</button>
+        </div>`;
+      const input = body.querySelector('#pl-email');
+      const send = async () => {
+        email = input.value.trim();
+        const btn = body.querySelector('#pl-send');
+        btn.disabled = true; btn.textContent = 'Sending…';
+        try { await startPurchaseLink(email); showCode(); } catch (e) { showEmail(errorText(e)); }
+      };
+      body.querySelector('#pl-send').addEventListener('click', send);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+      body.querySelector('#pl-cancel').addEventListener('click', () => done(null));
+      input.focus();
+    };
+
+    const showCode = (errorMsg = '', note = '') => {
+      body.innerHTML = `
+        <h2 style="margin-top:0;">Check that inbox</h2>
+        <p class="muted">We sent a 6-digit code to <strong>${esc(email)}</strong>. Type it here within 10 minutes.</p>
+        <div class="field"><label for="pl-code">Code</label>
+          <input id="pl-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" style="font-size:20px;letter-spacing:4px;max-width:180px;"></div>
+        ${note ? `<p class="field-hint">${esc(note)}</p>` : ''}
+        ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
+        <p class="field-hint">Didn't get it? Check the spam folder, or <a href="#" id="pl-resend">send a new code</a>.</p>
+        <div class="form-actions">
+          <button class="btn btn-primary" id="pl-verify">Link it</button>
+          <button class="btn" id="pl-back">Use a different email</button>
+          <button class="btn" id="pl-cancel">Cancel</button>
+        </div>`;
+      const input = body.querySelector('#pl-code');
+      const verify = async () => {
+        const btn = body.querySelector('#pl-verify');
+        btn.disabled = true; btn.textContent = 'Checking…';
+        try {
+          const e = await finishPurchaseLink(email, input.value);
+          done(e);
+          notify();
+          await alertModal(e.pro
+            ? { title: 'Linked', message: proLineText(e) }
+            : { title: 'Linked, but no Pro purchase yet', message: `We haven't been told of a Pro purchase made with ${email}. If you've just bought it, check again in a few minutes. Otherwise, link the address you bought it with.` });
+        } catch (e) {
+          if (e instanceof CloudRequestError && e.code === 'too_many_attempts') showEmail(errorText(e));
+          else showCode(errorText(e));
+        }
+      };
+      body.querySelector('#pl-verify').addEventListener('click', verify);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') verify(); });
+      body.querySelector('#pl-resend').addEventListener('click', async (e) => {
+        e.preventDefault();
+        try { await startPurchaseLink(email); showCode('', 'A new code is on its way. Only the newest code works.'); } catch (err) { showCode(errorText(err)); }
+      });
+      body.querySelector('#pl-back').addEventListener('click', () => showEmail());
+      body.querySelector('#pl-cancel').addEventListener('click', () => done(null));
+      input.focus();
+    };
+
+    showEmail();
+  });
 }
 
 // --- Your devices: a lost one (plan §2.5) --------------------------------------------

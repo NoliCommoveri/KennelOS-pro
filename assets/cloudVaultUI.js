@@ -5,13 +5,14 @@
 //   turnOnVaultFlow({ offer })   §2.1: "Also back up your private info?" → the
 //                                recovery code (print / save / copy, then type the
 //                                last group back) → the first encrypted backup
-//   unlockModal({ merge })       §2.3: recovery code · another device · not now
+//   unlockModal({ merge })       §2.3: passkey · recovery code · another device · not now
 //   unlockBeforeRestore()        the restore paths' unlock step (§2.3)
 //   approveDevicesModal()        §2.4: unlock another device from this one
+//   passkeysModal()              §2.2, §5.2: the vault's passkeys; add / remove
 //   newRecoveryCodeFlow()        §2.2
 //   turnOffVaultFlow()           §2.5
 //
-// Passkeys (§5.2) are a later build step. Layering: data/cloud/* only.
+// Layering: data/cloud/* only.
 import { esc, alertModal, confirmModal } from './ui.js';
 import {
   openModal, progressModal, errorText, withFreshSignIn, typedConfirm, notify, handlePushResult
@@ -20,13 +21,14 @@ import {
   vaultStatus, startVaultSetup, finishVaultSetup, unlockWithRecoveryCode,
   requestDeviceUnlock, pendingDeviceUnlock, waitForDeviceUnlock, cancelDeviceUnlock,
   listUnlockRequests, approveDeviceUnlock, startNewRecoveryCode, finishNewRecoveryCode,
-  disableVault, VaultSetupError
+  disableVault, addPasskey, unlockWithPasskey, removePasskey, VaultSetupError
 } from '../data/cloud/cloudVault.js';
+import { passkeySupported } from '../data/cloud/vaultPasskey.js';
 import { getBackupStatus } from '../data/cloud/cloudBackup.js';
 import { currentAccount } from '../data/cloud/cloudAuth.js';
 import { getMyKennelName } from '../data/kennelSetup.js';
 
-const HONEST_LINE = "If you lose this code, we can't open your private backup. Nobody can: it's encrypted on your device before it's uploaded. Your devices and file backups are unaffected.";
+const HONEST_LINE = "If you lose this code and any passkey you add, we can't open your private backup. Nobody can: it's encrypted on your device before it's uploaded. Your devices and file backups are unaffected.";
 
 function vaultErrorText(e) {
   if (e?.name === 'VaultLockedError') return "That code didn't work. Check it and try again.";
@@ -36,9 +38,18 @@ function vaultErrorText(e) {
       case 'no_vault': return "Private backup isn't turned on for this account.";
       case 'locked': return 'Unlock your private info on this device first.';
       case 'expired': return 'That request has expired. Ask again.';
+      case 'no_passkey': return 'No passkey on this device unlocks your private backup. Use your recovery code or another device.';
       default: return e.message;
     }
   }
+  if (e?.name === 'PasskeyError') {
+    switch (e.code) {
+      case 'cancelled': return "The passkey was cancelled, or this device doesn't have one for your private backup.";
+      case 'exists': return 'This device (or your password manager) already has a passkey for your private backup.';
+      default: return "Passkeys can't unlock private backup on this browser or with this passkey. Your recovery code still works.";
+    }
+  }
+  if (e?.name === 'CloudRequestError' && e.code === 'too_many_passkeys') return 'You already have 10 passkeys. Remove one first.';
   if (e?.name === 'CloudConflictError' && e.code === 'vault_exists') return 'Private backup was just turned on from another device. Unlock it here with that device\'s recovery code.';
   if (e?.name === 'CloudConflictError' && e.code === 'already_approved') return 'Another device already answered that request.';
   if (e?.name === 'CloudRequestError' && e.code === 'too_many_pairings') return 'Too many open requests. Wait ten minutes, then ask again.';
@@ -184,8 +195,46 @@ export async function turnOnVaultFlow({ offer = false } = {}) {
   notify();
   if (push && push.status !== 'pushed' && push.status !== 'unchanged' && push.status !== 'skipped') await handlePushResult(push);
   else await alertModal({ title: 'Private backup is on', message: 'Your private info is now backed up, encrypted, with every backup. Keep your recovery code safe.' });
+  if (await passkeySupported()) await offerPasskeyModal();
   return true;
 }
+
+// §2.1 step 3: "Unlock with Face ID / fingerprint next time?" Skippable; the
+// recovery code already works. Resolves true when a passkey was added.
+function offerPasskeyModal() {
+  return new Promise((resolve) => {
+    const overlay = openModal(`
+      <h2 style="margin-top:0;">Unlock with a passkey next time?</h2>
+      <p>On a new or reset device you can unlock your private info with <strong>Face ID, your fingerprint or
+        your device PIN</strong> instead of typing the recovery code. The passkey is saved in your password manager
+        (iCloud Keychain, Google Password Manager…), so it can follow you to a new phone.</p>
+      <p class="field-hint">Your recovery code still works either way. Keep it.</p>
+      <div id="pk-error"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="pk-add">Add a passkey</button>
+        <button class="btn" id="pk-skip">Skip</button>
+      </div>`, { width: 500, dismissible: false });
+    const q = (sel) => overlay.querySelector(sel);
+    q('#pk-skip').addEventListener('click', () => done(overlay, resolve, false));
+    q('#pk-add').addEventListener('click', async () => {
+      const btn = q('#pk-add');
+      btn.disabled = true;
+      try {
+        await addPasskey({ label: passkeyLabel() });
+        done(overlay, resolve, true);
+        await alertModal({ title: 'Passkey added', message: 'Next time, choose Use passkey to unlock your private info.' });
+      } catch (e) {
+        q('#pk-error').innerHTML = `<div class="inline-error">${esc(vaultErrorText(e))}</div>`;
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+const passkeyLabel = () => {
+  const device = currentAccount()?.deviceLabel;
+  return device ? `Made on ${device}` : 'Passkey';
+};
 
 // --- Unlocking this device (§2.3, §2.4) ------------------------------------------------
 // Resolves 'unlocked' or null (not now / cancelled). `merge: true` merges the
@@ -206,16 +255,34 @@ export function unlockModal({ merge = true, intro = '' } = {}) {
       finish('unlocked');
     };
 
-    const showChoices = () => {
+    // Offer the passkey only when the vault has one and this browser can try.
+    let canPasskey = false;
+    const ready = vaultStatus().then((st) => { canPasskey = st.passkeys.length > 0 && st.passkeySupported; }).catch(() => {});
+
+    const showPasskey = async () => {
+      body.innerHTML = '<h2 style="margin-top:0;">Use passkey</h2><p class="muted">Follow your device\'s prompt…</p>';
+      try {
+        const { merged } = await unlockWithPasskey({ merge });
+        await unlocked(merged);
+      } catch (e) {
+        await showChoices(vaultErrorText(e));
+      }
+    };
+
+    const showChoices = async (errorMsg = '') => {
+      await ready;
       body.innerHTML = `
         <h2 style="margin-top:0;">Unlock your private info</h2>
         <p class="muted">${esc(intro || "Your contacts' details, prices, Financials, contracts and private notes are backed up encrypted. Unlock them on this device to bring them back.")}</p>
+        ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
         <div class="form-actions" style="flex-direction:column;align-items:stretch;">
-          <button class="btn btn-primary" data-c="code">Enter recovery code</button>
+          ${canPasskey ? '<button class="btn btn-primary" data-c="passkey">Use passkey</button>' : ''}
+          <button class="btn${canPasskey ? '' : ' btn-primary'}" data-c="code">Enter recovery code</button>
           <button class="btn" data-c="device">Use another device</button>
           <button class="btn" data-c="later">Not now</button>
         </div>
         <p class="field-hint">Not now: your kennel records still come back. Private details stay blank until you unlock, and backups from this device pause until then.</p>`;
+      body.querySelector('[data-c="passkey"]')?.addEventListener('click', () => showPasskey());
       body.querySelector('[data-c="code"]').addEventListener('click', () => showCode());
       body.querySelector('[data-c="device"]').addEventListener('click', () => showDevice());
       body.querySelector('[data-c="later"]').addEventListener('click', () => finish(null));
@@ -366,6 +433,61 @@ export function approveDevicesModal() {
     };
 
     showList();
+  });
+}
+
+// --- Passkeys (§2.2, §5.2) ---------------------------------------------------------------
+// The vault's passkeys: add one on this device, or remove one (fresh sign-in).
+export function passkeysModal() {
+  return new Promise((resolve) => {
+    const overlay = openModal('<div id="pk-body"><p class="muted">Loading…</p></div>', { width: 500 });
+    const body = overlay.querySelector('#pk-body');
+    const finish = () => done(overlay, resolve);
+
+    const show = async (msg = '', isError = true) => {
+      let st;
+      try { st = await vaultStatus(); } catch (e) {
+        body.innerHTML = `<h2 style="margin-top:0;">Passkeys</h2><div class="inline-error">${esc(vaultErrorText(e))}</div>
+          <div class="form-actions"><button class="btn" id="pk-close">Close</button></div>`;
+        body.querySelector('#pk-close').addEventListener('click', finish);
+        return;
+      }
+      body.innerHTML = `
+        <h2 style="margin-top:0;">Passkeys</h2>
+        <p class="muted">A passkey unlocks your private info on a new or reset device with Face ID, a fingerprint or
+          the device PIN. It never signs you in, and your recovery code still works.</p>
+        ${st.passkeys.length ? `<ul style="list-style:none;padding:0;margin:0;">${st.passkeys.map((p) => `
+          <li style="padding:10px 0;border-top:1px solid var(--border);" class="row-between">
+            <span><strong>${esc(p.label || 'Passkey')}</strong> <span class="faint">· added ${esc(new Date(p.createdAt).toLocaleDateString())}</span></span>
+            <button class="btn btn-sm btn-danger" data-rm="${esc(p.id)}">Remove…</button>
+          </li>`).join('')}</ul>` : '<p class="field-hint">No passkeys yet.</p>'}
+        ${st.passkeySupported ? '' : '<p class="field-hint">This browser can\'t make a passkey that unlocks private backup. Try Safari on an iPhone or Mac, or Chrome.</p>'}
+        ${msg ? `<div class="${isError ? 'inline-error' : 'field-hint'}">${esc(msg)}</div>` : ''}
+        <div class="form-actions">
+          ${st.passkeySupported && st.unlocked ? '<button class="btn btn-primary" id="pk-add">Add a passkey</button>' : ''}
+          <button class="btn" id="pk-close">Close</button>
+        </div>`;
+      body.querySelector('#pk-close').addEventListener('click', finish);
+      body.querySelector('#pk-add')?.addEventListener('click', async (ev) => {
+        ev.currentTarget.disabled = true;
+        try { await addPasskey({ label: passkeyLabel() }); await show('Passkey added.', false); } catch (e) { await show(vaultErrorText(e)); }
+      });
+      body.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', async () => {
+        const p = st.passkeys.find((x) => x.id === b.dataset.rm);
+        if (!(await confirmModal({
+          title: 'Remove this passkey?',
+          message: `"${p?.label || 'Passkey'}" will no longer unlock your private info. Your recovery code and other passkeys still work.`,
+          confirmLabel: 'Remove'
+        }))) return;
+        try {
+          const r = await withFreshSignIn((reauth) => removePasskey(b.dataset.rm, { reauth }).then(() => true),
+            { purpose: 'remove a passkey', confirmLabel: 'Remove it' });
+          await show(r === null ? '' : 'Passkey removed.', false);
+        } catch (e) { await show(vaultErrorText(e)); }
+      }));
+    };
+
+    show();
   });
 }
 
