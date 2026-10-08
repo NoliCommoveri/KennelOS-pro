@@ -15,6 +15,13 @@ import { deriveContactWaitlistStatus, prefChangeLines } from './waitlistRules.js
 import { todayYMD } from './dateUtils.js';
 import { WAITLIST_ENTRY_STATUS, WAITLIST_LISTEN_MODE, WAITLIST_PREF_SEX } from './vocab.js';
 
+// A family's status-page link token (W2 Plan §4): 256 random bits, hex. Minted by
+// cloudWaitlist when the list goes online, and again by "New link".
+export function newStatusToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 const base = makeRepo('waitlist_entries', WAITLIST_ENTRY_REFERENCES);
 
 const STATUSES = WAITLIST_ENTRY_STATUS.map((s) => s.value);
@@ -95,7 +102,9 @@ export const waitlistEntryRepo = {
     // Every change to the matching answers once the family is past review goes in
     // their history (Spec §15.9), so changing one and back is visible to her.
     // While an application is still under review it's just being filled in.
-    const lines = existing.status === 'applied' ? [] : prefChangeLines(existing, changes, { date: todayYMD() });
+    // A caller that writes the log itself (approving a family's request, which logs
+    // `by: 'request'`) passes `pref_change_log` and is trusted with it.
+    const lines = existing.status === 'applied' || changes.pref_change_log !== undefined ? [] : prefChangeLines(existing, changes, { date: todayYMD() });
     if (lines.length) changes = { ...changes, pref_change_log: [...(existing.pref_change_log || []), ...lines] };
     const saved = await base.update(id, changes);
     // archive()/unarchive() route through here too, so is_archived changes resync.

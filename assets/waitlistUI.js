@@ -8,11 +8,36 @@ import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
 import { getMyKennelId } from '../data/settings.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
-import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal } from './ui.js';
+import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal, promptModal } from './ui.js';
 import { PLACEMENT_TYPE, descriptor } from '../data/vocab.js';
-import { isManuallyPaused, isReadyHeld, readyFromDate, soonNoticeText, entryName } from '../data/waitlistRules.js';
+import { isManuallyPaused, isReadyHeld, readyFromDate, soonNoticeText, entryName, waitlistConfig } from '../data/waitlistRules.js';
+import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass } from '../data/waitlistActions.js';
 import { DemoModeError } from '../data/demoMode.js';
+
+// A family's status-page link (W2 Plan §8), or null while the list isn't online
+// (or the waitlist online isn't offered here). Only builds the link: no network.
+export function statusLinkFor(entry, kennel) {
+  if (!editionFlags.waitlist || !isWaitlistOnlineOffered() || !entry?.status_token) return null;
+  if (!kennel || !waitlistConfig(kennel).online) return null;
+  return statusPageLink(entry.status_token);
+}
+
+// Copy a link for her to paste into Messenger or a text. Where the clipboard
+// isn't allowed (plain http on a test server), the link is shown to copy by hand.
+export async function copyLink(link, btn = null, { title = 'Copy this link' } = {}) {
+  try {
+    await navigator.clipboard.writeText(link);
+    if (btn) {
+      const label = btn.textContent;
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = label; }, 2000);
+    }
+  } catch {
+    await promptModal({ title, message: 'Select the link and copy it.', defaultValue: link, confirmLabel: 'Done', cancelLabel: 'Close' });
+  }
+}
 
 // The kennel whose list to show, in priority order: an explicit ?kennel= id (one
 // of your own), the active kennel scope, the own kennel with the most open
@@ -302,15 +327,15 @@ export async function changePickDialog({ offer, name, currentName, pups, pupLabe
   return ok ? res : null;
 }
 
-// Undo a pass / no response: the family is next in line for this litter again.
-// `holderName` names the family holding the litter's turn now (their offer is
-// voided), or null.
+// Undo a pass / no response: the family's turn is back (every litter of it they
+// still match, Spec §16.1). `holderName` names the family holding the kennel's turn
+// now (their turn is voided), or null.
 export async function undoPassDialog({ offer, name, holderName = null, removed = false }) {
   const what = offer.outcome === 'passed' ? 'pass' : 'no response';
   const lines = [
-    `${name}'s ${what} is erased and doesn't count. Their offer reopens with a new respond-by date, so they're next in line for this litter again.`,
+    `${name}'s ${what} is erased and doesn't count. Their turn reopens with a new respond-by date, on every litter of it they still match.`,
     removed ? 'That pass had removed them from the list, so they go back on it in their old place.' : '',
-    holderName ? `${holderName} holds this litter's turn now. Their offer will be voided (not a pass), and they're next again after ${name}. Let them know.` : ''
+    holderName ? `${holderName} holds the turn now. Their turn will be voided (not a pass), and they're next again after ${name}. Let them know.` : ''
   ].filter(Boolean);
   if (!(await confirmModal({ title: `Undo ${name}'s ${what}?`, message: lines.join('\n\n'), confirmLabel: 'Undo it' }))) return null;
   return undoPass(offer.id);

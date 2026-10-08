@@ -605,6 +605,26 @@ export function clearCloudBackupState() {
   localStorage.removeItem(CLOUD_BACKUP_STATE_KEY);
 }
 
+// The waitlist online on this device (data/cloud/cloudWaitlist.js, W2 Plan §5):
+// per kennel id, what was last published { publicId, hash, version, publishedAt },
+// plus the last error. Outside KEYS like the rest of the cloud state, so Reset
+// App doesn't drop it (a reset turns cloud backup off, and publishing with it).
+const WAITLIST_ONLINE_STATE_KEY = 'kennelOS.waitlistOnline';
+
+export function getWaitlistOnlineState() {
+  return { kennels: {}, lastError: null, lastAttemptAt: null, ...(readJsonKey(WAITLIST_ONLINE_STATE_KEY) || {}) };
+}
+
+export function updateWaitlistOnlineState(patch) {
+  const next = { ...getWaitlistOnlineState(), ...patch };
+  localStorage.setItem(WAITLIST_ONLINE_STATE_KEY, JSON.stringify(next));
+  return next;
+}
+
+export function clearWaitlistOnlineState() {
+  localStorage.removeItem(WAITLIST_ONLINE_STATE_KEY);
+}
+
 export function getCloudDeviceId() {
   let id = localStorage.getItem(CLOUD_DEVICE_ID_KEY);
   if (!id) {

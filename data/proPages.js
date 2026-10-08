@@ -63,6 +63,9 @@ export const PRO_ONLY_STANDALONE = [
   // The Litter page's waitlist picks panel — litter.js imports it dynamically only
   // when editionFlags.waitlist is on, so Lite never requests it.
   'assets/waitlistPicksPanel.js',
+  // The Kennel page's "Online list" card (Waitlist W2 Plan §9), imported only when
+  // editionFlags.waitlist is on and the waitlist online is offered.
+  'assets/waitlistOnlineUI.js',
   // Invoice / receipt document model + its PDF renderer (Waitlist Spec §15.2),
   // used only by the Pro invoice page and the waitlist family page, and the
   // vendored jsPDF they load on demand.

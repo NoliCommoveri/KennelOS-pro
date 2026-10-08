@@ -163,6 +163,19 @@ export const WAITLIST_OFFER_OUTCOME = [
   { value: 'voided',      label: 'Voided',      badge: 'badge-gray' }
 ];
 
+// The moments that can offer the next family by themselves (Waitlist Spec §4.6,
+// kennel waitlist_config.auto_offer_on; none by default). Each is an offer on that
+// litter closing: the family who held the turn accepted (deposit in), passed, let
+// the deadline pass without picking, picked a pup but the deposit didn't arrive by
+// the deadline (recorded as no_response, with a pick), or left the list holding it.
+export const WAITLIST_AUTO_OFFER_TRIGGER = [
+  { value: 'accepted',    label: 'A family accepts a pup (deposit received)' },
+  { value: 'passed',      label: 'A family passes' },
+  { value: 'no_response', label: 'An offer deadline passes with no response' },
+  { value: 'no_deposit',  label: 'A family picks a pup but the deposit doesn\'t arrive in time' },
+  { value: 'left',        label: 'A family holding a turn leaves the list' }
+];
+
 export const WAITLIST_REMOVED_REASON = [
   { value: 'second_pass',         label: 'Second pass',             badge: 'badge-red' },
   { value: 'no_checkin_response', label: 'No check-in response',    badge: 'badge-red' },

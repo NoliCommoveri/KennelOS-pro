@@ -8,10 +8,14 @@
 // W1 sends nothing: no emails, no status page. She messages families herself.
 // Nothing here runs on page load: every write follows a tap (Spec §0).
 //
-// When are offers made without her picking the family? Only when she has turned on
-// automatic offers (waitlist_config.auto_offer_next — OFF by default, decided
-// 2026-10-06) and an offer on that same litter closes (deposit received / passed /
-// no response, or the family left the list while holding it) — the turn moves on,
+// Offers are TURNS (Spec §16.1, decided 2026-10-08): one family at a time across
+// the kennel's open litters, each turn covering every open litter they match.
+//
+// When are turns offered without her picking the family? Only when a turn closes
+// (deposit received / passed / no response, or the family left the list while
+// holding it) AND she has turned automatic offers on for that moment
+// (waitlist_config.auto_offer_on — none by default, decided 2026-10-06; per moment
+// since 2026-10-08, waitlistRules.autoOffers) — the turn moves on,
 // and every such offer is RETURNED so the page can tell her who to contact. With
 // automatic offers off, the same moments return who is next (`waiting`) and offer
 // nobody. Actions on one family (fee received, a fee-waived approval, an undo)
@@ -35,8 +39,10 @@ import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
 import {
   waitlistConfig, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
-  nextFamilyForLitter, respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
-  hasOpenOffer, turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker
+  respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
+  turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
+  prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
+  splitPrepassed, prepassFor
 } from './waitlistRules.js';
 
 const nowISO = () => new Date().toISOString();
@@ -221,9 +227,16 @@ export async function markSoonNotified(litterIdsByEntry, { date = todayYMD() } =
   }
 }
 
-// --- Offers (Spec §6.4–§6.5) ------------------------------------------------------
+// --- Offers: turns (Spec §6.4–§6.5, §16.1) ------------------------------------------
+//
+// One family holds a TURN at a time across the kennel's open litters (decided
+// 2026-10-08). A turn is one waitlist_offers row per litter it covers, sharing
+// `turn_id` and `respond_by_date`; the family picks one pup from any of them, or
+// passes on all of them. Only a turn passed in full counts as a pass, once.
+// Picks, deposits and pup switches still act on one row (one litter); outcomes
+// (passed, no response, void) close the whole turn.
 
-// Everything the rules need to decide a litter's next offer.
+// Everything the rules need to decide a litter's pick or switch.
 async function litterContext(litterId) {
   const litter = await litterRepo.getById(litterId);
   if (!litter) throw new Error('That litter no longer exists.');
@@ -243,65 +256,219 @@ async function litterContext(litterId) {
   };
 }
 
-// Offer the turn on this litter to the next eligible family, if picks are open
-// and no offer is open yet. Returns the new offer, or null (picks closed, an offer
-// already open, or nobody eligible left). One open offer per litter (Spec §6.5).
-export async function offerNext(litterId, { today = todayYMD() } = {}) {
-  const c = await litterContext(litterId);
-  if (!c.litter.picks_opened_date || c.litter.is_archived) return null;
-  const next = nextFamilyForLitter(c.entries, c.offers, c.litter, c.pups, c.sales, {
-    today, config: c.config, programsById: c.programsById
-  });
-  if (!next) return null;
-  const program = c.programsById.get(next.entry.waitlist_program_id) || null;
-  return waitlistOfferRepo.create({
-    entry_id: next.entry.id,
-    litter_id: c.litter.id,
-    kennel_id: c.litter.kennel_id,
-    offered_date: today,
-    respond_by_date: respondByDate(today, c.config, program),
-    eligible_dog_ids: next.eligibleDogs.map((d) => d.id),
-    outcome: 'open'
-  });
+// Everything the rules need to decide a kennel's next turn: every litter, pup and
+// offer of the kennel.
+async function kennelContext(kennelId) {
+  const [kennel, entries, offers, allLitters, dogs, programsById, sales] = await Promise.all([
+    kennelRepo.getById(kennelId),
+    waitlistEntryRepo.getByKennel(kennelId),
+    waitlistOfferRepo.getByKennel(kennelId),
+    litterRepo.getAll({ includeArchived: true }),
+    dogRepo.getAll({ includeArchived: true }),
+    waitlistProgramRepo.getMapForKennel(kennelId),
+    saleRepo.getAll({ includeArchived: true })
+  ]);
+  const litters = allLitters.filter((l) => l.kennel_id === kennelId);
+  const litterIds = new Set(litters.map((l) => l.id));
+  const pups = dogs.filter((d) => litterIds.has(d.litter_id));
+  const pupIds = new Set(pups.map((d) => d.id));
+  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  return {
+    kennel, entries, offers, litters, pups, programsById,
+    sales: sales.filter((x) => pupIds.has(x.dog_id)),
+    config: waitlistConfig(kennel),
+    litterLabel: (l) => l.nickname || `${dogsById.get(l.dam_id)?.call_name || 'Unknown'} × ${dogsById.get(l.sire_id)?.call_name || 'Unknown'}`
+  };
 }
 
-// Offer one family a litter from their own page (Spec §15.2): the waitlist as the
-// main workflow. Opens picks on the litter if they aren't open yet. The family
-// must be eligible for at least one available pup, nobody else may hold an open
-// offer on the litter (one at a time, §6.5), and the family's turn on it mustn't
-// already be spent. Offering out of order is allowed — the page confirms it with
-// her first and passes `note` saying who was next — and nothing about anyone
-// else's place changes. Returns the new offer.
-export async function offerTo(litterId, entryId, { today = todayYMD(), note = '' } = {}) {
-  const c = await litterContext(litterId);
-  if (c.litter.is_archived) throw new Error('That litter is archived.');
-  const entry = c.entries.find((e) => e.id === entryId);
-  if (!entry || entry.status !== 'active') throw new Error('Only families on the list can be offered a litter.');
-  if (hasOpenOffer(c.offers, litterId)) throw new Error('Another family already has an open offer on this litter. Record how it ended first.');
-  if (turnSpent(c.offers, litterId, entryId)) throw new Error('This family has already had their turn on this litter.');
-  const eligible = eligiblePupsFor(entry, c.litter, c.pups, c.sales, { today, config: c.config });
-  if (!eligible.length) throw new Error('No available pup in this litter matches this family right now.');
-  if (!c.litter.picks_opened_date) await litterRepo.update(litterId, { picks_opened_date: today });
+const ruleOpts = (c, today) => ({ today, config: c.config, programsById: c.programsById, kennelId: c.kennel?.id });
+
+// A turn as the pages and Today report it.
+function turnView(rows) {
+  return {
+    id: turnIdOf(rows[0]), entry_id: rows[0].entry_id, offers: rows,
+    litter_ids: rows.map((o) => o.litter_id),
+    respond_by_date: rows.map((o) => o.respond_by_date || '').sort().reverse()[0] || null
+  };
+}
+
+// "Not this litter" used up: those litters are recorded as PASSED rows of this
+// turn (never counted on their own: only a turn passed in full counts, §16.1 rule
+// 6) with the family's reason, and the prepasses leave the entry.
+async function recordPrepassed(entry, prepassed, { turnId, today, respondBy, counts = false }) {
+  const rows = [];
+  for (const [i, { litter, eligibleDogs, prepass }] of prepassed.entries()) {
+    rows.push(await waitlistOfferRepo.create({
+      entry_id: entry.id, litter_id: litter.id, kennel_id: litter.kennel_id, turn_id: turnId,
+      offered_date: today, respond_by_date: respondBy, eligible_dog_ids: eligibleDogs.map((d) => d.id),
+      outcome: 'passed', outcome_date: today, counts_as_pass: counts && i === 0,
+      pass_reason: prepass.reason || null,
+      notes: `Passed ahead of time on ${prepass.date || 'their status page'} ("Not this litter"); recorded when their turn came.`
+    }));
+  }
+  const used = new Set(prepassed.map((x) => x.prepass));
+  const fresh = await load(entry.id);
+  await waitlistEntryRepo.update(entry.id, { prepasses: (fresh.prepasses || []).filter((p) => ![...used].some((u) => u.litter_id === p.litter_id && u.pairing_id === p.pairing_id)) });
+  return rows;
+}
+
+// A turn whose every litter the family passed on ahead of time (§16.2): recorded
+// as passed at once, counting once, with no wait, and a line for her on their
+// entry. At the pass limit they're removed (second_pass, with the usual undo).
+async function autoPassTurn(c, entry, prepassed, today) {
   const program = c.programsById.get(entry.waitlist_program_id) || null;
-  return waitlistOfferRepo.create({
-    entry_id: entry.id,
-    litter_id: litterId,
-    kennel_id: c.litter.kennel_id,
-    offered_date: today,
-    respond_by_date: respondByDate(today, c.config, program),
-    eligible_dog_ids: eligible.map((d) => d.id),
-    outcome: 'open',
-    notes: note || ''
-  });
+  const counts = countsAsPass('passed', { config: c.config, program });
+  await recordPrepassed(entry, prepassed, { turnId: crypto.randomUUID(), today, respondBy: today, counts });
+  const offers = await waitlistOfferRepo.getByEntry(entry.id);
+  const removed = shouldRemoveForPasses(entry, offers, c.config);
+  if (removed) await waitlistEntryRepo.update(entry.id, { status: 'removed', removed_date: today, removed_reason: 'second_pass' });
+  const names = prepassed.map((x) => c.litterLabel(x.litter)).join(', ');
+  await addFamilyActivity(entry.id, [{
+    id: `prepass-turn-${entry.id}-${today}-${prepassed.map((x) => x.litter.id).join('-')}`, kind: 'action',
+    body: `Their turn came up on ${names}, which they'd said "Not this litter" to, so it was recorded as a pass${counts ? ` (pass ${passesUsed(entry, offers)} of ${Number(c.config.max_passes)})` : ''} and the list moved on.${removed ? ' That was their last pass, so they were removed from the list; you can undo it from their page for 7 days.' : ''}`
+  }]);
+  return { entry_id: entry.id, litter_ids: prepassed.map((x) => x.litter.id), removed };
 }
 
-// A family leaving the list (withdrew, removed, archived, accepted elsewhere)
-// can't keep holding a litter's turn: void each open offer they have (never a
-// pass) and move that litter on to its next family. Returns { voided, offered } —
-// the closed offers and the new ones — so the page can say who to contact.
-// A pick they were holding is let go too (its deposit-pending Sale is cancelled).
-// Returns { voided, offered, waiting }.
-async function releaseOpenOffers(entryId, { date = todayYMD(), why, exceptOfferId = null } = {}) {
+// Write a turn: one open row per litter in `ls` ([{ litter, eligibleDogs }]), and
+// a passed row for each litter in `prepassed` (passed ahead of time, §16.2).
+async function makeTurn(c, entry, ls, { today, note = '', prepassed = [] }) {
+  const program = c.programsById.get(entry.waitlist_program_id) || null;
+  const turnId = crypto.randomUUID();
+  const respondBy = respondByDate(today, c.config, program);
+  const rows = [];
+  if (prepassed.length) await recordPrepassed(entry, prepassed, { turnId, today, respondBy });
+  for (const { litter, eligibleDogs } of ls) {
+    rows.push(await waitlistOfferRepo.create({
+      entry_id: entry.id,
+      litter_id: litter.id,
+      kennel_id: litter.kennel_id,
+      turn_id: turnId,
+      offered_date: today,
+      respond_by_date: respondBy,
+      eligible_dog_ids: eligibleDogs.map((d) => d.id),
+      outcome: 'open',
+      notes: note || ''
+    }));
+  }
+  return turnView(rows);
+}
+
+// Offer the next turn in this kennel, if nobody holds one (§16.1 rule 3). A family
+// whose whole turn they'd passed on ahead of time is passed at once and the list
+// goes on (§16.2). Returns the new turn (with `auto_passed`: the families passed on
+// the way), or null (a turn is open, or nobody is eligible for any open litter).
+export async function offerNextTurn(kennelId, { today = todayYMD() } = {}) {
+  const autoPassed = [];
+  for (;;) {
+    const c = await kennelContext(kennelId);
+    const next = nextTurn(c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today));
+    if (!next) return null;
+    const { offer, prepassed } = splitPrepassed(next.entry, next.litters);
+    if (offer.length) return { ...(await makeTurn(c, next.entry, offer, { today, prepassed })), auto_passed: autoPassed };
+    autoPassed.push(await autoPassTurn(c, next.entry, prepassed, today));
+  }
+}
+
+// The next turn in this litter's kennel (the Litter page's "Offer to them").
+export async function offerNext(litterId, { today = todayYMD() } = {}) {
+  const litter = await litterRepo.getById(litterId);
+  if (!litter) throw new Error('That litter no longer exists.');
+  return offerNextTurn(litter.kennel_id, { today });
+}
+
+// Offer one family a turn from their own page (Spec §15.2): the waitlist as the
+// main workflow. Opens picks on `litterId` if they aren't open yet; the turn covers
+// that litter and every other open litter they're eligible for. Nobody else may
+// hold a turn (one at a time, §16.1). Offering out of order is allowed: the page
+// confirms it with her first and passes `note` saying who was next. Returns the turn.
+export async function offerTo(litterId, entryId, { today = todayYMD(), note = '' } = {}) {
+  const litter = await litterRepo.getById(litterId);
+  if (!litter) throw new Error('That litter no longer exists.');
+  if (litter.is_archived) throw new Error('That litter is archived.');
+  let c = await kennelContext(litter.kennel_id);
+  const entry = c.entries.find((e) => e.id === entryId);
+  if (!entry || entry.status !== 'active') throw new Error('Only families on the list can be offered a turn.');
+  if (openTurns(c.offers, c.kennel.id).length) throw new Error('Another family holds the turn now. Record how it ended first.');
+  if (turnSpent(c.offers, litterId, entryId)) throw new Error('This family has already had their turn on this litter.');
+  if (!eligiblePupsFor(entry, litter, c.pups, c.sales, { today, config: c.config }).length) {
+    throw new Error('No available pup in this litter matches this family right now.');
+  }
+  if (!litter.picks_opened_date) {
+    await litterRepo.update(litterId, { picks_opened_date: today });
+    c = await kennelContext(litter.kennel_id);
+  }
+  const ls = turnLittersFor(entry, c.offers, c.litters, c.pups, c.sales, { today, config: c.config });
+  const { offer, prepassed } = splitPrepassed(entry, ls);
+  if (!offer.some((x) => x.litter.id === litterId)) {
+    throw new Error(`They said "Not this litter" to ${litter.nickname || 'this litter'} on their status page. Undo that on their page first if they've changed their mind.`);
+  }
+  return makeTurn(c, entry, offer, { today, note, prepassed });
+}
+
+// **Open picks** (Spec §6.5): stamp the litter. With no turn open, the next turn is
+// offered. With one open, the litter joins it when its holder is the
+// highest-ranked family eligible for it (§16.1 rule 5; the respond-by date
+// restarts for the whole turn), and otherwise waits for the next turn.
+// Returns the turn offered or joined (`joined: true`), or null.
+export async function openPicks(litterId, { date = todayYMD() } = {}) {
+  await litterRepo.update(litterId, { picks_opened_date: date });
+  const litter = await litterRepo.getById(litterId);
+  const c = await kennelContext(litter.kennel_id);
+  const [open] = openTurns(c.offers, c.kennel.id);
+  if (!open) return offerNextTurn(litter.kennel_id, { today: date });
+  const eligible = joinsOpenTurn(open, litter, c.entries, c.offers, c.pups, c.sales, ruleOpts(c, date));
+  if (!eligible.length) return null;
+  const entry = c.entries.find((e) => e.id === open.entry_id);
+  // They passed on it ahead of time: it doesn't join; their next turn records it.
+  if (entry && prepassFor(entry, litter)) return null;
+  const program = entry ? c.programsById.get(entry.waitlist_program_id) || null : null;
+  const respondBy = respondByDate(date, c.config, program);
+  const rows = [];
+  for (const o of open.offers) {
+    rows.push(o.respond_by_date === respondBy ? o : await waitlistOfferRepo.update(o.id, {
+      respond_by_date: respondBy, notes: appendNote(o.notes, `Respond-by date restarted on ${date}: another litter joined this turn.`)
+    }));
+  }
+  rows.push(await waitlistOfferRepo.create({
+    entry_id: open.entry_id, litter_id: litter.id, kennel_id: litter.kennel_id, turn_id: open.id,
+    offered_date: date, respond_by_date: respondBy, eligible_dog_ids: eligible.map((d) => d.id), outcome: 'open'
+  }));
+  return { ...turnView(rows), joined: true };
+}
+
+// Stop making new offers on this litter. An open turn stays open until she records
+// how it ended.
+export async function closePicks(litterId) {
+  return litterRepo.update(litterId, { picks_opened_date: null });
+}
+
+// The turn moved on (a turn closed, or its family left the list). `trigger` is how
+// it closed: accepted / passed / no_response / no_deposit / left. With automatic
+// offers on for that moment, the next turn is offered now; otherwise (the default)
+// nobody is offered and who's next is returned so the page can tell her.
+// Returns { next, waiting } — at most one set.
+async function moveTurnOn(kennelId, { today = todayYMD(), trigger } = {}) {
+  const c = await kennelContext(kennelId);
+  if (autoOffers(c.config, trigger)) return { next: await offerNextTurn(kennelId, { today }), waiting: null };
+  const n = nextTurn(c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today));
+  return { next: null, waiting: n ? { entry_id: n.entry.id, litter_ids: n.litters.map((x) => x.litter.id) } : null };
+}
+
+// Fold moveTurnOn's answer into an action's result.
+async function finishTurn(result, kennelId, today, trigger) {
+  const moved = await moveTurnOn(kennelId, { today, trigger });
+  result.next = moved.next;
+  if (moved.waiting) result.waiting = [...(result.waiting || []), moved.waiting];
+  return result;
+}
+
+// A family leaving the list (withdrew, removed, archived, accepted) can't keep
+// holding a turn: void each of their open rows (never a pass) and, unless
+// `moveOn` is false (the caller moves on itself), move the kennel on to its next
+// turn. A pick they were holding is let go too (its deposit-pending Sale is
+// cancelled). Returns { voided, offered, waiting }.
+async function releaseOpenOffers(entryId, { date = todayYMD(), why, exceptOfferId = null, moveOn = true } = {}) {
   const open = (await waitlistOfferRepo.getByEntry(entryId))
     .filter((o) => o.id !== exceptOfferId && o.outcome === 'open' && !o.is_archived);
   const voided = [];
@@ -313,33 +480,13 @@ async function releaseOpenOffers(entryId, { date = todayYMD(), why, exceptOfferI
       outcome: 'voided', outcome_date: date, counts_as_pass: false,
       notes: appendNote(o.notes, `Voided automatically: ${why}.`)
     }));
-    const moved = await moveTurnOn(o.litter_id, { today: date });
+  }
+  if (voided.length && moveOn) {
+    const moved = await moveTurnOn(voided[0].kennel_id, { today: date, trigger: 'left' });
     if (moved.next) offered.push(moved.next);
     if (moved.waiting) waiting.push(moved.waiting);
   }
   return { voided, offered, waiting };
-}
-
-// The turn on this litter moved on (an offer closed, or its family left the list).
-// With automatic offers on, the next family is offered now (picks must be open);
-// with them off (the default), nobody is offered and the family who's next is
-// returned so the page can tell her. Returns { next, waiting } — at most one set.
-async function moveTurnOn(litterId, { today = todayYMD() } = {}) {
-  const c = await litterContext(litterId);
-  if (c.config.auto_offer_next) return { next: await offerNext(litterId, { today }), waiting: null };
-  if (c.litter.is_archived) return { next: null, waiting: null };
-  const n = nextFamilyForLitter(c.entries, c.offers, c.litter, c.pups, c.sales, {
-    today, config: c.config, programsById: c.programsById
-  });
-  return { next: null, waiting: n ? { litter_id: litterId, entry_id: n.entry.id } : null };
-}
-
-// Fold moveTurnOn's answer into an action's result.
-async function finishTurn(result, litterId, today) {
-  const moved = await moveTurnOn(litterId, { today });
-  result.next = moved.next;
-  if (moved.waiting) result.waiting = [...(result.waiting || []), moved.waiting];
-  return result;
 }
 
 // The deposit-pending Sale holding an open offer's pick, or null.
@@ -379,10 +526,17 @@ async function loadOpenOffer(offerId) {
   return offer;
 }
 
+// The open rows of the turn `offer` belongs to.
+async function openTurnRows(offer) {
+  return turnOffers(await waitlistOfferRepo.getByEntry(offer.entry_id), turnIdOf(offer)).filter((o) => o.outcome === 'open');
+}
+
 // The family picked a pup (Spec §6.5): create the Sale (deposit pending, buyer =
 // the family, price/deposit prefilled) to hold it while they send the deposit. The
-// offer stays OPEN — nothing moves on, the family stays on the list — and the
-// respond-by date is still their deadline, now for the deposit. Returns { offer, sale }.
+// turn stays OPEN — nothing moves on, the family stays on the list — and the
+// respond-by date is still their deadline, now for the deposit. One pick per turn:
+// a pick from another litter of the same turn is let go first (they switched
+// litters). Returns { offer, sale }.
 export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {}) {
   const offer = await loadOpenOffer(offerId);
   if (offer.chosen_dog_id) throw new Error('They\'ve already picked a pup. Use "Change pup" to switch.');
@@ -392,6 +546,13 @@ export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {
   const dog = c.pups.find((d) => d.id === chosenDogId);
   if (!dog) throw new Error('Pick one of this litter\'s pups.');
   if (!isPupAvailable(dog, c.sales)) throw new Error(`${dog.call_name} is no longer available.`);
+  for (const other of (await openTurnRows(offer)).filter((o) => o.id !== offer.id && isAwaitingDeposit(o))) {
+    await releasePick(other, { date, why: 'they picked from another litter in the same turn' });
+    await waitlistOfferRepo.update(other.id, {
+      chosen_dog_id: null, picked_date: null, sale_id: null,
+      notes: appendNote(other.notes, `Pick let go on ${date}: they picked from another litter in the same turn.`)
+    });
+  }
   const sale = await saleRepo.create({
     dog_id: dog.id,
     buyer_contact_id: entry.contact_id,
@@ -406,17 +567,17 @@ export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {
   return { offer: saved, sale };
 }
 
-// Switch the pup a family picked (Spec §6.5 — they clicked the wrong one). Allowed
-// while the deposit is pending, and after it too as long as nobody else has been
-// offered this litter since. The same Sale moves to the new pup; its price and
-// deposit follow the new pup's expected amounts only where she hasn't changed them
-// (and a paid deposit is never touched). Returns { offer, sale }.
+// Switch the pup a family picked (Spec §6.5 — they clicked the wrong one), within
+// the same litter. Allowed while the deposit is pending, and after it too as long
+// as nobody else has been offered a turn since. The same Sale moves to the new pup;
+// its price and deposit follow the new pup's expected amounts only where she hasn't
+// changed them (and a paid deposit is never touched). Returns { offer, sale }.
 export async function changePick(offerId, { chosenDogId, date = todayYMD() } = {}) {
   const offer = await loadOffer(offerId);
   const c = await litterContext(offer.litter_id);
   const accepted = offer.outcome === 'accepted';
-  if (accepted && !canSwitchAcceptedPick(offer, c.offers)) {
-    throw new Error('Another family has been offered this litter since, so the pup can\'t be switched here. Change it on the sale.');
+  if (accepted && !canSwitchAcceptedPick(offer, await waitlistOfferRepo.getByKennel(offer.kennel_id))) {
+    throw new Error('Another family has been offered a turn since, so the pup can\'t be switched here. Change it on the sale.');
   }
   if (!accepted && !isAwaitingDeposit(offer)) throw new Error('They haven\'t picked a pup yet.');
   if (chosenDogId === offer.chosen_dog_id) return { offer, sale: null };
@@ -446,9 +607,9 @@ export async function changePick(offerId, { chosenDogId, date = todayYMD() } = {
 }
 
 // The deposit arrived for a picked pup: the Sale moves to deposit paid, the pup is
-// placed, the offer is accepted, the family is placed and leaves the list (their
-// other open offers are voided, never a pass), and the turn moves on. Returns the
-// same shape as recordOutcome.
+// placed, the offer is accepted, the family is placed and leaves the list (the
+// other litters of their turn, and any other open offer, are voided — never a
+// pass), and the next turn comes up. Returns the same shape as recordOutcome.
 export async function confirmDeposit(offerId, { date = todayYMD(), amount } = {}) {
   const offer = await loadOpenOffer(offerId);
   if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
@@ -465,84 +626,84 @@ export async function confirmDeposit(offerId, { date = todayYMD(), amount } = {}
   await dogRepo.update(offer.chosen_dog_id, { disposition: 'placed' });
   result.offer = await waitlistOfferRepo.update(offerId, { outcome: 'accepted', outcome_date: date, counts_as_pass: false });
   await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id });
-  // Their other open offers end too — never a pass (Spec §6.4 leaning).
-  Object.assign(result, await releaseOpenOffers(entry.id, { date, why: 'the family accepted a pup from another litter', exceptOfferId: offerId }));
-  return finishTurn(result, offer.litter_id, date);
+  const released = await releaseOpenOffers(entry.id, { date, why: 'the family accepted a pup', exceptOfferId: offerId, moveOn: false });
+  // The other litters of this same turn closing is just the turn ending: not news.
+  result.voided = released.voided.filter((o) => turnIdOf(o) !== turnIdOf(offer));
+  return finishTurn(result, offer.kennel_id, date, 'accepted');
 }
 
-// Undo a pass or no response (Spec §6.4): the family is next in line for this
-// litter again. Their offer reopens with a fresh respond-by date and the pass no
-// longer counts; if that pass had removed them (second pass), they're back on the
-// list. A family holding this litter's turn meanwhile has their offer voided —
+// Undo a pass or no response (Spec §6.4): the family's turn is back. Every litter
+// of that turn they're still eligible for reopens with a fresh respond-by date, and
+// the pass no longer counts; if that pass had removed them (second pass), they're
+// back on the list. A family holding the kennel's turn meanwhile has it voided —
 // never a pass, and they're next again once this family's turn settles — unless
-// they've already picked a pup (then she settles that first). Makes no other offer.
-// Returns { offer, voided, restored }.
+// they've already picked a pup (then she settles that first). Makes no other
+// offer. Returns { offer, offers, voided, restored }.
 export async function undoPass(offerId, { today = todayYMD() } = {}) {
   const offer = await loadOffer(offerId);
   const entry = await load(offer.entry_id);
   const blocker = undoPassBlocker(offer, entry, today);
   if (blocker) throw new Error(blocker);
-  const c = await litterContext(offer.litter_id);
-  if (c.litter.is_archived) throw new Error('That litter is archived.');
-  const holder = c.offers.find((o) => o.id !== offer.id && !o.is_archived && o.outcome === 'open');
-  if (holder && isAwaitingDeposit(holder)) {
-    throw new Error('The family holding this litter\'s turn now has already picked a pup. Record their deposit or void their offer first.');
+  const c = await kennelContext(offer.kennel_id);
+  const rows = turnOffers(c.offers, turnIdOf(offer)).filter((o) => o.outcome === offer.outcome && o.outcome_date === offer.outcome_date);
+  const holders = openTurns(c.offers, c.kennel.id).filter((t) => t.id !== turnIdOf(offer));
+  if (holders.some((t) => t.offers.some(isAwaitingDeposit))) {
+    throw new Error('The family holding the turn now has already picked a pup. Record their deposit or void their offer first.');
   }
-  const eligible = eligiblePupsFor({ ...entry, status: 'active' }, c.litter, c.pups, c.sales, { today, config: c.config });
-  if (!eligible.length) {
-    throw new Error('They can\'t be offered this litter right now (no matching pup left, paused, or listening for other litters), so there\'s no turn to give back.');
+  const active = { ...entry, status: 'active' };
+  const reopen = rows.map((o) => ({ o, litter: c.litters.find((l) => l.id === o.litter_id) }))
+    .filter(({ litter }) => litter && !litter.is_archived)
+    .map(({ o, litter }) => ({ o, eligible: eligiblePupsFor(active, litter, c.pups, c.sales, { today, config: c.config }) }))
+    .filter((x) => x.eligible.length);
+  if (!reopen.length) {
+    throw new Error('They can\'t be offered those litters right now (no matching pup left, paused, or listening for other litters), so there\'s no turn to give back.');
   }
   const program = c.programsById.get(entry.waitlist_program_id) || null;
-  const result = { offer: null, voided: [], restored: false };
-  if (holder) {
-    result.voided.push(await waitlistOfferRepo.update(holder.id, {
-      outcome: 'voided', outcome_date: today, counts_as_pass: false,
-      notes: appendNote(holder.notes, 'Voided automatically: you undid an earlier pass on this litter, so that family got their turn back. Not a pass; this family is next again after them.')
-    }));
+  const result = { offer: null, offers: [], voided: [], restored: false };
+  for (const t of holders) {
+    for (const h of t.offers) {
+      result.voided.push(await waitlistOfferRepo.update(h.id, {
+        outcome: 'voided', outcome_date: today, counts_as_pass: false,
+        notes: appendNote(h.notes, 'Voided automatically: you undid an earlier pass, so that family got their turn back. Not a pass; this family is next again after them.')
+      }));
+    }
   }
   if (entry.status === 'removed') {
     await waitlistEntryRepo.update(entry.id, { status: 'active', removed_date: null, removed_reason: null });
     result.restored = true;
   }
   const label = offer.outcome === 'passed' ? 'Pass' : 'No response';
-  result.offer = await waitlistOfferRepo.update(offerId, {
-    outcome: 'open', outcome_date: null, counts_as_pass: false,
-    respond_by_date: respondByDate(today, c.config, program),
-    eligible_dog_ids: eligible.map((d) => d.id),
-    notes: appendNote(offer.notes, `${label} undone by you on ${today}; their turn is back with a new respond-by date.`)
-  });
+  const respondBy = respondByDate(today, c.config, program);
+  for (const o of rows) {
+    const re = reopen.find((x) => x.o.id === o.id);
+    const saved = await waitlistOfferRepo.update(o.id, re
+      ? { outcome: 'open', outcome_date: null, counts_as_pass: false, respond_by_date: respondBy, eligible_dog_ids: re.eligible.map((d) => d.id),
+          notes: appendNote(o.notes, `${label} undone by you on ${today}; their turn is back with a new respond-by date.`) }
+      : { counts_as_pass: false, notes: appendNote(o.notes, `${label} undone by you on ${today}; no matching pup left in this litter, so it stays closed.`) });
+    if (re) result.offers.push(saved);
+  }
+  result.offer = result.offers.find((o) => o.id === offerId) || result.offers[0];
   return result;
 }
 
-// **Open picks** (Spec §6.5): stamp the litter and offer the first family.
-export async function openPicks(litterId, { date = todayYMD() } = {}) {
-  await litterRepo.update(litterId, { picks_opened_date: date });
-  return offerNext(litterId, { today: date });
-}
-
-// Stop making new offers on this litter. An open offer stays open until she
-// records its outcome.
-export async function closePicks(litterId) {
-  return litterRepo.update(litterId, { picks_opened_date: null });
-}
-
-// Record how an open offer ended. `outcome` is accepted / passed / no_response /
-// voided. Returns { offer, sale, removed, passes, next, voided, offered, waiting }
-// for the page's message: `next` is this litter's new offer (automatic offers on),
-// `waiting` who's next when they're off; `voided` / `offered` are the family's
-// OTHER open offers that closed because they left the list, and the offers those
-// litters moved on to.
-//  - accepted: the pick AND the deposit at once — needs `chosenDogId` (an available
-//    pup from this litter) unless they've already picked; `depositDate` /
-//    `depositAmount` are optional. Same as recordPick + confirmDeposit.
-//  - passed / no_response: a pick they were holding lapses (its Sale is cancelled).
-//    counts_as_pass is decided now and frozen (§6.4); at the pass limit the entry is
-//    removed (second_pass, with a 7-day undo) and their other open offers are voided too.
-//  - voided: never a pass; a held pick lapses. The turn is NOT moved on (she voided
-//    it for a reason; the same family would just be offered again) — she offers the
-//    next family from the litter page.
-// After passed/no_response the turn moves on (moveTurnOn).
-export async function recordOutcome(offerId, outcome, { date = todayYMD(), chosenDogId = null, depositDate = null, depositAmount } = {}) {
+// Record how a turn ended, from any of its rows. `outcome` is accepted / passed /
+// no_response / voided. Returns { offer, sale, removed, passes, next, voided,
+// offered, waiting } for the page's message: `next` is the new turn (automatic
+// offers on), `waiting` who's next when they're off; `voided` / `offered` are the
+// family's OTHER open offers that closed because they left the list.
+//  - accepted: the pick AND the deposit at once, on THIS row — needs `chosenDogId`
+//    (an available pup from this litter) unless they've already picked here;
+//    `depositDate` / `depositAmount` are optional. Same as recordPick + confirmDeposit.
+//  - passed / no_response: closes EVERY litter of the turn; a pick they were
+//    holding lapses (its Sale is cancelled). counts_as_pass is decided now and
+//    frozen (§6.4) on ONE row: a turn passed in full counts once (§16.1 rule 6). At
+//    the pass limit the entry is removed (second_pass, with a 7-day undo).
+//  - voided: the whole turn, never a pass; a held pick lapses. The turn is NOT
+//    moved on (she voided it for a reason; the same family would just be offered
+//    again) — she offers the next turn from the litter page.
+// `passReason` ({ id, label, text }) is the family's own reason, on a pass they
+// made on their status page (§16.5); none when she records one.
+export async function recordOutcome(offerId, outcome, { date = todayYMD(), chosenDogId = null, depositDate = null, depositAmount, passReason = null } = {}) {
   const offer = await loadOpenOffer(offerId);
   const entry = await load(offer.entry_id);
 
@@ -552,31 +713,188 @@ export async function recordOutcome(offerId, outcome, { date = todayYMD(), chose
     return confirmDeposit(offerId, { date: depositDate || date, amount: depositAmount });
   }
 
+  const rows = await openTurnRows(offer);
+  const picked = rows.find(isAwaitingDeposit) || null;
   const result = { offer: null, sale: null, removed: false, passes: null, next: null, voided: [], offered: [], waiting: [] };
   if (outcome === 'passed' || outcome === 'no_response') {
-    await releasePick(offer, { date, why: outcome === 'passed' ? 'they passed' : 'no deposit by the deadline' });
+    for (const o of rows) await releasePick(o, { date, why: outcome === 'passed' ? 'they passed' : 'no deposit by the deadline' });
     const [kennel, program] = await Promise.all([
       kennelRepo.getById(entry.kennel_id),
       entry.waitlist_program_id ? waitlistProgramRepo.getById(entry.waitlist_program_id) : null
     ]);
     const config = waitlistConfig(kennel);
-    result.offer = await waitlistOfferRepo.update(offerId, {
-      outcome, outcome_date: date, counts_as_pass: countsAsPass(outcome, { config, program })
-    });
+    const counts = countsAsPass(outcome, { config, program });
+    for (const o of rows) {
+      const saved = await waitlistOfferRepo.update(o.id, {
+        outcome, outcome_date: date, counts_as_pass: counts && o.id === offer.id,
+        ...(outcome === 'passed' && passReason ? { pass_reason: passReason } : {})
+      });
+      if (o.id === offer.id) result.offer = saved;
+    }
     const offers = await waitlistOfferRepo.getByEntry(entry.id);
-    result.passes = { used: passesUsed(entry, offers), max: Number(config.max_passes), counted: result.offer.counts_as_pass };
+    result.passes = { used: passesUsed(entry, offers), max: Number(config.max_passes), counted: counts };
     if (shouldRemoveForPasses(entry, offers, config)) {
       await waitlistEntryRepo.update(entry.id, { status: 'removed', removed_date: date, removed_reason: 'second_pass' });
       result.removed = true;
-      Object.assign(result, await releaseOpenOffers(entry.id, { date, why: 'the family was removed after their last pass', exceptOfferId: offerId }));
+      const released = await releaseOpenOffers(entry.id, { date, why: 'the family was removed after their last pass', moveOn: false });
+      result.voided = released.voided;
     }
   } else if (outcome === 'voided') {
-    await releasePick(offer, { date, why: 'you voided the offer' });
-    result.offer = await waitlistOfferRepo.update(offerId, { outcome: 'voided', outcome_date: date, counts_as_pass: false });
+    for (const o of rows) {
+      await releasePick(o, { date, why: 'you voided the offer' });
+      const saved = await waitlistOfferRepo.update(o.id, { outcome: 'voided', outcome_date: date, counts_as_pass: false });
+      if (o.id === offer.id) result.offer = saved;
+    }
     return result;
   } else {
     throw new Error(`Unknown outcome "${outcome}".`);
   }
 
-  return finishTurn(result, offer.litter_id, date);
+  return finishTurn(result, offer.kennel_id, date, closingTrigger(picked || offer, outcome));
+}
+
+// --- The status page (W2 step 5): family actions, requests, messages -------------
+//
+// A family's actions arrive as events (data/waitlistEvents.js plans each one); a
+// request (a pause, a narrower listen-only change, a change to a matching answer)
+// waits on the entry until she taps Approve or Decline here, and is then kept,
+// marked with her decision, so their page can show it (waitlistProjection).
+// `messages` on the entry is the family's activity and their messages to her,
+// newest last: { id, at, from: 'family', kind: 'message' | 'action', body, read }.
+// Unread ones are a Today nudge.
+
+export const MESSAGES_KEPT = 500;
+export const MESSAGE_MAX = 10000;
+
+// Add lines to a family's activity (by id, so the same line is never added twice).
+// → the entry, or null when there was nothing new.
+export async function addFamilyActivity(entryId, items) {
+  const entry = await load(entryId);
+  const have = new Set((entry.messages || []).map((m) => m.id));
+  const fresh = items.filter((m) => m && m.id && !have.has(m.id)).map((m) => ({
+    id: String(m.id), at: m.at || nowISO(), from: 'family', kind: m.kind === 'message' ? 'message' : 'action',
+    body: String(m.body ?? '').slice(0, MESSAGE_MAX), read: false
+  }));
+  if (!fresh.length) return null;
+  const messages = [...(entry.messages || []), ...fresh]
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+    .slice(-MESSAGES_KEPT);
+  return waitlistEntryRepo.update(entryId, { messages });
+}
+
+export async function markMessagesRead(entryId) {
+  const entry = await load(entryId);
+  if (!(entry.messages || []).some((m) => !m.read)) return entry;
+  return waitlistEntryRepo.update(entryId, { messages: entry.messages.map((m) => ({ ...m, read: true })) });
+}
+
+const decided = (req, decision, date) => ({ ...req, decided: decision, decided_date: date });
+const pending = (req) => Boolean(req && req.requested_date && !req.decided);
+export const hasPendingRequest = (entry, field) => pending(entry && entry[field]);
+
+function loadPending(entry, field, what) {
+  if (!pending(entry[field])) throw new Error(`There's no ${what} request waiting for this family.`);
+  return entry[field];
+}
+
+// Carry out one plan from waitlistEvents.planFamilyEvent. A pick or pass that
+// her records refuse after all (the pup was sold a moment ago…) becomes an
+// activity line instead, never an error that stops the other events.
+// → { done: op, result?, activity: entry | null }
+export async function applyFamilyPlan(entryId, plan) {
+  const { date } = plan;
+  let result = null;
+  let activity = plan.activity;
+  try {
+    switch (plan.op) {
+      case 'pick': result = await recordPick(plan.offerId, { chosenDogId: plan.dogId, date }); break;
+      case 'pass': result = await recordOutcome(plan.offerId, 'passed', { date, passReason: plan.reason || null }); break;
+      case 'prepass': await addPrepass(entryId, plan.prepass); break;
+      case 'unprepass': await removePrepass(entryId, plan.target); break;
+      case 'withdraw': result = await withdraw(entryId, { date }); break;
+      case 'pause_request': await waitlistEntryRepo.update(entryId, { pause_request: plan.request }); break;
+      case 'listen_request': await waitlistEntryRepo.update(entryId, { listen_change_request: plan.request }); break;
+      case 'pref_request': await waitlistEntryRepo.update(entryId, { pref_change_request: plan.request }); break;
+      case 'listen_apply': await waitlistEntryRepo.update(entryId, plan.changes); break;
+      case 'note': case 'skip': break;
+      default: throw new Error(`Unknown plan "${plan.op}".`);
+    }
+  } catch (err) {
+    if (!activity) throw err;
+    activity = { ...activity, body: `${activity.body.replace(/\. Their pick is held.*$/, '.')} It couldn't be recorded: ${err.message}` };
+    result = null;
+  }
+  return { done: plan.op, result, activity: activity ? await addFamilyActivity(entryId, [activity]) : null };
+}
+
+// A pause they asked for (Spec §6.3, Q7): approving sets paused_until to their
+// date (their note, if any, becomes the pause reason); declining changes nothing.
+export async function approvePauseRequest(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  const req = loadPending(entry, 'pause_request', 'pause');
+  return waitlistEntryRepo.update(entryId, {
+    paused_until: req.until, pause_reason: req.note || entry.pause_reason || '', pause_request: decided(req, 'approved', date)
+  });
+}
+
+export async function declinePauseRequest(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  return waitlistEntryRepo.update(entryId, { pause_request: decided(loadPending(entry, 'pause_request', 'pause'), 'declined', date) });
+}
+
+// A change to their matching answers (Spec §15.9). Approving applies it and logs
+// it `by: 'request'`; declining logs what they asked for with `declined: true`.
+// Neither closes an open offer.
+export async function approvePrefChange(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  const req = loadPending(entry, 'pref_change_request', 'answer-change');
+  const lines = prefChangeLines(entry, req.changes || {}, { date, by: 'request' });
+  return waitlistEntryRepo.update(entryId, {
+    ...(req.changes || {}),
+    pref_change_log: [...(entry.pref_change_log || []), ...lines],
+    pref_change_request: decided(req, 'approved', date)
+  });
+}
+
+export async function declinePrefChange(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  const req = loadPending(entry, 'pref_change_request', 'answer-change');
+  const lines = prefChangeLines(entry, req.changes || {}, { date, by: 'request' }).map((l) => ({ ...l, declined: true }));
+  return waitlistEntryRepo.update(entryId, {
+    pref_change_log: [...(entry.pref_change_log || []), ...lines],
+    pref_change_request: decided(req, 'declined', date)
+  });
+}
+
+// A narrower listen-only change they asked for (Spec §15.7 item 6).
+export async function approveListenChange(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  const req = loadPending(entry, 'listen_change_request', 'listen-only');
+  return waitlistEntryRepo.update(entryId, {
+    listen_mode: req.listen_mode || 'all',
+    ...(req.listen_mode === 'selected' ? { listen_sire_ids: [...(req.listen_sire_ids || [])], listen_dam_ids: [...(req.listen_dam_ids || [])] } : {}),
+    listen_change_request: decided(req, 'approved', date)
+  });
+}
+
+export async function declineListenChange(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  return waitlistEntryRepo.update(entryId, { listen_change_request: decided(loadPending(entry, 'listen_change_request', 'listen-only'), 'declined', date) });
+}
+
+// "Not this litter" (Spec §16.2): a pending pass on a litter (or an upcoming
+// pairing), with the family's reason. Nothing counts until their turn comes; one
+// per litter, and saying it again replaces it. `prepass` is { litter_id | pairing_id,
+// reason: { id, label, text }, date }.
+export async function addPrepass(entryId, prepass) {
+  const entry = await load(entryId);
+  const same = (p) => (prepass.litter_id ? p.litter_id === prepass.litter_id : p.pairing_id === prepass.pairing_id);
+  return waitlistEntryRepo.update(entryId, { prepasses: [...(entry.prepasses || []).filter((p) => !same(p)), prepass] });
+}
+
+// Take a "Not this litter" back. `target` is { litter_id } or { pairing_id }.
+export async function removePrepass(entryId, target) {
+  const entry = await load(entryId);
+  const same = (p) => (target.litter_id ? p.litter_id === target.litter_id : p.pairing_id === target.pairing_id);
+  return waitlistEntryRepo.update(entryId, { prepasses: (entry.prepasses || []).filter((p) => !same(p)) });
 }

@@ -19,7 +19,10 @@
 // Spec §5.4, gated on editionFlags.shows). Plus the Pro-only waitlist rules
 // (Waitlist Spec §6.5, gated on editionFlags.waitlist): new applications, an
 // offer past its deadline, a fee past its pay-by date, and the 7-day undo on a
-// second-pass removal — each a one-tap suggestion, never an automatic write.
+// second-pass removal — each a one-tap suggestion, never an automatic write;
+// and, from W2 step 5, what families asked for or said on their status page (a
+// pause, a listen-only narrowing, an answer change: Approve / Decline; messages
+// and activity: Mark read).
 //   { key, title, detail, subjectHref, actions: [{ label, run: async () => {} }] }
 // `run` may resolve to { title, message }, which Today shows once it's done.
 import { studServiceRepo } from './studServiceRepo.js';
@@ -37,8 +40,15 @@ import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { contactRepo } from './contactRepo.js';
-import { overdueOffers, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig } from './waitlistRules.js';
-import { recordOutcome, markFeeExpired, undoRemoval } from './waitlistActions.js';
+import { waitlistProgramRepo } from './waitlistProgramRepo.js';
+import {
+  overdueTurns, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, autoOffers, closingTrigger,
+  prefChangeSummary, prefChangeEffect, PREF_FIELD_LABEL
+} from './waitlistRules.js';
+import {
+  recordOutcome, markFeeExpired, undoRemoval, hasPendingRequest, markMessagesRead,
+  approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange
+} from './waitlistActions.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
@@ -385,16 +395,18 @@ async function waitlistNudges(today, litters, dogsById) {
     });
   }
 
-  for (const o of overdueOffers(offers, today)) {
-    const e = entriesById.get(o.entry_id);
+  // One per TURN (Spec §16.1): a turn covering two litters is one deadline.
+  for (const t of overdueTurns(offers, today)) {
+    const e = entriesById.get(t.entry_id);
     if (!e) continue;
-    const l = littersById.get(o.litter_id);
+    const o = t.offers.find((x) => x.chosen_dog_id) || t.offers[0];
+    const covers = t.offers.map((x) => (littersById.get(x.litter_id) ? litterLabel(littersById.get(x.litter_id), dogsById) : 'Litter')).join(', ');
     out.push({
-      key: `waitlist-offer-overdue:${o.id}`,
+      key: `waitlist-offer-overdue:${t.id}`,
       // A family that picked a pup but never sent the deposit: same outcome (their
       // pick lapses and the held Sale is cancelled), worded for the deposit.
       title: o.chosen_dog_id ? `${name(e)}'s deposit didn't arrive in time` : `${name(e)}'s offer deadline passed`,
-      detail: `${l ? litterLabel(l, dogsById) : 'Litter'} — they had until ${o.respond_by_date}${o.chosen_dog_id ? ' to send the deposit for their pick. Recording no deposit frees the pup' : '. Recording no response closes their turn'}${waitlistConfig(kennelsById.get(o.kennel_id)).auto_offer_next ? ' and offers the next family' : ''}.`,
+      detail: `${covers} — they had until ${t.respond_by_date}${o.chosen_dog_id ? ' to send the deposit for their pick. Recording no deposit frees the pup' : '. Recording no response closes their turn'}${autoOffers(waitlistConfig(kennelsById.get(o.kennel_id)), closingTrigger(o, 'no_response')) ? ' and offers the next family' : ''}.`,
       subjectHref: `litter.html?id=${encodeURIComponent(o.litter_id)}`,
       actions: [{
         label: o.chosen_dog_id ? 'Record no deposit' : 'Record no response',
@@ -411,7 +423,7 @@ async function waitlistNudges(today, litters, dogsById) {
             nameOf: (id) => (fresh.get(id) ? name(fresh.get(id)) : 'the next family'),
             litterOf: (id) => (littersById.get(id) ? litterLabel(littersById.get(id), dogsById) : 'A litter')
           }));
-          if (!res.next && !res.waiting.length) lines.push('Nobody else on the list is eligible for this litter right now.');
+          if (!res.next && !res.waiting.length) lines.push('Nobody else on the list is eligible for your open litters right now.');
           return { title: 'Recorded', message: lines.join('\n\n') };
         }
       }]
@@ -442,6 +454,99 @@ async function waitlistNudges(today, litters, dogsById) {
         }
       }]
     });
+  }
+  out.push(...(await statusPageNudges(entries, offers, { today, litters, dogsById, kennelsById, name })));
+  return out;
+}
+
+// What families asked for or said on their status page (W2 step 5). A request
+// waits on the entry until she decides, so dismissing the nudge never loses it
+// (the family's page has the same buttons). Keys carry the request's date or the
+// newest line's id, so a new one resurfaces after a dismiss.
+async function statusPageNudges(entries, offers, { today, litters, dogsById, kennelsById, name }) {
+  const out = [];
+  const href = (e) => `waitlist-entry.html?id=${encodeURIComponent(e.id)}`;
+  const dogName = (id) => dogsById.get(id)?.call_name || 'a dog';
+  const litterName = (l) => litterLabel(l, dogsById);
+  const said = (note) => (note ? ` They said: "${note}"` : '');
+  const decide = (approve, decline, done) => [
+    { label: 'Approve', run: async () => { await approve(); return { title: 'Approved', message: done }; } },
+    { label: 'Decline', run: async () => { await decline(); return { title: 'Declined', message: 'Nothing changed for them. Let them know.' }; } }
+  ];
+  let sales = null;
+  const programs = new Map();
+  for (const e of entries) {
+    const open = offers.filter((o) => o.entry_id === e.id && o.outcome === 'open' && !o.is_archived);
+    const openNote = open.length
+      ? ` Their open offer on ${open.map((o) => (litters.find((l) => l.id === o.litter_id) ? litterName(litters.find((l) => l.id === o.litter_id)) : 'a litter')).join(', ')} stays open either way.`
+      : '';
+    if (hasPendingRequest(e, 'pause_request')) {
+      const r = e.pause_request;
+      out.push({
+        key: `waitlist-pause-request:${e.id}:${r.requested_date}:${r.until}`,
+        title: `${name(e)} asked to pause their place until ${r.until}`,
+        detail: `They keep their place and aren't offered pups until then; a pause never counts as a pass.${openNote}${said(r.note)}`,
+        subjectHref: href(e),
+        actions: decide(() => approvePauseRequest(e.id, { date: today }), () => declinePauseRequest(e.id, { date: today }),
+          `${name(e)} is paused until ${r.until}. Let them know.`)
+      });
+    }
+    if (hasPendingRequest(e, 'pref_change_request')) {
+      const r = e.pref_change_request;
+      const kennel = kennelsById.get(e.kennel_id);
+      const config = waitlistConfig(kennel);
+      sales ??= await saleRepo.getAll({ includeArchived: true });
+      if (!programs.has(e.kennel_id)) programs.set(e.kennel_id, await waitlistProgramRepo.getMapForKennel(e.kennel_id));
+      const live = litters.filter((l) => l.kennel_id === e.kennel_id && !l.is_archived && ['expected', 'whelped', 'weaning', 'ready'].includes(l.status));
+      const fx = prefChangeEffect(e, r.changes || {}, {
+        litters: live, entries: entries.filter((x) => x.kennel_id === e.kennel_id), offers, pups: [...dogsById.values()], sales, today, config, programsById: programs.get(e.kennel_id)
+      });
+      const history = (e.pref_change_log || []).filter((l) => !l.declined);
+      const lines = [
+        fx.narrowed.length
+          ? `Narrower (${fx.narrowed.map((f) => PREF_FIELD_LABEL[f]).join(', ')})${fx.skippedLitters.length ? `: they'd stop being next for ${fx.skippedLitters.map(litterName).join(', ')}` : ''}.`
+          : 'Not narrower: it doesn\'t rule out a pup they could be offered now.',
+        openNote.trim(),
+        history.length ? `${history.length} change${history.length === 1 ? '' : 's'} to these answers since joining; the last on ${history[history.length - 1].date}.` : '',
+        said(r.note).trim()
+      ].filter(Boolean);
+      out.push({
+        key: `waitlist-pref-request:${e.id}:${r.requested_date}`,
+        title: `${name(e)} asked to change ${prefChangeSummary(e, r.changes) || 'their answers'}`,
+        detail: lines.join(' '),
+        subjectHref: href(e),
+        actions: decide(() => approvePrefChange(e.id, { date: today }), () => declinePrefChange(e.id, { date: today }),
+          `${name(e)}'s answers are updated, and the change is in their answer history. Let them know.`)
+      });
+    }
+    if (hasPendingRequest(e, 'listen_change_request')) {
+      const r = e.listen_change_request;
+      const parents = [...(r.listen_sire_ids || []), ...(r.listen_dam_ids || [])].map(dogName).join(', ');
+      out.push({
+        key: `waitlist-listen-request:${e.id}:${r.requested_date}`,
+        title: r.listen_mode === 'selected' ? `${name(e)} asked to wait only for litters from ${parents || 'no parents'}` : `${name(e)} asked to change which litters they wait for`,
+        detail: `Narrower, so it needs you: they wouldn't be offered other litters, and nothing is counted as a pass for those.${openNote}`,
+        subjectHref: href(e),
+        actions: decide(() => approveListenChange(e.id, { date: today }), () => declineListenChange(e.id, { date: today }),
+          `${name(e)} now waits only for those litters. Let them know.`)
+      });
+    }
+    const unread = (e.messages || []).filter((m) => !m.read);
+    if (unread.length) {
+      const newest = unread[unread.length - 1];
+      const msgs = unread.filter((m) => m.kind === 'message').length;
+      const clip = (t) => (t.length > 200 ? `${t.slice(0, 200)}…` : t);
+      out.push({
+        key: `waitlist-messages:${e.id}:${newest.id}`,
+        title: msgs ? `${msgs === 1 ? 'A message' : `${msgs} messages`} from ${name(e)}` : `${name(e)} did something on their status page`,
+        detail: unread.slice(-3).map((m) => clip(m.body)).join(' · '),
+        subjectHref: href(e),
+        actions: [
+          { label: 'Open', run: async () => { location.href = href(e); } },
+          { label: 'Mark read', run: async () => { await markMessagesRead(e.id); } }
+        ]
+      });
+    }
   }
   return out;
 }

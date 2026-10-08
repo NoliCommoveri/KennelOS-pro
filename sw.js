@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v47';
+const CACHE_NAME = 'kennelos-pro-shell-v48';
 
 const PRECACHE_URLS = [
   './',
@@ -45,6 +45,7 @@ const PRECACHE_URLS = [
   'assets/invoiceDoc.js',
   'assets/invoicePdf.js',
   'assets/invoiceGenerator.js',
+  'assets/waitlistOnlineUI.js',
   'assets/waitlistPicksPanel.js',
   'assets/waitlistUI.js',
   'assets/wizardUI.js',
@@ -65,6 +66,7 @@ const PRECACHE_URLS = [
   'data/cloud/cloudDevices.js',
   'data/cloud/cloudEntitlement.js',
   'data/cloud/cloudVault.js',
+  'data/cloud/cloudWaitlist.js',
   'data/cloud/vaultCrypto.js',
   'data/cloud/vaultKeyStore.js',
   'data/cloud/vaultPasskey.js',
@@ -115,10 +117,14 @@ const PRECACHE_URLS = [
   'data/syncRegistry.js',
   'data/vocab.js',
   'data/waitlistActions.js',
+  'data/waitlistCrypto.js',
   'data/waitlistEntryRepo.js',
+  'data/waitlistEvents.js',
   'data/waitlistForm.js',
+  'data/waitlistInbox.js',
   'data/waitlistOfferRepo.js',
   'data/waitlistProgramRepo.js',
+  'data/waitlistProjection.js',
   'data/waitlistRules.js',
   'data/wizardState.js',
   'data/wizardSteps.js',

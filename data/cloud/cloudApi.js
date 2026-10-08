@@ -231,4 +231,17 @@ export const pollPairing = (token, pairingId) => getJson(`/vault/pairings/${enco
 
 // --- Public -------------------------------------------------------------------
 // Service notices (the shutdown channel). → [{ id, level, message, until }]
+// --- The waitlist online, her side (Waitlist W2 Plan §5) -------------------------------
+export const publishWaitlist = (token, publicId, projection) =>
+  getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { method: 'PUT', token, json: { projection } });
+export const readWaitlistInbox = (token, { all = false, after = null } = {}) =>
+  getJson(`/waitlist/inbox${all || after ? `?${new URLSearchParams({ ...(all ? { all: '1' } : {}), ...(after ? { after } : {}) })}` : ''}`, { token });
+export const ackWaitlistInbox = (token, ids) => getJson('/waitlist/inbox/ack', { method: 'POST', token, json: { ids } });
+// → { events: [{ seq, publicId, entryId, kind, payload, basedOnVersion, madeBy, createdAt }], last, more }
+export const readWaitlistEvents = (token, since = 0) => getJson(`/waitlist/events?since=${encodeURIComponent(since)}`, { token });
+export const readWaitlistProjection = (token, publicId) =>
+  getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { token });
+export const unpublishWaitlist = (token, publicId) =>
+  getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { method: 'DELETE', token });
+
 export const getNotices = () => getJson('/notice').then((b) => b.notices || []);

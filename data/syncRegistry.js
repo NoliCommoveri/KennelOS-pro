@@ -79,9 +79,14 @@ export const SYNC_REGISTRY = Object.freeze({
       // payment instructions. Her business settings, not anyone else's personal
       // data, so cloud, or a restore couldn't run her waitlist (decided 2026-10-07,
       // Cloud plan §5.1 decision 1).
-      'waitlist_config'
+      'waitlist_config',
+      // The kennel's IANA time zone: offer deadlines end at 11:59 pm there (Waitlist
+      // Spec §6.5, W2 Plan §9). A setting, not personal data.
+      'time_zone'
     ],
-    private: [],
+    // Her application form's key pairs (W2 Plan §7): the private halves open every
+    // online application, so they ride the private vault and file backups only.
+    private: ['waitlist_form_keys'],
     pending: []
   },
 
@@ -219,13 +224,27 @@ export const SYNC_REGISTRY = Object.freeze({
       // question wording is her own form; and the applicant's name + email are
       // what W2's server holds readable anyway (Waitlist Spec §8.1). Only those
       // two keys of `application` go (see `partial`); every other answer stays private.
-      'ready_timing', 'soon_notified_litter_ids', 'application_questions', 'application'
+      'ready_timing', 'soon_notified_litter_ids', 'application_questions', 'application',
+      // The family's status-page link token (Waitlist W2 Plan §4, decided 2026-10-08).
+      // The waitlist server already holds every token readable (it serves the page
+      // and puts the link in emails), so cloud backup tells it nothing new; private,
+      // a restore without private backup would change every family's link.
+      'status_token',
+      // 'online_form' when the application came through her online form (W2 step 4).
+      'source'
     ],
     partial: { application: ['name', 'email'] },
     // pref_change_*: "private tier like application" (Waitlist Spec §15.9).
+    // The status page's requests and the family's activity and messages (W2 step
+    // 5): private like pref_change_request (W2 Plan §9). Their messages were
+    // sealed so the server can't read them, and a pause request's note may name a
+    // medical situation, like pause_reason.
     private: [
       'fee_amount', 'fee_payment_method', 'fee_payment_reference',
-      'fee_credit_policy', 'pause_reason', 'notes', 'pref_change_log', 'pref_change_request'
+      'fee_credit_policy', 'pause_reason', 'notes', 'pref_change_log', 'pref_change_request',
+      'pause_request', 'listen_change_request', 'messages',
+      // "Not this litter" with the family's reason (Spec §16.2): private like a pass reason.
+      'prepasses'
     ],
     pending: []
   },
@@ -235,9 +254,12 @@ export const SYNC_REGISTRY = Object.freeze({
     cloud: [
       'entry_id', 'litter_id', 'kennel_id', 'offered_date', 'respond_by_date',
       'eligible_dog_ids', 'outcome', 'outcome_date', 'chosen_dog_id', 'counts_as_pass',
-      'picked_date', 'sale_id' // §9: "every field except notes"
+      'picked_date', 'sale_id', // §9: "every field except notes"
+      'turn_id' // the turn the row belongs to (Spec §16.1): how the list ran, like outcome
     ],
-    private: ['notes'],
+    // pass_reason: the family's own reason for a pass (Spec §16.5, decided private:
+    // it can name money or health).
+    private: ['notes', 'pass_reason'],
     pending: []
   },
 

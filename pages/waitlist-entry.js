@@ -21,9 +21,10 @@ import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches,
   entryName, canUndoRemoval, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, rankedList, REMOVAL_UNDO_DAYS,
-  eligiblePupsFor, nextFamilyForLitter, turnSpent, hasOpenOffer, isListeningFor, isPupAvailable,
+  eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
-  kennelBreeds, resolveBreed, prefChangeEffect
+  kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
+  PREF_FIELD_LABEL, prefValueText, prefChangeSummary
 } from '../data/waitlistRules.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq, READY_TIMING_LABEL,
@@ -37,7 +38,7 @@ import { addDaysToYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, formModal,
-  pickDialog, depositDialog, changePickDialog, undoPassDialog
+  pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink
 } from '../assets/waitlistUI.js';
 
 const els = {
@@ -46,6 +47,7 @@ const els = {
   back: document.getElementById('back-link'),
   headerActions: document.getElementById('header-actions'),
   status: document.getElementById('status-section'),
+  online: document.getElementById('online-section'),
   profileActions: document.getElementById('profile-actions'),
   body: document.getElementById('profile-body'),
   offers: document.getElementById('offers-section'),
@@ -120,7 +122,7 @@ function statusLines(e) {
   const today = todayYMD();
   const lines = [];
   if (e.status === 'applied') {
-    lines.push(`Applied ${e.applied_date ? esc(fmtDate(e.applied_date)) : ''}. Waiting for your review.`);
+    lines.push(`Applied ${e.applied_date ? esc(fmtDate(e.applied_date)) : ''}${e.source === 'online_form' ? ' through your online form' : ''}. Waiting for your review.`);
   } else if (e.status === 'approved') {
     const fee = e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : 'no fee set';
     lines.push(`Approved ${esc(fmtDate(e.approved_date))}. Fee due: <strong>${fee}</strong>${e.fee_due_date ? ` by ${esc(fmtDate(e.fee_due_date))}` : ''}.`);
@@ -167,6 +169,25 @@ function actionButtons(e) {
   }
 }
 
+// Her request (W2 Plan §8): the family's status-page link, to send by Messenger
+// or text, and "New link" if it went somewhere it shouldn't. Only while the list
+// is online.
+function statusLinkHtml(e) {
+  if (!statusLinkFor(e, ctx.kennel)) return '';
+  return `<div class="row-between" style="gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+      <span class="muted">Their status page: their place, offers and the fee due.</span>
+      <span class="pill-row"><button class="btn btn-sm" data-link="copy">Copy status link</button><button class="btn btn-sm" data-link="new" title="Make a new link; the old one stops working">New link</button></span>
+    </div>`;
+}
+
+async function onNewLink() {
+  if (!(await confirmModal({ title: 'Make a new link?', message: 'Their current link stops working as soon as the new one is published. Send them the new link.', confirmLabel: 'Make a new link' }))) return;
+  const { replaceStatusToken } = await import('../data/cloud/cloudWaitlist.js');
+  await replaceStatusToken(ctx.entry.id);
+  await afterAction();
+  await copyLink(statusLinkFor(ctx.entry, ctx.kennel), null, { title: 'Their new status page link' });
+}
+
 function renderStatus() {
   const e = ctx.entry;
   els.status.innerHTML = `
@@ -176,11 +197,76 @@ function renderStatus() {
         ${statusLines(e).map((l) => `<p style="margin:4px 0;">${l}</p>`).join('')}
       </div>
       <div class="pill-row">${actionButtons(e)}</div>
-    </div>`;
+    </div>${statusLinkHtml(e)}`;
+  els.status.querySelector('[data-link="copy"]')?.addEventListener('click', (ev) => copyLink(statusLinkFor(e, ctx.kennel), ev.currentTarget, { title: 'Their status page' }));
+  els.status.querySelector('[data-link="new"]')?.addEventListener('click', () => onNewLink().catch((err) => showError(err.message || String(err))));
   const handlers = { offer: onOfferLitter, approve: onApprove, decline: onDecline, withdraw: onWithdraw, fee: onFeeReceived, expire: onExpire, move: onMove, remove: onRemove, undo: onUndo, reapply: onReapply };
   els.status.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });
+}
+
+// --- From their status page (W2 step 5) ------------------------------------------
+// What the family asked for on their status page (a pause, a narrower listen-only
+// choice, a change to a matching answer: each waits for her Approve / Decline,
+// the same buttons as on Today) and their messages and activity, newest first.
+// Hidden for a family who never used it.
+
+function listenText(r) {
+  if ((r.listen_mode || 'all') !== 'selected') return 'All litters';
+  const names = (list) => (list || []).map(dogName).join(', ');
+  return [r.listen_sire_ids?.length ? `Sires: ${names(r.listen_sire_ids)}` : '', r.listen_dam_ids?.length ? `Dams: ${names(r.listen_dam_ids)}` : '']
+    .filter(Boolean).join(' · ') || 'no parents';
+}
+
+function pendingRequests(e) {
+  const out = [];
+  if (actions.hasPendingRequest(e, 'pause_request')) {
+    const r = e.pause_request;
+    out.push({ kind: 'pause', text: `Asked ${esc(fmtDate(r.requested_date))} to pause their place until <strong>${esc(fmtDate(r.until))}</strong>.`, note: r.note,
+      hint: 'They keep their place and aren\'t offered pups until then. A pause never counts as a pass.' });
+  }
+  if (actions.hasPendingRequest(e, 'pref_change_request')) {
+    const r = e.pref_change_request;
+    out.push({ kind: 'pref', text: `Asked ${esc(fmtDate(r.requested_date))} to change: <strong>${esc(prefChangeSummary(e, r.changes)) || 'nothing that differs now'}</strong>.`, note: r.note,
+      hint: 'An open offer stays open either way.' });
+  }
+  if (actions.hasPendingRequest(e, 'listen_change_request')) {
+    const r = e.listen_change_request;
+    out.push({ kind: 'listen', text: `Asked ${esc(fmtDate(r.requested_date))} to wait only for: <strong>${esc(listenText(r))}</strong> <span class="faint">(now: ${esc(listenText(e))})</span>.`, note: '',
+      hint: 'Narrower, so it needs you: they wouldn\'t be offered other litters. An open offer stays open.' });
+  }
+  return out;
+}
+
+function renderOnline() {
+  const e = ctx.entry;
+  const requests = pendingRequests(e);
+  const messages = [...(e.messages || [])].reverse();
+  if (!requests.length && !messages.length) { els.online.hidden = true; els.online.innerHTML = ''; return; }
+  const unread = messages.filter((m) => !m.read).length;
+  const reqHtml = requests.map((r) => `<div class="row-between" style="gap:8px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
+      <div><p style="margin:0;">${r.text}</p>${r.note ? `<p class="faint" style="margin:2px 0 0;">They said: "${esc(r.note)}"</p>` : ''}<p class="field-hint" style="margin:2px 0 0;">${esc(r.hint)}</p></div>
+      <span class="pill-row"><button class="btn btn-sm btn-primary" data-req="${r.kind}:approve">Approve</button><button class="btn btn-sm" data-req="${r.kind}:decline">Decline</button></span>
+    </div>`).join('');
+  const msgHtml = messages.slice(0, 50).map((m) => `<li style="padding:6px 0;border-top:1px solid var(--border);">
+      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.at).slice(0, 10)))} · ${m.kind === 'message' ? 'Message' : 'On their status page'}${m.read ? '' : ' <span class="badge badge-blue">New</span>'}</div>
+      <div>${multiline(m.body)}</div></li>`).join('');
+  els.online.hidden = false;
+  els.online.innerHTML = `
+    <div class="row-between" style="gap:8px;flex-wrap:wrap;"><h3 style="margin:0;">From their status page</h3>
+      ${unread ? '<button class="btn btn-sm" data-msgs="read">Mark read</button>' : ''}</div>
+    ${requests.length ? `<div style="margin-top:8px;">${reqHtml}</div>` : ''}
+    ${messages.length ? `<ul style="list-style:none;margin:8px 0 0;padding:0;">${msgHtml}</ul>${messages.length > 50 ? `<p class="faint">Showing the newest 50 of ${messages.length}.</p>` : ''}` : ''}
+    <p class="field-hint" style="margin-top:8px;">Nothing is sent to the family from here yet; reply by email, text or Messenger.</p>`;
+  const run = (fn) => fn().then(afterAction).catch((err) => showError(err.message || String(err)));
+  els.online.querySelector('[data-msgs="read"]')?.addEventListener('click', () => run(() => actions.markMessagesRead(e.id)));
+  const handlers = {
+    'pause:approve': () => actions.approvePauseRequest(e.id), 'pause:decline': () => actions.declinePauseRequest(e.id),
+    'pref:approve': () => actions.approvePrefChange(e.id), 'pref:decline': () => actions.declinePrefChange(e.id),
+    'listen:approve': () => actions.approveListenChange(e.id), 'listen:decline': () => actions.declineListenChange(e.id)
+  };
+  els.online.querySelectorAll('[data-req]').forEach((btn) => btn.addEventListener('click', () => run(handlers[btn.dataset.req])));
 }
 
 async function afterAction() {
@@ -389,25 +475,23 @@ function readySummary(e) {
 }
 
 // Her changes to the matching answers (Spec §15.9), for the history and the
-// narrowing warning.
-const PREF_FIELD_LABEL = {
-  pref_sex: 'Sex', pref_breed: 'Breed', pref_placement_type: 'Placement', pref_colors: 'Colors', ready_timing: 'Ready to buy'
-};
-function prefValueText(field, v) {
-  switch (field) {
-    case 'pref_sex': return descriptor(WAITLIST_PREF_SEX, v || 'any').label;
-    case 'pref_breed': return v || 'Any breed';
-    case 'pref_placement_type': return v ? descriptor(PLACEMENT_TYPE, v).label : 'Any';
-    case 'pref_colors': return (Array.isArray(v) ? v : []).join(', ') || 'None';
-    case 'ready_timing': return v ? descriptor(WAITLIST_READY_TIMING, v).label : 'Not answered';
-    default: return String(v ?? '');
-  }
-}
+// narrowing warning (PREF_FIELD_LABEL / prefValueText from waitlistRules).
 // Newest first, so changing an answer and back shows as neighbouring lines.
 function prefHistory(e) {
   const log = e.pref_change_log || [];
   if (!log.length) return '';
-  return [...log].reverse().map((x) => `${esc(fmtDate(x.date))} · ${esc(PREF_FIELD_LABEL[x.field] || x.field)}: ${esc(prefValueText(x.field, x.from))} → ${esc(prefValueText(x.field, x.to))}${x.by === 'request' ? ' <span class="faint">(they asked)</span>' : ''}`).join('<br>');
+  return [...log].reverse().map((x) => `${esc(fmtDate(x.date))} · ${esc(PREF_FIELD_LABEL[x.field] || x.field)}: ${esc(prefValueText(x.field, x.from))} → ${esc(prefValueText(x.field, x.to))}${x.declined ? ' <span class="faint">(they asked; you declined)</span>' : x.by === 'request' ? ' <span class="faint">(they asked)</span>' : ''}`).join('<br>');
+}
+
+// "Not this litter" (Spec §16.2): litters the family passed on ahead of time on
+// their status page, with their reason. Nothing counts until their turn comes.
+const reasonText = (r) => (r ? `${r.label}${r.text ? `: "${r.text}"` : ''}` : '');
+function notThisLitterHtml(e) {
+  return (e.prepasses || []).map((p) => {
+    const l = p.litter_id ? ctx.litters.find((x) => x.id === p.litter_id) : null;
+    const name = l ? litterLabel(l) : p.pairing_id ? 'an upcoming pairing' : 'a litter';
+    return `${esc(name)}${p.reason ? ` <span class="faint">— ${esc(reasonText(p.reason))}${p.date ? `, ${esc(fmtDate(p.date))}` : ''}</span>` : ''}`;
+  }).join('<br>') + ((e.prepasses || []).length ? '<br><span class="faint">Left out of their turn when it comes, and it counts as a pass only then.</span>' : '');
 }
 
 function renderView() {
@@ -425,6 +509,7 @@ function renderView() {
       ${row('Ready to buy', readySummary(e))}
       ${row('Answer changes', prefHistory(e))}
       ${row('Listening for', LISTEN_STATUSES.includes(e.status) || (e.listen_mode || 'all') === 'selected' ? listenSummary(e) : '')}
+      ${row('Not this litter', notThisLitterHtml(e))}
       ${row('Paused until', e.paused_until ? esc(fmtDate(e.paused_until)) + (e.pause_reason ? ` <span class="faint">— ${esc(e.pause_reason)}</span>` : '') : '')}
       ${row('Fee', e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : '')}
       ${row('Fee policy', e.fee_credit_policy ? esc(descriptor(FEE_CREDIT_POLICY, e.fee_credit_policy).label) : '')}
@@ -522,20 +607,13 @@ function renderEdit() {
   // that's a parent of one of its live litters or upcoming pairings (an outside
   // stud included), plus anything already chosen (so a retired dog a family picked
   // never silently drops off their list).
-  const liveParents = (side) => new Set([
-    ...ctx.litters.filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status)).map((l) => l[side]),
-    ...ctx.pairings.filter((p) => !p.is_archived && LIVE_PAIRING.includes(p.status)).map((p) => p[side])
-  ].filter(Boolean));
-  const parentChoices = (sex, side, selected) => {
-    const live = liveParents(side);
-    return [...ctx.dogsById.values()]
-      .filter((d) => selected.includes(d.id) || (!d.is_archived && (live.has(d.id)
-        || (d.kennel_id === ctx.kennel.id && d.status === 'active_breeding' && d.sex === sex))))
-      .sort((a, b) => (a.call_name || '').localeCompare(b.call_name || ''))
-      .map((d) => ({ id: d.id, label: `${d.call_name || '(unnamed)'}${d.is_archived ? ' (archived)' : ''}` }));
-  };
-  const sires = parentChoices('male', 'sire_id', selSires);
-  const dams = parentChoices('female', 'dam_id', selDams);
+  // (waitlistRules.listenParentChoices; the status page offers the same ones.)
+  const choices = listenParentChoices(ctx.kennel, {
+    dogs: [...ctx.dogsById.values()], litters: ctx.litters, pairings: ctx.pairings, selectedSires: selSires, selectedDams: selDams
+  });
+  const asOption = (d) => ({ id: d.id, label: `${d.call_name || '(unnamed)'}${d.is_archived ? ' (archived)' : ''}` });
+  const sires = choices.sires.map(asOption);
+  const dams = choices.dams.map(asOption);
   const isNew = ctx.mode === 'new';
   const programField = `<div class="field"><label>Program</label><select id="f-program">${programOptions(e.waitlist_program_id)}</select>
     <span class="field-hint">Only you assign programs. Families never pick one.</span></div>`;
@@ -666,12 +744,14 @@ const familyNameById = (entryId) => {
   return x ? entryName(x, ctx.contacts.find((c) => c.id === x.contact_id)) : 'another family';
 };
 
-// Every live litter of this kennel, with whether this family can be offered it now
-// and, if not, why. `next` is who the list says is next (null = nobody / an offer
-// is open).
+// Every live litter of this kennel, with whether this family can be offered a turn
+// starting from it now and, if not, why. `next` is who's first in line for that
+// litter (null = nobody). One family holds a turn at a time across the kennel
+// (Spec §16.1), so while anyone holds one, nothing can be offered.
 function litterChoices(e) {
   const today = todayYMD();
   const opts = { today, config: ctx.config, programsById: ctx.programs };
+  const [held] = openTurns(ctx.kennelOffers, ctx.kennel.id);
   return ctx.litters
     .filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status))
     .map((l) => {
@@ -679,9 +759,8 @@ function litterChoices(e) {
       const offers = ctx.kennelOffers.filter((o) => o.litter_id === l.id);
       const eligible = eligiblePupsFor(e, l, pups, ctx.sales, opts);
       let blocked = '';
-      if (hasOpenOffer(offers, l.id)) {
-        const open = offers.find((o) => o.outcome === 'open' && !o.is_archived);
-        blocked = open.entry_id === e.id ? 'They already have an open offer on this litter.' : `${familyNameById(open.entry_id)} has an open offer on this litter.`;
+      if (held) {
+        blocked = held.entry_id === e.id ? 'They hold the turn now.' : `${familyNameById(held.entry_id)} holds the turn now; one family at a time.`;
       } else if (turnSpent(offers, l.id, e.id)) blocked = 'They\'ve already had their turn on this litter.';
       else if (isReadyHeld(e, today)) blocked = `They said they won't be ready to buy until about ${fmtDate(readyFromDate(e))}.`;
       else if (isManuallyPaused(e, today)) blocked = 'They\'re paused.';
@@ -711,11 +790,11 @@ async function onOfferLitter() {
   };
   const days = ctx.programs.get(e.waitlist_program_id)?.respond_days_override || ctx.config.respond_days;
   await formModal({
-    title: `Offer ${entryName(e, ctx.contact)} a litter`,
-    confirmLabel: 'Make the offer',
+    title: `Offer ${entryName(e, ctx.contact)} their turn`,
+    confirmLabel: 'Offer the turn',
     bodyHtml: choices.length
       ? `${choices.map(rowHtml).join('')}
-         <p class="field-hint">They get ${esc(days)} days to pick a pup and send the deposit. Offering someone who isn't next doesn't change anyone's place; the next family ${ctx.config.auto_offer_next ? 'is offered' : 'is up'} once this one is settled. Nothing is sent automatically, so tell them yourself.</p>`
+         <p class="field-hint">Their turn covers this litter and every other open litter they match; they pick one pup from any of them, or pass on all of them. They get ${esc(days)} days to pick a pup and send the deposit. Offering someone who isn't next doesn't change anyone's place; the next family ${ctx.config.auto_offer_on.length ? 'is up (offered automatically if you chose that in Waitlist settings)' : 'is up'} once this one is settled. Nothing is sent automatically, so tell them yourself.</p>`
       : '<p class="muted">No upcoming or current litters on this kennel yet.</p>',
     onConfirm: async (o) => {
       const picked = o.querySelector('input[name="ol"]:checked');
@@ -733,9 +812,9 @@ async function onOfferLitter() {
   }) && afterAction();
 }
 
-// The turn-moves-on sentence for the outcome prompts: with automatic offers off
-// (the default) nobody is offered; she's told who's next.
-const turnNote = () => (ctx.config.auto_offer_next
+// The turn-moves-on sentence for an outcome prompt: with automatic offers off for
+// that moment (the default) nobody is offered; she's told who's next.
+const turnNote = (outcome) => (autoOffers(ctx.config, outcome)
   ? 'The turn moves to the next eligible family.'
   : 'Nobody is offered automatically; you\'ll see who\'s next.');
 
@@ -773,21 +852,26 @@ async function onOfferOutcome(offer, outcome) {
     return;
   }
   if (outcome === 'undo') {
-    const holder = ctx.kennelOffers.find((o) => o.litter_id === offer.litter_id && o.outcome === 'open' && !o.is_archived && o.id !== offer.id);
+    const holder = openTurns(ctx.kennelOffers, ctx.kennel.id).find((t) => t.id !== turnIdOf(offer));
     const res = await undoPassDialog({ offer, name, holderName: holder ? familyNameById(holder.entry_id) : null, removed: e.status === 'removed' });
     if (!res) return;
     await afterAction();
-    await alertModal({ title: 'Their turn is back', message: [`${name} is next for ${litter ? litterLabel(litter) : 'this litter'} again, with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know; nothing is sent automatically.`, ...offerChangeLines(res)].join('\n\n') });
+    const back = res.offers.map((x) => ctx.litters.find((l) => l.id === x.litter_id)).filter(Boolean).map(litterLabel).join(', ');
+    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${back || 'this litter'}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know; nothing is sent automatically.`, ...offerChangeLines(res)].join('\n\n') });
     return;
   }
 
   const lapse = offer.chosen_dog_id ? ` Their pick lapses: the sale is cancelled and ${dogName(offer.chosen_dog_id)} is available again.` : '';
+  // A turn covers every open litter they matched (Spec §16.1): outcomes close all of it.
+  const also = turnOffers(ctx.kennelOffers, turnIdOf(offer)).filter((o) => o.outcome === 'open' && o.id !== offer.id)
+    .map((o) => ctx.litters.find((l) => l.id === o.litter_id)).filter(Boolean).map(litterLabel);
+  const whole = also.length ? ` This closes their whole turn, including ${also.join(', ')}, and counts once.` : '';
   const prompts = {
-    passed: { title: `${name} passed on this litter?`, message: `${turnNote()}${lapse}`, confirmLabel: 'Record it' },
+    passed: { title: also.length ? `${name} passed on their whole turn?` : `${name} passed on this litter?`, message: `${turnNote('passed')}${whole}${lapse}`, confirmLabel: 'Record it' },
     no_response: offer.chosen_dog_id
-      ? { title: `No deposit from ${name}?`, message: `Record that the deposit didn't arrive in time. It counts like no response. ${turnNote()}${lapse}`, confirmLabel: 'Record it' }
-      : { title: `${name} didn't respond in time?`, message: turnNote(), confirmLabel: 'Record it' },
-    voided: { title: 'Void this offer?', message: `Use this if the offer was a mistake or the litter fell through. It never counts as a pass for ${name}, and the turn isn't moved on automatically.${lapse}`, confirmLabel: 'Void it' }
+      ? { title: `No deposit from ${name}?`, message: `Record that the deposit didn't arrive in time. It counts like no response. ${turnNote(closingTrigger(offer, 'no_response'))}${lapse}`, confirmLabel: 'Record it' }
+      : { title: `${name} didn't respond in time?`, message: `${turnNote('no_response')}${whole}`, confirmLabel: 'Record it' },
+    voided: { title: 'Void this turn?', message: `Use this if the offer was a mistake or the litter fell through. It never counts as a pass for ${name}, and the turn isn't moved on automatically.${also.length ? ` It voids their whole turn, including ${also.join(', ')}.` : ''}${lapse}`, confirmLabel: 'Void it' }
   };
   if (!(await confirmModal(prompts[outcome]))) return;
   const res = await actions.recordOutcome(offer.id, outcome);
@@ -810,7 +894,7 @@ function offerButtons(o, today) {
   } else if (o.outcome === 'open') {
     list = [btn('pick', 'Picked a pup…', true), btn('passed', 'Passed'), btn('no_response', 'No response'), btn('voided', 'Void')];
   } else if (canSwitchAcceptedPick(o, ctx.kennelOffers)) {
-    list = [btn('change', 'Change pup…', false, 'Allowed until the next family is offered this litter')];
+    list = [btn('change', 'Change pup…', false, 'Allowed until the next family is offered a turn')];
   } else if (!undoPassBlocker(o, ctx.entry, today)) {
     list = [btn('undo', 'Undo…', false, 'Erase this and give them their turn back')];
   }
@@ -830,7 +914,7 @@ function renderOffers() {
           const sale = o.sale_id && isAwaitingDeposit(o) ? ` · <a href="sale.html?id=${encodeURIComponent(o.sale_id)}">sale</a>` : '';
           const status = isAwaitingDeposit(o)
             ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>`
-            : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}`;
+            : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${o.pass_reason ? ` <span class="faint">${esc(reasonText(o.pass_reason))}</span>` : ''}`;
           return `<tr><td>${l ? `<a href="litter.html?id=${encodeURIComponent(l.id)}">${esc(litterLabel(l))}</a>` : none}</td>
             <td>${esc(fmtDate(o.offered_date))}</td><td>${o.respond_by_date ? esc(fmtDate(o.respond_by_date)) : none}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</td>
             <td>${status}${offerButtons(o, today)}</td>
@@ -1010,8 +1094,8 @@ function renderAll() {
   renderTitle();
   renderProfileActions();
   renderHeaderActions();
-  if (ctx.mode === 'view') { renderStatus(); renderView(); els.status.hidden = false; }
-  else { els.status.hidden = true; renderEdit(); }
+  if (ctx.mode === 'view') { renderStatus(); renderOnline(); renderView(); els.status.hidden = false; }
+  else { els.status.hidden = true; els.online.hidden = true; renderEdit(); }
   renderOffers();
   renderDocs();
 }

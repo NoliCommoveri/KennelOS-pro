@@ -22,7 +22,8 @@
 //
 // Layering: talks to data/cloud/* only (never cloudApi's fetch directly, never db).
 import { esc, confirmModal, alertModal, selectModal, promptModal } from './ui.js';
-import { isCloudAvailable, isVaultOffered } from '../data/cloud/cloudConfig.js';
+import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
+import { editionFlags } from '../data/editionConfig.js';
 import {
   startSignIn, verifySignIn, currentAccount, signOut, signOutOtherDevices, defaultDeviceLabel
 } from '../data/cloud/cloudAuth.js';
@@ -1202,6 +1203,10 @@ export async function signOutAfterResetIfChecked(root) {
 export async function bootCloud() {
   if (!isCloudAvailable()) return;
   startBackupScheduler();
+  // The waitlist online (Waitlist W2 Plan §5): Pro, behind its release switch.
+  if (isWaitlistOnlineOffered() && editionFlags.waitlist) {
+    import('../data/cloud/cloudWaitlist.js').then((m) => m.startWaitlistScheduler()).catch(() => {});
+  }
   renderServiceNotices().catch(() => {});
   try { renderPrivateGapHint(); } catch { /* a hint only */ }
   await maybeRunCloudOffer().catch(() => {});
