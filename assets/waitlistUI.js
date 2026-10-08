@@ -10,7 +10,7 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal, promptModal } from './ui.js';
 import { PLACEMENT_TYPE, descriptor } from '../data/vocab.js';
-import { isManuallyPaused, isReadyHeld, readyFromDate, soonNoticeText, entryName, waitlistConfig } from '../data/waitlistRules.js';
+import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig } from '../data/waitlistRules.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass } from '../data/waitlistActions.js';
@@ -92,12 +92,28 @@ export function prefsSummary(entry) {
 }
 
 // Small flags for the list row: paused / not ready yet / listen-only. Escaped HTML.
-export function entryFlags(entry, today) {
+export function entryFlags(entry, today, config = null) {
   const out = [];
   if (isManuallyPaused(entry, today)) out.push(`<span class="badge badge-amber" title="${esc(entry.pause_reason || '')}">Paused to ${esc(entry.paused_until)}</span>`);
-  if (isReadyHeld(entry, today)) out.push(`<span class="badge badge-amber" title="They said they won't be ready to buy yet, so they aren't offered pups until then.">Not ready until ${esc(readyFromDate(entry))}</span>`);
-  if ((entry.listen_mode || 'all') === 'selected') out.push('<span class="badge badge-blue">Listen-only</span>');
+  if (isReadyHeld(entry, today, config)) {
+    out.push(today < readyFromDate(entry)
+      ? `<span class="badge badge-amber" title="They said they won't be ready to buy yet, so they aren't offered pups until then.">Not ready until ${esc(readyFromDate(entry))}</span>`
+      : `<span class="badge badge-amber" title="${esc(readyHoldText(entry, today, config))}">Ready now? ${entry.ready_check?.answer === 'no' ? 'Not yet' : 'No answer'}</span>`);
+  }
+  if (isListenOnly(entry)) out.push(`<span class="badge badge-blue">${entry.listen_mode === 'except' ? 'Skips some litters' : 'Listen-only'}</span>`);
   return out.join(' ');
+}
+
+// Why a family is held by their readiness answer (Spec §15.8, §16.7). Plain text.
+export function readyHoldText(entry, today, config = null) {
+  const from = readyFromDate(entry);
+  if (!from) return '';
+  if (today < from) return `They said they won't be ready to buy until about ${fmtDate(from)}.`;
+  const rc = readyCheck(entry, today, config);
+  if (!rc) return '';
+  if (rc.answer === 'no') return `Asked "Ready now?", they said not until ${fmtDate(entry.ready_check.until)}: their pause request is waiting for you.`;
+  if (rc.answer === 'yes') return '';
+  return `Their readiness hold ended ${fmtDate(rc.asked)}; they haven't answered "Ready now?" yet${rc.answer_by ? `, and will be removed after ${fmtDate(rc.answer_by)}` : ''}.`;
 }
 
 // A form dialog in the app's modal chrome (same markup as ui.js's dialogs).

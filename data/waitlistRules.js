@@ -32,8 +32,28 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   checkin_months: 6,
   soon_notice_text: '', // blank = SOON_NOTICE_DEFAULT
   pass_reasons: null, // her reasons for a pass (Spec §16.5); null = DEFAULT_PASS_REASONS
-  pass_other: true // also offer "Other" with a short text box (Q33)
+  pass_other: true, // also offer "Other" with a short text box (Q33)
+  show_upcoming: null, // pairings and early litters online (Spec §16.4); null = all off, see showUpcoming
+  online_since: null, // the day her list last went online (set by the Online list card); the ready check starts there
+  ready_no_answer: 'keep_paused', // "Ready now?" unanswered (Spec §16.7): WAITLIST_READY_NO_ANSWER
+  ready_answer_days: 14 // remove_after: days to answer; keep_paused: when Today flags them
 });
+
+// The three stages she can show before picks open (Spec §16.4), each on the public
+// list and on family pages separately. All off unless she switches one on.
+export const UPCOMING_STAGES = Object.freeze([
+  { value: 'planned_pairings', label: 'Planned pairings' },
+  { value: 'pairings', label: 'Pairings (bred or confirmed pregnant)' },
+  { value: 'early_litters', label: 'Whelped litters, picks not open yet' }
+]);
+
+// → { planned_pairings: { public, family }, pairings: {…}, early_litters: {…} }, all booleans.
+export function showUpcoming(config) {
+  const stored = config && typeof config.show_upcoming === 'object' && config.show_upcoming ? config.show_upcoming : {};
+  return Object.fromEntries(UPCOMING_STAGES.map(({ value }) => [value, {
+    public: stored[value]?.public === true, family: stored[value]?.family === true
+  }]));
+}
 
 // The effective config for a kennel record (or null/undefined → all defaults).
 // A null/blank stored value counts as "not set" so the default applies.
@@ -184,6 +204,81 @@ export function isPupAvailable(dog, sales = []) {
   return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASING_SALE_STATUSES.includes(s.status));
 }
 
+// Litters whose deposits were planned to open by `today` (Spec §16.8): born
+// (not expected, sold or closed), `accept_deposits_date` on or before today,
+// picks not open, at least one pup available. Today suggests Open picks for each;
+// nothing opens by itself.
+export function depositsDueLitters(litters, pups, sales, today) {
+  return litters.filter((l) => !l.is_archived && ['whelped', 'weaning', 'ready'].includes(l.status)
+    && l.accept_deposits_date && l.accept_deposits_date <= today && !l.picks_opened_date
+    && pups.some((d) => d.litter_id === l.id && isPupAvailable(d, sales)));
+}
+
+// Is a family's place number hidden from them (decided 2026-10-08)? A family sees
+// only its overall place, never a per-litter one, and not even that while it would
+// mislead: during their turn ("It's your turn!" instead), and after a turn they
+// passed on or let lapse, until every litter of it has closed (picks stopped, every
+// pup spoken for, or the litter sold or closed), since families below them are
+// being offered those litters meanwhile. A "Not this litter" counts once their turn
+// records it as passed. The public list leaves them out the same way, number skipped.
+// → null | { reason: 'turn' } | { reason: 'passed', offers: [the closed rows, one per litter] }
+export function placeHidden(entry, offers = [], litters = [], pups = [], sales = []) {
+  const mine = offers.filter((o) => o.entry_id === entry.id && !o.is_archived);
+  if (mine.some((o) => o.outcome === 'open')) return { reason: 'turn' };
+  const littersById = new Map(litters.map((l) => [l.id, l]));
+  const picking = (l) => Boolean(l && !l.is_archived && l.picks_opened_date && !['sold', 'closed'].includes(l.status)
+    && pups.some((d) => d.litter_id === l.id && isPupAvailable(d, sales)));
+  const spent = new Map();
+  for (const o of mine) {
+    if ((o.outcome === 'passed' || o.outcome === 'no_response') && picking(littersById.get(o.litter_id))) spent.set(o.litter_id, o);
+  }
+  return spent.size ? { reason: 'passed', offers: [...spent.values()] } : null;
+}
+
+// "A litter you match was born" / "Review your preferences" (Spec §16.6, Q30, Q34).
+// For a born litter whose picks aren't open yet, with pups available: each active
+// family on its kennel's list, not paused or held, gets `match` when they're
+// eligible now, else `review` when they'd be eligible with All litters and open
+// answers, with `why`: what narrows them ('listen', then the matching answers that
+// rule out some of these pups: 'sex', 'breed', 'placement', 'colors'). Derived,
+// nothing stored. → [{ entry, kind: 'match' | 'review', why: [] }]
+export const WHELP_NOTE_FIELDS = Object.freeze([
+  { why: 'sex', open: { pref_sex: 'any' } },
+  { why: 'breed', open: { pref_breed: '' } },
+  { why: 'placement', open: { pref_placement_type: '' } },
+  { why: 'colors', open: { pref_colors: [] } }
+]);
+export function isWhelpNoteLitter(litter) {
+  return Boolean(litter) && !litter.is_archived && ['whelped', 'weaning', 'ready'].includes(litter.status) && !litter.picks_opened_date;
+}
+export function whelpNotes(entries, litter, pups, sales = [], { today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
+  if (!isWhelpNoteLitter(litter)) return [];
+  const available = pups.filter((d) => d.litter_id === litter.id && isPupAvailable(d, sales));
+  if (!available.length) return [];
+  const out = [];
+  for (const entry of entries) {
+    if (entry.is_archived || entry.status !== 'active' || entry.kennel_id !== litter.kennel_id || isPaused(entry, today, config)) continue;
+    if (eligiblePupsFor(entry, litter, available, sales, { today, config }).length) {
+      out.push({ entry, kind: 'match', why: [] });
+      continue;
+    }
+    const why = [];
+    if (!isListeningFor(entry, litter)) why.push('listen');
+    for (const f of WHELP_NOTE_FIELDS) {
+      const narrowed = available.some((d) => !pupMatchesPrefs(entry, d, config) && pupMatchesPrefs({ ...entry, ...f.open }, d, config));
+      if (narrowed) why.push(f.why);
+    }
+    // No one answer rules a pup out by itself (two together do): name each answer
+    // that, on its own, rules out at least one of these pups.
+    if (!why.length) {
+      const only = (f) => Object.assign({ ...entry }, ...WHELP_NOTE_FIELDS.filter((g) => g !== f).map((g) => g.open));
+      for (const f of WHELP_NOTE_FIELDS) if (available.some((d) => !pupMatchesPrefs(only(f), d, config))) why.push(f.why);
+    }
+    if (why.length) out.push({ entry, kind: 'review', why });
+  }
+  return out;
+}
+
 // The breeds a family can ask for on this kennel's list (decided 2026-10-06: a
 // dropdown, never free text, so a misspelling or shorthand can't make a family
 // match no pup). The breeds of the kennel's own non-archived dogs — what its pups
@@ -260,31 +355,118 @@ export function readyFromDate(entry) {
   return months && anchor ? addMonthsToYMD(anchor, months) : null;
 }
 
-export function isReadyHeld(entry, today) {
+// "Ready now?" (Spec §16.7): when a readiness hold ends, the family is asked. It
+// applies only to a list that's online, and only to holds ending while it is (both
+// decided 2026-10-08), so an offline list, and a hold that ended before she put the
+// list online, keep the plain rule: the hold ends on its date. `ready_check` on the
+// entry (private) holds their answer, or `ask_from` when she undid a removal for no
+// answer (the window starts again). Pure: entry + config + today.
+// → null | { asked, answer_by, answer: 'yes' | 'no' | null }
+export function readyCheck(entry, today, config) {
+  if (!config || config.online !== true || !config.online_since) return null;
   const from = readyFromDate(entry);
-  return Boolean(from) && today < from;
+  if (!from || today < from || from < config.online_since) return null;
+  const rc = entry.ready_check || {};
+  const asked = rc.ask_from && rc.ask_from > from ? rc.ask_from : from;
+  const days = Math.max(1, Number(config.ready_answer_days) || WAITLIST_CONFIG_DEFAULTS.ready_answer_days);
+  return {
+    asked,
+    answer_by: config.ready_no_answer === 'remove_after' ? addDaysToYMD(asked, days) : null,
+    answer: rc.answer === 'yes' || rc.answer === 'no' ? rc.answer : null
+  };
+}
+
+// Unanswered past her window under remove_after: her device removes them
+// (removed_reason 'no_ready_answer', with the 7-day undo).
+export function readyCheckLapsed(entry, today, config) {
+  const rc = entry.status === 'active' && readyCheck(entry, today, config);
+  return Boolean(rc && !rc.answer && rc.answer_by && today > rc.answer_by);
+}
+
+// Unanswered for longer than ready_answer_days under keep_paused: Today lists them.
+export function readyCheckOverdue(entry, today, config) {
+  const rc = entry.status === 'active' && readyCheck(entry, today, config);
+  if (!rc || rc.answer || config.ready_no_answer !== 'keep_paused') return false;
+  return today > addDaysToYMD(rc.asked, Math.max(1, Number(config.ready_answer_days) || WAITLIST_CONFIG_DEFAULTS.ready_answer_days));
+}
+
+// The readiness hold: before readyFromDate, and after it while "Ready now?" is
+// unanswered (unless she chose to unpause as normal), or answered No with their
+// pause request still waiting for her. Without `config` (or offline), the plain rule.
+export function isReadyHeld(entry, today, config = null) {
+  const from = readyFromDate(entry);
+  if (!from) return false;
+  if (today < from) return true;
+  const rc = readyCheck(entry, today, config);
+  if (!rc || rc.answer === 'yes') return false;
+  if (rc.answer === 'no') return Boolean(entry.pause_request && !entry.pause_request.decided);
+  return config.ready_no_answer !== 'unpause';
 }
 
 // Paused for any reason: her own pause or the readiness hold. Both mean the same
 // thing everywhere (decided 2026-10-06): no offers, so no passes to use up; their
 // place is kept; and they're left off the public list with their number skipped.
-export function isPaused(entry, today) {
-  return isManuallyPaused(entry, today) || isReadyHeld(entry, today);
+export function isPaused(entry, today, config = null) {
+  return isManuallyPaused(entry, today) || isReadyHeld(entry, today, config);
 }
 
 // Is the family listening for this litter? Everyone is, unless they've chosen
-// listen-only (`selected`) — then only for litters by a sire OR out of a dam they
-// picked. They pick parent dogs, never litters or pairings: which litters (and
+// listen-only. `selected`: only litters by a sire OR out of a dam they picked.
+// `except` (Spec §16.3): every litter but one by a sire OR out of a dam they
+// listed. They pick parent dogs, never litters or pairings: which litters (and
 // upcoming pairings) that covers is derived from the litter's own sire_id/dam_id.
 export function isListeningFor(entry, litter) {
-  if ((entry.listen_mode || 'all') !== 'selected') return true;
-  return (Boolean(litter.sire_id) && (entry.listen_sire_ids || []).includes(litter.sire_id))
+  const mode = entry.listen_mode || 'all';
+  if (mode === 'all') return true;
+  const hit = (Boolean(litter.sire_id) && (entry.listen_sire_ids || []).includes(litter.sire_id))
     || (Boolean(litter.dam_id) && (entry.listen_dam_ids || []).includes(litter.dam_id));
+  return mode === 'except' ? !hit : hit;
+}
+
+// Is this a listen-only choice (anything but All litters)? An `except` with no
+// parents listed skips nothing, so it counts as All.
+export function isListenOnly(entry) {
+  const mode = entry.listen_mode || 'all';
+  if (mode === 'except') return Boolean((entry.listen_sire_ids || []).length || (entry.listen_dam_ids || []).length);
+  return mode !== 'all';
 }
 
 // The litter and pairing statuses whose parents count as "live" for listen-only.
 export const LISTEN_LIVE_LITTER = ['expected', 'whelped', 'weaning', 'ready'];
 export const LISTEN_LIVE_PAIRING = ['planned', 'bred', 'confirmed_pregnant'];
+
+// What a kennel has coming before picks open (Spec §16.4), one item per future
+// litter: a pairing with no litter yet, an `expected` litter (shown with its
+// pairing, decided 2026-10-08), or a whelped litter whose picks aren't open.
+// Every stage, unfiltered: the projection applies her switches (showUpcoming).
+// → [{ id, kind: 'planned_pairing' | 'pairing' | 'early_litter', stage, pairing,
+//      litter, pairing_id, litter_id, sire_id, dam_id }]. `id` is the pairing's id
+// when there is one (so "Not this litter" on it carries over to its litter),
+// else the litter's; an early litter is always its litter's id.
+export function upcomingItems(kennel, { litters = [], pairings = [] } = {}) {
+  const own = (x) => !x.is_archived && x.kennel_id === kennel.id;
+  const pairingsById = new Map(pairings.map((p) => [p.id, p]));
+  const hasLitter = new Set(litters.filter((l) => !l.is_archived && l.pairing_id).map((l) => l.pairing_id));
+  const out = [];
+  for (const l of litters.filter((x) => own(x) && LISTEN_LIVE_LITTER.includes(x.status) && !x.picks_opened_date)) {
+    const pairing = (l.pairing_id && pairingsById.get(l.pairing_id)) || null;
+    const early = l.status !== 'expected';
+    out.push({
+      id: early ? l.id : (l.pairing_id || l.id), kind: early ? 'early_litter' : 'pairing', stage: early ? 'early_litters' : 'pairings',
+      pairing, litter: l, pairing_id: l.pairing_id || null, litter_id: l.id, sire_id: l.sire_id || null, dam_id: l.dam_id || null
+    });
+  }
+  for (const p of pairings.filter((x) => own(x) && LISTEN_LIVE_PAIRING.includes(x.status) && !hasLitter.has(x.id))) {
+    const planned = p.status === 'planned';
+    out.push({
+      id: p.id, kind: planned ? 'planned_pairing' : 'pairing', stage: planned ? 'planned_pairings' : 'pairings',
+      pairing: p, litter: null, pairing_id: p.id, litter_id: null, sire_id: p.sire_id || null, dam_id: p.dam_id || null
+    });
+  }
+  const order = { early_litter: 0, pairing: 1, planned_pairing: 2 };
+  const when = (x) => x.litter?.whelp_date || x.pairing?.expected_due_date || x.pairing?.planned_date || '9999';
+  return out.sort((a, b) => order[a.kind] - order[b.kind] || when(a).localeCompare(when(b)) || String(a.id).localeCompare(String(b.id)));
+}
 
 // The parent dogs a family can pick for listen-only (Spec §15.7 item 1): this
 // kennel's active breeding dogs of that sex, plus any parent of one of its live
@@ -307,27 +489,30 @@ export function listenParentChoices(kennel, { dogs = [], litters = [], pairings 
   return { sires: pick('male', 'sire_id', selectedSires), dams: pick('female', 'dam_id', selectedDams) };
 }
 
-// Is a family's own listen-only change wider or narrower (Spec §15.7 item 6)?
-// Wider (more parents, or back to All litters) applies at once; narrower (All →
-// only these parents, or dropping a parent) is a request she approves.
+// Is a family's own listen-only change wider or narrower (Spec §15.7 item 6,
+// §16.3)? Wider (more `selected` parents, fewer `except` parents, or back to All
+// litters) applies at once; narrower (leaving All, dropping a `selected` parent,
+// adding an `except` one, or switching between `selected` and `except`) is a
+// request she approves. An `except` with nobody listed is All.
 // `next` is { listen_mode, listen_sire_ids, listen_dam_ids }. → 'same' | 'wider' | 'narrower'
 export function listenChangeKind(entry, next) {
-  const mode = (x) => (x.listen_mode || 'all');
+  const mode = (x) => (isListenOnly(x) ? x.listen_mode : 'all');
   const ids = (x) => new Set([...(x.listen_sire_ids || []).map((id) => `s:${id}`), ...(x.listen_dam_ids || []).map((id) => `d:${id}`)]);
   const [a, b] = [mode(entry), mode(next)];
   if (b === 'all') return a === 'all' ? 'same' : 'wider';
-  if (a === 'all') return 'narrower';
-  const before = ids(entry);
-  const after = ids(next);
-  if ([...before].some((x) => !after.has(x))) return 'narrower';
-  return [...after].some((x) => !before.has(x)) ? 'wider' : 'same';
+  if (a !== b) return 'narrower';
+  const [before, after] = [ids(entry), ids(next)];
+  const lost = [...before].some((x) => !after.has(x));
+  const gained = [...after].some((x) => !before.has(x));
+  if (b === 'except') return gained ? 'narrower' : lost ? 'wider' : 'same';
+  return lost ? 'narrower' : gained ? 'wider' : 'same';
 }
 
 // The pups in `litter` this family could be offered right now: [] when the family
 // isn't eligible at all. `pups` may be every dog — only this litter's are used.
 export function eligiblePupsFor(entry, litter, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
   if (!isOnList(entry) || entry.kennel_id !== litter.kennel_id) return [];
-  if (isPaused(entry, today)) return [];
+  if (isPaused(entry, today, config)) return [];
   if (!isListeningFor(entry, litter)) return [];
   return pups.filter((d) => d.litter_id === litter.id && isPupAvailable(d, sales) && pupMatchesPrefs(entry, d, config));
 }
@@ -732,7 +917,7 @@ export const REMOVAL_UNDO_DAYS = 7;
 // The 7-day undo on an automatic second-pass removal, worked out from removed_date
 // (nothing extra stored).
 export function canUndoRemoval(entry, today) {
-  if (!entry || entry.status !== 'removed' || entry.removed_reason !== 'second_pass' || !entry.removed_date) return false;
+  if (!entry || entry.status !== 'removed' || !['second_pass', 'no_ready_answer'].includes(entry.removed_reason) || !entry.removed_date) return false;
   return today <= addDaysToYMD(entry.removed_date, REMOVAL_UNDO_DAYS);
 }
 
@@ -810,10 +995,12 @@ export function publicName(fullName) {
 // so nobody's public number shifts when a pause ends (decided 2026-10-06).
 // Listen-only families show, with no marker. Programs, notes and money never do.
 // `nameOf(entry)` returns the family's full name.
-export function publicList(entries, kennelId, programsById = new Map(), { today, nameOf = (e) => entryName(e, null) } = {}) {
+// `hidden(entry)`: also leave out a family whose place is hidden from them
+// (placeHidden), so their own page and the public list never disagree.
+export function publicList(entries, kennelId, programsById = new Map(), { today, nameOf = (e) => entryName(e, null), hidden = () => false, config = null } = {}) {
   return rankedList(entries, kennelId, programsById)
     .map((e, i) => ({ entry: e, position: i + 1 }))
-    .filter(({ entry }) => !isPaused(entry, today))
+    .filter(({ entry }) => !isPaused(entry, today, config) && !hidden(entry))
     .map(({ entry, position }) => ({
       position,
       name: publicName(nameOf(entry)),
@@ -831,7 +1018,7 @@ export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d
   if (!rows.length) return `${head}\nNobody is on the list yet.`;
   const lines = rows.map((r) => `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`);
   const gaps = rows.some((r, i) => r.position !== i + 1);
-  return [head, '', ...lines, ...(gaps ? ['', 'A skipped number is a family who has paused or isn\'t ready to buy yet. They keep their place.'] : [])].join('\n');
+  return [head, '', ...lines, ...(gaps ? ['', 'A skipped number is a family who is paused, not ready to buy yet, or between turns. They keep their place.'] : [])].join('\n');
 }
 
 // --- Telling her what an action did to offers -------------------------------------

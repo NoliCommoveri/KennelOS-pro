@@ -26,14 +26,15 @@ import { pairingRepo } from '../pairingRepo.js';
 import { dogRepo } from '../dogRepo.js';
 import { saleRepo } from '../saleRepo.js';
 import { contactRepo } from '../contactRepo.js';
+import { eventRepo } from '../eventRepo.js';
 import { todayYMD } from '../dateUtils.js';
-import { waitlistConfig, kennelBreeds } from '../waitlistRules.js';
+import { waitlistConfig, kennelBreeds, readyCheckLapsed } from '../waitlistRules.js';
 import { buildProjection } from '../waitlistProjection.js';
 import { formQuestions } from '../waitlistForm.js';
 import { generateFormKey, currentFormKey, rotateFormKeys, openSealed } from '../waitlistCrypto.js';
 import { applicationToEntry } from '../waitlistInbox.js';
 import { planFamilyEvent, activityId } from '../waitlistEvents.js';
-import { applyFamilyPlan, addFamilyActivity, MESSAGE_MAX } from '../waitlistActions.js';
+import { applyFamilyPlan, addFamilyActivity, removeForNoReadyAnswer, MESSAGE_MAX } from '../waitlistActions.js';
 
 export const WAITLIST_ONLINE_EVENT = 'kennelos:waitlistonline';
 // After a change, wait this long for more before publishing (one publish per burst).
@@ -267,9 +268,36 @@ export async function applyFamilyEvents(token, kennels) {
   return counts;
 }
 
+// "Ready now?" unanswered past her window (Spec §16.7, remove_after): her device
+// removes them, the BACKING device only (checked before the first removal), like
+// every other move made for her online. A kennel online from before the ready check
+// existed gets today as its online_since, so only holds ending from now are asked.
+// → [entryId removed]
+export async function sweepReadyChecks(token, kennels, { today = todayYMD() } = {}) {
+  const removed = [];
+  let backing = null;
+  for (const k of kennels.filter(isOnline)) {
+    const config = waitlistConfig(k);
+    if (!config.online_since) {
+      await kennelRepo.update(k.id, { waitlist_config: { ...(k.waitlist_config || {}), online_since: today } });
+      continue;
+    }
+    for (const e of (await waitlistEntryRepo.getByKennel(k.id)).filter((x) => readyCheckLapsed(x, today, config))) {
+      if (backing === null) {
+        const program = await api.getProgram(token);
+        backing = Boolean(program.backingDevice && program.backingDevice.id === program.thisDeviceId);
+      }
+      if (!backing) return removed;
+      await removeForNoReadyAnswer(e.id, { date: today });
+      removed.push(e.id);
+    }
+  }
+  return removed;
+}
+
 // The projection for one kennel, from the database.
 export async function projectionFor(kennel, { today = todayYMD() } = {}) {
-  const [entries, offers, programsById, litters, pairings, dogs, sales, contacts] = await Promise.all([
+  const [entries, offers, programsById, litters, pairings, dogs, sales, contacts, events] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
     waitlistOfferRepo.getByKennel(kennel.id),
     waitlistProgramRepo.getMapForKennel(kennel.id),
@@ -277,10 +305,12 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
     pairingRepo.getAll(),
     dogRepo.getAll({ includeArchived: true }),
     saleRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true })
+    contactRepo.getAll({ includeArchived: true }),
+    // Parents' earned titles, for the pairings and early litters she shows (§16.4).
+    eventRepo.getByType('title_earned')
   ]);
   return buildProjection({
-    kennel, entries, offers, programsById, litters, pairings, dogs, sales, contacts, today,
+    kennel, entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, today,
     formKey: currentFormKey(kennel.waitlist_form_keys), eventsThrough: getWaitlistOnlineState().eventsCursor || 0
   });
 }
@@ -339,6 +369,7 @@ async function syncNow({ force }) {
     // pages, so the projection that follows includes all of it.
     if (wanted.length) inbox = await takeInApplications(token, wanted);
     if (wanted.length) events = await applyFamilyEvents(token, kennels);
+    if (wanted.length) await sweepReadyChecks(token, kennels);
     for (const [kennelId, s] of stale) {
       await api.unpublishWaitlist(token, s.publicId);
       const kennelsState = { ...getWaitlistOnlineState().kennels };

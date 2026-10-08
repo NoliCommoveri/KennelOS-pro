@@ -244,7 +244,9 @@ export const SYNC_REGISTRY = Object.freeze({
       'fee_credit_policy', 'pause_reason', 'notes', 'pref_change_log', 'pref_change_request',
       'pause_request', 'listen_change_request', 'messages',
       // "Not this litter" with the family's reason (Spec §16.2): private like a pass reason.
-      'prepasses'
+      'prepasses',
+      // "Ready now?" (Spec §16.7): their answer and a not-yet reason, private like pause_reason.
+      'ready_check'
     ],
     pending: []
   },

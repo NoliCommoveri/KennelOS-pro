@@ -43,10 +43,11 @@ import { contactRepo } from './contactRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import {
   overdueTurns, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, autoOffers, closingTrigger,
-  prefChangeSummary, prefChangeEffect, PREF_FIELD_LABEL
+  prefChangeSummary, prefChangeEffect, PREF_FIELD_LABEL, depositsDueLitters,
+  readyCheck, readyCheckOverdue
 } from './waitlistRules.js';
 import {
-  recordOutcome, markFeeExpired, undoRemoval, hasPendingRequest, markMessagesRead,
+  recordOutcome, markFeeExpired, openPicks, recordReadyAnswer, undoRemoval, hasPendingRequest, markMessagesRead,
   approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange
 } from './waitlistActions.js';
 
@@ -350,7 +351,7 @@ export async function computeNudges() {
     }
   }
 
-  if (editionFlags.waitlist) nudges.push(...(await waitlistNudges(today, litters, dogsById)));
+  if (editionFlags.waitlist) nudges.push(...(await waitlistNudges(today, litters, dogsById, { dogs, sales })));
 
   return nudges;
 }
@@ -361,7 +362,7 @@ export async function computeNudges() {
 // rule (the waitlist is per kennel, so entries/offers carry kennel_id).
 // A waitlist action's `run` returns the message Today shows afterwards (the turn
 // can move on to another family, who she must contact — never silently).
-async function waitlistNudges(today, litters, dogsById) {
+async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] } = {}) {
   const [entriesAll, offersAll, contacts, kennels] = await Promise.all([
     waitlistEntryRepo.getAll(),
     waitlistOfferRepo.getAll(),
@@ -441,16 +442,56 @@ async function waitlistNudges(today, litters, dogsById) {
   }
 
   for (const e of entries.filter((x) => canUndoRemoval(x, today))) {
+    const noAnswer = e.removed_reason === 'no_ready_answer';
     out.push({
       key: `waitlist-removed:${e.id}:${e.removed_date}`,
-      title: `Removed ${name(e)} from the waitlist after their second pass`,
-      detail: `You can undo this until ${addDaysToYMD(e.removed_date, 7)}. Undoing forgives that pass and puts them back in their old place.`,
+      title: noAnswer ? `Removed ${name(e)} from the waitlist: no answer to "Ready now?"` : `Removed ${name(e)} from the waitlist after their second pass`,
+      detail: `You can undo this until ${addDaysToYMD(e.removed_date, 7)}. ${noAnswer
+        ? 'Undoing puts them back in their old place and asks "Ready now?" again from today.'
+        : 'Undoing forgives that pass and puts them back in their old place.'}`,
       subjectHref: `waitlist-entry.html?id=${encodeURIComponent(e.id)}`,
       actions: [{
         label: 'Undo',
         run: async () => {
           await undoRemoval(e.id, { today });
           return { title: 'Removal undone', message: `${name(e)} is back in their old place. No offer was made for them; offer a litter from their page when you're ready.` };
+        }
+      }]
+    });
+  }
+  // "Ready now?" unanswered for longer than her days, under "keep paused" (§16.7):
+  // they stay held, so nobody waits forever unnoticed.
+  for (const e of entries.filter((x) => readyCheckOverdue(x, today, waitlistConfig(kennelsById.get(x.kennel_id))))) {
+    const rc = readyCheck(e, today, waitlistConfig(kennelsById.get(e.kennel_id)));
+    out.push({
+      key: `waitlist-ready-overdue:${e.id}:${rc.asked}`,
+      title: `${name(e)} hasn't answered "Ready now?"`,
+      detail: `Asked ${rc.asked}, when the readiness hold from their application ended. They stay paused until they answer (your setting). Contact them, or record their answer if they've told you.`,
+      subjectHref: `waitlist-entry.html?id=${encodeURIComponent(e.id)}`,
+      actions: [{ label: 'They\'re ready', run: async () => { await recordReadyAnswer(e.id, { answer: 'yes', date: today, by: 'breeder' }); } }]
+    });
+  }
+
+  // Deposits were planned to open today (Spec §16.8): suggest Open picks, which
+  // starts the next turn (§16.1). Only for a kennel with families on its list.
+  const listed = new Set(entries.filter((e) => e.status === 'active').map((e) => e.kennel_id));
+  for (const l of depositsDueLitters(inScopeOnly(litters).filter((x) => listed.has(x.kennel_id)), dogs, sales, today)) {
+    const label = litterLabel(l, dogsById);
+    out.push({
+      key: `waitlist-open-picks:${l.id}:${l.accept_deposits_date}`,
+      title: `${label}: you planned to start taking deposits ${l.accept_deposits_date === today ? 'today' : `on ${l.accept_deposits_date}`}. Open picks?`,
+      detail: 'Opening picks offers the next family on your list a turn (or adds this litter to the turn open now). Nothing opens by itself.',
+      subjectHref: `litter.html?id=${encodeURIComponent(l.id)}`,
+      actions: [{
+        label: 'Open picks',
+        run: async () => {
+          const turn = await openPicks(l.id, { date: today });
+          if (!turn) return { title: 'Picks are open', message: 'Nobody can be offered this litter right now: another family holds the turn and isn\'t first in line for it, or nobody on the list matches its pups yet. The Litter page shows who\'s next.' };
+          const fresh = (await waitlistEntryRepo.getAll({ includeArchived: true })).find((x) => x.id === turn.entry_id);
+          const who = fresh ? name(fresh) : 'The next family';
+          return turn.joined
+            ? { title: 'Added to their turn', message: `${who} is first in line for ${label} too, so it joined their turn. Their deadline restarted: until ${turn.respond_by_date}. Let them know.` }
+            : { title: 'Turn offered', message: `It's ${who}'s turn. They have until ${turn.respond_by_date} to pick a pup and send the deposit, or pass. Let them know.` };
         }
       }]
     });
@@ -524,11 +565,13 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
       const parents = [...(r.listen_sire_ids || []), ...(r.listen_dam_ids || [])].map(dogName).join(', ');
       out.push({
         key: `waitlist-listen-request:${e.id}:${r.requested_date}`,
-        title: r.listen_mode === 'selected' ? `${name(e)} asked to wait only for litters from ${parents || 'no parents'}` : `${name(e)} asked to change which litters they wait for`,
-        detail: `Narrower, so it needs you: they wouldn't be offered other litters, and nothing is counted as a pass for those.${openNote}`,
+        title: r.listen_mode === 'selected' ? `${name(e)} asked to wait only for litters from ${parents || 'no parents'}`
+          : r.listen_mode === 'except' ? `${name(e)} asked to skip litters from ${parents || 'no parents'}`
+            : `${name(e)} asked to change which litters they wait for`,
+        detail: `Narrower, so it needs you: they wouldn't be offered ${r.listen_mode === 'except' ? 'those' : 'other'} litters, and nothing is counted as a pass for those.${openNote}`,
         subjectHref: href(e),
         actions: decide(() => approveListenChange(e.id, { date: today }), () => declineListenChange(e.id, { date: today }),
-          `${name(e)} now waits only for those litters. Let them know.`)
+          `${name(e)} now ${r.listen_mode === 'except' ? 'skips' : 'waits only for'} those litters. Let them know.`)
       });
     }
     const unread = (e.messages || []).filter((m) => !m.read);

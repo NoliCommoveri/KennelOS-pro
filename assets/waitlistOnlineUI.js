@@ -2,7 +2,7 @@
 // §9). Imported dynamically by pages/kennel.js, only where the waitlist online is
 // offered (Pro, cloud available, its release switch or staging). Saving goes
 // through kennelRepo; publishing through data/cloud/cloudWaitlist.js.
-import { esc, confirmModal, alertModal } from './ui.js';
+import { esc, confirmModal, alertModal, todayYMD } from './ui.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { waitlistConfig } from '../data/waitlistRules.js';
 import { syncWaitlistOnline, waitlistOnlineStatus, rotateFormKey, WAITLIST_ONLINE_EVENT } from '../data/cloud/cloudWaitlist.js';
@@ -56,7 +56,7 @@ export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
     const zones = timeZoneOptions(kennel.time_zone).map((z) => `<option value="${esc(z)}"${z === zone ? ' selected' : ''}>${esc(z.replace(/_/g, ' '))}</option>`).join('');
     root.innerHTML = `
       <div class="row-between"><h2 style="margin:0;">Online list</h2><span class="badge badge-purple" title="Only on the test server until it's released">Preview</span></div>
-      <p class="field-hint">Publishes ${esc(kennel.kennel_name)}'s waitlist to the server: the public list (position, first name and last initial, sex preference, date added) and each family's own status page (their name and email, their place and offers, the fee while it's unpaid, and whether it was received). Their other answers, phone, address, programs, notes and payment details stay on your devices. Updated by itself after each change.</p>
+      <p class="field-hint">Publishes ${esc(kennel.kennel_name)}'s waitlist to the server: the public list (position, first name and last initial, sex preference, date added) and each family's own status page (their name and email, their place and offers, the fee while it's unpaid, and whether it was received), plus any pairings and litters you chose to show before picks open (Waitlist settings). Their other answers, phone, address, programs, notes and payment details stay on your devices. Updated by itself after each change.</p>
       <div class="form-grid">
         <div class="field field-wide">
           <label class="check-inline"><input id="wlo-online" type="checkbox"${waitlistConfig(kennel).online ? ' checked' : ''}> Put ${esc(kennel.kennel_name)}'s waitlist online</label>
@@ -104,7 +104,9 @@ export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
     const online = root.querySelector('#wlo-online').checked;
     const onlineForm = online && root.querySelector('#wlo-form').checked;
     const timeZone = root.querySelector('#wlo-tz').value || null;
-    const config = { ...(kennel.waitlist_config || {}), online, online_form: onlineForm };
+    const before = kennel.waitlist_config || {};
+    // The day the list (last) went online: "Ready now?" covers holds ending from then (§16.7).
+    const config = { ...before, online, online_form: onlineForm, ...(online && before.online !== true ? { online_since: todayYMD() } : {}) };
     kennel = await kennelRepo.update(kennel.id, { waitlist_config: config, time_zone: timeZone });
     if (online && !kennel.public_id) {
       await kennelRepo.ensurePublicId(kennel.id);

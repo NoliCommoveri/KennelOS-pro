@@ -17,7 +17,7 @@ import { WAITLIST_ENTRY_STATUS, WAITLIST_PRIORITY, WAITLIST_REMOVED_REASON } fro
 import {
   waitlistConfig, rankedList, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, openTurns, isPupAvailable, publicList, publicListText,
-  soonFamiliesForKennel, kennelBreeds, resolveBreed
+  soonFamiliesForKennel, kennelBreeds, resolveBreed, placeHidden
 } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, formModal, openSoonNotice } from '../assets/waitlistUI.js';
@@ -113,7 +113,7 @@ async function main() {
   const listHtml = ranked.length
     ? table(['#', 'Family', 'Wants', 'Passes', 'In line since'], ranked.map((e, i) => row(e, [
         `<strong>${i + 1}</strong>`,
-        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today)}${breedFlag(e)}`,
+        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today, config)}${breedFlag(e)}`,
         prefsSummary(e),
         `${passesUsed(e, offers)} of ${esc(config.max_passes)}`,
         `${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ' <span class="badge badge-purple" title="You set this place by hand">Moved by you</span>' : ''}`
@@ -236,12 +236,16 @@ async function main() {
   // The public list as text (Spec §15.3): allow-listed fields only, paused
   // families left out with their numbers skipped.
   document.getElementById('wl-copy-public').onclick = async () => {
-    const rows = publicList(entries, kennel.id, programs, { today, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)) });
+    const rows = publicList(entries, kennel.id, programs, {
+      today, config, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)),
+      // Same as online: a family in their turn, or after passing until those litters close.
+      hidden: (e) => Boolean(placeHidden(e, offers, litters, dogs, sales))
+    });
     const text = publicListText(rows, { kennelName: kennel.kennel_name, today, fmtDate });
     await formModal({
       title: 'Public list',
       confirmLabel: 'Copy',
-      bodyHtml: `<p class="field-hint" style="margin-top:0;">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details, programs and paused families are left out.</p>
+      bodyHtml: `<p class="field-hint" style="margin-top:0;">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details and programs are left out, and so are paused families and families between turns (holding a turn, or after passing until that litter closes).</p>
         <textarea readonly style="width:100%;min-height:220px;font-family:inherit;">${esc(text)}</textarea>`,
       onConfirm: async (o) => {
         const ta = o.querySelector('textarea');

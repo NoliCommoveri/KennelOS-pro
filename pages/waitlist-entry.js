@@ -20,8 +20,8 @@ import { saleRepo } from '../data/saleRepo.js';
 import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches,
-  entryName, canUndoRemoval, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, rankedList, REMOVAL_UNDO_DAYS,
-  eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isPupAvailable,
+  entryName, canUndoRemoval, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
+  eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary
@@ -37,7 +37,7 @@ import {
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal } from '../assets/ui.js';
 import {
-  resolveWaitlistKennel, prefsSummary, entryFlags, formModal,
+  resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
   pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink
 } from '../assets/waitlistUI.js';
 
@@ -134,11 +134,12 @@ function statusLines(e) {
     lines.push(`<strong style="font-size:1.3em;">#${esc(pos)}</strong> of ${esc(total)} on the list.`);
     lines.push(`In line since ${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ` <span class="badge badge-purple">Moved by you</span> <span class="faint">(fee received ${esc(fmtDate(e.fee_received_date))})</span>` : ''}.`);
     lines.push(`Passes used: ${passesUsed(e, ctx.offers)} of ${esc(ctx.config.max_passes)}.`);
-    const flags = entryFlags(e, today);
-    const why = isReadyHeld(e, today)
-      ? `They said they won't be ready to buy until about ${esc(fmtDate(readyFromDate(e)))}, so they aren't offered pups (or charged passes) until then. They keep their place.`
+    const flags = entryFlags(e, today, ctx.config);
+    const why = isReadyHeld(e, today, ctx.config)
+      ? `${esc(readyHoldText(e, today, ctx.config))} They aren't offered pups (or charged passes) until then, and keep their place.`
       : isPaused(e, today) ? 'Paused families keep their place; they just aren\'t offered pups.'
-        : 'Only offered litters from the sires and dams they chose; they keep their place.';
+        : e.listen_mode === 'except' ? 'Not offered litters from the sires and dams they listed; they keep their place.'
+          : 'Only offered litters from the sires and dams they chose; they keep their place.';
     if (flags) lines.push(`${flags} <span class="faint">${why}</span>`);
   } else if (e.status === 'removed') {
     lines.push(`Removed ${esc(fmtDate(e.removed_date))}${e.removed_reason ? ` — ${esc(descriptor(WAITLIST_REMOVED_REASON, e.removed_reason).label.toLowerCase())}` : ''}.`);
@@ -213,10 +214,11 @@ function renderStatus() {
 // Hidden for a family who never used it.
 
 function listenText(r) {
-  if ((r.listen_mode || 'all') !== 'selected') return 'All litters';
+  if (!isListenOnly(r)) return 'All litters';
   const names = (list) => (list || []).map(dogName).join(', ');
-  return [r.listen_sire_ids?.length ? `Sires: ${names(r.listen_sire_ids)}` : '', r.listen_dam_ids?.length ? `Dams: ${names(r.listen_dam_ids)}` : '']
+  const parents = [r.listen_sire_ids?.length ? `Sires: ${names(r.listen_sire_ids)}` : '', r.listen_dam_ids?.length ? `Dams: ${names(r.listen_dam_ids)}` : '']
     .filter(Boolean).join(' · ') || 'no parents';
+  return r.listen_mode === 'except' ? `All except ${parents}` : parents;
 }
 
 function pendingRequests(e) {
@@ -233,8 +235,9 @@ function pendingRequests(e) {
   }
   if (actions.hasPendingRequest(e, 'listen_change_request')) {
     const r = e.listen_change_request;
-    out.push({ kind: 'listen', text: `Asked ${esc(fmtDate(r.requested_date))} to wait only for: <strong>${esc(listenText(r))}</strong> <span class="faint">(now: ${esc(listenText(e))})</span>.`, note: '',
-      hint: 'Narrower, so it needs you: they wouldn\'t be offered other litters. An open offer stays open.' });
+    const except = r.listen_mode === 'except';
+    out.push({ kind: 'listen', text: `Asked ${esc(fmtDate(r.requested_date))} to ${except ? 'wait for' : 'wait only for'}: <strong>${esc(listenText(r))}</strong> <span class="faint">(now: ${esc(listenText(e))})</span>.`, note: '',
+      hint: `Narrower, so it needs you: they wouldn't be offered ${except ? 'those' : 'other'} litters. An open offer stays open.` });
   }
   return out;
 }
@@ -449,12 +452,21 @@ function soonLitters(e) {
 // their dams — waitlistRules.isListeningFor reads only sire_id/dam_id, which
 // pairings carry too).
 function listenSummary(e) {
-  if ((e.listen_mode || 'all') !== 'selected') return esc('All litters');
+  if (!isListenOnly(e)) return esc('All litters');
+  const except = e.listen_mode === 'except';
   const names = (ids) => (ids || []).map(dogName).join(', ');
   const parts = [];
   if ((e.listen_sire_ids || []).length) parts.push(`Sires: ${names(e.listen_sire_ids)}`);
   if ((e.listen_dam_ids || []).length) parts.push(`Dams: ${names(e.listen_dam_ids)}`);
   if (!parts.length) return esc('Only: no sires or dams chosen yet, so no litter is offered to them');
+  if (except) {
+    const skipped = [
+      ...ctx.litters.filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status) && !isListeningFor(e, l)).map(litterLabel),
+      ...ctx.pairings.filter((p) => !p.is_archived && LIVE_PAIRING.includes(p.status) && !isListeningFor(e, p)
+        && !ctx.litters.some((l) => l.pairing_id === p.id)).map((p) => `${pairingLabel(p)} (pairing)`)
+    ];
+    return `${esc(`All except: ${parts.join(' · ')}`)}<br><span class="faint">${esc(skipped.length ? `Right now that skips: ${skipped.join(', ')}` : 'No current litter or upcoming pairing has these parents.')}</span>`;
+  }
   const covers = [
     ...ctx.litters.filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status) && isListeningFor(e, l)).map(litterLabel),
     ...ctx.pairings.filter((p) => !p.is_archived && LIVE_PAIRING.includes(p.status) && isListeningFor(e, p)
@@ -470,8 +482,16 @@ function readySummary(e) {
   const from = readyFromDate(e);
   if (!from) return esc(t.label);
   const base = e.fee_received_date ? 'the fee date' : 'approval';
-  const held = isReadyHeld(e, todayYMD());
-  return `${esc(t.label)} <span class="faint">— ${held ? 'no offers until' : 'hold ended'} ${esc(fmtDate(from))} (${esc(t.hold_months)} month${t.hold_months === 1 ? '' : 's'} from ${base})</span>`;
+  const today = todayYMD();
+  const held = today < from;
+  const base0 = `${esc(t.label)} <span class="faint">— ${held ? 'no offers until' : 'hold ended'} ${esc(fmtDate(from))} (${esc(t.hold_months)} month${t.hold_months === 1 ? '' : 's'} from ${base})</span>`;
+  // "Ready now?" (Spec §16.7): their answer, or a button for when they told her.
+  const rc = e.status === 'active' ? readyCheck(e, today, ctx.config) : null;
+  if (!rc) return base0;
+  if (rc.answer === 'yes') return `${base0}<br><span class="faint">Ready now? Yes, ${esc(fmtDate(e.ready_check.answered_date))}${e.ready_check.by === 'breeder' ? ' (you recorded it)' : ''}.</span>`;
+  if (rc.answer === 'no') return `${base0}<br><span class="faint">Ready now? Not yet: until ${esc(fmtDate(e.ready_check.until))}. "${esc(e.ready_check.reason)}"</span>`;
+  return `${base0}<br><span class="badge badge-amber">Ready now? No answer yet</span> <span class="faint">${esc(readyHoldText(e, today, ctx.config))}</span>
+    <button class="btn btn-sm" data-ready="yes" style="margin-top:4px;">They told me they're ready</button>`;
 }
 
 // Her changes to the matching answers (Spec §15.9), for the history and the
@@ -508,7 +528,7 @@ function renderView() {
       ${row('Wants', prefsSummary(e) + (e.pref_breed && resolveBreed(e.pref_breed, ctx.breeds) === null ? ` <span class="badge badge-red" title="No pup will match this breed. Edit to pick one of your breeds.">Unknown breed</span>` : ''))}
       ${row('Ready to buy', readySummary(e))}
       ${row('Answer changes', prefHistory(e))}
-      ${row('Listening for', LISTEN_STATUSES.includes(e.status) || (e.listen_mode || 'all') === 'selected' ? listenSummary(e) : '')}
+      ${row('Listening for', LISTEN_STATUSES.includes(e.status) || isListenOnly(e) ? listenSummary(e) : '')}
       ${row('Not this litter', notThisLitterHtml(e))}
       ${row('Paused until', e.paused_until ? esc(fmtDate(e.paused_until)) + (e.pause_reason ? ` <span class="faint">— ${esc(e.pause_reason)}</span>` : '') : '')}
       ${row('Fee', e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : '')}
@@ -523,6 +543,9 @@ function renderView() {
       ${row('Applied', e.applied_date ? esc(fmtDate(e.applied_date)) : '')}
       ${entryQuestions(e, ctx.form).map((q) => row(q.label, multiline(answerText(q, app[q.id])))).join('')}
     </dl>`;
+  // "Ready now?" answered for them (they told her by phone or message).
+  els.body.querySelector('[data-ready="yes"]')?.addEventListener('click', () => actions.recordReadyAnswer(e.id, { answer: 'yes', by: 'breeder' })
+    .then(afterAction).catch((err) => showError(err.message || String(err))));
 }
 
 // --- Details: edit / new ------------------------------------------------------------
@@ -660,11 +683,11 @@ function renderEdit() {
 
       ${canListen ? `<div class="field field-wide"><h3 style="margin:8px 0 0;">Which litters</h3></div>
       <div class="field"><label>Listening for</label><select id="f-listen_mode">${options(WAITLIST_LISTEN_MODE, e.listen_mode || 'all')}</select>
-        <span class="field-hint">Listen-only families are only offered litters by a sire or out of a dam they picked. That never costs them their place or counts as a pass.</span></div>
-      <div class="field field-wide" id="listen-picks"${(e.listen_mode || 'all') === 'selected' ? '' : ' hidden'}>
+        <span class="field-hint">Listen-only families are only offered litters by a sire or out of a dam they picked (or, with "All except", every litter but those). That never costs them their place or counts as a pass.</span></div>
+      <div class="field field-wide" id="listen-picks"${(e.listen_mode || 'all') !== 'all' ? '' : ' hidden'}>
         <label>Sires</label><div class="check-group">${checkList(sires, selSires, 'data-sire')}</div>
         <label style="margin-top:8px;">Dams</label><div class="check-group">${checkList(dams, selDams, 'data-dam')}</div>
-        <span class="field-hint">Any litter or pairing with one of these parents counts: picking a sire and a dam means either one, not only the two together.</span>
+        <span class="field-hint">Any litter or pairing with one of these parents counts (or is skipped, with "All except"): picking a sire and a dam means either one, not only the two together.</span>
       </div>` : e.status === 'approved' ? `<div class="field field-wide"><span class="field-hint">Listening for certain sires and dams opens once they're on the list (fee received).</span></div>` : ''}
       <div class="field"><label>Paused until</label><input id="f-paused_until" type="date" value="${esc(e.paused_until || '')}">
         <span class="field-hint">Not offered pups until after this date. They keep their place, but don't appear on the public list while paused.</span></div>
@@ -681,7 +704,7 @@ function renderEdit() {
     </div>`;
 
   const modeSel = document.getElementById('f-listen_mode');
-  if (modeSel) modeSel.addEventListener('change', () => { document.getElementById('listen-picks').hidden = modeSel.value !== 'selected'; });
+  if (modeSel) modeSel.addEventListener('change', () => { document.getElementById('listen-picks').hidden = modeSel.value === 'all'; });
 }
 
 function readForm() {
@@ -762,9 +785,9 @@ function litterChoices(e) {
       if (held) {
         blocked = held.entry_id === e.id ? 'They hold the turn now.' : `${familyNameById(held.entry_id)} holds the turn now; one family at a time.`;
       } else if (turnSpent(offers, l.id, e.id)) blocked = 'They\'ve already had their turn on this litter.';
-      else if (isReadyHeld(e, today)) blocked = `They said they won't be ready to buy until about ${fmtDate(readyFromDate(e))}.`;
+      else if (isReadyHeld(e, today, ctx.config)) blocked = readyHoldText(e, today, ctx.config);
       else if (isManuallyPaused(e, today)) blocked = 'They\'re paused.';
-      else if (!isListeningFor(e, l)) blocked = 'They\'re only listening for litters from other sires/dams.';
+      else if (!isListeningFor(e, l)) blocked = e.listen_mode === 'except' ? 'They asked to skip litters from this sire or dam.' : 'They\'re only listening for litters from other sires/dams.';
       else if (!pups.some((d) => isPupAvailable(d, ctx.sales))) blocked = 'No pups available yet.';
       else if (!eligible.length) blocked = 'No available pup matches what they want.';
       const next = blocked ? null : nextFamilyForLitter(ctx.kennelEntries, offers, l, pups, ctx.sales, opts);

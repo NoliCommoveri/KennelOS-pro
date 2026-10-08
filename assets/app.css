@@ -430,6 +430,9 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 /* --- Forms / edit-in-place --------------------------------------------- */
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 20px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
+/* Same `[hidden]` idiom as `.pill-row[hidden]` below: a `.field` toggled by its
+   `hidden` attribute (the waitlist entry's parent picks, the sale's owner field). */
+.field[hidden] { display: none; }
 .field label { font-size: 13px; font-weight: 600; color: var(--text-muted); }
 .field .req { color: var(--danger); }
 .field input:not([type="checkbox"]):not([type="radio"]), .field select, .field textarea {

@@ -22,10 +22,10 @@
 // Events the server makes itself (deadlines and automatic offers, step 7) are
 // not handled yet: they're skipped here, and no server writes any before step 7.
 import { WAITLIST_OPEN_STATUSES } from './vocab.js';
-import { isPupAvailable, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf } from './waitlistRules.js';
+import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
 
-export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass'];
+export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready'];
 export const NOTE_MAX = 500;
 
 const clean = (v) => String(v ?? '').trim().slice(0, NOTE_MAX);
@@ -51,6 +51,7 @@ export const activityId = (event) => `event-${event.seq}`;
 //   op 'pref_request'   { request }  → entry.pref_change_request
 //   op 'prepass'        { prepass }  → "Not this litter" on the entry (§16.2)
 //   op 'unprepass'      { target }   → taken back
+//   op 'ready'          { answer, until, reason } → "Ready now?" answered (§16.7)
 // `date` is the day the family acted, in the kennel's time zone; `activity` the
 // line for their entry's activity ({ id, at, body }), or null.
 export function planFamilyEvent(event, ctx) {
@@ -125,6 +126,14 @@ export function planFamilyEvent(event, ctx) {
       const why = clean(p.note);
       return { op: 'withdraw', date, activity: line(`Left the list on their status page.${why ? ` They said: "${why}"` : ''}`) };
     }
+    case 'ready': {
+      if (!active) return note(`Answered "Ready now?", but ${gone}.`);
+      if (p.answer === 'yes') return { op: 'ready', answer: 'yes', date, activity: line('Said they\'re ready now, on their status page.') };
+      const reason = clean(p.reason);
+      if (p.answer !== 'no' || !/^\d{4}-\d{2}-\d{2}$/.test(String(p.until ?? '')) || !reason) return skip('bad_payload');
+      // Their "not yet" is a pause request (the request is what she sees and decides).
+      return { op: 'ready', answer: 'no', until: p.until, reason, date, activity: null };
+    }
     case 'pause_request': {
       if (!active) return note(`Asked to pause their place until ${p.until}, but ${gone}.`);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.until ?? ''))) return skip('bad_payload');
@@ -132,17 +141,19 @@ export function planFamilyEvent(event, ctx) {
     }
     case 'listen': {
       if (!active) return note(`Asked to change which litters they're waiting for, but ${gone}.`);
-      const next = p.mode === 'selected'
-        ? { listen_mode: 'selected', listen_sire_ids: ids(p.sire_ids), listen_dam_ids: ids(p.dam_ids) }
+      const next = p.mode === 'selected' || p.mode === 'except'
+        ? { listen_mode: p.mode, listen_sire_ids: ids(p.sire_ids), listen_dam_ids: ids(p.dam_ids) }
         : { listen_mode: 'all', listen_sire_ids: [], listen_dam_ids: [] };
       const kind = listenChangeKind(entry, next);
       if (kind === 'same') return skip('no_change');
       if (kind === 'wider') {
         // Back to All litters keeps their earlier picks on the entry (Spec §15.7 item 3).
-        const changes = next.listen_mode === 'all' ? { listen_mode: 'all' } : next;
-        return { op: 'listen_apply', date, changes, activity: line(next.listen_mode === 'all'
+        const toAll = !isListenOnly(next);
+        return { op: 'listen_apply', date, changes: toAll ? { listen_mode: 'all' } : next, activity: line(toAll
           ? 'Went back to waiting for all litters, on their status page.'
-          : 'Added parents to the litters they\'re waiting for, on their status page.') };
+          : next.listen_mode === 'except'
+            ? 'Took parents off the litters they skip, on their status page.'
+            : 'Added parents to the litters they\'re waiting for, on their status page.') };
       }
       return { op: 'listen_request', date, activity: null, request: { requested_date: date, ...next } };
     }

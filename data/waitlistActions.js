@@ -147,6 +147,32 @@ export async function withdraw(entryId, { date = todayYMD() } = {}) {
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'the family withdrew from the list' })) };
 }
 
+// "Ready now?" (Spec §16.7). Yes: the hold is over. No: a new date and a required
+// reason, which becomes a pause request she approves or declines (the reason
+// rides it, like a pause note). `by`: 'family' (their status page) or 'breeder'.
+export async function recordReadyAnswer(entryId, { answer, until = null, reason = '', date = todayYMD(), by = 'breeder' } = {}) {
+  const entry = await load(entryId);
+  requireStatus(entry, ['active'], 'answer the ready check for');
+  if (answer === 'yes') return waitlistEntryRepo.update(entryId, { ready_check: { answer: 'yes', answered_date: date, by } });
+  if (answer !== 'no') throw new Error('Ready now? is answered yes or no.');
+  const why = String(reason || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(until || '')) || until <= date) throw new Error('Not ready yet needs a date after today.');
+  if (!why) throw new Error('Not ready yet needs a reason.');
+  return waitlistEntryRepo.update(entryId, {
+    ready_check: { answer: 'no', answered_date: date, until, reason: why, by },
+    pause_request: { requested_date: date, until, note: why, from_ready_check: true }
+  });
+}
+
+// Her device's move under remove_after (§16.7): no answer in her window. Removed
+// with the 7-day undo, like a second-pass removal. They're held, so no offer is open.
+export async function removeForNoReadyAnswer(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  requireStatus(entry, ['active'], 'remove');
+  const saved = await waitlistEntryRepo.update(entryId, { status: 'removed', removed_date: date, removed_reason: 'no_ready_answer' });
+  return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'they didn\'t answer the ready check' })) };
+}
+
 // She removes a family from the list. Final: coming back means re-applying. Any
 // open offer they held is voided and moves on. Returns { entry, voided, offered }.
 export async function removeByBreeder(entryId, { date = todayYMD() } = {}) {
@@ -171,6 +197,13 @@ export async function archiveEntry(entryId, { date = todayYMD() } = {}) {
 export async function undoRemoval(entryId, { today = todayYMD() } = {}) {
   const entry = await load(entryId);
   if (!canUndoRemoval(entry, today)) throw new Error('This removal can no longer be undone.');
+  // No answer to "Ready now?" (§16.7): back on the list, and the question asked
+  // again from today, so the next sweep doesn't remove them again at once.
+  if (entry.removed_reason === 'no_ready_answer') {
+    return waitlistEntryRepo.update(entryId, {
+      status: 'active', removed_date: null, removed_reason: null, ready_check: { ask_from: today }
+    });
+  }
   const offers = await waitlistOfferRepo.getByEntry(entryId);
   const forgive = passToForgive(entry, offers);
   if (forgive) {
@@ -813,6 +846,7 @@ export async function applyFamilyPlan(entryId, plan) {
       case 'unprepass': await removePrepass(entryId, plan.target); break;
       case 'withdraw': result = await withdraw(entryId, { date }); break;
       case 'pause_request': await waitlistEntryRepo.update(entryId, { pause_request: plan.request }); break;
+      case 'ready': await recordReadyAnswer(entryId, { answer: plan.answer, until: plan.until, reason: plan.reason, date, by: 'family' }); break;
       case 'listen_request': await waitlistEntryRepo.update(entryId, { listen_change_request: plan.request }); break;
       case 'pref_request': await waitlistEntryRepo.update(entryId, { pref_change_request: plan.request }); break;
       case 'listen_apply': await waitlistEntryRepo.update(entryId, plan.changes); break;
@@ -872,7 +906,7 @@ export async function approveListenChange(entryId, { date = todayYMD() } = {}) {
   const req = loadPending(entry, 'listen_change_request', 'listen-only');
   return waitlistEntryRepo.update(entryId, {
     listen_mode: req.listen_mode || 'all',
-    ...(req.listen_mode === 'selected' ? { listen_sire_ids: [...(req.listen_sire_ids || [])], listen_dam_ids: [...(req.listen_dam_ids || [])] } : {}),
+    ...((req.listen_mode || 'all') !== 'all' ? { listen_sire_ids: [...(req.listen_sire_ids || [])], listen_dam_ids: [...(req.listen_dam_ids || [])] } : {}),
     listen_change_request: decided(req, 'approved', date)
   });
 }
