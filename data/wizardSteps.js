@@ -28,6 +28,8 @@
 //              resolved anchor id is written to — defaults to 'id'. A couple
 //              of print-doc pages read a different key (puppy-record.html
 //              reads `?sale=`); anchor still resolves the same way.
+//   hash       (optional) a #section to open on a one-card-at-a-time page (the
+//              Kennel page's Section dropdown: 'tests', 'expenses', …).
 //   selector   CSS selector for the coach-mark target on that page. Container
 //              ids (`#…-section`, `[data-card="…"]`) are stable mount points
 //              that always resolve; a step whose selector matches nothing
@@ -267,13 +269,13 @@ export const WIZARD_STEPS = [
     body: 'The kennels list holds every kennel you do business with, including your own. Add the ones you work with regularly and link each to its contact — your dogs carry owner and breeder-kennel links back to them.'
   },
   {
-    id: 'kennel-config', hub: 'People', page: 'kennel.html', anchor: 'thornfield',
-    selector: '#kennel-config',
-    title: 'Kennel program config',
-    body: 'Set kennel-wide preferences here — the health tests you generally administer, and your standard age for promoting a dog to the breeding roster.'
+    id: 'kennel-config', hub: 'People', page: 'kennel.html', anchor: 'thornfield', hash: 'tests',
+    selector: '[data-ks="tests"]',
+    title: 'Kennel overview and settings',
+    body: 'Each kennel’s overview and settings, one section at a time — pick it from the Section dropdown. Here, the health tests you generally administer; other sections hold your standard age for promoting a dog to the breeding roster, your waitlist settings, the kennel’s roster, litters, placements and finances, and more.'
   },
   {
-    id: 'kennel-expenses', hub: 'People', page: 'kennel.html', anchor: 'thornfield',
+    id: 'kennel-expenses', hub: 'People', page: 'kennel.html', anchor: 'thornfield', hash: 'expenses',
     selector: '#expenses-section',
     title: 'Kennel expenses',
     body: 'Record kennel-wide expenses that don’t relate to an individual dog or litter — bulk dog-food purchases, facility costs, and the like.'

@@ -3,8 +3,9 @@
 // approved families whose fee is due, the ranked rolling list, and closed runs.
 // Position and passes are DERIVED here from waitlistRules — nothing is stored.
 // Also the waitlist as the main workflow (Spec §15.2): each live litter with who's
-// next and a one-tap offer, and "Copy public list" (Spec §15.3), the W1 stand-in
-// for the public link. Pro-only page (proPages.js).
+// next and a one-tap offer. Its one primary action is "+ New application"; the rest
+// sit under Manage (the form, programs, publishing the list — waitlist-publish.html —
+// and settings). Pro-only page (proPages.js).
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
@@ -16,11 +17,11 @@ import * as actions from '../data/waitlistActions.js';
 import { WAITLIST_ENTRY_STATUS, WAITLIST_PRIORITY, WAITLIST_REMOVED_REASON } from '../data/vocab.js';
 import {
   waitlistConfig, rankedList, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
-  canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, openTurns, isPupAvailable, publicList, publicListText,
-  soonFamiliesForKennel, kennelBreeds, resolveBreed, placeHidden
+  canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, openTurns, isPupAvailable,
+  soonFamiliesForKennel, kennelBreeds, resolveBreed
 } from '../data/waitlistRules.js';
-import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal } from '../assets/ui.js';
-import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, formModal, openSoonNotice } from '../assets/waitlistUI.js';
+import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal, wireActionMenu } from '../assets/ui.js';
+import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, openSoonNotice } from '../assets/waitlistUI.js';
 
 const els = {
   title: document.getElementById('wl-title'),
@@ -49,14 +50,22 @@ async function main() {
   mountKennelPicker(els.picker, { kennel, own });
   const kq = `kennel=${encodeURIComponent(kennel.id)}`;
   els.title.textContent = own.length > 1 ? `Waitlist — ${kennel.kennel_name}` : 'Waitlist';
+  // One primary action; everything else lives under Manage. (CSV import is on the
+  // Import/Export page.)
   els.actions.innerHTML = `
-    <a class="btn" href="kennel.html?id=${encodeURIComponent(kennel.id)}#waitlist-settings">Settings</a>
-    <a class="btn" href="waitlist-form.html?${kq}">Application form</a>
-    <a class="btn" href="waitlist-programs.html?${kq}">Programs</a>
-    <button class="btn" id="wl-copy-public">Copy public list</button>
-    <button class="btn" id="wl-soon" title="Tell the families whose turn is coming up for the pups available now">Almost your turn…</button>
-    <a class="btn" href="waitlist-import.html?${kq}">Import CSV</a>
-    <a class="btn btn-primary" href="waitlist-entry.html?new=1&${kq}">+ New application</a>`;
+    <a class="btn btn-primary" href="waitlist-entry.html?new=1&${kq}">+ New application</a>
+    <div class="action-menu" id="wl-manage">
+      <button class="btn" type="button" aria-haspopup="menu" aria-expanded="false">Manage ▾</button>
+      <div class="action-menu-list" role="menu" hidden>
+        <button type="button" role="menuitem" id="wl-soon" title="Tell the families whose turn is coming up for the pups available now">Almost your turn…</button>
+        <hr>
+        <a role="menuitem" href="waitlist-form.html?${kq}">Application form</a>
+        <a role="menuitem" href="waitlist-programs.html?${kq}">Programs</a>
+        <a role="menuitem" href="waitlist-publish.html?${kq}">Publish list</a>
+        <a role="menuitem" href="kennel.html?id=${encodeURIComponent(kennel.id)}#waitlist-settings">Settings</a>
+      </div>
+    </div>`;
+  wireActionMenu(document.getElementById('wl-manage'));
 
   const [entries, offers, programs, contacts, litters, dogs, sales] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
@@ -230,32 +239,6 @@ async function main() {
       kennel, config, rows, contactsById,
       litterLabelOf: (r) => r.litters.map((x) => `${litterLabel(x.litter)}: #${x.soonPosition} in line`).join(' · '),
       litterIdsOf: (r) => r.litters.map((x) => x.litter.id)
-    });
-  };
-
-  // The public list as text (Spec §15.3): allow-listed fields only, paused
-  // families left out with their numbers skipped.
-  document.getElementById('wl-copy-public').onclick = async () => {
-    const rows = publicList(entries, kennel.id, programs, {
-      today, config, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)),
-      // Same as online: a family in their turn, or after passing until those litters close.
-      hidden: (e) => Boolean(placeHidden(e, offers, litters, dogs, sales))
-    });
-    const text = publicListText(rows, { kennelName: kennel.kennel_name, today, fmtDate });
-    await formModal({
-      title: 'Public list',
-      confirmLabel: 'Copy',
-      bodyHtml: `<p class="field-hint" style="margin-top:0;">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details and programs are left out, and so are paused families and families between turns (holding a turn, or after passing until that litter closes).</p>
-        <textarea readonly style="width:100%;min-height:220px;font-family:inherit;">${esc(text)}</textarea>`,
-      onConfirm: async (o) => {
-        const ta = o.querySelector('textarea');
-        try {
-          await navigator.clipboard.writeText(text);
-        } catch {
-          ta.select();
-          if (!document.execCommand('copy')) throw new Error('Copying isn\'t allowed here. Select the text and copy it yourself.');
-        }
-      }
     });
   };
 }

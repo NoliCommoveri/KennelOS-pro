@@ -22,7 +22,7 @@
 import {
   waitlistConfig, entryName, publicList, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
-  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, whelpNotes, readyCheck
+  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, whelpNotes, readyCheck, publicIntroText
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
@@ -212,9 +212,15 @@ export function titlesByDog(events = []) {
 // expected whelp date, a whelped litter's whelp date and "picks expected to open"
 // (its accept-deposits date). Internal `sire_id`/`dam_id`/`litter_id` are kept
 // for the per-family view and stripped by toUpcomingView.
+// A parent as family pages show one (Coming up, Available Puppies, Review Your
+// Preferences): call name and earned titles. And a litter's breed: the dam's, else
+// the sire's.
+const parentView = (dogsById, titles, id) => ({ name: dogsById.get(id)?.call_name || 'Unknown', titles: [...(titles.get(id) || [])] });
+const breedOf = (dogsById, damId, sireId) => orNull(dogsById.get(damId)?.breed || dogsById.get(sireId)?.breed);
+
 function upcomingSection(kennel, config, { litters, pairings, dogsById, titles }) {
   const show = showUpcoming(config);
-  const parent = (id) => ({ name: dogsById.get(id)?.call_name || 'Unknown', titles: [...(titles.get(id) || [])] });
+  const parent = (id) => parentView(dogsById, titles, id);
   return upcomingItems(kennel, { litters, pairings })
     .filter((u) => show[u.stage].public || show[u.stage].family)
     .map((u) => ({
@@ -222,6 +228,7 @@ function upcomingSection(kennel, config, { litters, pairings, dogsById, titles }
       label: u.litter?.nickname || `${parent(u.dam_id).name} × ${parent(u.sire_id).name}`,
       sire: parent(u.sire_id),
       dam: parent(u.dam_id),
+      breed: breedOf(dogsById, u.dam_id, u.sire_id),
       expected_whelp_date: u.kind === 'early_litter' ? null : orNull(u.pairing?.expected_due_date),
       whelp_date: u.kind === 'early_litter' ? orNull(u.litter.whelp_date) : null,
       picks_expected_date: u.kind === 'early_litter' ? orNull(u.litter.accept_deposits_date) : null,
@@ -232,7 +239,7 @@ function upcomingSection(kennel, config, { litters, pairings, dogsById, titles }
 
 const toUpcomingView = (u) => ({
   id: u.id, kind: u.kind, label: u.label, pairing_id: u.pairing_id, litter_id: u.litter_id,
-  sire: u.sire, dam: u.dam, expected_whelp_date: u.expected_whelp_date, whelp_date: u.whelp_date,
+  sire: u.sire, dam: u.dam, breed: u.breed, expected_whelp_date: u.expected_whelp_date, whelp_date: u.whelp_date,
   picks_expected_date: u.picks_expected_date, public: u.public, family: u.family
 });
 
@@ -261,6 +268,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const live = entries.filter((e) => !e.is_archived && e.kennel_id === kennel.id);
   const kennelOffers = offers.filter((o) => !o.is_archived && o.kennel_id === kennel.id);
   const opts = { today, config, programsById };
+  const titles = titlesByDog(events);
+  const parent = (id) => parentView(dogsById, titles, id);
 
   // Each live litter's queue tells which families match it now (Q13); a family
   // sees only that they match, never their place in it (decided 2026-10-08).
@@ -280,11 +289,20 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // whatever her early-litters switch says (Q34).
     for (const n of whelpNotes(live, litter, pups, sales, opts)) {
       if (!notes.has(n.entry.id)) notes.set(n.entry.id, []);
-      notes.get(n.entry.id).push({ litter_id: litter.id, pairing_id: orNull(litter.pairing_id), label: litterLabel(litter, dogsById), kind: n.kind, why: n.why });
+      notes.get(n.entry.id).push({
+        litter_id: litter.id, pairing_id: orNull(litter.pairing_id), label: litterLabel(litter, dogsById), kind: n.kind, why: n.why,
+        breed: breedOf(dogsById, litter.dam_id, litter.sire_id), sire: parent(litter.sire_id), dam: parent(litter.dam_id)
+      });
     }
     const open = kennelOffers.find((o) => o.litter_id === litter.id && o.outcome === 'open') || null;
     litterViews[litter.id] = {
       label: litterLabel(litter, dogsById),
+      // What a family's Available Puppies card shows (decided 2026-10-08): her
+      // nickname, the breed, and the parents as Coming up shows them.
+      nickname: orNull(litter.nickname),
+      breed: breedOf(dogsById, litter.dam_id, litter.sire_id),
+      sire: parent(litter.sire_id),
+      dam: parent(litter.dam_id),
       status: litter.status,
       whelp_date: orNull(litter.whelp_date),
       ready_date: orNull(litter.estimated_ready_date),
@@ -315,7 +333,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   }
 
   const hidden = new Map(live.map((e) => [e.id, placeHidden(e, kennelOffers, litters, dogs, sales)]));
-  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogsById, titles: titlesByDog(events) });
+  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogsById, titles });
   const ctx = {
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
     positions: overallPositions(live, kennel.id, programsById), matches, litterLabels, hidden, notes,
@@ -330,6 +348,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     kennel: {
       public_id: kennel.public_id,
       name: kennel.kennel_name || '',
+      // The message under her public list's heading (publicIntroText).
+      intro: publicIntroText(config, kennel.kennel_name || ''),
       time_zone: orNull(kennel.time_zone),
       respond_days: Number(config.respond_days),
       max_passes: Number(config.max_passes),

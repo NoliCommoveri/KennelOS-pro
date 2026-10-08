@@ -741,6 +741,34 @@ table.data tr.row-detail .dl-meta { margin: 0; }
   border-color: #bfe0cd;
   font-weight: 600;
 }
+/* A page's secondary actions behind one button ("Manage ▾"), so the page's one
+   primary action stands alone. Markup: .action-menu > button.btn[aria-expanded]
+   + .action-menu-list > a/button items (ui.js wireActionMenu). */
+.action-menu { position: relative; display: inline-block; }
+.action-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: 40;
+}
+.action-menu-list[hidden] { display: none; }
+.action-menu-list > a, .action-menu-list > button {
+  display: block; width: 100%; text-align: left; padding: 8px 10px;
+  background: none; border: 0; border-radius: var(--radius-sm);
+  font: inherit; color: var(--text); text-decoration: none; cursor: pointer;
+}
+.action-menu-list > a:hover, .action-menu-list > button:hover { background: var(--accent-soft); }
+.action-menu-list > hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
+
+/* One-card-at-a-time pages (the Kennel page): a section dropdown above them. */
+.section-picker { max-width: 320px; margin-bottom: 14px; }
+
 .dest-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
 .dest-label { color: var(--text-muted); font-size: 13px; }
 

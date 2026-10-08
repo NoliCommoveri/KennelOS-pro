@@ -37,16 +37,18 @@ import { dogRepo } from './dogRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
+import { RELEASED_SALE_STATUSES, SALE_END_REASON, descriptor } from './vocab.js';
 import {
   waitlistConfig, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
   respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
-  splitPrepassed, prepassFor
+  splitPrepassed, prepassFor, lostSaleFamily
 } from './waitlistRules.js';
 
 const nowISO = () => new Date().toISOString();
 const appendNote = (notes, line) => [notes, line].filter(Boolean).join('\n');
+const money = (v) => `$${Number(v).toFixed(2)}`;
 
 async function load(entryId) {
   const entry = await waitlistEntryRepo.getById(entryId);
@@ -536,7 +538,7 @@ async function releasePick(offer, { date, why, strict = true }) {
   const sale = await heldSale(offer);
   if (!sale || sale.is_archived) return;
   if (sale.status !== 'deposit_pending') {
-    if (strict && !['cancelled', 'returned'].includes(sale.status)) {
+    if (strict && !RELEASED_SALE_STATUSES.includes(sale.status)) {
       throw new Error('Their sale already shows the deposit as received. Record it with "Deposit received" instead.');
     }
     return;
@@ -594,7 +596,13 @@ export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {
     kennel_id: dog.kennel_id || c.litter.kennel_id,
     sale_date: date,
     lead_source: 'Waitlist',
-    ...expectedPricing(dog, c.litter)
+    ...expectedPricing(dog, c.litter),
+    // What they'd paid on a pup they lost (§16.11) is their deposit on this one;
+    // it's recorded as received with "Deposit received", as any deposit is.
+    ...(entry.carried_payment ? {
+      deposit_amount: Number(entry.carried_payment.amount),
+      notes: `Deposit: ${money(entry.carried_payment.amount)} carried over from a pup they lost (paid ${entry.carried_payment.date}).`
+    } : {})
   });
   const saved = await waitlistOfferRepo.update(offerId, { chosen_dog_id: dog.id, picked_date: date, sale_id: sale.id });
   return { offer: saved, sale };
@@ -648,7 +656,7 @@ export async function confirmDeposit(offerId, { date = todayYMD(), amount } = {}
   if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
   const entry = await load(offer.entry_id);
   const sale = await heldSale(offer);
-  if (!sale || sale.is_archived || ['cancelled', 'returned'].includes(sale.status)) {
+  if (!sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) {
     throw new Error('The sale holding their pick was cancelled or archived. Void this offer, or open the sale and fix it first.');
   }
   const saleChanges = { deposit_date: date };
@@ -658,7 +666,7 @@ export async function confirmDeposit(offerId, { date = todayYMD(), amount } = {}
   result.sale = await saleRepo.update(sale.id, saleChanges);
   await dogRepo.update(offer.chosen_dog_id, { disposition: 'placed' });
   result.offer = await waitlistOfferRepo.update(offerId, { outcome: 'accepted', outcome_date: date, counts_as_pass: false });
-  await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id });
+  await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, carried_payment: null });
   const released = await releaseOpenOffers(entry.id, { date, why: 'the family accepted a pup', exceptOfferId: offerId, moveOn: false });
   // The other litters of this same turn closing is just the turn ending: not news.
   result.voided = released.voided.filter((o) => turnIdOf(o) !== turnIdOf(offer));
@@ -784,6 +792,90 @@ export async function recordOutcome(offerId, outcome, { date = todayYMD(), chose
   }
 
   return finishTurn(result, offer.kennel_id, date, closingTrigger(picked || offer, outcome));
+}
+
+// --- A lost pup (Spec §16.11) ------------------------------------------------------
+//
+// A family's pup is lost through no fault of theirs: its sale is voided (the pup
+// died, or failed a health check before going home) or returned for a health
+// problem within the guarantee. She's asked, as she marks the sale, whether to put
+// them back in line; nothing here runs by itself.
+
+// The waitlist family a lost sale belongs to, or null: { kind, entry, offer, sale }
+// (waitlistRules.lostSaleFamily).
+export async function lostSaleFamilyFor(saleId) {
+  const sale = await saleRepo.getById(saleId);
+  if (!sale || !sale.buyer_contact_id) return null;
+  const entries = await waitlistEntryRepo.getByContact(sale.buyer_contact_id);
+  const offers = (await Promise.all(entries.map((e) => waitlistOfferRepo.getByEntry(e.id)))).flat();
+  const found = lostSaleFamily(sale, entries, offers);
+  return found ? { ...found, sale } : null;
+}
+
+// Put the family back in line. Never a pass, never a new place:
+//  - placed: their accepted offer is voided (not a pass), so that litter is theirs
+//    to be offered again, and the entry is active again with its own fee date —
+//    their ORIGINAL place — and their passes as they were.
+//  - picked (their turn was still open): the pick is cleared and the turn gets a
+//    fresh respond-by date to pick another pup; a litter of it with no pup left for
+//    them closes (voided, never a pass), and if none is left the turn ends.
+// `carry` ({ amount, date }) keeps what they'd paid for their next pup
+// (entry.carried_payment: their next pick's sale takes it as its deposit); none =
+// she's refunding it. Then the turn moves on like any other moment, `restored`:
+// automatic offers on for it and nobody holding a turn → the next turn is offered
+// now (to them, when they're next); otherwise who's next is returned.
+// Returns { kind, entry, offers, voided, next, waiting }.
+export async function restoreAfterLostSale(saleId, { date = todayYMD(), carry = null } = {}) {
+  const found = await lostSaleFamilyFor(saleId);
+  if (!found) throw new Error('This sale isn\'t a waitlist family\'s lost pup (it must be voided, or returned for a health problem).');
+  const { kind, entry, offer, sale } = found;
+  const pupName = (await dogRepo.getById(sale.dog_id))?.call_name || 'their pup';
+  const why = `${pupName}'s sale was ${sale.status}${sale.end_reason ? ` (${descriptor(SALE_END_REASON, sale.end_reason).label.toLowerCase()})` : ''}`;
+  const carried = carry && Number(carry.amount) > 0
+    ? { amount: Number(carry.amount), date: carry.date || date, from_sale_id: sale.id } : null;
+  const entryNote = (what) => appendNote(entry.notes, `${what} on ${date}: ${why}.${carried ? ` ${money(carried.amount)} they'd paid is carried to their next pup.` : ''}`);
+  const result = { kind, entry: null, offers: [], voided: [], next: null, waiting: [] };
+
+  if (kind === 'placed') {
+    if (offer) {
+      await waitlistOfferRepo.update(offer.id, {
+        outcome: 'voided', outcome_date: date, counts_as_pass: false,
+        notes: appendNote(offer.notes, `Voided on ${date}: ${why}. The family is back in line, so this litter can be offered to them again. Not a pass.`)
+      });
+    }
+    result.entry = await waitlistEntryRepo.update(entry.id, {
+      status: 'active', placed_sale_id: null, ...(carried ? { carried_payment: carried } : {}),
+      notes: entryNote('Back on the list in their original place')
+    });
+    return finishTurn(result, entry.kennel_id, date, 'restored');
+  }
+
+  const c = await kennelContext(offer.kennel_id);
+  const program = c.programsById.get(entry.waitlist_program_id) || null;
+  const respondBy = respondByDate(date, c.config, program);
+  for (const o of turnOffers(c.offers, turnIdOf(offer)).filter((x) => x.outcome === 'open')) {
+    const litter = c.litters.find((l) => l.id === o.litter_id);
+    // Never the lost pup itself, even if she hasn't recorded its death or hold yet.
+    const eligible = litter && !litter.is_archived
+      ? eligiblePupsFor(entry, litter, c.pups, c.sales, { today: date, config: c.config }).filter((d) => d.id !== sale.dog_id) : [];
+    const cleared = o.id === offer.id ? { chosen_dog_id: null, picked_date: null, sale_id: null } : {};
+    if (eligible.length) {
+      result.offers.push(await waitlistOfferRepo.update(o.id, {
+        ...cleared, respond_by_date: respondBy, eligible_dog_ids: eligible.map((d) => d.id),
+        notes: appendNote(o.notes, `${o.id === offer.id ? `Pick cleared on ${date}: ${why}. ` : ''}Respond-by date restarted on ${date} so they can pick another pup.`)
+      }));
+    } else {
+      result.voided.push(await waitlistOfferRepo.update(o.id, {
+        ...cleared, outcome: 'voided', outcome_date: date, counts_as_pass: false,
+        notes: appendNote(o.notes, `Voided on ${date}: ${why}, and no other pup here matches them. Not a pass.`)
+      }));
+    }
+  }
+  result.entry = await waitlistEntryRepo.update(entry.id, {
+    ...(carried ? { carried_payment: carried } : {}),
+    notes: entryNote(result.offers.length ? 'Their turn was given back' : 'Their turn ended with no other pup for them')
+  });
+  return result.offers.length ? result : finishTurn(result, entry.kennel_id, date, 'restored');
 }
 
 // --- The status page (W2 step 5): family actions, requests, messages -------------

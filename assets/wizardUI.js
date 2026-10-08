@@ -54,6 +54,7 @@ function anchorParam(step) {
 function isOnStepPage(step) {
   if (!step.page) return true;
   if (step.page.split('?')[0] !== currentFile()) return false;
+  if (step.hash && location.hash !== `#${step.hash}`) return false;
   const wantId = resolvedAnchorId(step);
   return wantId ? currentId(anchorParam(step)) === wantId : true;
 }
@@ -61,7 +62,8 @@ function isOnStepPage(step) {
 function resolveStepUrl(step) {
   const base = `${rootPrefix()}pages/${step.page.split('?')[0]}`;
   const id = resolvedAnchorId(step);
-  return id ? `${base}?${anchorParam(step)}=${id}` : base;
+  // `hash` opens one section of a one-card-at-a-time page (the Kennel page's #tests).
+  return (id ? `${base}?${anchorParam(step)}=${id}` : base) + (step.hash ? `#${step.hash}` : '');
 }
 
 function goToStep(step) {

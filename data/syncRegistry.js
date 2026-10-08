@@ -138,7 +138,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount',
       'deferred_boarding_frequency', 'deferred_boarding_duration_days',
       'invoice_number', 'invoice_notes', 'payment_method', 'payment_reference',
-      'lead_source', 'referred_by_contact_id', 'notes'
+      'lead_source', 'referred_by_contact_id', 'notes',
+      // Why a voided/returned sale ended, and her note on it (decided 2026-10-08):
+      // health information about the pup, so private like notes.
+      'end_reason', 'end_note'
     ],
     pending: []
   },
@@ -249,7 +252,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'ready_check',
       // A Companion link request from their status page (Spec §8.3), with their
       // optional note: private like pause_request.
-      'companion_request'
+      'companion_request',
+      // What they'd paid on a pup they lost, kept for their next one (Spec
+      // §16.11): money, private like fee_amount.
+      'carried_payment'
     ],
     pending: []
   },

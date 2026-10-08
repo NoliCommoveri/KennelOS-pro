@@ -7,8 +7,9 @@ import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
-import { PLACEMENT_TYPE, SALE_STATUS, DISPOSITION, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate, todayYMD, param, confirmModal, selectModal, dogRefHtml } from '../assets/ui.js';
+import { PLACEMENT_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, DISPOSITION, DOG_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
+import { restoresFamily } from '../data/waitlistRules.js';
+import { esc, badge, fmtDate, todayYMD, param, confirmModal, selectModal, promptModal, dogRefHtml } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -33,7 +34,7 @@ const blankSale = () => ({
   deposit_date: '', balance_due_date: '', balance_paid_date: '', placement_type: '',
   lead_source: '', referred_by_contact_id: '', status: '', notes: '',
   transport_fee: '', deferred_boarding_amount: '', deferred_boarding_frequency: '',
-  deferred_boarding_duration_days: ''
+  deferred_boarding_duration_days: '', end_reason: '', end_note: ''
 });
 
 const ctx = {
@@ -138,6 +139,8 @@ function renderView() {
         : esc(contactName(s.buyer_contact_id) || '—'))}
       ${row('Placement type', badge(PLACEMENT_TYPE, s.placement_type))}
       ${row('Status', badge(SALE_STATUS, s.status))}
+      ${s.end_reason ? row('Why it ended', esc(descriptor(SALE_END_REASON, s.end_reason).label)) : ''}
+      ${s.end_note ? row('About it', esc(s.end_note).replace(/\n/g, '<br>')) : ''}
       ${row('Price', esc(money(s.price)))}
       ${row('Deposit amount', esc(money(s.deposit_amount)))}
       ${row('Transport fee', esc(money(s.transport_fee)))}
@@ -155,6 +158,20 @@ function renderView() {
 }
 
 // --- Edit form ---------------------------------------------------------
+
+// Why a voided or returned sale ended (vocab SALE_END_REASON): required for those
+// two statuses, and hidden for every other. Voided = it fell through on your side
+// (the pup died or can't be sold); Cancelled = the buyer backed out; Returned = the
+// pup came back after going home.
+function endReasonFields(s) {
+  const reasons = saleEndReasonsFor(s.status);
+  if (!reasons.length) return '';
+  const hint = s.status === 'voided'
+    ? 'Voided: the sale fell through on your side, not the buyer\'s. Nothing on it counts as income. (A buyer backing out is Cancelled.)'
+    : 'Returned: the pup came back after going home.';
+  return `${field('Why it ended', `<select id="f-end_reason">${vocabOptions(reasons, s.end_reason, 'Select…')}</select>`, { required: true, hint })}
+      ${field('About it', `<input id="f-end_note" type="text" value="${esc(s.end_note)}" placeholder="e.g. what the vet found">`)}`;
+}
 function field(label, inner, { required = false, hint = '', wide = false } = {}) {
   return `<div class="field${wide ? ' field-wide' : ''}">
     <label>${esc(label)}${required ? ' <span class="req">*</span>' : ''}</label>
@@ -172,6 +189,7 @@ function renderEdit() {
       ${field('Buyer', `<select id="f-buyer_contact_id">${contactOptions(s.buyer_contact_id)}</select>`, { required: true })}
       ${field('Placement type', `<select id="f-placement_type">${vocabOptions(PLACEMENT_TYPE, s.placement_type, 'Select…')}</select>`, { required: true })}
       ${field('Status', `<select id="f-status">${vocabOptions(SALE_STATUS, s.status, 'Select…')}</select>`, { required: true })}
+      ${endReasonFields(s)}
       ${field('Price', `<input id="f-price" type="number" min="0" step="0.01" value="${esc(s.price)}">`)}
       ${field('Deposit amount', `<input id="f-deposit_amount" type="number" min="0" step="0.01" value="${esc(s.deposit_amount)}">`)}
       ${field('Transport fee', `<input id="f-transport_fee" type="number" min="0" step="0.01" value="${esc(s.transport_fee)}">`)}
@@ -206,6 +224,11 @@ function renderEdit() {
   document.getElementById('picker-all-kennels')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerAllKennels = e.target.checked;
+    renderEdit();
+  });
+  // Voided/Returned need a reason; the reason fields come and go with the status.
+  document.getElementById('f-status').addEventListener('change', () => {
+    ctx.draft = readForm();
     renderEdit();
   });
   // Prefilling price/deposit_amount from the selected dog's litter (only when
@@ -255,6 +278,8 @@ function readForm() {
     deferred_boarding_duration_days: val('f-deferred_boarding_duration_days').trim(),
     lead_source: val('f-lead_source').trim(),
     referred_by_contact_id: val('f-referred_by_contact_id') || null,
+    end_reason: val('f-end_reason') || null,
+    end_note: val('f-end_note').trim() || null,
     notes: val('f-notes')
   };
 }
@@ -461,6 +486,64 @@ async function promptDisposition(sale, { title, message, defaultValue }) {
   if (choice && choice !== dog.disposition) await dogRepo.update(dog.id, { disposition: choice });
 }
 
+// The pup of a sale that just ended without it staying placed. Pup died → offer to
+// record the death (status Deceased + date). A health reason → disposition prompt
+// defaulting to Health hold (not for sale, never offered). Anything else → back to
+// Available, as before.
+const HEALTH_END_REASONS = ['failed_health_check', 'health_problem'];
+async function promptReleasedPup(sale) {
+  if (sale.end_reason === 'pup_died') {
+    const dog = await dogRepo.getById(sale.dog_id);
+    if (!dog || dog.status === 'deceased') return;
+    const date = await promptModal({
+      title: `Record ${dog.call_name}'s death?`,
+      message: `Marks ${dog.call_name} Deceased, so no one is offered this pup again.`,
+      label: 'Date of death', type: 'date', defaultValue: todayYMD(), confirmLabel: 'Record', cancelLabel: 'Skip'
+    });
+    if (date == null) return;
+    try {
+      await dogRepo.update(dog.id, { status: 'deceased', date_of_death: date });
+    } catch (e) {
+      showError(`${dog.call_name}'s death wasn't recorded: ${e.message || e} Record it on the dog's page.`);
+    }
+    return;
+  }
+  const health = HEALTH_END_REASONS.includes(sale.end_reason);
+  if (sale.status === 'returned' && await promptBackAsPuppy(sale, health)) return;
+  await promptDisposition(sale, {
+    title: 'Update this dog’s disposition?',
+    message: health
+      ? `This sale is now "${descriptor(SALE_STATUS, sale.status).label}" for a health reason. Health hold keeps the pup from being offered until you change it.`
+      : `This sale is now "${descriptor(SALE_STATUS, sale.status).label}" — update the dog's disposition back?`,
+    defaultValue: health ? 'health_hold' : 'available'
+  });
+}
+
+// A returned pup that was marked as gone home (Pet home, or External after the
+// delivery prompt) is back with you: offer to make it a puppy again — owned, with a
+// disposition (Health hold for a health return) — so it shows in its litter and
+// the waitlist sees it right. Skip leaves the dog as it is (e.g. an adult dog
+// returned long after). Resolves true when it was handled here.
+async function promptBackAsPuppy(sale, health) {
+  const dog = await dogRepo.getById(sale.dog_id);
+  if (!dog || dog.is_archived || !['pet_home', 'external_reference'].includes(dog.status)) return false;
+  const choice = await selectModal({
+    title: `${dog.call_name} is back with you`,
+    message: `${dog.call_name} is marked ${descriptor(DOG_STATUS, dog.status).label}. Bring ${dog.call_name} back into your program as a puppy?${health ? ' Health hold keeps the pup from being offered until you change it.' : ''}`,
+    label: 'Disposition', options: DISPOSITION.filter((o) => o.value !== 'placed'),
+    defaultValue: health ? 'health_hold' : 'available', confirmLabel: 'Bring back', cancelLabel: 'Skip'
+  });
+  if (!choice) return true;
+  const changes = { status: 'puppy', disposition: choice };
+  if (dog.ownership_type === 'external') Object.assign(changes, { ownership_type: 'owned', owner_contact_id: null });
+  try {
+    await dogRepo.update(dog.id, changes);
+  } catch (e) {
+    showError(`${dog.call_name} wasn't updated: ${e.message || e} Change it on the dog's page.`);
+  }
+  return true;
+}
+
 // Guards against a rapid double-tap/double-click firing save() twice before
 // the first call's await chain has a chance to disable anything itself —
 // each call would otherwise run to completion independently, e.g. creating
@@ -481,6 +564,10 @@ async function doSave() {
   const candidate = normalizeMoney(readForm());
   const isNew = ctx.mode === 'new';
   const prevStatus = isNew ? null : ctx.original.status;
+  if (saleEndReasonsFor(candidate.status).length && !candidate.end_reason) {
+    showError(`Choose why the sale was ${descriptor(SALE_STATUS, candidate.status).label.toLowerCase()}.`);
+    return;
+  }
   try {
     if (isNew) {
       // Kennel scope (Multi-Kennel Scope Spec §6): the sale files under the kennel
@@ -530,14 +617,17 @@ async function doSave() {
       });
     }
 
-    // Editing a sale into Returned/Cancelled → offer to set disposition back,
-    // defaulting to Available (the dog is available again).
-    if (!isNew && ['returned', 'cancelled'].includes(saved.status) && prevStatus !== saved.status) {
-      await promptDisposition(saved, {
-        title: 'Update this dog’s disposition?',
-        message: `This sale is now "${descriptor(SALE_STATUS, saved.status).label}" — update the dog's disposition back?`,
-        defaultValue: 'available'
-      });
+    // Editing a sale into Returned/Cancelled/Voided → settle the pup first (record
+    // its death, or set its disposition back — Available, or Health hold for a
+    // health reason), then, for a waitlist family's lost pup, offer to put them back
+    // in line (Waitlist Spec §16.11). The pup goes first so a dead or held pup is
+    // never offered to anyone.
+    if (!isNew && RELEASED_SALE_STATUSES.includes(saved.status) && prevStatus !== saved.status) {
+      await promptReleasedPup(saved);
+      if (editionFlags.waitlist && restoresFamily(saved)) {
+        const { restoreLostPupDialog } = await import('../assets/waitlistUI.js');
+        await restoreLostPupDialog({ saleId: saved.id, asStatus: prevStatus });
+      }
     }
 
     // All three deferred-pickup fields set → offer to schedule a boarding event.

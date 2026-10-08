@@ -267,10 +267,11 @@ export async function computeNudges() {
     const href = `litter.html?id=${encodeURIComponent(l.id)}`;
     const anyAvailable = pups.some((p) => p.disposition === 'available');
 
-    // Every pup resolved to placed/keeping, with at least one actually placed
-    // (an all-keeping litter never "sold" anything) → suggest marking it sold.
+    // Every pup resolved to placed/keeping (or on a health hold — not for sale),
+    // with at least one actually placed (an all-keeping litter never "sold"
+    // anything) → suggest marking it sold.
     if (l.status === 'ready'
-      && pups.every((p) => p.disposition === 'placed' || p.disposition === 'keeping')
+      && pups.every((p) => ['placed', 'keeping', 'health_hold'].includes(p.disposition))
       && pups.some((p) => p.disposition === 'placed')) {
       nudges.push({
         key: `littersold:${l.id}`,

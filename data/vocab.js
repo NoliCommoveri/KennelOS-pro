@@ -42,7 +42,11 @@ export const DISPOSITION = [
   { value: 'undecided', label: 'Undecided', badge: 'badge-gray' },
   { value: 'keeping',   label: 'Keeping',   badge: 'badge-blue' },
   { value: 'available', label: 'Available', badge: 'badge-green' },
-  { value: 'placed',    label: 'Placed',    badge: 'badge-neutral' }
+  { value: 'placed',    label: 'Placed',    badge: 'badge-neutral' },
+  // Not sellable right now for a health reason (failed a health check, came back
+  // with a health problem). Never offered by the waitlist; she changes it if the
+  // pup recovers, or she keeps or places it another way.
+  { value: 'health_hold', label: 'Health hold', badge: 'badge-amber' }
 ];
 
 // Foster direction — a per-litter fact (a litter fostered under a caretaker↔owner
@@ -168,12 +172,15 @@ export const WAITLIST_OFFER_OUTCOME = [
 // litter closing: the family who held the turn accepted (deposit in), passed, let
 // the deadline pass without picking, picked a pup but the deposit didn't arrive by
 // the deadline (recorded as no_response, with a pick), or left the list holding it.
+// `restored` isn't a closing: a family whose pup was lost (its sale voided, or
+// returned for a health problem) is back in line (waitlistActions.restoreAfterLostSale).
 export const WAITLIST_AUTO_OFFER_TRIGGER = [
   { value: 'accepted',    label: 'A family accepts a pup (deposit received)' },
   { value: 'passed',      label: 'A family passes' },
   { value: 'no_response', label: 'An offer deadline passes with no response' },
   { value: 'no_deposit',  label: 'A family picks a pup but the deposit doesn\'t arrive in time' },
-  { value: 'left',        label: 'A family holding a turn leaves the list' }
+  { value: 'left',        label: 'A family holding a turn leaves the list' },
+  { value: 'restored',    label: 'A family gets their place back after losing their pup' }
 ];
 
 export const WAITLIST_REMOVED_REASON = [
@@ -253,8 +260,38 @@ export const SALE_STATUS = [
   { value: 'paid_in_full',  label: 'Paid in full',  badge: 'badge-green' },
   { value: 'delivered',     label: 'Delivered',     badge: 'badge-green' },
   { value: 'returned',      label: 'Returned',      badge: 'badge-red' },
-  { value: 'cancelled',     label: 'Cancelled',     badge: 'badge-gray' }
+  { value: 'cancelled',     label: 'Cancelled',     badge: 'badge-gray' },
+  { value: 'voided',        label: 'Voided',        badge: 'badge-neutral' }
 ];
+
+// A sale that ended without the pup going home. `cancelled` is the BUYER backing
+// out (a deposit they paid stays earned, Financials §21); `voided` is the sale
+// falling through on the kennel's side, through no fault of the buyer (the pup
+// died or can't go home): nothing on it counts as income, since any deposit is
+// refunded or carried to another pup. `returned` came back after going home.
+// Every one frees the pup (waitlistRules.isPupAvailable).
+export const RELEASED_SALE_STATUSES = ['returned', 'cancelled', 'voided'];
+
+// Why a voided or returned sale ended (Sale.end_reason; the Sale form requires one
+// for those two statuses). `statuses` says which status each reason belongs to.
+// The reason decides what the Sale page offers next: record the pup's death, put
+// the pup on Health hold, and — for a waitlist family — put them back in line
+// (waitlistRules.restoresFamily).
+export const SALE_END_REASON = [
+  { value: 'pup_died',            label: 'Pup died',                                statuses: ['voided'] },
+  { value: 'failed_health_check', label: 'Failed a health check (can\'t be sold)',  statuses: ['voided'] },
+  { value: 'health_problem',      label: 'Health problem (within the guarantee)',  statuses: ['returned'] },
+  { value: 'buyer_choice',        label: 'Buyer\'s choice',                         statuses: ['returned'] },
+  { value: 'other',               label: 'Other',                                   statuses: ['voided', 'returned'] }
+];
+export const saleEndReasonsFor = (status) => SALE_END_REASON.filter((r) => r.statuses.includes(status));
+
+// A LOST sale: the pup didn't stay placed through no fault of the buyer — voided
+// (the pup died or can't be sold), or returned for a health problem within the
+// guarantee. What they paid is refunded or carried to another pup, so none of it
+// is this sale's income (incomeView), and a waitlist family can be put back in line
+// (waitlistRules.restoresFamily). A cancelled sale or a buyer's-choice return is not.
+export const isLostSale = (s) => !!s && (s.status === 'voided' || (s.status === 'returned' && s.end_reason === 'health_problem'));
 
 // Statuses that close a sale out. A closed sale no longer makes its buyer a
 // current "family": not in the Companion family package (companion.js), not in
@@ -262,7 +299,7 @@ export const SALE_STATUS = [
 // status page (waitlistProjection.js). All of them go through isOpenSale (via
 // saleRepo.isOpenSale in the app) so they can't drift. Here, not in saleRepo,
 // so the pure waitlist modules can use it without Dexie.
-export const TERMINAL_SALE_STATUSES = ['delivered', 'returned', 'cancelled'];
+export const TERMINAL_SALE_STATUSES = ['delivered', ...RELEASED_SALE_STATUSES];
 export const isOpenSale = (s) => !!s && !s.is_archived && !!s.status && !TERMINAL_SALE_STATUSES.includes(s.status);
 
 export const CONTRACT_TYPE = [

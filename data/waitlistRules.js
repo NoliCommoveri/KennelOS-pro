@@ -11,7 +11,7 @@
 //  - Eligibility (§6.2) is computed per litter / per pup at the moment it's needed.
 // The repos store; the pages call these functions to decide what to write.
 import { addDaysToYMD, addMonthsToYMD } from './dateUtils.js';
-import { WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_PREF_SEX, PLACEMENT_TYPE, descriptor } from './vocab.js';
+import { WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_PREF_SEX, PLACEMENT_TYPE, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
 
 // --- Config (Spec §4.6) -------------------------------------------------------
 
@@ -31,6 +31,7 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   color_matching: false,
   checkin_months: 6,
   soon_notice_text: '', // blank = SOON_NOTICE_DEFAULT
+  public_intro_text: '', // blank = PUBLIC_INTRO_DEFAULT (the message under her public list's heading)
   pass_reasons: null, // her reasons for a pass (Spec §16.5); null = DEFAULT_PASS_REASONS
   pass_other: true, // also offer "Other" with a short text box (Q33)
   show_upcoming: null, // pairings and early litters online (Spec §16.4); null = all off, see showUpcoming
@@ -89,8 +90,9 @@ export function closingTrigger(offer, outcome) {
   return outcome === 'no_response' && offer && offer.chosen_dog_id ? 'no_deposit' : outcome;
 }
 
-// Does this closing (`accepted` / `passed` / `no_response` / `no_deposit` / `left`) offer the next
-// family by itself? Off for every moment unless she turned it on (§4.6).
+// Does this moment (`accepted` / `passed` / `no_response` / `no_deposit` / `left` /
+// `restored`) offer the next family by itself? Off for every moment unless she
+// turned it on (§4.6).
 export function autoOffers(config, trigger) {
   return Boolean(config && Array.isArray(config.auto_offer_on) && config.auto_offer_on.includes(trigger));
 }
@@ -190,18 +192,53 @@ export function overallPositions(entries, kennelId, programsById = new Map()) {
 
 // --- Availability + preference matching (Spec §0, §6.2) ------------------------
 
-// Sale statuses that free a pup back up. Any other non-archived sale (open OR
-// delivered) means the pup is spoken for.
-const RELEASING_SALE_STATUSES = ['returned', 'cancelled'];
+// Dog statuses of a pup that has left: died, or gone home (a pet home, or an
+// outside dog now). A pup that came back is a puppy again before it's offered.
+const GONE_DOG_STATUSES = ['deceased', 'pet_home', 'external_reference'];
 
-// Is this pup still available to offer? Kept-back (`keeping`), already placed,
-// deceased, archived, or carrying a live Sale → no. Unset/`undecided`/`available`
-// disposition → yes (keeping a pup is an explicit choice; Spec §0).
+// Dispositions that take a pup out of the offers: kept back, already placed, or on
+// a health hold (not sellable right now).
+const UNOFFERED_DISPOSITIONS = ['keeping', 'placed', 'health_hold'];
+
+// Is this pup still available to offer? Kept-back (`keeping`), already placed, on a
+// health hold, deceased or gone home, archived, or carrying a live Sale → no. A sale that was
+// returned, cancelled or voided (vocab.RELEASED_SALE_STATUSES) frees the pup; any
+// other non-archived sale (open OR delivered) means it's spoken for.
+// Unset/`undecided`/`available` disposition → yes (keeping a pup is an explicit
+// choice; Spec §0).
 export function isPupAvailable(dog, sales = []) {
   if (!dog || dog.is_archived) return false;
-  if (dog.status === 'deceased') return false;
-  if (dog.disposition === 'keeping' || dog.disposition === 'placed') return false;
-  return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASING_SALE_STATUSES.includes(s.status));
+  if (GONE_DOG_STATUSES.includes(dog.status)) return false;
+  if (UNOFFERED_DISPOSITIONS.includes(dog.disposition)) return false;
+  return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status));
+}
+
+// --- A lost pup (Spec §16.11) ----------------------------------------------------
+// A waitlist family whose pup is lost through no fault of theirs gets their place
+// back. "Lost" is a sale VOIDED (the pup died or failed a health check before going
+// home) or RETURNED for a health problem within the guarantee. Never a cancelled
+// sale or a buyer's-choice return: the family backed out themselves.
+export function restoresFamily(sale) {
+  return isLostSale(sale) && !sale.is_archived;
+}
+
+// The waitlist family a lost sale belongs to, or null:
+//  - { kind: 'placed', entry, offer }: they were placed with it (deposit in). `offer`
+//    is the accepted offer for it (null on an entry placed some other way).
+//  - { kind: 'picked', entry, offer }: they picked it and their turn is still open.
+export function lostSaleFamily(sale, entries, offers) {
+  if (!restoresFamily(sale)) return null;
+  const live = (o) => !o.is_archived && o.sale_id === sale.id;
+  const placed = entries.find((e) => !e.is_archived && e.status === 'placed' && e.placed_sale_id === sale.id);
+  if (placed) {
+    const offer = offers.find((o) => live(o) && o.entry_id === placed.id && o.outcome === 'accepted')
+      || offers.find((o) => !o.is_archived && o.entry_id === placed.id && o.outcome === 'accepted' && o.chosen_dog_id === sale.dog_id)
+      || null;
+    return { kind: 'placed', entry: placed, offer };
+  }
+  const picked = offers.find((o) => live(o) && o.outcome === 'open' && o.chosen_dog_id);
+  const entry = picked && entries.find((e) => e.id === picked.entry_id && !e.is_archived && e.status === 'active');
+  return entry ? { kind: 'picked', entry, offer: picked } : null;
 }
 
 // Litters whose deposits were planned to open by `today` (Spec §16.8): born
@@ -750,6 +787,18 @@ export function soonNoticeText(config, kennelName = '') {
   return { subject: first.trim(), body: rest.join('\n').trim(), text };
 }
 
+// The message under the heading of her public list page (decided 2026-10-08), with
+// [Kennel Name] filled in. She edits it on the Publish list page
+// (waitlist_config.public_intro_text; blank = this default); it's published with
+// the list (waitlistProjection kennel.intro).
+export const PUBLIC_INTRO_DEFAULT = 'Our waitlist is a rolling list of approved applicants for [Kennel Name] puppies. When puppies are ready for selection, applicants whose preferences match an available pup will be contacted by [Kennel Name] through one of the following methods: email, SMS, and/or the messaging platform used to communicate with the applicant previously. Once contacted, you will have a limited time to respond before we move on to the next waiting family, so we encourage you to check back regularly to see your place in line.';
+export const PUBLIC_INTRO_MAX = 2000;
+
+export function publicIntroText(config, kennelName = '') {
+  return String((config && config.public_intro_text) || PUBLIC_INTRO_DEFAULT)
+    .replace(/\[kennel name\]/gi, kennelName || 'our kennel').trim().slice(0, PUBLIC_INTRO_MAX);
+}
+
 const openOfferEntryIds = (offers) =>
   new Set(offers.filter((o) => !o.is_archived && o.outcome === 'open').map((o) => o.entry_id));
 
@@ -1014,11 +1063,11 @@ const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
 // The public list as plain text for a Facebook post or website (the W1 stand-in
 // for the public link). `fmtDate` formats a YYYY-MM-DD for display.
 export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d) => d } = {}) {
-  const head = `${kennelName ? `${kennelName} waitlist` : 'Waitlist'}${today ? ` (updated ${fmtDate(today)})` : ''}`;
+  const head = `${kennelName ? `${kennelName} Waitlist` : 'Waitlist'}${today ? ` (updated ${fmtDate(today)})` : ''}`;
   if (!rows.length) return `${head}\nNobody is on the list yet.`;
   const lines = rows.map((r) => `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`);
   const gaps = rows.some((r, i) => r.position !== i + 1);
-  return [head, '', ...lines, ...(gaps ? ['', 'A skipped number is a family who is paused, not ready to buy yet, or between turns. They keep their place.'] : [])].join('\n');
+  return [head, '', ...lines, ...(gaps ? ['', 'Note: in special circumstances, some applicant names may not be displayed above. Their place is being held, but they are not currently eligible for available pups.'] : [])].join('\n');
 }
 
 // --- Telling her what an action did to offers -------------------------------------

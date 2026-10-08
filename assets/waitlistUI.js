@@ -2,7 +2,9 @@
 // (waitlist / waitlist-entry / waitlist-programs; Waitlist Spec §11, End-State
 // guide §29). Which kennel's list a page shows, the kennel picker, and the
 // one-line preference summary, and the offer dialogs (pick a pup, deposit received,
-// change pup, undo a pass) shared by the family page and the litter's picks panel.
+// change pup, undo a pass) shared by the family page and the litter's picks panel,
+// and "put them back in line" for a lost pup (shared with the Sale page, which
+// imports this module only when editionFlags.waitlist is on).
 // Pro-only like the pages (proPages.js).
 import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
 import { getMyKennelId } from '../data/settings.js';
@@ -10,10 +12,16 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal, promptModal } from './ui.js';
 import { PLACEMENT_TYPE, descriptor } from '../data/vocab.js';
-import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig } from '../data/waitlistRules.js';
+import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges } from '../data/waitlistRules.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass } from '../data/waitlistActions.js';
+import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale } from '../data/waitlistActions.js';
+import { kennelRepo } from '../data/kennelRepo.js';
+import { contactRepo } from '../data/contactRepo.js';
+import { dogRepo } from '../data/dogRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
+import { paidOnSale, getSaleFeeCredit } from '../data/incomeView.js';
 import { DemoModeError } from '../data/demoMode.js';
 
 // A family's status-page link (W2 Plan §8), or null while the list isn't online
@@ -120,7 +128,7 @@ export function readyHoldText(entry, today, config = null) {
 // `onConfirm(overlay)` reads the fields and does the work; throwing shows the
 // message inside the dialog and keeps it open. Resolves true once confirmed,
 // false on cancel/backdrop. `onOpen(overlay)` (optional) wires live controls.
-export function formModal({ title, bodyHtml, confirmLabel = 'Save', danger = false, onConfirm }, onOpen = null) {
+export function formModal({ title, bodyHtml, confirmLabel = 'Save', cancelLabel = 'Cancel', danger = false, onConfirm }, onOpen = null) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -130,7 +138,7 @@ export function formModal({ title, bodyHtml, confirmLabel = 'Save', danger = fal
         ${bodyHtml}
         <div class="form-actions">
           <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-fm-confirm>${esc(confirmLabel)}</button>
-          <button class="btn" data-fm-cancel>Cancel</button>
+          <button class="btn" data-fm-cancel>${esc(cancelLabel)}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -271,18 +279,22 @@ const pupOptions = (pups, pupLabel) => pups.map((p) => `<option value="${esc(p.i
 // Sale holds the pup and the offer stays open until the deposit arrives (their
 // respond-by date is the deadline). Ticking "deposit received" does both at once.
 // Resolves { res, depositDone } or null.
-export async function pickDialog({ offer, name, pups, pupLabel }) {
+// `carried` (the entry's carried_payment, Spec §16.11): what they'd paid on a pup
+// they lost. It's already in hand, so the deposit box starts ticked with it.
+export async function pickDialog({ offer, name, pups, pupLabel, carried = null }) {
   let out = null;
+  const carriedHint = carried ? `<p class="field-hint">${esc(fmtMoney(carried.amount))} they paid on a pup they lost (${esc(fmtDate(carried.date))}) is their deposit on this one.</p>` : '';
   const ok = await formModal({
     title: `${name} picked a pup`,
     confirmLabel: 'Record their pick',
     bodyHtml: `<div class="field"><label>Which pup?</label><select id="pk-dog">${pupOptions(pups, pupLabel)}</select></div>
       <div class="field"><label>Date</label><input id="pk-date" type="date" value="${esc(todayYMD())}"></div>
-      <label class="check-inline" style="display:block;margin:8px 0;"><input id="pk-paid" type="checkbox"> Their deposit is already in</label>
-      <div id="pk-paid-fields" class="form-grid" hidden>
-        <div class="field"><label>Deposit received</label><input id="pk-dep-date" type="date" value="${esc(todayYMD())}"></div>
-        <div class="field"><label>Amount</label><input id="pk-dep-amount" type="number" min="0" step="0.01" placeholder="The litter's expected deposit"></div>
+      <label class="check-inline" style="display:block;margin:8px 0;"><input id="pk-paid" type="checkbox"${carried ? ' checked' : ''}> Their deposit is already in</label>
+      <div id="pk-paid-fields" class="form-grid"${carried ? '' : ' hidden'}>
+        <div class="field"><label>Deposit received</label><input id="pk-dep-date" type="date" value="${esc(carried?.date || todayYMD())}"></div>
+        <div class="field"><label>Amount</label><input id="pk-dep-amount" type="number" min="0" step="0.01" placeholder="The litter's expected deposit" value="${esc(carried?.amount ?? '')}"></div>
       </div>
+      ${carriedHint}
       <p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(fmtDate(offer.respond_by_date))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`,
     onConfirm: async (o) => {
       const chosenDogId = o.querySelector('#pk-dog').value;
@@ -306,17 +318,19 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
 
 // The deposit for their pick arrived: they're placed and the turn moves on.
 // `sale` (the held Sale, may be null) prefills the amount.
-export async function depositDialog({ offer, name, pupName, sale }) {
+// `carried` (the entry's carried_payment): money they'd already paid on a pup they
+// lost, which the held Sale took as its deposit — prefills the date it was paid.
+export async function depositDialog({ offer, name, pupName, sale, carried = null }) {
   let res = null;
   const ok = await formModal({
     title: `${name}'s deposit received`,
     confirmLabel: 'Deposit received',
     bodyHtml: `<p style="margin-top:0;">For <strong>${esc(pupName)}</strong>.</p>
       <div class="form-grid">
-        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || todayYMD())}"></div>
+        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || carried?.date || todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
       </div>
-      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}</p>`,
+      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${carried ? ` ${esc(fmtMoney(carried.amount))} of it is what they paid on a pup they lost (${esc(fmtDate(carried.date))}).` : ''}</p>`,
     onConfirm: async (o) => {
       res = await confirmDeposit(offer.id, { date: o.querySelector('#dp-date').value || todayYMD(), amount: o.querySelector('#dp-amount').value });
     }
@@ -355,4 +369,144 @@ export async function undoPassDialog({ offer, name, holderName = null, removed =
   ].filter(Boolean);
   if (!(await confirmModal({ title: `Undo ${name}'s ${what}?`, message: lines.join('\n\n'), confirmLabel: 'Undo it' }))) return null;
   return undoPass(offer.id);
+}
+
+// --- A lost pup (Spec §16.11) ------------------------------------------------------
+
+// Ask whether to put a waitlist family back in line after their pup was lost (its
+// sale voided, or returned for a health problem), and do it. Asked as she marks the
+// sale (the Sale page) and offered on the family's page until she does. `asStatus`
+// is the status the sale had before (the Sale page knows it), so what they'd paid
+// is read as of then. Resolves the action's result, or null (not a waitlist
+// family's lost pup, or she said not now).
+export async function restoreLostPupDialog({ saleId, asStatus = null }) {
+  const found = await lostSaleFamilyFor(saleId);
+  if (!found) return null;
+  const { kind, entry, sale } = found;
+  const [kennel, contact, pup, programsById, kennelEntries, feeCredit] = await Promise.all([
+    kennelRepo.getById(entry.kennel_id),
+    entry.contact_id ? contactRepo.getById(entry.contact_id) : null,
+    dogRepo.getById(sale.dog_id),
+    waitlistProgramRepo.getMapForKennel(entry.kennel_id),
+    waitlistEntryRepo.getByKennel(entry.kennel_id),
+    getSaleFeeCredit(sale.id)
+  ]);
+  const config = waitlistConfig(kennel);
+  const name = entryName(entry, contact);
+  const pupName = pup?.call_name || 'their pup';
+  const paid = paidOnSale(sale, { feeCredit, asStatus });
+  const asActive = kennelEntries.map((e) => (e.id === entry.id ? { ...e, status: 'active' } : e));
+  const pos = overallPositions(asActive, entry.kennel_id, programsById).get(entry.id);
+  const total = overallPositions(asActive, entry.kennel_id, programsById).size;
+  const intro = kind === 'placed'
+    ? `${esc(name)} goes back on the list in their original place, <strong>#${esc(pos)} of ${esc(total)}</strong> by the date their fee came in, with their passes as they were. They can be offered ${esc(pupName)}'s litter again.`
+    : `${esc(name)} picked ${esc(pupName)} and still holds the turn. Their pick is cleared and the turn gets a new respond-by date so they can pick another pup.`;
+  const next = kind === 'placed'
+    ? (autoOffers(config, 'restored')
+      ? 'Automatic offers are on for this, so if nobody holds a turn the next one is offered now (to them, if they\'re next).'
+      : 'Nobody is offered automatically; you\'ll be told who\'s next.')
+    : '';
+  const credit = feeCredit > 0 && kind === 'placed'
+    ? `<p class="field-hint">Their ${esc(fmtMoney(feeCredit))} application fee stays credited toward their next pup.</p>` : '';
+  const money = paid > 0 ? `
+      <p style="margin-bottom:4px;">They've paid <strong>${esc(fmtMoney(paid))}</strong> on ${esc(pupName)}'s sale.</p>
+      <label class="check-inline" style="display:block;"><input type="radio" name="lp-money" value="carry" checked> Carry it to their next pup</label>
+      <div class="field" id="lp-amount-field" style="margin:4px 0 8px 24px;"><label>Amount to carry</label><input id="lp-amount" type="number" min="0" step="0.01" value="${esc(paid.toFixed(2))}"></div>
+      <label class="check-inline" style="display:block;"><input type="radio" name="lp-money" value="refund"> I'm refunding it</label>
+      <p class="field-hint">Carried, it becomes the deposit on the pup they pick next. Refunded, nothing more is recorded; note the refund on the sale if you like. Either way it isn't counted as income on this sale.</p>` : '';
+  let res = null;
+  const ok = await formModal({
+    title: kind === 'placed' ? `Put ${name} back in line?` : `Give ${name} their turn back?`,
+    confirmLabel: kind === 'placed' ? 'Put them back in line' : 'Give their turn back',
+    cancelLabel: 'Not now',
+    bodyHtml: `<p style="margin-top:0;">${intro}</p>${next ? `<p class="field-hint">${esc(next)}</p>` : ''}${credit}${money}`,
+    onConfirm: async (o) => {
+      const choice = o.querySelector('input[name="lp-money"]:checked')?.value;
+      const amount = choice === 'carry' ? Number(o.querySelector('#lp-amount').value) : 0;
+      if (choice === 'carry' && !(amount > 0)) throw new Error('Enter the amount to carry, or choose "I\'m refunding it".');
+      res = await restoreAfterLostSale(sale.id, { carry: amount > 0 ? { amount } : null });
+    }
+  }, (o) => {
+    for (const r of o.querySelectorAll('input[name="lp-money"]')) {
+      r.addEventListener('change', () => { o.querySelector('#lp-amount-field').hidden = r.value !== 'carry' || !r.checked; });
+    }
+  });
+  if (!ok) return null;
+  const [entries, litters, dogs] = await Promise.all([
+    waitlistEntryRepo.getByKennel(entry.kennel_id),
+    litterRepo.getAll({ includeArchived: true }),
+    dogRepo.getAll({ includeArchived: true })
+  ]);
+  const familyNames = new Map(await Promise.all(entries.map(async (e) => [e.id, entryName(e, e.contact_id ? await contactRepo.getById(e.contact_id) : null)])));
+  const dogName = (id) => dogs.find((d) => d.id === id)?.call_name || '—';
+  const litterOf = (id) => { const l = litters.find((x) => x.id === id); return l ? (l.nickname || `${dogName(l.dam_id)} × ${dogName(l.sire_id)}`) : 'A litter'; };
+  const lines = kind === 'placed'
+    ? [`${name} is back on the list at #${pos}.`]
+    : res.offers.length
+      ? [`${name}'s turn is open again on ${res.offers.map((x) => litterOf(x.litter_id)).join(', ')}: respond by ${fmtDate(res.offers[0].respond_by_date)}. Let them know.`]
+      : [`No other pup matches ${name} in that turn, so it ended (not a pass). They keep their place.`];
+  lines.push(...describeOfferChanges(kind === 'placed' ? res : { ...res, voided: [] }, { nameOf: (id) => familyNames.get(id) || 'the next family', litterOf, fmtDate }));
+  await alertModal({ title: kind === 'placed' ? `${name} is back in line` : `${name}'s turn is back`, message: lines.join('\n\n') });
+  return res;
+}
+
+// --- Texting a family (decided 2026-10-08) -------------------------------------------
+// The app never sends a text. This puts the message in front of her ready to send
+// from whichever app she likes, so it can come from a business number (Google
+// Voice) rather than her own:
+//  - Share…: the phone's share sheet, with the message in it — pick Google Voice
+//    (or any app), then the family inside it;
+//  - Copy message / Open Google Voice: copies it and opens Google Voice on the web
+//    to paste (no Google Voice link can fill in a number and a message);
+//  - Texting app: an sms: link with the number and message filled in, which always
+//    opens the phone's DEFAULT texting app (on an iPhone, Messages and her own number).
+// `message` is a suggestion she can edit first.
+const GOOGLE_VOICE_URL = 'https://voice.google.com/u/0/messages';
+
+function smsHref(phone, body) {
+  const num = String(phone || '').replace(/[^\d+]/g, '');
+  // iOS reads `&body=`, everyone else `?body=`.
+  const sep = /iPad|iPhone|iPod/.test(globalThis.navigator?.userAgent || '') ? '&' : '?';
+  return `sms:${num}${sep}body=${encodeURIComponent(body)}`;
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+}
+
+export async function textFamilyDialog({ name, phone = '', message = '' }) {
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  await formModal({
+    title: `Text ${name}`,
+    confirmLabel: 'Done',
+    bodyHtml: `
+      <p style="margin-top:0;">${phone
+        ? `To <strong>${esc(phone)}</strong> <button class="btn btn-sm" type="button" data-tx="copy-number">Copy number</button>`
+        : '<span class="faint">No phone number on file for them.</span>'}</p>
+      <div class="field"><label for="tx-body">Message</label><textarea id="tx-body" style="min-height:150px;">${esc(message)}</textarea></div>
+      <div class="pill-row" style="margin:8px 0;">
+        ${canShare ? '<button class="btn btn-primary btn-sm" type="button" data-tx="share">Share…</button>' : ''}
+        <button class="btn btn-sm${canShare ? '' : ' btn-primary'}" type="button" data-tx="copy">Copy message</button>
+        <button class="btn btn-sm" type="button" data-tx="voice">Copy &amp; open Google Voice</button>
+        ${phone ? '<a class="btn btn-sm" data-tx="sms" href="#">Texting app</a>' : ''}
+      </div>
+      <p class="field-hint" data-tx="note" role="status"></p>
+      <p class="field-hint">To text from your business number: ${canShare ? '<strong>Share…</strong> and pick Google Voice, or ' : ''}<strong>Copy &amp; open Google Voice</strong> and paste it into their conversation.${phone ? ' <strong>Texting app</strong> fills in their number and the message, but opens your phone\'s own texting app, so it sends from your personal number.' : ''} Nothing is sent by KennelOS.</p>`,
+    onConfirm: async () => {}
+  }, (o) => {
+    o.querySelector('[data-fm-cancel]')?.remove(); // one way out: Done
+    const body = () => o.querySelector('#tx-body').value;
+    const note = (t) => { o.querySelector('[data-tx="note"]').textContent = t; };
+    o.querySelector('[data-tx="copy-number"]')?.addEventListener('click', async () => note(await copyText(phone) ? 'Number copied.' : 'Copying isn\'t allowed here; select the number and copy it.'));
+    o.querySelector('[data-tx="copy"]').addEventListener('click', async () => note(await copyText(body()) ? 'Message copied.' : 'Copying isn\'t allowed here; select the message and copy it.'));
+    o.querySelector('[data-tx="voice"]').addEventListener('click', async () => {
+      const ok = await copyText(body());
+      window.open(GOOGLE_VOICE_URL, '_blank', 'noopener');
+      note(ok ? 'Message copied. Paste it into their conversation in Google Voice.' : 'Copy the message above, then paste it in Google Voice.');
+    });
+    o.querySelector('[data-tx="share"]')?.addEventListener('click', async () => {
+      try { await navigator.share({ text: body() }); } catch (e) { if (e?.name !== 'AbortError') note('Sharing didn\'t work here. Use Copy message instead.'); }
+    });
+    o.querySelector('[data-tx="sms"]')?.addEventListener('click', (ev) => { ev.currentTarget.href = smsHref(phone, body()); });
+  });
 }

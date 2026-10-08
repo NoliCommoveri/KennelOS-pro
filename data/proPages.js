@@ -44,6 +44,8 @@ export const PRO_ONLY_PAGES = [
   'waitlist.html', 'waitlist-entry.html', 'waitlist-programs.html', 'waitlist-import.html',
   // ...and her application form editor (Waitlist Spec §15.1)
   'waitlist-form.html',
+  // ...and publishing the list: online, or as text to copy (Spec §15.3)
+  'waitlist-publish.html',
 ];
 
 // Standalone Pro files that live outside pages/ (no nav entry) — also excluded from

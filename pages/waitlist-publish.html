@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Waitlist — KennelOS</title>
+  <title>Publish your list — KennelOS</title>
   <link rel="stylesheet" href="../assets/app.css">
   <link rel="manifest" href="../manifest.json">
   <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
@@ -18,21 +18,19 @@
   <main>
     <div class="page-header">
       <div>
-        <h1 id="wl-title">Waitlist</h1>
-        <p class="page-subtitle" id="wl-subtitle">Applications, families waiting on their fee, and your rolling list.</p>
+        <a class="muted" id="back-link" href="waitlist.html">← Waitlist</a>
+        <h1 id="pub-title">Publish your list</h1>
+        <p class="page-subtitle">Share your waitlist with families: online, or as text to paste on Facebook or your website.</p>
       </div>
-      <div class="pill-row" id="wl-actions"></div>
     </div>
-    <nav class="seg-tabs" id="people-hub-tabs" aria-label="People">
-      <a class="seg-tab" href="contacts.html">Contacts</a>
-      <span class="seg-tab active" aria-current="page">Waitlist</span>
-    </nav>
     <div id="page-error"></div>
-    <div id="wl-kennel-picker"></div>
-    <div id="wl-body"></div>
+    <div id="pub-kennel-picker"></div>
+    <section class="card" id="pub-online" hidden></section>
+    <section class="card" id="pub-intro" hidden></section>
+    <section class="card" id="pub-text"></section>
   </main>
 
   <script type="module" src="../app.js"></script>
-  <script type="module" src="./waitlist.js"></script>
+  <script type="module" src="./waitlist-publish.js"></script>
 </body>
 </html>

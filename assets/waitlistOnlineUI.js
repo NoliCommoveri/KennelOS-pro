@@ -1,5 +1,6 @@
-// waitlistOnlineUI.js — the Kennel page's "Online list" card (Waitlist W2 Plan
-// §9). Imported dynamically by pages/kennel.js, only where the waitlist online is
+// waitlistOnlineUI.js — the "Online list" card on the waitlist's Publish list page
+// (Waitlist W2 Plan §9; it lived on the Kennel page until 2026-10-08). Imported
+// dynamically by pages/waitlist-publish.js, only where the waitlist online is
 // offered (Pro, cloud available, its release switch or staging). Saving goes
 // through kennelRepo; publishing through data/cloud/cloudWaitlist.js.
 import { esc, confirmModal, alertModal, todayYMD } from './ui.js';
@@ -49,6 +50,20 @@ function statusLine(st) {
   return 'Publishing…';
 }
 
+// Every button is always shown (decided 2026-10-08: she couldn't find them when
+// they only appeared once usable); one that can't work yet is greyed out, and
+// waitingFor says what it's waiting on.
+function button(key, label, enabled, title) {
+  return `<button class="btn btn-sm" data-wlo="${key}"${enabled ? '' : ' disabled'}${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</button>`;
+}
+
+function waitingFor(st) {
+  if (!st.online) return 'To publish, tick "Put … waitlist online" above and Save. The copy-link buttons work once the list has been published.';
+  if (!st.published) return 'The copy-link buttons work once the list has been published (see the line above for anything stopping it).';
+  if (!st.formOpen) return 'To copy an application form link, tick "Take applications online" and Save.';
+  return '';
+}
+
 export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
   const render = () => {
     const st = waitlistOnlineStatus(kennel);
@@ -71,11 +86,12 @@ export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
       <p class="field-hint" id="wlo-status">${statusLine(st)}</p>
       <div class="form-actions">
         <button class="btn btn-primary btn-sm" data-wlo="save">Save</button>
-        ${st.online ? '<button class="btn btn-sm" data-wlo="now">Publish now</button>' : ''}
-        ${st.online && st.published ? '<button class="btn btn-sm" data-wlo="list" title="The public list, for Facebook or your website">Copy public list link</button>' : ''}
-        ${st.formOpen && st.published ? '<button class="btn btn-sm" data-wlo="form" title="Your application form, for Facebook or your website">Copy application form link</button>' : ''}
+        ${button('now', 'Publish now', st.online, '')}
+        ${button('list', 'Copy public list link', st.online && st.published, 'The public list, for Facebook or your website')}
+        ${button('form', 'Copy application form link', st.formOpen && st.published, 'Your application form, for Facebook or your website')}
         ${st.formOpen && st.published ? '<button class="btn btn-sm" data-wlo="rotate" title="Make a new form key (if a device holding it was lost)">Rotate form key…</button>' : ''}
-      </div>`;
+      </div>
+      ${waitingFor(st) ? `<p class="field-hint" style="margin-top:6px;">${esc(waitingFor(st))}</p>` : ''}`;
     root.querySelector('[data-wlo="save"]').addEventListener('click', save);
     root.querySelector('[data-wlo="now"]')?.addEventListener('click', publishNow);
     root.querySelector('[data-wlo="list"]')?.addEventListener('click', (ev) => copyLink(publicListLink(kennel.public_id), ev.currentTarget, { title: 'Your public list' }));

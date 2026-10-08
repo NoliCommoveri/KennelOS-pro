@@ -122,14 +122,14 @@ export function alertModal({ title, message = '', okLabel = 'OK' }) {
 
 // Single-line text prompt. Resolves the trimmed string on confirm, or null on
 // cancel/backdrop/empty.
-export function promptModal({ title, message = '', label = '', placeholder = '', defaultValue = '', confirmLabel = 'OK', cancelLabel = 'Cancel' }) {
+export function promptModal({ title, message = '', label = '', placeholder = '', defaultValue = '', confirmLabel = 'OK', cancelLabel = 'Cancel', type = 'text' }) {
   return new Promise((resolve) => {
     const overlay = mountModal(`
       <h2 style="margin-top:0;">${esc(title)}</h2>
       ${modalMessage(message)}
       <div class="field">
         ${label ? `<label>${esc(label)}</label>` : ''}
-        <input id="pm-value" type="text" value="${esc(defaultValue)}" placeholder="${esc(placeholder)}">
+        <input id="pm-value" type="${esc(type)}" value="${esc(defaultValue)}" placeholder="${esc(placeholder)}">
       </div>
       <div class="form-actions">
         <button class="btn btn-primary" id="pm-confirm">${esc(confirmLabel)}</button>
@@ -234,3 +234,17 @@ document.addEventListener('click', (e) => {
   btn.setAttribute('aria-expanded', String(!wasOpen));
   btn.setAttribute('aria-label', wasOpen ? 'Expand card' : 'Collapse card');
 });
+
+// A "Manage ▾"-style menu (app.css .action-menu): `root` holds the toggle button
+// and its .action-menu-list. Opens on click, closes on an item, an outside click
+// or Escape.
+export function wireActionMenu(root) {
+  const btn = root?.querySelector('button[aria-haspopup]');
+  const list = root?.querySelector('.action-menu-list');
+  if (!btn || !list) return;
+  const set = (open) => { list.hidden = !open; btn.setAttribute('aria-expanded', String(open)); };
+  btn.addEventListener('click', (ev) => { ev.stopPropagation(); set(list.hidden); });
+  list.addEventListener('click', () => set(false));
+  document.addEventListener('click', (ev) => { if (!root.contains(ev.target)) set(false); });
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') set(false); });
+}

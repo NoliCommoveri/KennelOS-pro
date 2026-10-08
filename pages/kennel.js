@@ -1,4 +1,4 @@
-// kennel.js — Kennel Detail, now a per-kennel HUB (Multi-Kennel Scope Spec §8):
+// kennel.js — Kennel Overview and Settings, a per-kennel HUB (Multi-Kennel Scope Spec §8):
 // roster counts, active litters, recent placements, and this kennel's P&L, all
 // derived on load and all filtered on THIS kennel's id rather than the active
 // scope — you opened this kennel's page, so you get its numbers whichever kennel
@@ -11,6 +11,11 @@
 // also hosts the kennel-wide Expenses ledger: costs that belong to the whole
 // kennel rather than any one dog or litter (facility, bulk food, registration
 // dues, marketing…), all carrying subject_type='kennel' + subject_id=this kennel.
+//
+// One card at a time (decided 2026-10-08): every card carries data-ks="<section>"
+// and a dropdown, alphabetical (SECTIONS), shows only the chosen one. A
+// #<section> hash opens it directly. There's no Profile card: the kennel's name
+// and badges head the page, and identity is edited on the Kennels list.
 import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -31,7 +36,8 @@ import { renderKennelCardSection } from '../assets/kennelCardUI.js';
 const els = {
   title: document.getElementById('kennel-title'),
   subtitle: document.getElementById('kennel-subtitle'),
-  body: document.getElementById('profile-body'),
+  scope: document.getElementById('kennel-scope'),
+  picker: document.getElementById('kennel-section-picker'),
   error: document.getElementById('page-error'),
   logo: document.getElementById('logo-section'),
   card: document.getElementById('kennel-card-section'),
@@ -59,24 +65,70 @@ function row(label, valueHtml) {
   return valueHtml ? `<dt>${esc(label)}</dt><dd>${valueHtml}</dd>` : '';
 }
 
-function renderProfile(k) {
-  els.title.innerHTML = esc(k.kennel_name) +
-    (k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : '') +
-    (k.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
-  els.subtitle.textContent = k.is_own_kennel
-    ? 'This kennel’s roster, litters, placements, finances, and program configuration.'
-    : 'An outside kennel — reference data only.';
-  els.body.innerHTML = `
-    <dl class="dl-meta" style="margin-top:14px;">
-      ${row('Name', esc(k.kennel_name))}
-      ${row('Prefix', esc(k.prefix))}
-      ${row('Location', esc(k.location))}
-      ${row('Website', k.website ? `<a href="${esc(k.website)}" target="_blank" rel="noopener noreferrer">${esc(k.website)}</a>` : '')}
-    </dl>
-    <p class="field-hint" style="margin-top:10px;">Edit a kennel's name, prefix, or
-      location from the <a href="kennels.html">Kennels list</a>. Program settings
-      and kennel-wide overhead live below.</p>`;
+// The page heading stays "Kennel Overview and Settings"; which kennel, under it.
+function renderHeader(k) {
+  els.subtitle.innerHTML = `<strong>${esc(k.kennel_name)}</strong>`
+    + (k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : ' <span class="badge badge-neutral">Outside kennel</span>')
+    + (k.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '')
+    + (k.is_own_kennel ? '' : ' <span class="faint">Reference data only.</span>');
+  document.title = `${k.kennel_name} — Kennel Overview and Settings — KennelOS`;
 }
+
+// --- Sections (one card at a time) --------------------------------------------
+// Every card the page can show, alphabetical by label. `when` says whether this
+// kennel has it (own-kennel cards, the waitlist's flag, a received kennel card).
+const SECTIONS = [
+  { key: 'litters', label: 'Active litters', when: (k) => k.is_own_kennel },
+  { key: 'feeding', label: 'Feeding schedules', when: (k) => k.is_own_kennel },
+  { key: 'finances', label: 'Finances', when: (k) => k.is_own_kennel },
+  { key: 'card', label: 'Kennel card', when: (k) => k.is_own_kennel || !!k.public_id },
+  { key: 'expenses', label: 'Kennel expenses', when: () => true },
+  { key: 'nudges', label: 'Lifecycle nudges', when: (k) => k.is_own_kennel },
+  { key: 'logo', label: 'Logo', when: () => true },
+  { key: 'tests', label: 'Preferred tests', when: (k) => k.is_own_kennel },
+  { key: 'placements', label: 'Recent placements', when: (k) => k.is_own_kennel },
+  { key: 'roster', label: 'Roster', when: (k) => k.is_own_kennel },
+  { key: 'waitlist-settings', label: 'Waitlist settings', when: (k) => k.is_own_kennel && editionFlags.waitlist }
+].sort((a, b) => a.label.localeCompare(b.label));
+
+// Show only the chosen section. A stylesheet rule rather than toggling each card,
+// so a card re-rendered later (Save re-renders the config cards) stays hidden or
+// shown without anyone remembering to re-apply it.
+function showSection(key) {
+  let style = document.getElementById('kennel-section-style');
+  if (!style) {
+    style = document.createElement('style');
+    style.id = 'kennel-section-style';
+    document.head.appendChild(style);
+  }
+  style.textContent = key ? `[data-ks]:not([data-ks="${CSS.escape(key)}"]) { display: none; }` : '[data-ks] { display: none; }';
+  const hint = els.picker.querySelector('[data-ks-hint]');
+  if (hint) hint.hidden = !!key;
+}
+
+function renderSectionPicker(k) {
+  const available = SECTIONS.filter((x) => x.when(k));
+  const fromHash = decodeURIComponent(location.hash.slice(1));
+  const current = available.some((x) => x.key === fromHash) ? fromHash : '';
+  els.picker.innerHTML = `
+    <div class="field section-picker">
+      <label for="kennel-section">Section</label>
+      <select id="kennel-section">
+        <option value="">Choose a section…</option>
+        ${available.map((x) => `<option value="${esc(x.key)}"${x.key === current ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="empty-state" data-ks-hint>Choose a section to see or change it.</div>`;
+  els.picker.querySelector('#kennel-section').addEventListener('change', (e) => {
+    const key = e.target.value;
+    history.replaceState(null, '', key ? `#${encodeURIComponent(key)}` : location.pathname + location.search);
+    showSection(key);
+  });
+  showSection(current);
+}
+
+// A #<section> link followed while the page is already open (same document).
+window.addEventListener('hashchange', () => { if (kennel) renderSectionPicker(kennel); });
 
 // --- Logo ------------------------------------------------------------------
 // The logo is a plain (unindexed) data-URL string on the Kennel record, so it
@@ -243,7 +295,7 @@ function rosterCardHtml(roster) {
     .filter((s) => (byStatus.get(s.value) || 0) > 0)
     .map((s) => statTile(byStatus.get(s.value), s.label, 'dogs.html'))
     .join('');
-  return `<section class="card">
+  return `<section class="card" data-ks="roster">
       <div class="row-between" style="align-items:baseline;">
         <h2 style="margin:0;">Roster <span class="muted" style="font-size:14px;">(${active.length})</span></h2>
         <a class="btn btn-sm" href="dogs.html">All dogs →</a>
@@ -261,7 +313,7 @@ function littersCardHtml(kLitters) {
       <span><a href="litter.html?id=${encodeURIComponent(l.id)}"><strong>${esc(litterLabel(l))}</strong></a> ${badge(LITTER_STATUS, l.status)}</span>
       <span class="muted" style="white-space:nowrap;">${l.whelp_date ? esc(fmtDate(l.whelp_date)) : '<span class="faint">not whelped</span>'}</span>
     </li>`).join('');
-  return `<section class="card">
+  return `<section class="card" data-ks="litters">
       <div class="row-between" style="align-items:baseline;">
         <h2 style="margin:0;">Active litters <span class="muted" style="font-size:14px;">(${live.length})</span></h2>
         <a class="btn btn-sm" href="breeding.html">Breeding →</a>
@@ -281,7 +333,7 @@ function placementsCardHtml(kSales) {
         <span class="muted">→ ${esc(hub.contactsById.get(s.buyer_contact_id)?.name || '—')}</span> ${badge(SALE_STATUS, s.status)}</span>
       <span class="muted" style="white-space:nowrap;">${s.sale_date ? esc(fmtDate(s.sale_date)) : '<span class="faint">—</span>'}</span>
     </li>`).join('');
-  return `<section class="card">
+  return `<section class="card" data-ks="placements">
       <div class="row-between" style="align-items:baseline;">
         <h2 style="margin:0;">Recent placements <span class="muted" style="font-size:14px;">(${kSales.length} total)</span></h2>
         <a class="btn btn-sm" href="sales.html">Sales →</a>
@@ -295,9 +347,9 @@ function financesCardHtml(incomeRows, kExpenses) {
   const { totals } = summarize(incomeRows);
   const spent = expenseRepo.total(kExpenses);
   const net = totals.earned - spent;
-  return `<section class="card">
+  return `<section class="card" data-ks="finances">
       <div class="row-between" style="align-items:baseline;">
-        <h2 style="margin:0;">This kennel's finances</h2>
+        <h2 style="margin:0;">Finances</h2>
         <a class="btn btn-sm" href="financials.html">Financials →</a>
       </div>
       <p class="field-hint">Derived exactly as the Financials hub derives its own totals — nothing stored. Expenses include this kennel's overhead plus the costs on its dogs, litters, and pairings.</p>
@@ -329,9 +381,10 @@ async function renderOverview() {
     rosterCardHtml(roster)
     + littersCardHtml(kLitters)
     + placementsCardHtml(kSales)
-    + financesCardHtml(incomeRows, kExpenses)
-    + scopeActionHtml(kennel);
-  els.overview.querySelector('[data-act="scope-here"]')?.addEventListener('click', () => {
+    + financesCardHtml(incomeRows, kExpenses);
+  // Not a section: whether the app is scoped here belongs under the heading.
+  els.scope.innerHTML = scopeActionHtml(kennel);
+  els.scope.querySelector('[data-act="scope-here"]')?.addEventListener('click', () => {
     setActiveKennel(kennel.id);
     location.reload();
   });
@@ -343,12 +396,9 @@ async function renderOverview() {
 // same gating both panels carried on the old Kennels-list rows.
 function renderConfig() {
   if (!kennel.is_own_kennel) { els.config.innerHTML = ''; return; }
-  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + waitlistCard(kennel)
-    // The waitlist online (W2 Plan §9): its UI is imported only where it's offered.
-    + (editionFlags.waitlist && isWaitlistOnlineOffered() ? '<section class="card" id="waitlist-online"></section>' : '');
+  // The waitlist online's card moved to the waitlist's Publish list page (2026-10-08).
+  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + waitlistCard(kennel);
   wireConfig();
-  // Deep link from the Waitlist page's "Settings" button.
-  if (location.hash === '#waitlist-settings') document.getElementById('waitlist-settings')?.scrollIntoView();
 }
 
 // Waitlist settings (Waitlist Spec §4.6) — stored as one Kennel.waitlist_config
@@ -359,7 +409,7 @@ function waitlistCard(k) {
   const c = waitlistConfig(k);
   const policyOpts = FEE_CREDIT_POLICY.map((o) => `<option value="${esc(o.value)}"${o.value === c.fee_credit_policy ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
   return `
-    <section class="card" id="waitlist-settings">
+    <section class="card" id="waitlist-settings" data-ks="waitlist-settings">
       <div class="row-between"><h2 style="margin:0;">Waitlist settings</h2><span class="pill-row"><a class="btn btn-sm" href="waitlist-form.html?kennel=${encodeURIComponent(k.id)}">Application form →</a><a class="btn btn-sm" href="waitlist.html?kennel=${encodeURIComponent(k.id)}">Open waitlist →</a></span></div>
       <p class="field-hint">How ${esc(k.kennel_name)}'s waitlist works. Programs can change the fee and response window for particular families.</p>
       <div class="form-grid">
@@ -482,7 +532,7 @@ async function onSaveWaitlist() {
 // configuration", alongside Lifecycle nudges and Preferred tests.
 function feedingScheduleCard() {
   return `
-    <section class="card">
+    <section class="card" data-ks="feeding">
       <h2 style="margin-top:0;">Feeding schedules</h2>
       <p class="field-hint">Your own recommended feeding amounts, by breed — sent along with each puppy's Furever seed link.</p>
       <div class="form-actions">
@@ -495,7 +545,7 @@ function feedingScheduleCard() {
 // checkbox + two month thresholds, saved together.
 function nudgeCard(k) {
   return `
-    <section class="card">
+    <section class="card" data-ks="nudges">
       <h2 style="margin-top:0;">Lifecycle nudges</h2>
       <p class="field-hint">Opt-in reminders to promote kept puppies to active breeding once they're old enough.</p>
       <div class="form-grid">
@@ -546,7 +596,7 @@ function testsCard(k) {
       </div>`
     : '';
   return `
-    <section class="card">
+    <section class="card" data-ks="tests">
       <h2 style="margin-top:0;">Preferred tests</h2>
       <p class="field-hint">Changes apply to newly added dogs only. Existing dogs keep their current plans — use "Apply to dogs" to update them.</p>
       <div>${checklist}</div>
@@ -597,13 +647,6 @@ function wireConfig() {
   els.config.querySelector('#wl-reasons')?.addEventListener('click', (ev) => {
     if (ev.target.closest('[data-act="remove-reason"]')) ev.target.closest('[data-reason-id]').remove();
   });
-  const online = els.config.querySelector('#waitlist-online');
-  if (online) {
-    import('../assets/waitlistOnlineUI.js')
-      .then((m) => m.mountWaitlistOnline(online, kennel, { onSaved: async () => { await reloadKennel(); renderConfig(); } }))
-      .catch((err) => { online.innerHTML = `<p class="field-hint">The online list couldn't load: ${esc(err.message || String(err))}</p>`; });
-  }
-
   els.config.querySelectorAll('[data-remove-test]').forEach((cb) => {
     cb.addEventListener('change', async (e) => {
       if (e.target.checked) return; // only act on uncheck
@@ -686,7 +729,8 @@ async function main() {
   if (!k) { showError('Kennel not found. It may have been deleted.'); return; }
   kennel = k;
   allDogs = dogs;
-  renderProfile(k);
+  renderHeader(k);
+  renderSectionPicker(k);
   renderLogo();
   renderOverview().catch((e) => showError(e.message || String(e)));
   // Async because an own kennel that predates public_id has one minted on the

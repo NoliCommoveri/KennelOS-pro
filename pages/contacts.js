@@ -7,6 +7,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { createListView } from '../assets/listView.js';
 import { badges, badge, esc, param } from '../assets/ui.js';
 import { CONTACT_TYPE, WAITLIST_STATUS } from '../data/vocab.js';
+import { editionFlags } from '../data/editionConfig.js';
 
 const mount = document.getElementById('contact-list');
 const group = param('group');
@@ -39,6 +40,9 @@ const GROUPS = {
 };
 
 function renderTabs() {
+  // The People hub's two views (Contacts | Waitlist); without the waitlist the
+  // hub has just one, so the row goes.
+  if (!editionFlags.waitlist) document.getElementById('people-hub-tabs')?.remove();
   const active = GROUPS[group] ? group : null;
   document.querySelectorAll('#contacts-group-tabs .seg-tab').forEach((tab) => {
     const tabGroup = new URL(tab.href).searchParams.get('group');
