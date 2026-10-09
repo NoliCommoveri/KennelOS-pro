@@ -394,10 +394,10 @@ export const WIZARD_STEPS = [
   },
   {
     id: 'import-export', hub: 'More', page: 'import-export.html',
-    selector: '#btn-backup',
+    selector: '#br-tabs',
     title: 'Import / export',
     body: 'Where you bring in CSV files to populate a large kennel all at once, and where you back up your entire dataset to protect against loss. There’s no cloud storage, so losing your phone means starting over — back up regularly and keep the file somewhere central, like a Drive or an email to yourself, for easy recovery.',
     // Shown instead when the edition has a cloud server (wizardUI.stepBody).
-    cloudBody: 'Where you bring in CSV files to populate a large kennel all at once, and where you protect your records. Turn on free cloud backup here and a lost or replaced phone gets your kennel records back when you sign in on the new one. Private details (contacts’ phone, email and address, prices, Financials) stay on this device only, so also download a backup file now and then and keep it somewhere central, like a Drive or an email to yourself.'
+    cloudBody: 'Where you bring in CSV files to populate a large kennel all at once, and where you protect your records. Turn on free cloud backup here and a lost or replaced phone gets your kennel records back when you sign in on the new one. Sensitive records (contacts’ phone, email and address, prices, Financials) stay on this device only unless you turn on their encrypted backup, so also download a backup file now and then and keep it somewhere central, like a Drive or an email to yourself.'
   }
 ];

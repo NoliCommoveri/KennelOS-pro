@@ -71,7 +71,7 @@ function renderActivationWall() {
         ${checkoutLinkHtml('Buy Pro →')}
       </div>
     </form>
-    <p class="license-note">Your key covers a set number of devices. Naming this one makes it easy to tell your devices apart later — you can release a device from <strong>Import/Export</strong> when you stop using it, which frees its slot.</p>
+    <p class="license-note">Your key covers a set number of devices. Naming this one makes it easy to tell your devices apart later — you can release a device from <strong>Settings</strong> when you stop using it, which frees its slot.</p>
     ${isCloudAvailable() ? `<p class="license-note">Lost a device, and every slot is used? <a href="#" class="license-link" id="license-lost-device">Free a lost device's slot</a> through your cloud backup account (for devices that had cloud backup on).</p>` : ''}
     <p class="license-note">Just upgrading from Lite? After activating, use <strong>Import</strong> to bring in the backup you exported.</p>
   `);

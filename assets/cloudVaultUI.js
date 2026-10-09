@@ -28,29 +28,29 @@ import { getBackupStatus } from '../data/cloud/cloudBackup.js';
 import { currentAccount } from '../data/cloud/cloudAuth.js';
 import { getMyKennelName } from '../data/kennelSetup.js';
 
-const HONEST_LINE = "If you lose this code and any passkey you add, we can't open your private backup. Nobody can: it's encrypted on your device before it's uploaded. Your devices and file backups are unaffected.";
+const HONEST_LINE = "If you lose this code and any passkey you add, we can't open your sensitive records backup. Nobody can: it's encrypted on your device before it's uploaded. Your devices and file backups are unaffected.";
 
 function vaultErrorText(e) {
   if (e?.name === 'VaultLockedError') return "That code didn't work. Check it and try again.";
   if (e instanceof VaultSetupError) {
     switch (e.code) {
       case 'confirm_mismatch': return "That doesn't match the end of your recovery code.";
-      case 'no_vault': return "Private backup isn't turned on for this account.";
-      case 'locked': return 'Unlock your private info on this device first.';
+      case 'no_vault': return "Sensitive records backup isn't turned on for this account.";
+      case 'locked': return 'Unlock your sensitive records on this device first.';
       case 'expired': return 'That request has expired. Ask again.';
-      case 'no_passkey': return 'No passkey on this device unlocks your private backup. Use your recovery code or another device.';
+      case 'no_passkey': return 'No passkey on this device unlocks your sensitive records backup. Use your recovery code or another device.';
       default: return e.message;
     }
   }
   if (e?.name === 'PasskeyError') {
     switch (e.code) {
-      case 'cancelled': return "The passkey was cancelled, or this device doesn't have one for your private backup.";
-      case 'exists': return 'This device (or your password manager) already has a passkey for your private backup.';
-      default: return "Passkeys can't unlock private backup on this browser or with this passkey. Your recovery code still works.";
+      case 'cancelled': return "The passkey was cancelled, or this device doesn't have one for your sensitive records backup.";
+      case 'exists': return 'This device (or your password manager) already has a passkey for your sensitive records backup.';
+      default: return "Passkeys can't unlock sensitive records backup on this browser or with this passkey. Your recovery code still works.";
     }
   }
   if (e?.name === 'CloudRequestError' && e.code === 'too_many_passkeys') return 'You already have 10 passkeys. Remove one first.';
-  if (e?.name === 'CloudConflictError' && e.code === 'vault_exists') return 'Private backup was just turned on from another device. Unlock it here with that device\'s recovery code.';
+  if (e?.name === 'CloudConflictError' && e.code === 'vault_exists') return 'Sensitive records backup was just turned on from another device. Unlock it here with that device\'s recovery code.';
   if (e?.name === 'CloudConflictError' && e.code === 'already_approved') return 'Another device already answered that request.';
   if (e?.name === 'CloudRequestError' && e.code === 'too_many_pairings') return 'Too many open requests. Wait ten minutes, then ask again.';
   return errorText(e);
@@ -64,7 +64,7 @@ const buttons = (overlay, resolve) => overlay.querySelectorAll('[data-v]').forEa
 function introModal({ offer }) {
   return new Promise((resolve) => {
     const overlay = openModal(`
-      <h2 style="margin-top:0;">${offer ? 'Also back up your private info?' : 'Back up your private info'}</h2>
+      <h2 style="margin-top:0;">${offer ? 'Also back up your sensitive records?' : 'Back up your sensitive records'}</h2>
       <p>Contacts' phone, email and address, prices and payments, Financials, contracts, receipts and your
         private notes can be backed up too, <strong>encrypted on this device before upload</strong>. We can't read
         them, and neither can anyone who gets into our server.</p>
@@ -81,18 +81,18 @@ function introModal({ offer }) {
 
 // The code on screen, with Print / Save / Copy, and the last group typed back.
 // Resolves true once confirmed, false on cancel. `setup` is a cloudVault draft.
-function recoveryCodeModal(setup, { title = 'Your recovery code', confirmLabel = 'Turn on private backup', onConfirm }) {
+function recoveryCodeModal(setup, { title = 'Your recovery code', confirmLabel = 'Turn on sensitive records backup', onConfirm }) {
   const account = currentAccount();
   const fileText = [
-    'KennelOS: private backup recovery code',
+    'KennelOS: sensitive records backup recovery code',
     '',
     setup.recoveryCode,
     '',
     `Account: ${account?.email || ''}`,
     `Made: ${new Date().toLocaleString()}`,
     '',
-    'Use this to unlock your private info (contacts\' details, prices, Financials, contracts, private notes)',
-    'on a new or reset device: Cloud backup → Unlock your private info → Enter recovery code.',
+    'Use this to unlock your sensitive records (contacts\' details, prices, Financials, contracts, private notes)',
+    'on a new or reset device: Import / Export → Cloud → Sensitive records → Unlock → Enter recovery code.',
     '',
     HONEST_LINE
   ].join('\n');
@@ -179,7 +179,7 @@ export async function turnOnVaultFlow({ offer = false } = {}) {
   let push = null;
   const ok = await recoveryCodeModal(setup, {
     onConfirm: async (typed) => {
-      const pg = progressModal('Encrypting and backing up your private info…');
+      const pg = progressModal('Encrypting and backing up your sensitive records…');
       try {
         push = await finishVaultSetup(setup, {
           confirmation: typed,
@@ -194,7 +194,7 @@ export async function turnOnVaultFlow({ offer = false } = {}) {
   if (!ok) return false;
   notify();
   if (push && push.status !== 'pushed' && push.status !== 'unchanged' && push.status !== 'skipped') await handlePushResult(push);
-  else await alertModal({ title: 'Private backup is on', message: 'Your private info is now backed up, encrypted, with every backup. Keep your recovery code safe.' });
+  else await alertModal({ title: 'Sensitive records backup is on', message: 'Your sensitive records are now backed up, encrypted, with every backup. Keep your recovery code safe.' });
   if (await passkeySupported()) await offerPasskeyModal();
   return true;
 }
@@ -205,7 +205,7 @@ function offerPasskeyModal() {
   return new Promise((resolve) => {
     const overlay = openModal(`
       <h2 style="margin-top:0;">Unlock with a passkey next time?</h2>
-      <p>On a new or reset device you can unlock your private info with <strong>Face ID, your fingerprint or
+      <p>On a new or reset device you can unlock your sensitive records with <strong>Face ID, your fingerprint or
         your device PIN</strong> instead of typing the recovery code. The passkey is saved in your password manager
         (iCloud Keychain, Google Password Manager…), so it can follow you to a new phone.</p>
       <p class="field-hint">Your recovery code still works either way. Keep it.</p>
@@ -222,7 +222,7 @@ function offerPasskeyModal() {
       try {
         await addPasskey({ label: passkeyLabel() });
         done(overlay, resolve, true);
-        await alertModal({ title: 'Passkey added', message: 'Next time, choose Use passkey to unlock your private info.' });
+        await alertModal({ title: 'Passkey added', message: 'Next time, choose Use passkey to unlock your sensitive records.' });
       } catch (e) {
         q('#pk-error').innerHTML = `<div class="inline-error">${esc(vaultErrorText(e))}</div>`;
         btn.disabled = false;
@@ -272,7 +272,7 @@ export function unlockModal({ merge = true, intro = '' } = {}) {
     const showChoices = async (errorMsg = '') => {
       await ready;
       body.innerHTML = `
-        <h2 style="margin-top:0;">Unlock your private info</h2>
+        <h2 style="margin-top:0;">Unlock your sensitive records</h2>
         <p class="muted">${esc(intro || "Your contacts' details, prices, Financials, contracts and private notes are backed up encrypted. Unlock them on this device to bring them back.")}</p>
         ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
         <div class="form-actions" style="flex-direction:column;align-items:stretch;">
@@ -281,7 +281,7 @@ export function unlockModal({ merge = true, intro = '' } = {}) {
           <button class="btn" data-c="device">Use another device</button>
           <button class="btn" data-c="later">Not now</button>
         </div>
-        <p class="field-hint">Not now: your kennel records still come back. Private details stay blank until you unlock, and backups from this device pause until then.</p>`;
+        <p class="field-hint">Not now: your kennel records still come back. Sensitive records stay blank until you unlock, and backups from this device pause until then.</p>`;
       body.querySelector('[data-c="passkey"]')?.addEventListener('click', () => showPasskey());
       body.querySelector('[data-c="code"]').addEventListener('click', () => showCode());
       body.querySelector('[data-c="device"]').addEventListener('click', () => showDevice());
@@ -291,7 +291,7 @@ export function unlockModal({ merge = true, intro = '' } = {}) {
     const showCode = (errorMsg = '') => {
       body.innerHTML = `
         <h2 style="margin-top:0;">Enter your recovery code</h2>
-        <p class="muted">The 24-character code you saved when you turned on private backup. Dashes and capitals don't matter.</p>
+        <p class="muted">The 24-character code you saved when you turned on sensitive records backup. Dashes and capitals don't matter.</p>
         <div class="field field-wide"><label for="ul-code">Recovery code</label>
           <input id="ul-code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" style="font-family:ui-monospace,monospace;"></div>
         ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
@@ -327,8 +327,8 @@ export function unlockModal({ merge = true, intro = '' } = {}) {
       }
       body.innerHTML = `
         <h2 style="margin-top:0;">Use another device</h2>
-        <p class="muted">On a device where your private info is already unlocked, open KennelOS, then
-          <strong>Import / Export → Cloud backup → Private backup → Unlock another device</strong>, and type this code:</p>
+        <p class="muted">On a device where your sensitive records are already unlocked, open KennelOS, then
+          <strong>Import / Export → Cloud → Sensitive records → Unlock another device</strong>, and type this code:</p>
         <p style="font-family:ui-monospace,monospace;font-size:24px;letter-spacing:2px;text-align:center;padding:12px;border:1px solid var(--border);border-radius:8px;">${esc(req.code)}</p>
         <p class="field-hint" id="ul-wait">Waiting for the other device… This code works for 10 minutes.</p>
         ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
@@ -385,7 +385,7 @@ export function approveDevicesModal() {
       }
       body.innerHTML = `
         <h2 style="margin-top:0;">Unlock another device</h2>
-        <p class="muted">On the other device, choose <strong>Unlock your private info → Use another device</strong>. It shows a code; it appears here, then type the code.</p>
+        <p class="muted">On the other device, choose <strong>Unlock your sensitive records → Use another device</strong>. It shows a code; it appears here, then type the code.</p>
         ${requests.length ? `<ul style="list-style:none;padding:0;margin:0;">${requests.map((r) => `
           <li style="padding:10px 0;border-top:1px solid var(--border);" class="row-between">
             <span><strong>${esc(r.deviceLabel || 'A device')}</strong> <span class="faint">· asked ${esc(new Date(r.createdAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }))}</span></span>
@@ -454,14 +454,14 @@ export function passkeysModal() {
       }
       body.innerHTML = `
         <h2 style="margin-top:0;">Passkeys</h2>
-        <p class="muted">A passkey unlocks your private info on a new or reset device with Face ID, a fingerprint or
+        <p class="muted">A passkey unlocks your sensitive records on a new or reset device with Face ID, a fingerprint or
           the device PIN. It never signs you in, and your recovery code still works.</p>
         ${st.passkeys.length ? `<ul style="list-style:none;padding:0;margin:0;">${st.passkeys.map((p) => `
           <li style="padding:10px 0;border-top:1px solid var(--border);" class="row-between">
             <span><strong>${esc(p.label || 'Passkey')}</strong> <span class="faint">· added ${esc(new Date(p.createdAt).toLocaleDateString())}</span></span>
             <button class="btn btn-sm btn-danger" data-rm="${esc(p.id)}">Remove…</button>
           </li>`).join('')}</ul>` : '<p class="field-hint">No passkeys yet.</p>'}
-        ${st.passkeySupported ? '' : '<p class="field-hint">This browser can\'t make a passkey that unlocks private backup. Try Safari on an iPhone or Mac, or Chrome.</p>'}
+        ${st.passkeySupported ? '' : '<p class="field-hint">This browser can\'t make a passkey that unlocks sensitive records backup. Try Safari on an iPhone or Mac, or Chrome.</p>'}
         ${msg ? `<div class="${isError ? 'inline-error' : 'field-hint'}">${esc(msg)}</div>` : ''}
         <div class="form-actions">
           ${st.passkeySupported && st.unlocked ? '<button class="btn btn-primary" id="pk-add">Add a passkey</button>' : ''}
@@ -476,7 +476,7 @@ export function passkeysModal() {
         const p = st.passkeys.find((x) => x.id === b.dataset.rm);
         if (!(await confirmModal({
           title: 'Remove this passkey?',
-          message: `"${p?.label || 'Passkey'}" will no longer unlock your private info. Your recovery code and other passkeys still work.`,
+          message: `"${p?.label || 'Passkey'}" will no longer unlock your sensitive records. Your recovery code and other passkeys still work.`,
           confirmLabel: 'Remove'
         }))) return;
         try {
@@ -518,18 +518,18 @@ export async function newRecoveryCodeFlow() {
 export async function turnOffVaultFlow() {
   const kennel = (await getMyKennelName()) || 'your program';
   const ok = await typedConfirm({
-    title: 'Turn off private backup?',
-    message: `Nobody will be able to unlock the private backup of ${kennel} again, from any device, and private info stops being backed up. `
+    title: 'Turn off sensitive records backup?',
+    message: `Nobody will be able to unlock the sensitive records backup of ${kennel} again, from any device, and sensitive records stop being backed up. `
       + 'Old encrypted backups are deleted within 30 days.\n\nYour records on this device are untouched. Kennel records keep backing up as before.',
     phrase: 'TURN OFF',
-    confirmLabel: 'Turn off private backup'
+    confirmLabel: 'Turn off sensitive records backup'
   });
   if (!ok) return false;
   const r = await withFreshSignIn((reauth) => disableVault({ reauth }).then(() => true),
-    { purpose: 'turn off private backup', confirmLabel: 'Turn it off' });
+    { purpose: 'turn off sensitive records backup', confirmLabel: 'Turn it off' });
   if (r === null) return false;
   notify();
-  await alertModal({ title: 'Private backup is off', message: 'Your private info is only on this device now. Keep a file backup of it from Import / Export.' });
+  await alertModal({ title: 'Sensitive records backup is off', message: 'Your sensitive records are only on this device now. Keep a file backup of them from Import / Export.' });
   return true;
 }
 

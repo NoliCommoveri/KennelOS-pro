@@ -156,7 +156,7 @@ export function formModal({ title, bodyHtml, confirmLabel = 'Save', cancelLabel 
         confirmBtn.disabled = false;
       }
     });
-    overlay.querySelector('[data-fm-cancel]').addEventListener('click', () => done(false));
+    overlay.querySelector('[data-fm-cancel]')?.addEventListener('click', () => done(false)); // a dialog may drop Cancel (textFamilyDialog)
     overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
   });
 }
@@ -460,7 +460,9 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
 //    to paste (no Google Voice link can fill in a number and a message);
 //  - Texting app: an sms: link with the number and message filled in, which always
 //    opens the phone's DEFAULT texting app (on an iPhone, Messages and her own number).
-// `message` is a suggestion she can edit first.
+// `message` is a suggestion she can edit first. It carries their status page link
+// when the list is online (the caller builds it), and every button sends the box as
+// it stands, link included. The box grows to fit so the link is always in view.
 const GOOGLE_VOICE_URL = 'https://voice.google.com/u/0/messages';
 
 function smsHref(phone, body) {
@@ -497,6 +499,12 @@ export async function textFamilyDialog({ name, phone = '', message = '' }) {
     o.querySelector('[data-fm-cancel]')?.remove(); // one way out: Done
     const body = () => o.querySelector('#tx-body').value;
     const note = (t) => { o.querySelector('[data-tx="note"]').textContent = t; };
+    // Show the whole message, never a scrolling box: the status page link is its
+    // last line, and below the fold it looks like it isn't there.
+    const box = o.querySelector('#tx-body');
+    const fit = () => { box.style.height = 'auto'; box.style.height = `${box.scrollHeight + 2}px`; };
+    box.addEventListener('input', fit);
+    fit();
     o.querySelector('[data-tx="copy-number"]')?.addEventListener('click', async () => note(await copyText(phone) ? 'Number copied.' : 'Copying isn\'t allowed here; select the number and copy it.'));
     o.querySelector('[data-tx="copy"]').addEventListener('click', async () => note(await copyText(body()) ? 'Message copied.' : 'Copying isn\'t allowed here; select the message and copy it.'));
     o.querySelector('[data-tx="voice"]').addEventListener('click', async () => {

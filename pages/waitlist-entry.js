@@ -771,8 +771,13 @@ function renderEdit() {
       <div class="field"><label>Fee amount</label><input id="f-fee_amount" type="number" min="0" step="0.01" value="${esc(e.fee_amount ?? '')}"></div>
       <div class="field"><label>Pay by</label><input id="f-fee_due_date" type="date" value="${esc(e.fee_due_date || '')}"></div>
       <div class="field"><label>Fee policy</label><select id="f-fee_credit_policy">${options(FEE_CREDIT_POLICY, e.fee_credit_policy || '', '—')}</select></div>
+      ${e.fee_received_date ? `<div class="field"><label>Fee received</label><input id="f-fee_received_date" type="date" value="${esc(e.fee_received_date)}">
+        <span class="field-hint">${isMovedByBreeder(e)
+          ? 'You moved this family yourself, so their place stays where you put it. This date still sets when a readiness hold ends and the day the fee counts as income.'
+          : 'This date is their place in line: changing it can move them up or down the list. It also sets when a readiness hold ends and the day the fee counts as income.'}</span></div>` : ''}
 
       <div class="field field-wide"><h3 style="margin:8px 0 0;">Application</h3>${e.contact_id ? '<span class="field-hint">Name, email and phone are what they applied with. The contact record holds the current ones.</span>' : ''}</div>
+      <div class="field"><label>Applied</label><input id="f-applied_date" type="date" value="${esc(e.applied_date || '')}"></div>
       ${draftQuestions().map((q) => answerField(q, app[q.id])).join('')}
       <div class="field field-wide"><label>Your notes</label><textarea id="f-notes">${esc(e.notes || '')}</textarea></div>
     </div>`;
@@ -807,7 +812,10 @@ function readForm() {
     application_questions: snapshotQuestions(questions),
     notes: val('f-notes')
   };
-  if (has('f-applied_date')) out.applied_date = val('f-applied_date') || todayYMD();
+  if (has('f-applied_date')) out.applied_date = val('f-applied_date') || ctx.draft.applied_date || todayYMD();
+  // The fee date is the position anchor (waitlistRules.anchorDate), so it can be
+  // corrected but never blanked here: a cleared box keeps the date it had.
+  if (has('f-fee_received_date') && val('f-fee_received_date')) out.fee_received_date = val('f-fee_received_date');
   if (has('f-paused_until')) {
     Object.assign(out, {
       paused_until: val('f-paused_until') || null,

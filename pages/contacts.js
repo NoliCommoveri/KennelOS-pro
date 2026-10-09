@@ -95,6 +95,9 @@ async function init() {
     load: (o) => contactRepo.getAll(o),
     emptyText: GROUPS[group] ? `No ${GROUPS[group].title.toLowerCase()} yet.` : 'No contacts yet. Click “+ Add Contact” to create the first one.'
   });
+  // The bucket row sits under the search bar and filters, with the list it narrows,
+  // so it never reads as a second row of the People hub's Contacts | Waitlist tabs.
+  mount.querySelector('.list-toolbar')?.after(document.getElementById('contacts-group-tabs'));
 }
 
 init();

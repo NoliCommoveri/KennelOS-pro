@@ -1,17 +1,14 @@
-// import-export.js — wires the Import/Export page to the backup engine.
+// import-export.js — wires the Import/Export page to the backup engine: Backup &
+// restore, CSV import, and the Danger zone. Account, kennel setup, the guided tour
+// and this device's license are on the Settings page (pages/settings.js).
 import { downloadBackup, readBackupFile, inspectBackup, restoreBackup } from '../data/importExport.js';
-import { getLastBackupDate, getProLicense } from '../data/settings.js';
-import { isLicenseGated, releaseThisDevice } from '../data/license.js';
-import { hasMyKennelSetup, getMyKennelName } from '../data/kennelSetup.js';
-import { showKennelSetupModal } from '../assets/kennelSetupUI.js';
+import { getLastBackupDate } from '../data/settings.js';
 import { getResetCounts, resetApp } from '../data/appReset.js';
-import { isTourAvailable, restartWizard } from '../data/wizardState.js';
-import { runWizardStep } from '../assets/wizardUI.js';
 import { esc, confirmModal } from '../assets/ui.js';
 import { editionFlags, edition } from '../data/editionConfig.js';
 import { isProOnlyPage } from '../data/proPages.js';
 import { isDropboxConnected } from '../data/dropbox.js';
-import { mountDropboxConnect, dropboxRequiredNotice } from '../assets/dropboxConnectUI.js';
+import { mountDropboxConnect } from '../assets/dropboxConnectUI.js';
 import { pushToDropbox, fetchDropboxBackup } from '../data/assistantSync.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
@@ -33,7 +30,7 @@ function renderLastBackup() {
 
 // --- Backup & restore -------------------------------------------------------
 // Two INDEPENDENT axes: what you're doing (back up / restore — the seg-tabs) and
-// where it goes (this device / Dropbox — chosen per run). They compose freely,
+// where it goes (cloud / this device / Dropbox — chosen per run). They compose freely,
 // which is the whole point: a Dropbox push IS a backup (same exportAll(), same
 // lastBackupDate stamp) and a Dropbox pull IS a restore (same restoreBackup()
 // engine), so they belong on the same control rather than in a parallel card.
@@ -42,16 +39,25 @@ function renderLastBackup() {
 // a Dropbox pull now gets the same dry-run table and the same Merge/Replace
 // choice a file gets — previously it went straight to a bare confirm and could
 // only merge.
+//
+// Cloud is the first destination when this edition has a cloud server. Its pane
+// (#br-cloud) is filled by cloudBackupUI.mountCloudPane in the same shape as the
+// other two: a blurb, "Last backup", Back up now on one side and the backups to
+// roll back to (a dropdown, right on the page) on the other, and a strip at the
+// foot saying whether cloud backup is on, where Dropbox's says whether it's
+// connected.
 
 const dropboxEnabled = editionFlags.assistant;
 const fileInput = document.getElementById('restore-file');
 const fetchBtn = document.getElementById('btn-dbx-fetch');
 const backupBtn = document.getElementById('btn-backup');
 const preview = document.getElementById('restore-preview');
-const destWarn = document.getElementById('dest-warn');
 let pendingBackup = null;
-let mode = 'backup';   // 'backup' | 'restore'
-let dest = 'local';    // 'local'  | 'dropbox'
+const cloudPane = document.getElementById('br-cloud');
+const dropboxConnect = document.getElementById('dropbox-connect');
+let mode = 'backup';                  // 'backup' | 'restore'
+let dest = cloudUI ? 'cloud' : 'local'; // 'cloud' | 'local' | 'dropbox'
+let renderCloudPane = () => {};
 
 const BLURBS = {
   'backup:local': 'Downloads every record as one JSON file — also the migration path if the app ever moves to a new web address (your data doesn’t follow automatically).',
@@ -77,9 +83,19 @@ function resetRestoreInput() {
 
 function renderBackupRestore() {
   const needsConnect = dest === 'dropbox' && !isDropboxConnected();
+  const isCloud = dest === 'cloud';
 
-  document.getElementById('br-backup').hidden = mode !== 'backup';
-  document.getElementById('br-restore').hidden = mode !== 'restore';
+  const destLabel = document.getElementById('dest-label');
+  if (destLabel) destLabel.textContent = mode === 'backup' ? 'To:' : 'From:';
+  cloudPane.hidden = !isCloud;
+  document.getElementById('br-backup').hidden = isCloud || mode !== 'backup';
+  document.getElementById('br-restore').hidden = isCloud || mode !== 'restore';
+  // Each destination's connection strip shows only with that destination.
+  if (dropboxConnect) dropboxConnect.hidden = dest !== 'dropbox';
+  if (isCloud) {
+    renderCloudPane();
+    return;
+  }
   document.getElementById('backup-blurb').textContent = BLURBS[`backup:${dest}`];
   document.getElementById('restore-blurb').textContent = BLURBS[`restore:${dest}`];
 
@@ -90,12 +106,10 @@ function renderBackupRestore() {
   // Everything below is the Dropbox axis, which Lite deletes outright (see the
   // edition branch at the foot of this file) — so it exists only when enabled.
   if (!dropboxEnabled) return;
-  document.getElementById('dest-label').textContent = mode === 'backup' ? 'To:' : 'From:';
   fetchBtn.hidden = dest !== 'dropbox';
   fetchBtn.disabled = needsConnect;
-  // The connect control is mounted at the foot of this same card, so the notice
-  // can point straight at it.
-  destWarn.innerHTML = needsConnect ? dropboxRequiredNotice('at the bottom of this card') : '';
+  // No separate "connect first" notice: the strip at the foot of the card says
+  // Dropbox isn't connected, right under the disabled button.
 }
 
 // The single dry-run preview, whatever the backup came from. Nothing is written
@@ -254,47 +268,6 @@ csvSelect.addEventListener('change', () => {
   if (csvSelect.value) location.href = csvSelect.value;
 });
 
-// Guided tour — the tour anchors to specific sample records, so it's only
-// offerable while the "Thornfield Kennels" sample data is loaded (same gate as
-// the nav "more" menu's tour entry). The button restarts it from the top; the
-// opening card is a page-agnostic intro, so it just appears right here.
-function renderTourStatus() {
-  const status = document.getElementById('tour-status');
-  const btn = document.getElementById('btn-tour');
-  if (isTourAvailable()) {
-    status.textContent = 'Walk through KennelOS’s major features using the sample data. Starts from the beginning.';
-    btn.style.display = '';
-  } else {
-    status.textContent = 'Available only while the “Thornfield Kennels” sample data is loaded.';
-    btn.style.display = 'none';
-  }
-}
-
-document.getElementById('btn-tour').addEventListener('click', () => {
-  restartWizard();
-  runWizardStep();
-});
-
-renderTourStatus();
-
-async function renderKennelSetupStatus() {
-  const status = document.getElementById('kennel-setup-status');
-  const btn = document.getElementById('btn-kennel-setup');
-  const name = hasMyKennelSetup() ? await getMyKennelName() : null;
-  status.textContent = name
-    ? `Your kennel is set to "${name}".`
-    : 'Not set up yet — dogs won’t prefill an owner until this is done.';
-  btn.textContent = name ? 'Change kennel / owner' : 'Set up your kennel';
-}
-
-document.getElementById('btn-kennel-setup').addEventListener('click', () => {
-  // Cancellable, not required: this is a deliberate reopen to EDIT an existing
-  // kennel, not the first-run gate (Multi-Kennel Scope Spec §3.2.2).
-  showKennelSetupModal({ mode: 'cancellable' });
-});
-
-renderKennelSetupStatus();
-
 async function renderResetAppStatus() {
   const status = document.getElementById('reset-app-status');
   const counts = await getResetCounts();
@@ -360,127 +333,34 @@ document.getElementById('btn-reset-app').addEventListener('click', showResetAppM
 
 renderResetAppStatus();
 
-// --- This device's license (Pro only) ---------------------------------------
-// The proactive way to hand this browser's activation slot back, so an owner who
-// is about to clear their browser or replace a laptop doesn't burn a slot they
-// can never recover. Hidden entirely unless the license gate is on (Pro), so Lite
-// keeps rendering exactly as it did.
-
-const licenseSection = document.getElementById('license-section');
-const licenseReleaseBtn = document.getElementById('btn-license-release');
-
-function renderLicenseSection() {
-  if (!isLicenseGated()) return; // Lite/Demo: section stays hidden.
-  licenseSection.hidden = false;
-  const record = getProLicense();
-  const status = document.getElementById('license-device-status');
-  if (!record) {
-    status.textContent = 'This device is not activated.';
-    licenseReleaseBtn.disabled = true;
-    return;
-  }
-  const name = record.instanceName ? `“${record.instanceName}”` : 'this browser';
-  status.textContent = `Activated on this device as ${name}.`;
+// The destinations this edition has. Cloud needs a cloud server (`cloudUrl`);
+// Dropbox sync + KennelAssistant is Pro (§26). With neither (Lite with no server)
+// there is no second destination at all, so the whole row disappears and the
+// card renders as the plain local backup/restore it has always been.
+if (cloudUI) renderCloudPane = cloudUI.mountCloudPane(cloudPane, () => mode);
+else {
+  document.querySelector('#dest-tabs [data-dest="cloud"]')?.remove();
+  document.querySelector('#dest-tabs [data-dest="local"]')?.classList.add('active');
+  cloudPane.remove();
 }
-
-// Releasing is the one action here that takes away the ability to *reach* data
-// while leaving the data in place: the moment the slot goes back, every page
-// including this one shows the activation wall, so Export is behind the wall too.
-// The records are still in IndexedDB, but getting at them means re-activating —
-// which is exactly what an owner who released their last slot may not be able to
-// do. So the confirmation isn't a yes/no: it puts the backup one click away,
-// right here, before the door closes.
-function showReleaseModal() {
-  const iso = getLastBackupDate();
-  const last = iso
-    ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-    : 'Never';
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" style="max-width:460px;">
-      <h2 style="margin-top:0;">Release this device?</h2>
-      <p class="muted">The license slot goes back so another device can use it. Your records are
-        <strong>not deleted</strong> — they stay in this browser exactly as they are.</p>
-      <p class="muted"><strong>Export a backup first.</strong> Once this device is released, Pro asks for a
-        key here again — and that includes this Import/Export page, so you won't be able to download a
-        backup until you re-activate. If you released this slot to free it for another device, that may
-        not be something you can undo today.</p>
-      <p class="muted">Last backup: <strong id="release-last-backup">${esc(last)}</strong></p>
-      <div id="release-error"></div>
-      <div class="form-actions">
-        <button class="btn btn-primary" id="release-backup-btn">⬇️ Download a backup</button>
-        <button class="btn" id="release-confirm-btn">Release this device</button>
-        <button class="btn" data-act="cancel">Cancel</button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-
-  const errorBox = overlay.querySelector('#release-error');
-  const backupBtn = overlay.querySelector('#release-backup-btn');
-
-  backupBtn.addEventListener('click', async () => {
-    errorBox.innerHTML = '';
-    backupBtn.disabled = true;
-    backupBtn.textContent = 'Preparing…';
-    try {
-      await downloadBackup();
-      renderLastBackup();  // the page behind the modal, too
-      overlay.querySelector('#release-last-backup').textContent = 'just now';
-      backupBtn.textContent = '✅ Backup downloaded';
-    } catch (e) {
-      backupBtn.disabled = false;
-      backupBtn.textContent = '⬇️ Download a backup';
-      errorBox.innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
-    }
-  });
-
-  return new Promise((resolve) => {
-    const done = (val) => { overlay.remove(); resolve(val); };
-    overlay.querySelector('#release-confirm-btn').addEventListener('click', () => done(true));
-    overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => done(false));
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
-  });
-}
-
-licenseReleaseBtn.addEventListener('click', async () => {
-  if (!(await showReleaseModal())) return;
-  licenseReleaseBtn.disabled = true;
-  licenseReleaseBtn.textContent = 'Releasing…';
-  // Only reload once the slot is genuinely back: releaseThisDevice() leaves the
-  // activation untouched on failure, so the owner still has Pro here and can
-  // retry rather than losing both the device and the slot.
-  if (await releaseThisDevice()) {
-    flash('This device has been released. Reloading…');
-    setTimeout(() => location.reload(), 900);
-    return;
-  }
-  licenseReleaseBtn.disabled = false;
-  licenseReleaseBtn.textContent = 'Release this device…';
-  flash("Couldn't reach the licensing server, so this device still holds its slot and stays activated. Check your connection and try again.", 'err');
-});
-
-renderLicenseSection();
-
-if (cloudUI) cloudUI.mountCloudBackupCard(document.getElementById('cloud-backup'));
-else document.getElementById('cloud-backup')?.remove();
-
-// Dropbox sync + KennelAssistant is Pro (§26). In Lite there is no second
-// destination at all, so the whole Dropbox axis disappears and the card renders
-// as the plain local backup/restore it has always been.
 if (!dropboxEnabled) {
-  document.getElementById('dest-row')?.remove();
-  document.getElementById('dest-warn')?.remove();
+  document.querySelector('#dest-tabs [data-dest="dropbox"]')?.remove();
+  if (!cloudUI) document.getElementById('dest-row')?.remove();
   document.getElementById('btn-dbx-fetch')?.remove();
-  document.getElementById('dropbox-connect')?.remove();
+  dropboxConnect?.remove();
   renderBackupRestore();
 } else {
   renderBackupRestore();
   // Mounts the connect control AND finishes an in-flight OAuth redirect, so
   // everything gated on the connection re-renders once it lands.
-  mountDropboxConnect(document.getElementById('dropbox-connect'), {
+  mountDropboxConnect(dropboxConnect, {
     onChange: (connected) => {
-      if (connected) flash('Dropbox connected.');
+      if (connected) {
+        // Back from dropbox.com: land on the destination she was connecting.
+        dest = 'dropbox';
+        document.querySelectorAll('#dest-tabs .seg-tab').forEach((t) => t.classList.toggle('active', t.dataset.dest === 'dropbox'));
+        flash('Dropbox connected.');
+      }
       renderBackupRestore();
     },
     onError: (m) => flash(m, 'err')

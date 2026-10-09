@@ -19,13 +19,13 @@
     <div class="page-header">
       <div>
         <h1>Import / Export</h1>
-        <p class="page-subtitle">Back up your records, restore from a file, or import CSV data.</p>
+        <p class="page-subtitle">Back up and restore your records, or import CSV data.</p>
       </div>
     </div>
 
     <div id="page-msg"></div>
 
-    <section class="card">
+    <section class="card" id="backup-restore">
       <h2 style="margin-top:0;">Backup &amp; restore</h2>
       <div class="seg-tabs" id="br-tabs" role="tablist">
         <button class="seg-tab active" type="button" data-mode="backup">Back up</button>
@@ -33,17 +33,20 @@
       </div>
 
       <!-- Destination/source is chosen per run, independently of the tab above.
-           Removed wholesale in Lite (no Dropbox), leaving the card exactly as it
-           was before the two axes existed. -->
+           Cloud is there only when this edition has a cloud server, Dropbox only
+           in Pro; with neither, the row goes and the card is the plain file
+           backup/restore. -->
       <div class="dest-row" id="dest-row">
         <span class="dest-label" id="dest-label">To:</span>
         <div class="seg-tabs seg-tabs-sub" id="dest-tabs">
-          <button class="seg-tab active" type="button" data-dest="local">💾 This device</button>
-          <button class="seg-tab" type="button" data-dest="dropbox">☁️ Dropbox</button>
+          <button class="seg-tab active" type="button" data-dest="cloud">☁️ Cloud</button>
+          <button class="seg-tab" type="button" data-dest="local">💾 This device</button>
+          <button class="seg-tab" type="button" data-dest="dropbox">📦 Dropbox</button>
         </div>
       </div>
 
-      <div id="dest-warn"></div>
+      <!-- The Cloud destination, both sides: filled by assets/cloudBackupUI.js. -->
+      <div id="br-cloud" hidden></div>
 
       <div id="br-backup">
         <p class="muted" id="backup-blurb"></p>
@@ -60,11 +63,6 @@
 
       <div id="dropbox-connect"></div>
     </section>
-
-
-    <!-- Cloud backup (Cloud Phase 1 plan §2). Filled by assets/cloudBackupUI.js
-         only when this edition has a cloud server; removed otherwise. -->
-    <section class="card" style="margin-top:16px;" id="cloud-backup" hidden></section>
 
     <section class="card" style="margin-top:16px;">
       <h2 style="margin-top:0;">CSV import</h2>
@@ -85,26 +83,6 @@
           <option value="kennel-tests-import.html">Kennel tests</option>
         </select>
       </div>
-    </section>
-
-    <section class="card" style="margin-top:16px;" id="tour-section">
-      <h2 style="margin-top:0;">Guided tour</h2>
-      <p class="muted" id="tour-status">Checking…</p>
-      <button class="btn" id="btn-tour" style="display:none;">🧭 Restart the guided tour</button>
-    </section>
-
-    <section class="card" style="margin-top:16px;" id="kennel-setup-section">
-      <h2 style="margin-top:0;">Your kennel</h2>
-      <p class="muted" id="kennel-setup-status">Checking…</p>
-      <button class="btn" id="btn-kennel-setup">Set up your kennel</button>
-    </section>
-
-    <section class="card" style="margin-top:16px;" id="license-section" hidden>
-      <h2 style="margin-top:0;">This device's license</h2>
-      <p class="muted" id="license-device-status">Checking…</p>
-      <p class="muted">Your license key can be activated on a limited number of devices. Release this one when you stop using it — before you clear this browser's data, hand the computer on, or switch to a new one — and its slot goes back so another device can use it. Your records are not touched and stay on this device; you can re-activate here any time with the same key.</p>
-      <p class="muted"><strong>Download a backup before you release.</strong> Afterwards Pro asks for a key on this device again, and that includes this page — so export while you still can. You'll be offered the download when you confirm.</p>
-      <button class="btn" id="btn-license-release">Release this device…</button>
     </section>
 
     <section class="card" style="margin-top:16px; border-color:#e0a0a0;" id="danger-zone-section">

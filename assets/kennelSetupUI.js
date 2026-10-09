@@ -1,5 +1,5 @@
 // kennelSetupUI.js — the kennel/owner setup modal and its nav-banner name.
-// Shared by app.js (every page) and pages/import-export.js ("Set up your
+// Shared by app.js (every page) and pages/settings.js ("Set up your
 // kennel" — the same reachable-any-time-from-Settings pattern as Clear Sample
 // Data, since there's still no dedicated Settings page).
 import {
@@ -25,7 +25,7 @@ export async function maybeShowKennelSetupPrompt() {
 //                   way out is saving a kennel. Used by all three first-run call
 //                   sites; the app is unusable without a kennel to stamp dogs into.
 //   'cancellable' — a Cancel that closes and changes nothing. Used only by
-//                   Import/Export's deliberate reopen, which EDITS an existing
+//                   Settings' deliberate reopen, which EDITS an existing
 //                   kennel and so must stay dismissible.
 // There is no 'skippable' any more — the skip flag it wrote is gone (§3.2.1).
 //

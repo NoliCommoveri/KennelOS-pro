@@ -6,7 +6,8 @@
 //
 //   bootCloud()                 app.js, every page: scheduler, service notices,
 //                               the one-time post-setup offer
-//   mountCloudBackupCard(el)    the Import/Export card
+//   mountCloudPane(el, getMode) Import/Export: the Cloud destination of Backup & restore
+//   mountCloudAccountCard(el)   Settings: the Account card
 //   renderTodayCloudNudge(el)   Today: "turn it on" while off, or "paused"
 //   runSignInAndRestore()       first-run "I already use KennelOS"
 //   resetSignOutFieldHtml() / signOutAfterResetIfChecked()   Reset App's question
@@ -21,7 +22,7 @@
 // needed (vaultUI()).
 //
 // Layering: talks to data/cloud/* only (never cloudApi's fetch directly, never db).
-import { esc, confirmModal, alertModal, selectModal, promptModal } from './ui.js';
+import { esc, confirmModal, alertModal, promptModal } from './ui.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
 import {
@@ -77,16 +78,6 @@ export function snapshotLabel(iso, now = new Date(), { seconds = false } = {}) {
   return `${date} ${time}`;
 }
 
-// The card's first line: statusLine as the end of "Kennel records: …".
-const asTail = (line) => line.charAt(0).toLowerCase() + line.slice(1).replace(/\.$/, '');
-
-// The card's second line (Private Vault Plan §2.2): the private tier.
-export function privateLine(status, lastFileBackup = null, now = Date.now()) {
-  if (status.vault === 'on') return status.vaultPushedAt ? `encrypted backup, ${relativeTime(status.vaultPushedAt, now)}` : 'encrypted backup is on';
-  if (status.vault === 'locked') return 'locked on this device';
-  return `only on this device · last file backup ${lastFileBackup ? relativeTime(lastFileBackup, now) : 'never'}`;
-}
-
 // The status line on the card and the nudge (plan §2.2).
 export function statusLine(status, now = Date.now()) {
   if (!status.enabled && status.movedToEdition === 'pro') return 'Backup is off on this device: your records moved to KennelOS Pro.';
@@ -109,8 +100,8 @@ function pausedReason(lastError) {
     case 'shrink': return 'This device has far fewer records than your last backup.';
     case 'auth': return 'Your sign-in has expired.';
     case 'vault_locked': return lastError.stale
-      ? 'Private backup was turned off and on again on another device. Unlock it here with the new recovery code.'
-      : 'Your private info is locked on this device. Unlock it to keep backing up.';
+      ? 'Sensitive records backup was turned off and on again on another device. Unlock it here with the new recovery code.'
+      : 'Your sensitive records are locked on this device. Unlock them to keep backing up.';
     default: return null;
   }
 }
@@ -288,7 +279,7 @@ function whatGetsBackedUpModal() {
         application form, and each applicant's <strong>name and email</strong>.</p>
       <p><strong>Stays only on this device:</strong> contacts' phone, email and address, prices and
         payments (including waitlist fees paid), Financials, contracts, receipts, the rest of each
-        application's answers, and your private notes.</p>
+        application's answers, and your notes.</p>
       <p class="muted">${isVaultOffered()
         ? 'Next, you can also back those up <strong>encrypted</strong>, so only you can open them. Or download a file backup now and then from <a href="import-export.html">Import / Export</a>.'
         : 'To keep a copy of those too, download a file backup now and then from <a href="import-export.html">Import / Export</a>.'}</p>
@@ -359,8 +350,8 @@ export async function handlePushResult(result) {
       const unlocked = await (await vaultUI()).unlockModal({
         merge: true,
         intro: result.stale
-          ? 'Private backup was turned off and on again on another device, so it has a new recovery code. Unlock it here to keep backing up.'
-          : 'This account backs up private info, encrypted. Unlock it on this device to keep backing up.'
+          ? 'Sensitive records backup was turned off and on again on another device, so it has a new recovery code. Unlock it here to keep backing up.'
+          : 'This account backs up sensitive records, encrypted. Unlock them on this device to keep backing up.'
       });
       if (unlocked) await pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress }));
       return;
@@ -391,7 +382,7 @@ async function conflictDialog(result, { skipMoved = false } = {}) {
       <h2 style="margin-top:0;">There's already a backup</h2>
       <p class="muted">${esc(message)}</p>
       <ul class="muted" style="padding-left:18px;">
-        <li><strong>Restore that backup here</strong> — its records are merged into this device (anything newer here is kept, and nothing private here is lost). This device then takes over the backups.</li>
+        <li><strong>Restore that backup here</strong> — its records are merged into this device (anything newer here is kept, and nothing sensitive here is lost). This device then takes over the backups.</li>
         <li><strong>Replace it with this device's records</strong> — this device's records become the backup. The old one stays in the 30-day history.</li>
       </ul>
       <div class="form-actions">
@@ -487,28 +478,22 @@ async function shrinkDialog(result) {
 }
 
 // --- Restore as of… (plan §2.3, §4.3) ------------------------------------------------
-async function restoreAsOfFlow() {
-  let snapshots;
-  try { snapshots = await listSnapshots(); } catch (e) { return alertModal({ title: "Couldn't load your backups", message: errorText(e) }); }
-  if (!snapshots.length) return alertModal({ title: 'No backups yet', message: 'There are no cloud backups to restore from yet.' });
-
-  // Two backups in the same minute ("Back up now" twice) would read the same, so
-  // a repeated label gets its seconds.
+// The backups to choose from, as <option> data. Two backups in the same minute
+// ("Back up now" twice) would read the same, so a repeated label gets its seconds.
+function snapshotOptions(snapshots) {
   const labels = snapshots.map((s) => snapshotLabel(s.createdAt));
-  const options = snapshots.map((s, i) => ({
+  return snapshots.map((s, i) => ({
     value: s.id,
     label: `${labels.filter((l) => l === labels[i]).length > 1 ? snapshotLabel(s.createdAt, new Date(), { seconds: true }) : labels[i]}`
       + ` — ${s.counts?.dogs ?? 0} dogs${s.deviceLabel ? `, from ${s.deviceLabel}` : ''}`
   }));
-  const id = await selectModal({
-    title: 'Restore as of…',
-    message: 'Pick the backup to roll back to. Records are rolled back to how they were then. Nothing is deleted.',
-    label: 'Backup',
-    options,
-    confirmLabel: 'Next'
-  });
-  if (!id) return;
+}
+
+// Roll back to the backup picked in the card's dropdown: load it, say what would
+// change, and write nothing until she confirms.
+async function rollBackTo(id, snapshots) {
   const chosen = snapshots.find((s) => s.id === id);
+  if (!chosen) return;
 
   const pg = progressModal('Loading that backup…');
   let envelope; let preview;
@@ -531,8 +516,8 @@ async function restoreAsOfFlow() {
       updated ? `${updated} record(s) will be rolled back to how they were then.` : '',
       inserted ? `${inserted} record(s) missing here will be added back.` : '',
       chosen.vaultKeyId && getBackupStatus().vault === 'on'
-        ? 'Their private details (phone numbers, prices, notes…) roll back too, from the encrypted backup.'
-        : 'Their private details (phone numbers, prices, notes…) keep their current values: those aren\'t in this backup, so they can\'t roll back.',
+        ? 'Their sensitive records (phone numbers, prices, notes…) roll back too, from the encrypted backup.'
+        : 'Their sensitive records (phone numbers, prices, notes…) keep their current values: those aren\'t in this backup, so they can\'t roll back.',
       'Records added since then stay. Archive them by hand if you don\'t want them.'
     ].filter(Boolean).join('\n\n'),
     confirmLabel: 'Roll back',
@@ -554,107 +539,150 @@ async function restoreAsOfFlow() {
   }
 }
 
-// --- The Import/Export card (plan §2.2, §2.4) ------------------------------------------
-export function mountCloudBackupCard(el) {
-  if (!el || !isCloudAvailable()) { if (el) el.remove(); return; }
-  el.hidden = false;
-  const render = () => renderCard(el);
-  window.addEventListener(CLOUD_BACKUP_EVENT, render);
-  render();
+// --- Import/Export: the Cloud destination of Backup & restore (plan §2.2, §2.4) --------
+// The card and its two axes (Back up | Restore, and where to/from) belong to
+// pages/import-export.js. This fills the Cloud destination's pane, in the same
+// shape as the other two: a blurb, "Last backup", the action (Back up now, or the
+// backups to roll back to, right on the page), and a connection strip at the foot.
+// `getMode()` says which side is showing ('backup' | 'restore'). Returns the
+// render function, which the page calls when the tab or destination changes.
+export function mountCloudPane(el, getMode) {
+  if (!el || !isCloudAvailable()) return () => {};
+  const render = () => { if (!el.hidden) renderPane(el, getMode(), render); };
+  // A background push must not rebuild a dropdown she has open.
+  window.addEventListener(CLOUD_BACKUP_EVENT, () => {
+    if (el.contains(document.activeElement) && document.activeElement.tagName === 'SELECT') return;
+    render();
+  });
   // Learn the vault's state from the server once per visit (another device may
   // have turned it on or off); refreshVaultState re-renders through the event.
   if (isVaultOffered() && currentAccount()?.signedIn) vaultUI().then((ui) => ui.refreshVaultState()).catch(() => {});
-  // Keep "Backed up 4 minutes ago" honest without re-rendering the card (which
-  // would close an open <details> or drop focus).
-  setInterval(() => {
-    const status = getBackupStatus();
-    const line = el.querySelector('[data-status-line]');
-    if (line) line.textContent = line.dataset.tail ? asTail(statusLine(status)) : statusLine(status);
-    const priv = el.querySelector('[data-private-line]');
-    if (priv) priv.textContent = privateLine(status, getLastBackupDate());
-  }, MINUTE);
+  return render;
 }
 
-function renderCard(el) {
+const backupStamp = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Never');
+
+// The cloud backups, fetched once per (account, last backup) so a re-render
+// doesn't ask the server again.
+let snapshotCache = null;
+function cachedSnapshots(status) {
+  const key = `${status.account?.email || ''}|${status.lastPushedAt || ''}`;
+  if (!snapshotCache || snapshotCache.key !== key) {
+    const promise = listSnapshots();
+    snapshotCache = { key, promise };
+    promise.catch(() => { if (snapshotCache?.promise === promise) snapshotCache = null; });
+  }
+  return snapshotCache.promise;
+}
+
+// Sensitive records (the encrypted tier, Private Vault Plan §2.2): one dropdown.
+// It reads Off, Locked or On; everything you can do with it is a choice in the
+// list, and choosing one opens its dialog at once.
+function sensitiveField(status) {
+  if (!(isVaultOffered() || status.vault === 'on' || status.vault === 'locked')) return '';
+  const what = "Contacts' phone, email and address, prices, Financials, contracts and your notes";
+  let current; let choices; let hint;
+  if (status.vault === 'on') {
+    current = status.vaultPushedAt ? `On · backed up ${relativeTime(status.vaultPushedAt)}` : 'On';
+    choices = [['vault-approve', 'Unlock another device…'], ['vault-passkeys', 'Passkeys…'], ['vault-code', 'New recovery code…'], ['vault-off', 'Turn off…']];
+    hint = `${what}, encrypted so only you can open them.`;
+  } else if (status.vault === 'locked') {
+    current = 'Locked on this device';
+    choices = [['vault-unlock', 'Unlock…']];
+    hint = `${what} are backed up encrypted. Unlock them here to bring them back and keep backing up.`;
+  } else {
+    current = 'Off';
+    choices = status.enabled && isVaultOffered() ? [['vault-on', 'Turn on…']] : [];
+    hint = `${what} stay only on this device. Last file backup: ${relativeTime(getLastBackupDate())}.`;
+  }
+  return `<div class="field" style="max-width:340px;margin-top:12px;">
+      <label for="cb-sensitive">Sensitive records</label>
+      <select id="cb-sensitive"${choices.length ? '' : ' disabled'}>
+        <option value="" selected>${esc(current)}</option>
+        ${choices.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}
+      </select>
+      <span class="field-hint">${esc(hint)}</span>
+    </div>`;
+}
+
+function renderPane(el, mode, rerender) {
   const status = getBackupStatus();
   const account = status.account;
+  const signedIn = !!account?.signedIn;
   const restoredAt = getCloudRestoredAt();
   const paused = status.enabled ? pausedReason(status.lastError) : null;
+  const restoring = mode === 'restore';
 
-  let main;
+  // --- The strip at the foot: is cloud backup on here, and the one way to change that.
+  let stripText; let stripBtn; let stripOn = false;
   if (!account) {
-    main = `
-      <p class="muted">Back up your kennel records automatically, free. If this device is lost or replaced,
-        sign in on the new one with your email and everything comes back.</p>
-      <p class="field-hint">Contacts' phone, email and address, prices, Financials, contracts and your private notes
-        stay on this device${isVaultOffered() ? ', unless you also turn on <strong>private backup</strong>, which encrypts them so only you can open them' : '. Keep a file backup for those'}.</p>
-      <div class="form-actions"><button class="btn btn-primary" data-act="on">☁️ Turn on cloud backup</button>
-        <button class="btn" data-act="restore-new">I already have a backup: sign in and restore</button></div>`;
-  } else if (!account.signedIn) {
-    main = `
-      <p class="muted">Signed in as <strong>${esc(account.email || '')}</strong>, but the sign-in has expired.
-        Backup is paused until you sign in again. Your records here are untouched.</p>
-      <div class="form-actions"><button class="btn btn-primary" data-act="signin">Sign in again</button>
-        <button class="btn" data-act="signout">Sign out</button></div>`;
+    stripText = 'Cloud backup off';
+    stripBtn = restoring ? ['restore-new', 'Sign in and restore'] : ['on', 'Turn on'];
+  } else if (!signedIn) {
+    stripText = `Sign-in expired · ${account.email || ''}`;
+    stripBtn = ['signin', 'Sign in again'];
+  } else if (status.enabled) {
+    stripOn = true;
+    stripText = `Cloud backup on · ${account.email || ''}`;
+    stripBtn = ['off', 'Turn off'];
   } else {
+    stripText = `Cloud backup off on this device · ${account.email || ''}`;
+    stripBtn = ['on', 'Turn on'];
+  }
+  const strip = `<div class="dbx-strip">
+      <span class="dbx-status"><span class="dbx-dot${stripOn ? ' dbx-dot-on' : ''}"></span> ${esc(stripText)}</span>
+      <button class="btn btn-sm" type="button" data-act="${stripBtn[0]}">${esc(stripBtn[1])}</button>
+    </div>`;
+
+  // --- "Last backup", in the other destinations' format, with what's worth adding.
+  let aside = '';
+  if (signedIn && !status.enabled && status.movedToEdition === 'pro') aside = 'Your records moved to KennelOS Pro.';
+  else if (signedIn && status.enabled && !paused) {
     const line = statusLine(status);
-    const priv = privateLine(status, getLastBackupDate());
-    // Two lines once the vault is offered (or this program has one); Phase 1's single line otherwise.
-    const twoLines = isVaultOffered() || status.vault === 'on' || status.vault === 'locked';
-    const privAction = status.vault === 'locked' && status.lastError?.code !== 'vault_locked' // the pause line has its own Unlock
-      ? '<button class="btn btn-sm" data-act="vault-unlock" style="margin-left:6px;">Unlock</button>'
-      : status.vault === 'off' && status.enabled ? '<button class="btn btn-sm" data-act="vault-on" style="margin-left:6px;">Turn on</button>' : '';
-    main = `
-      <p${twoLines ? ' style="margin-bottom:4px;"' : ''}>${twoLines ? 'Kennel records: ' : ''}<strong data-status-line data-tail="${twoLines ? '1' : ''}">${esc(twoLines ? asTail(line) : line)}</strong>${status.enabled && status.dirty && !paused ? ' <span class="faint">Recent changes will back up shortly.</span>' : ''}</p>
-      ${twoLines ? `<p>Private info: <strong data-private-line>${esc(priv)}</strong>${privAction}</p>` : ''}
-      ${paused ? `<div class="inline-warn">Backup is paused: ${esc(paused)} <button class="btn btn-sm" data-act="resolve" style="margin-left:6px;">${status.lastError?.code === 'vault_locked' ? 'Unlock…' : 'Resolve…'}</button></div>` : ''}
-      <p class="field-hint">Signed in as ${esc(account.email || '')}${account.deviceLabel ? ` · this device: ${esc(account.deviceLabel)}` : ''}</p>
-      <div class="form-actions">
-        ${status.enabled
-          ? `<button class="btn btn-primary" data-act="now">Back up now</button>
-             <button class="btn" data-act="asof">Restore as of…</button>
-             <button class="btn" data-act="off">Turn off backup on this device</button>`
-          : `<button class="btn btn-primary" data-act="on">Turn on backup on this device</button>
-             <button class="btn" data-act="asof">Restore as of…</button>`}
+    if (/no internet/.test(line)) aside = line;
+    else if (status.dirty) aside = 'Recent changes will back up shortly.';
+  }
+  const lastBackup = `<p class="muted">Last backup: <strong>${esc(backupStamp(status.lastPushedAt))}</strong>${aside ? ` <span class="faint">${esc(aside)}</span>` : ''}</p>`;
+  const pausedWarn = paused
+    ? `<div class="inline-warn">Backup is paused: ${esc(paused)} <button class="btn btn-sm" data-act="resolve" style="margin-left:6px;">${status.lastError?.code === 'vault_locked' ? 'Unlock…' : 'Resolve…'}</button></div>`
+    : '';
+
+  let body;
+  if (restoring) {
+    body = `
+      <p class="muted">Roll back to an earlier cloud backup. Records go back to how they were then; nothing is deleted, and nothing changes until you confirm.</p>
+      ${signedIn ? lastBackup : ''}
+      <div class="field" style="max-width:340px;">
+        <label for="cb-asof">Restore as of</label>
+        <select id="cb-asof" disabled><option value="">${signedIn ? 'Loading your backups…' : 'Sign in to see your backups'}</option></select>
       </div>
-      ${status.vault === 'on' ? `<details style="margin-top:10px;"><summary class="muted">Private backup</summary>
-        <div class="form-actions">
-          <button class="btn btn-sm" data-act="vault-approve">Unlock another device…</button>
-          <button class="btn btn-sm" data-act="vault-passkeys">Passkeys…</button>
-          <button class="btn btn-sm" data-act="vault-code">New recovery code…</button>
-          <button class="btn btn-sm btn-danger" data-act="vault-off">Turn off private backup…</button>
-        </div>
-      </details>` : ''}
-      <details style="margin-top:10px;"><summary class="muted">Account</summary>
-        ${isLicenseGated() ? `<p class="field-hint" data-pro-line>${esc(proLineText(cachedEntitlement()))}</p>` : ''}
-        <div class="form-actions">
-          ${isLicenseGated() ? `<button class="btn btn-sm" data-act="pro-link"${cachedEntitlement()?.pro ? ' hidden' : ''}>Link a Pro purchase email…</button>
-          <button class="btn btn-sm" data-act="pro-unlink"${cachedEntitlement()?.linkedEmails ? '' : ' hidden'}>Unlink purchase emails</button>` : ''}
-          <button class="btn btn-sm" data-act="devices">Your devices…</button>
-          <button class="btn btn-sm" data-act="others">Sign out other devices</button>
-          <button class="btn btn-sm" data-act="signout">Sign out</button>
-          <button class="btn btn-sm btn-danger" data-act="delete">Delete my cloud data…</button>
-        </div>
-      </details>`;
+      ${signedIn ? sensitiveField(status) : ''}`;
+  } else {
+    const ready = signedIn && status.enabled;
+    body = `
+      <p class="muted">Backs up your kennel records automatically after you make changes, free. If this device is lost or replaced, sign in on the new one with your email and everything comes back.</p>
+      ${signedIn ? lastBackup : ''}
+      ${pausedWarn}
+      <button class="btn btn-primary" data-act="now"${ready ? '' : ' disabled'}>⬆ Back up now</button>
+      ${signedIn ? sensitiveField(status) : ''}`;
   }
 
   el.innerHTML = `
-    <h2 style="margin-top:0;">☁️ Cloud backup</h2>
     ${restoredAt ? `<div class="inline-warn" style="margin-bottom:10px;">Restored from cloud backup ${esc(relativeTime(restoredAt))}.
-      Private details (contacts' phone, email and address, prices, notes) are blank on this device.
+      Sensitive records (contacts' phone, email and address, prices, notes) are blank on this device.
       ${status.vault === 'locked'
-        ? 'Unlock your private info to bring them back.'
-        : 'If you have a file backup, restore it with <strong>Merge</strong> above to bring them back.'}
+        ? 'Unlock them under Sensitive records to bring them back.'
+        : 'If you have a file backup, restore it from <strong>This device</strong> with <strong>Merge</strong> to bring them back.'}
       <button class="btn btn-sm" data-act="hide-restored" style="margin-left:6px;">Got it</button></div>` : ''}
-    ${main}
-    <div id="cloud-msg"></div>`;
+    ${body}
+    ${strip}`;
 
-  const act = (name, fn) => el.querySelector(`[data-act="${name}"]`)?.addEventListener('click', async (e) => {
-    const btn = e.currentTarget;
-    btn.disabled = true;
+  const guarded = async (control, fn) => {
+    control.disabled = true;
     try { await fn(); } catch (err) { await alertModal({ title: "That didn't work", message: errorText(err) }); }
-    finally { if (btn.isConnected) btn.disabled = false; renderCard(el); }
-  });
+    finally { rerender(); }
+  };
+  const act = (name, fn) => el.querySelector(`[data-act="${name}"]`)?.addEventListener('click', (e) => guarded(e.currentTarget, fn));
 
   act('on', turnOnFlow);
   act('restore-new', async () => { if (await runSignInAndRestore({ fromCard: true })) location.reload(); });
@@ -665,16 +693,92 @@ function renderCard(el) {
   act('resolve', () => (status.lastError?.code === 'vault_locked'
     ? handlePushResult({ status: 'vault_locked', stale: !!status.lastError.stale })
     : pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress }))));
-  act('vault-unlock', async () => { await (await vaultUI()).unlockModal({ merge: true }); });
-  act('vault-on', async () => { await (await vaultUI()).turnOnVaultFlow(); });
-  act('vault-approve', async () => { await (await vaultUI()).approveDevicesModal(); });
-  act('vault-passkeys', async () => { await (await vaultUI()).passkeysModal(); });
-  act('vault-code', async () => { await (await vaultUI()).newRecoveryCodeFlow(); });
-  act('vault-off', async () => { await (await vaultUI()).turnOffVaultFlow(); });
   act('now', () => pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress })));
-  act('asof', restoreAsOfFlow);
   act('off', async () => {
     if (await confirmModal({ title: 'Turn off backup on this device?', message: 'Changes on this device stop backing up. The cloud copy stays, and you can turn it back on any time.', confirmLabel: 'Turn off' })) disableBackup();
+  });
+  act('hide-restored', () => setCloudRestoredAt(null));
+
+  // Sensitive records: choosing an entry opens its dialog straight away.
+  const sensitive = el.querySelector('#cb-sensitive');
+  const vaultActions = {
+    'vault-on': (ui) => ui.turnOnVaultFlow(),
+    'vault-unlock': (ui) => ui.unlockModal({ merge: true }),
+    'vault-approve': (ui) => ui.approveDevicesModal(),
+    'vault-passkeys': (ui) => ui.passkeysModal(),
+    'vault-code': (ui) => ui.newRecoveryCodeFlow(),
+    'vault-off': (ui) => ui.turnOffVaultFlow()
+  };
+  sensitive?.addEventListener('change', () => {
+    const run = vaultActions[sensitive.value];
+    if (run) guarded(sensitive, async () => run(await vaultUI()));
+  });
+
+  // Restore: the backups are listed right here; choosing one starts the roll back.
+  const asOf = el.querySelector('#cb-asof');
+  if (asOf && signedIn) {
+    cachedSnapshots(status).then((snapshots) => {
+      if (!asOf.isConnected) return; // re-rendered meanwhile
+      if (!snapshots.length) { asOf.innerHTML = '<option value="">No cloud backups yet</option>'; return; }
+      asOf.innerHTML = '<option value="" selected>Choose a backup…</option>'
+        + snapshotOptions(snapshots).map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+      asOf.disabled = false;
+      asOf.addEventListener('change', () => { if (asOf.value) guarded(asOf, () => rollBackTo(asOf.value, snapshots)); });
+    }).catch((e) => {
+      if (!asOf.isConnected) return;
+      asOf.innerHTML = '<option value="">Couldn\'t load your backups</option>';
+      asOf.insertAdjacentHTML('afterend', `<span class="field-hint">${esc(errorText(e))}</span>`);
+    });
+  }
+}
+
+// --- Settings: the Account card ------------------------------------------------------------
+// The cloud sign-in itself (who, which device, Pro on this account, the other
+// devices, sign out, delete). Backups are on Import/Export; this is the account.
+export function mountCloudAccountCard(el) {
+  if (!el || !isCloudAvailable()) { if (el) el.remove(); return; }
+  el.hidden = false;
+  const render = () => renderAccountCard(el);
+  window.addEventListener(CLOUD_BACKUP_EVENT, render);
+  render();
+}
+
+function renderAccountCard(el) {
+  const account = currentAccount();
+  let main;
+  if (!account) {
+    main = `<p class="muted">Not signed in. Your account is the email you sign in to cloud backup with; turn cloud backup on from <a href="import-export.html">Import / Export</a>.</p>`;
+  } else if (!account.signedIn) {
+    main = `
+      <p class="muted">Signed in as <strong>${esc(account.email || '')}</strong>, but the sign-in has expired.
+        Backup is paused until you sign in again. Your records here are untouched.</p>
+      <div class="form-actions"><button class="btn btn-primary" data-act="signin">Sign in again</button>
+        <button class="btn" data-act="signout">Sign out</button></div>`;
+  } else {
+    main = `
+      <p>Signed in as <strong>${esc(account.email || '')}</strong>${account.deviceLabel ? ` <span class="faint">· this device: ${esc(account.deviceLabel)}</span>` : ''}</p>
+      ${isLicenseGated() ? `<p class="field-hint" data-pro-line>${esc(proLineText(cachedEntitlement()))}</p>` : ''}
+      <div class="form-actions">
+        ${isLicenseGated() ? `<button class="btn btn-sm" data-act="pro-link"${cachedEntitlement()?.pro ? ' hidden' : ''}>Link a Pro purchase email…</button>
+        <button class="btn btn-sm" data-act="pro-unlink"${cachedEntitlement()?.linkedEmails ? '' : ' hidden'}>Unlink purchase emails</button>` : ''}
+        <button class="btn btn-sm" data-act="devices">Your devices…</button>
+        <button class="btn btn-sm" data-act="others">Sign out other devices</button>
+        <button class="btn btn-sm" data-act="signout">Sign out</button>
+        <button class="btn btn-sm btn-danger" data-act="delete">Delete my cloud data…</button>
+      </div>`;
+  }
+  el.innerHTML = `<h2 style="margin-top:0;">Account</h2>${main}`;
+
+  const act = (name, fn) => el.querySelector(`[data-act="${name}"]`)?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try { await fn(); } catch (err) { await alertModal({ title: "That didn't work", message: errorText(err) }); }
+    finally { if (btn.isConnected) btn.disabled = false; renderAccountCard(el); }
+  });
+
+  act('signin', async () => {
+    const acc = await signInModal({ title: 'Sign in again' });
+    if (acc) await pushWithProgress((onProgress) => pushIfDirty({ force: true, onProgress }));
   });
   act('devices', () => devicesModal());
   act('others', async () => {
@@ -697,7 +801,6 @@ function renderCard(el) {
     if ((await withFreshSignIn((reauth) => deleteCloudData(reauth).then(() => true), { purpose: 'delete your cloud data', confirmLabel: 'Delete cloud data' })) === null) return;
     await alertModal({ title: 'Cloud data deleted', message: 'Your cloud backups and account are gone. Everything on this device is still here.' });
   });
-  act('hide-restored', () => setCloudRestoredAt(null));
   act('pro-link', () => linkPurchaseModal());
   act('pro-unlink', async () => {
     if (!(await confirmModal({
@@ -942,7 +1045,7 @@ async function eraseDeviceFlow(d) {
     title: `Erase ${name}?`,
     message: `The next time ${name} opens KennelOS with an internet connection, every record on it is deleted and it's signed out.`
       + `\n\nUntil then nothing happens to it. If it stays offline or never opens KennelOS again, its records stay on it. Your phone's own Find My (iPhone) or Find My Device (Android) can erase the whole phone.`
-      + `\n\nPrivate details (contacts' phone, email and address, prices, Financials, contracts, private notes) aren't in cloud backup. If ${name} has the only copy of them, erasing it loses them, unless you have a file backup that includes them.`
+      + `\n\nSensitive records (contacts' phone, email and address, prices, Financials, contracts, private notes) aren't in cloud backup. If ${name} has the only copy of them, erasing it loses them, unless you have a file backup that includes them.`
       + `\n\nYour cloud backup isn't touched.`,
     phrase: 'ERASE',
     confirmLabel: `Erase ${name}`
@@ -1048,10 +1151,10 @@ export async function runSignInAndRestore({ fromCard = false } = {}) {
     const n = Object.values(restored.summary).reduce((t, s) => t + (s.inserted || 0) + (s.updated || 0), 0);
     const vault = restored.vault?.status;
     const privateNote = vault === 'restored'
-      ? 'Your private info came back too.'
+      ? 'Your sensitive records came back too.'
       : vault === 'locked'
-        ? "Private details (contacts' phone, email and address, prices, notes) are blank until you unlock them: Import / Export → Cloud backup → Unlock. Backups from this device are paused until then."
-        : "Private details (contacts' phone, email and address, prices, notes) weren't in this backup. If you have a file backup, restore it from Import / Export with Merge to bring those back.";
+        ? "Sensitive records (contacts' phone, email and address, prices, notes) are blank until you unlock them: Import / Export → Cloud → Sensitive records → Unlock. Backups from this device are paused until then."
+        : "Sensitive records (contacts' phone, email and address, prices, notes) weren't in this backup. If you have a file backup, restore it from Import / Export with Merge to bring those back.";
     const missing = (restored.missingFiles?.length || 0) + (restored.vault?.missingFiles?.length || 0);
     await alertModal({
       title: 'Your records are back',
@@ -1071,7 +1174,7 @@ const OFFER_HTML = `
   <h2 class="onboard-title">☁️ Protect your records</h2>
   <p>Turn on <strong>free cloud backup</strong> and your dogs, litters, pairings and health records are backed
   up automatically. If this device is ever lost or replaced, sign in on the new one and they come back.</p>
-  <p class="muted">It's optional. Contacts' details, prices, Financials and your private notes stay on this device either way.</p>`;
+  <p class="muted">It's optional. Contacts' details, prices, Financials and your notes stay on this device either way.</p>`;
 
 async function maybeRunCloudOffer() {
   if (!isCloudOfferPending()) return;
@@ -1112,7 +1215,7 @@ export function renderTodayCloudNudge(el) {
       html = `<div class="row-between">
           <div><strong>☁️ Cloud backup is paused.</strong>
             <div class="muted" style="font-size:13px;">${esc(paused || 'Your sign-in has expired.')}</div></div>
-          <div class="pill-row"><a class="btn btn-sm btn-primary" href="import-export.html#cloud-backup">Resolve</a></div>
+          <div class="pill-row"><a class="btn btn-sm btn-primary" href="import-export.html#backup-restore">Resolve</a></div>
         </div>`;
     } else if (!status.enabled && status.movedToEdition !== 'pro') {
       const at = dismissedAt(NUDGE_KEY);
@@ -1172,8 +1275,8 @@ export function renderPrivateGapHint() {
   hint.className = 'inline-warn private-gap-hint';
   hint.style.marginBottom = '12px';
   hint.innerHTML = locked
-    ? 'Private details (phone, email, address, prices, notes) are blank on this device until you unlock them. <a href="import-export.html#cloud-backup">Unlock your private info</a>'
-    : 'Private details (phone, email, address, prices, notes) weren\'t in the cloud backup this device was restored from, so they\'re blank here. <a href="import-export.html">Restore a file backup</a> with Merge to bring them back.';
+    ? 'Sensitive records (phone, email, address, prices, notes) are blank on this device until you unlock them. <a href="import-export.html#backup-restore">Unlock your sensitive records</a>'
+    : 'Sensitive records (phone, email, address, prices, notes) weren\'t in the cloud backup this device was restored from, so they\'re blank here. <a href="import-export.html">Restore a file backup</a> with Merge to bring them back.';
   main.insertBefore(hint, main.firstChild);
 }
 
