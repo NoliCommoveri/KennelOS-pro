@@ -12,7 +12,7 @@ import { isOpenSale, saleEndReasonsFor } from './vocab.js';
 
 const base = makeRepo('sales', SALE_REFERENCES);
 
-const REQUIRED_FIELDS = ['dog_id', 'buyer_contact_id', 'placement_type', 'status'];
+const REQUIRED_FIELDS = ['dog_id', 'buyer_contact_id', 'registration_type', 'status'];
 
 // Statuses that close a sale out (vocab.js, with the isOpenSale predicate that
 // membership, the companion bundle and the waitlist all share).

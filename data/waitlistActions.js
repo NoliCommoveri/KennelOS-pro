@@ -37,7 +37,7 @@ import { dogRepo } from './dogRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
-import { RELEASED_SALE_STATUSES, SALE_END_REASON, descriptor } from './vocab.js';
+import { RELEASED_SALE_STATUSES, SALE_END_REASON, registrationsForPurposes, descriptor } from './vocab.js';
 import {
   waitlistConfig, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
   respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
@@ -234,7 +234,7 @@ export async function reapply(entryId, { date = todayYMD() } = {}) {
     application: { ...(entry.application || {}) },
     pref_sex: entry.pref_sex || 'any',
     pref_breed: entry.pref_breed || '',
-    pref_placement_type: entry.pref_placement_type || '',
+    pref_purposes: [...(entry.pref_purposes || [])],
     pref_colors: [...(entry.pref_colors || [])]
   });
 }
@@ -588,15 +588,18 @@ export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {
       notes: appendNote(other.notes, `Pick let go on ${date}: they picked from another litter in the same turn.`)
     });
   }
+  // The pup's intended registration, else the first one the family's purposes
+  // fit (vocab order: Limited before Full), else Limited.
+  const registration = dog.intended_registration || (registrationsForPurposes(entry.pref_purposes) || [])[0] || 'limited';
   const sale = await saleRepo.create({
     dog_id: dog.id,
     buyer_contact_id: entry.contact_id,
-    placement_type: dog.intended_placement || entry.pref_placement_type || 'pet',
+    registration_type: registration,
     status: 'deposit_pending',
     kennel_id: dog.kennel_id || c.litter.kennel_id,
     sale_date: date,
     lead_source: 'Waitlist',
-    ...expectedPricing(dog, c.litter),
+    ...expectedPricing(dog, c.litter, registration),
     // What they'd paid on a pup they lost (§16.11) is their deposit on this one;
     // it's recorded as received with "Deposit received", as any deposit is.
     ...(entry.carried_payment ? {
@@ -630,9 +633,10 @@ export async function changePick(offerId, { chosenDogId, date = todayYMD() } = {
   const sale = saleId ? await saleRepo.getById(saleId) : null;
   if (!sale) throw new Error('There\'s no sale for this pick to move. Change it on the Sales page.');
   const oldDog = c.pups.find((d) => d.id === offer.chosen_dog_id) || null;
-  const was = expectedPricing(oldDog, c.litter);
-  const now = expectedPricing(dog, c.litter);
-  const changes = { dog_id: dog.id, placement_type: dog.intended_placement || sale.placement_type };
+  const registration = dog.intended_registration || sale.registration_type;
+  const was = expectedPricing(oldDog, c.litter, sale.registration_type);
+  const now = expectedPricing(dog, c.litter, registration);
+  const changes = { dog_id: dog.id, registration_type: registration };
   if ((sale.price ?? null) === was.price) changes.price = now.price;
   if (sale.status === 'deposit_pending' && (sale.deposit_amount ?? null) === was.deposit_amount) changes.deposit_amount = now.deposit_amount;
   const savedSale = await saleRepo.update(sale.id, changes);

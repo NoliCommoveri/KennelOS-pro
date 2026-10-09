@@ -106,7 +106,7 @@ function entryView(entry, ctx) {
     prefs: {
       sex: entry.pref_sex || 'any',
       breed: orNull(entry.pref_breed),
-      placement: orNull(entry.pref_placement_type),
+      purposes: Array.isArray(entry.pref_purposes) ? [...entry.pref_purposes] : [],
       colors: Array.isArray(entry.pref_colors) ? [...entry.pref_colors] : (orNull(entry.pref_colors) ? [entry.pref_colors] : []),
       ready_timing: orNull(entry.ready_timing)
     },

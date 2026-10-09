@@ -32,6 +32,7 @@ import { contractRepo } from './contractRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { litterRepo } from './litterRepo.js';
+import { expectedPricing } from './saleDefaults.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { todayYMD } from './dateUtils.js';
@@ -252,9 +253,11 @@ export async function buildProspectiveBundle(contact) {
         sex: d.sex || '',
         callName: d.call_name || '',
         markings: inc.markings ? (d.color_markings || '') : '',
-        price: !showPrice ? null
-          : d.sex === 'male' ? nonEmpty(l.expected_price_male)
-            : d.sex === 'female' ? nonEmpty(l.expected_price_female) : null,
+        // By sex, plus the Full-registration surcharge for a pup intended Full
+        // (saleDefaults.expectedPricing, the same price a sale would prefill);
+        // the registration rides along so a surcharged price explains itself.
+        price: !showPrice ? null : nonEmpty(expectedPricing(d, l).price),
+        registration: showPrice ? nonEmpty(d.intended_registration) : null,
         deposit: !showDeposit ? null
           : d.sex === 'male' ? nonEmpty(l.expected_deposit_male)
             : d.sex === 'female' ? nonEmpty(l.expected_deposit_female) : null
@@ -375,7 +378,7 @@ export async function buildFamilyBundle(contact) {
         sire: inc.parentage ? parentName(sireDog) : null,
         dam: inc.parentage ? parentName(damDog) : null,
         age: inc.age ? ageFrom(dog.date_of_birth, asOf) : null,
-        placementType: nonEmpty(sale.placement_type),
+        registrationType: nonEmpty(sale.registration_type),
         saleStatus: nonEmpty(sale.status),
         price: showFin ? price : null,
         deposit: showFin ? deposit : null,

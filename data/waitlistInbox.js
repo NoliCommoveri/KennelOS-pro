@@ -6,7 +6,7 @@
 // nothing is copied through as-is: answers are kept only for questions on her
 // form, cut to size and to the question's choices; preferences only take values
 // from the vocab (a breed only one of hers); everything else is dropped.
-import { WAITLIST_PREF_SEX, WAITLIST_READY_TIMING, PLACEMENT_TYPE } from './vocab.js';
+import { WAITLIST_PREF_SEX, WAITLIST_READY_TIMING, cleanPurposes } from './vocab.js';
 import { isAnswerQuestion, snapshotQuestions } from './waitlistForm.js';
 import { resolveBreed } from './waitlistRules.js';
 
@@ -85,7 +85,7 @@ export function applicationToEntry(item, opened, { kennel, form, breeds = [] }) 
     application_questions: snapshotQuestions(form),
     pref_sex: oneOf(prefs.pref_sex, WAITLIST_PREF_SEX, 'any'),
     pref_breed: breed || '',
-    pref_placement_type: oneOf(prefs.pref_placement_type, PLACEMENT_TYPE, ''),
+    pref_purposes: Array.isArray(prefs.pref_purposes) ? cleanPurposes(prefs.pref_purposes) : [],
     pref_colors: colors,
     ready_timing: oneOf(prefs.ready_timing, WAITLIST_READY_TIMING, null),
     listen_mode: 'all',

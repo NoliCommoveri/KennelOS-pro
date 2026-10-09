@@ -19,59 +19,15 @@
     <div class="page-header">
       <div>
         <h1>Reports</h1>
-        <p class="page-subtitle">Derived, exportable views over your records. Every report reads live data and can export the visible rows to CSV.</p>
+        <p class="page-subtitle">Derived views over your records, grouped by what they're about. Every report reads live data, charts what you filter to, prints (or saves as PDF), and exports its rows to CSV.</p>
       </div>
     </div>
-
-    <h2>Analytics</h2>
-    <div class="grid-links">
-      <a class="tile" href="litters-report.html">
-        <span class="tile-icon">🐣</span>
-        <h3>Litters Over Time</h3>
-        <p>Every litter by whelp date and year, filterable by status.</p>
-      </a>
-      <a class="tile" href="live-births.html">
-        <span class="tile-icon">📈</span>
-        <h3>Live-Birth Summary</h3>
-        <p>Per-litter born / alive / deceased and live percentage.</p>
-      </a>
-      <a class="tile" href="placements-report.html">
-        <span class="tile-icon">🏡</span>
-        <h3>Placements</h3>
-        <p>Sales by type, status, and year — buyers resolve to Contacts.</p>
-      </a>
-      <a class="tile" href="litter-finances-report.html">
-        <span class="tile-icon">💰</span>
-        <h3>Litter P&amp;L</h3>
-        <p>Sale income vs cost per litter — earned/anticipated against litter + puppy expenses, and the net.</p>
-      </a>
-      <a class="tile" href="stud-services-report.html">
-        <span class="tile-icon">🧬</span>
-        <h3>Stud Services</h3>
-        <p>Outgoing and incoming arrangements by direction and status.</p>
-      </a>
-      <a class="tile" href="health-tests-report.html">
-        <span class="tile-icon">🔬</span>
-        <h3>Health-Test Events</h3>
-        <p>Recorded genetic, OFA/PennHIP, and breed-specific results across all dogs.</p>
-      </a>
-    </div>
-
-    <h2>Operational</h2>
-    <div class="grid-links">
-      <a class="tile" href="roster.html">
-        <span class="tile-icon">📋</span>
-        <h3>Active Roster</h3>
-        <p>All active dogs, filterable and exportable.</p>
-      </a>
-      <a class="tile" href="scheduled-placements.html">
-        <span class="tile-icon">📅</span>
-        <h3>Scheduled Placements</h3>
-        <p>Every future-dated puppy drop-off.</p>
-      </a>
-    </div>
+    <div id="reports-featured"></div>
+    <div class="seg-tabs" id="reports-tabs" role="tablist"></div>
+    <div class="grid-links" id="reports-tiles"></div>
   </main>
 
   <script type="module" src="../app.js"></script>
+  <script type="module" src="./reports.js"></script>
 </body>
 </html>

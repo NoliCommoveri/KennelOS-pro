@@ -51,7 +51,7 @@ export const SYNC_REGISTRY = Object.freeze({
       'owner_contact_id', 'co_owner_contact_ids', 'date_of_birth', 'date_of_death',
       'color_markings', 'registry', 'registration_number', 'microchip_id', 'url',
       'planned_tests', 'disposition', 'dob_is_estimated', 'recorded_coi',
-      'intended_placement' // Waitlist Spec §9
+      'intended_registration' // Waitlist Spec §9
     ],
     private: ['notes'],
     pending: []
@@ -121,7 +121,8 @@ export const SYNC_REGISTRY = Object.freeze({
     // and split basis are the terms of that money, so they stay with it.
     private: [
       'expected_price_male', 'expected_price_female', 'expected_deposit_male',
-      'expected_deposit_female', 'foster_comp_model', 'foster_our_share_pct',
+      'expected_deposit_female', 'full_reg_surcharge_male', 'full_reg_surcharge_female',
+      'foster_comp_model', 'foster_our_share_pct',
       'foster_split_basis', 'foster_flat_fee_per_pup', 'foster_split_notes',
       'feeding_schedule_override', 'notes'
     ],
@@ -131,7 +132,7 @@ export const SYNC_REGISTRY = Object.freeze({
   sales: {
     rows: ALL,
     cloud: [
-      'kennel_id', 'dog_id', 'buyer_contact_id', 'status', 'placement_type',
+      'kennel_id', 'dog_id', 'buyer_contact_id', 'status', 'registration_type',
       'sale_date', 'deposit_date', 'balance_due_date', 'balance_paid_date'
     ],
     private: [
@@ -219,7 +220,7 @@ export const SYNC_REGISTRY = Object.freeze({
       // the same-day tie-breaker of the list order (waitlistRules), so cloud for
       // the reason fee_received_date is: a restore must not re-order the list
       'fee_received_at',
-      'pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors',
+      'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors',
       'listen_mode', 'listen_sire_ids', 'listen_dam_ids',
       'removed_reason', 'placed_sale_id',
       // Decided 2026-10-07 (Cloud plan §5.1, decisions 1 and 2): the readiness

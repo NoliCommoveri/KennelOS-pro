@@ -46,6 +46,12 @@ async function init() {
     filters: [
       { id: 'type', label: 'Test type', options: TYPE_OPTIONS, match: (e, v) => e.event_type === v }
     ],
+    dateRange: { label: 'Tested', date: (e) => e.event_date },
+    kpis: (list) => [
+      { label: 'Results recorded', value: String(list.length) },
+      { label: 'Dogs tested', value: String(new Set(list.map((e) => e.subject_id)).size) },
+      ...TYPE_OPTIONS.map((t) => ({ label: t.label, value: String(list.filter((e) => e.event_type === t.value).length) }))
+    ],
     columns: [
       { header: 'Date', value: (e) => (e.event_date ? fmtDate(e.event_date) : ''), csv: (e) => e.event_date || '' },
       { header: 'Dog', value: dogName },

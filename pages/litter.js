@@ -10,7 +10,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, descriptor } from '../data/vocab.js';
+import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
@@ -45,7 +45,7 @@ const els = {
 const blankLitter = () => ({
   pairing_id: '', dam_id: '', sire_id: '', nickname: '', whelp_date: '', accept_deposits_date: '', estimated_ready_date: '', litter_registration_number: '',
   puppies_born_total: '', puppies_born_alive: '', puppies_born_deceased: '', puppies_born_abnormalities: '', status: '', notes: '',
-  expected_price_male: '', expected_price_female: '', expected_deposit_male: '', expected_deposit_female: '',
+  expected_price_male: '', expected_price_female: '', expected_deposit_male: '', expected_deposit_female: '', full_reg_surcharge_male: '', full_reg_surcharge_female: '',
   foster_direction: '', foster_partner_contact_id: '', foster_comp_model: '',
   foster_our_share_pct: '', foster_split_basis: '', foster_flat_fee_per_pup: '', foster_split_notes: '',
   feeding_schedule_override: ''
@@ -210,8 +210,10 @@ function renderView() {
       ${row('Status', badge(LITTER_STATUS, l.status))}
       ${row('Expected price (male)', esc(money(l.expected_price_male)))}
       ${row('Expected deposit (male)', esc(money(l.expected_deposit_male)))}
+      ${row('Full registration surcharge (male)', esc(money(l.full_reg_surcharge_male)))}
       ${row('Expected price (female)', esc(money(l.expected_price_female)))}
       ${row('Expected deposit (female)', esc(money(l.expected_deposit_female)))}
+      ${row('Full registration surcharge (female)', esc(money(l.full_reg_surcharge_female)))}
       ${row('Notes', l.notes ? esc(l.notes).replace(/\n/g, '<br>') : '')}
       ${editionFlags.feedingSchedule ? row('Feeding schedule override', l.feeding_schedule_override ? esc(l.feeding_schedule_override).replace(/\n/g, '<br>') : '') : ''}
     </dl>`;
@@ -301,12 +303,14 @@ function renderEdit() {
       ${field('Born alive', `<input id="f-puppies_born_alive" type="number" min="0" value="${esc(l.puppies_born_alive)}">`)}
       ${field('Born deceased', `<input id="f-puppies_born_deceased" type="number" min="0" value="${esc(l.puppies_born_deceased)}">`)}
       ${field('Born with abnormalities', `<input id="f-puppies_born_abnormalities" type="number" min="0" value="${esc(l.puppies_born_abnormalities)}">`)}
-      <div class="field field-wide"><h3 style="margin:8px 0 0;">Males — expected price &amp; deposit</h3></div>
+      <div class="field field-wide"><h3 style="margin:8px 0 0;">Males — expected price, deposit &amp; Full surcharge</h3></div>
       ${field('Expected price (male)', `<input id="f-expected_price_male" type="number" min="0" step="0.01" value="${esc(l.expected_price_male)}">`, { hint: 'Prefills a new sale\'s price when the puppy sold is male. Still editable per sale.' })}
       ${field('Expected deposit (male)', `<input id="f-expected_deposit_male" type="number" min="0" step="0.01" value="${esc(l.expected_deposit_male)}">`, { hint: 'Prefills a new sale\'s deposit amount when the puppy sold is male. Still editable per sale.' })}
-      <div class="field field-wide"><h3 style="margin:8px 0 0;">Females — expected price &amp; deposit</h3></div>
+      ${field('Full registration surcharge (male)', `<input id="f-full_reg_surcharge_male" type="number" min="0" step="0.01" value="${esc(l.full_reg_surcharge_male)}">`, { hint: 'Added to the expected price when a male is sold with Full registration (or intended Full, on a shared price list).' })}
+      <div class="field field-wide"><h3 style="margin:8px 0 0;">Females — expected price, deposit &amp; Full surcharge</h3></div>
       ${field('Expected price (female)', `<input id="f-expected_price_female" type="number" min="0" step="0.01" value="${esc(l.expected_price_female)}">`, { hint: 'Prefills a new sale\'s price when the puppy sold is female. Still editable per sale.' })}
       ${field('Expected deposit (female)', `<input id="f-expected_deposit_female" type="number" min="0" step="0.01" value="${esc(l.expected_deposit_female)}">`, { hint: 'Prefills a new sale\'s deposit amount when the puppy sold is female. Still editable per sale.' })}
+      ${field('Full registration surcharge (female)', `<input id="f-full_reg_surcharge_female" type="number" min="0" step="0.01" value="${esc(l.full_reg_surcharge_female)}">`, { hint: 'Added to the expected price when a female is sold with Full registration (or intended Full, on a shared price list).' })}
       ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/pairings/contacts in the pickers above</label>
       </div>` : ''}
@@ -398,6 +402,8 @@ function readForm() {
     expected_price_female: val('f-expected_price_female'),
     expected_deposit_male: val('f-expected_deposit_male'),
     expected_deposit_female: val('f-expected_deposit_female'),
+    full_reg_surcharge_male: val('f-full_reg_surcharge_male'),
+    full_reg_surcharge_female: val('f-full_reg_surcharge_female'),
     notes: val('f-notes'),
     // Absent from the DOM in Lite (editionFlags.feedingSchedule off) — falls
     // back to the stored draft value rather than being clobbered to '' by val().
@@ -513,7 +519,8 @@ function cancel() {
 function normalizeCounts(candidate) {
   for (const k of [
     'puppies_born_total', 'puppies_born_alive', 'puppies_born_deceased', 'puppies_born_abnormalities',
-    'expected_price_male', 'expected_price_female', 'expected_deposit_male', 'expected_deposit_female'
+    'expected_price_male', 'expected_price_female', 'expected_deposit_male', 'expected_deposit_female',
+    'full_reg_surcharge_male', 'full_reg_surcharge_female'
   ]) {
     candidate[k] = candidate[k] === '' || candidate[k] == null ? null : Number(candidate[k]);
   }
@@ -668,7 +675,7 @@ async function renderRosterSection() {
         const openBtn = hideArchive ? '' : `<a class="btn btn-sm" href="dog.html?id=${encodeURIComponent(d.id)}">Open →</a>`;
         return `
         <li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
-          <span>${badge(SEX, d.sex)} <strong>${esc(d.call_name)}</strong>${d.registered_name ? ` <span class="faint">${esc(d.registered_name)}</span>` : ''} ${badge(DOG_STATUS, d.status)}${archBadge}</span>
+          <span>${badge(SEX, d.sex)} <strong>${esc(d.call_name)}</strong>${d.registered_name ? ` <span class="faint">${esc(d.registered_name)}</span>` : ''} ${badge(DOG_STATUS, d.status)}${d.intended_registration ? ' ' + badge(REGISTRATION_TYPE, d.intended_registration) : ''}${archBadge}</span>
           ${openBtn}
         </li>`;
       }).join('') + `</ul>`

@@ -28,7 +28,7 @@ import { waitlistConfig, kennelBreeds, resolveBreed } from './waitlistRules.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
-  LITTER_STATUS, PLACEMENT_TYPE, SALE_STATUS, eventTypesFor, STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS,
+  LITTER_STATUS, REGISTRATION_TYPE, PLACEMENT_PURPOSE, cleanPurposes, SALE_STATUS, eventTypesFor, STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS,
   EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, WAITLIST_PREF_SEX, WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING
 } from './vocab.js';
 
@@ -68,6 +68,13 @@ function normEnum(vocab, raw, extra = {}) {
   const hit = vocab.find((v) => v.value === k || v.label.toLowerCase() === s.toLowerCase());
   return hit ? hit.value : null;
 }
+
+// Other words for a purpose on an imported application (normEnum keys: lower-case,
+// spaces → underscores). The old placement values read as their purpose.
+const PURPOSE_ALIASES = {
+  companion: 'pet', family_pet: 'pet', pet_home: 'pet', sports: 'performance', agility: 'performance', obedience: 'performance',
+  conformation: 'show', breeding_rights: 'breeding', 'co-own': 'co_own', coown: 'co_own', co_ownership: 'co_own'
+};
 
 // Normalize a date to YYYY-MM-DD. Accepts ISO and US M/D/YYYY. Returns ''
 // (blank), a valid YYYY-MM-DD string, or null (present but unrecognized).
@@ -669,10 +676,10 @@ const SALE_MAPPING = {
   entity: 'sale',
   label: 'Sales',
   templateHeaders: [
-    'dog_registered_name', 'buyer_name', 'sale_date', 'placement_type', 'status',
+    'dog_registered_name', 'buyer_name', 'sale_date', 'registration_type', 'status',
     'price', 'deposit_amount', 'deposit_date', 'balance_paid_date', 'kennel_name', 'lead_source', 'notes'
   ],
-  requiredForCreate: ['dog_id', 'placement_type', 'status'],
+  requiredForCreate: ['dog_id', 'registration_type', 'status'],
 
   async loadExisting() {
     const [sales, dogs, contacts, kennels] = await Promise.all([
@@ -721,9 +728,10 @@ const SALE_MAPPING = {
       else toCreateBuyer = buyerName.trim(); // created inline on commit — never flagged
     }
 
-    const placementType = normEnum(PLACEMENT_TYPE, col(row, 'placement_type', 'placement'));
-    if (placementType === null) reasons.push(`Unrecognized placement_type "${col(row, 'placement_type', 'placement')}".`);
-    else if (placementType) record.placement_type = placementType;
+    const registrationRaw = col(row, 'registration_type', 'registration');
+    const registrationType = normEnum(REGISTRATION_TYPE, registrationRaw, { unregistered: 'none', 'co-own': 'co_own' });
+    if (registrationType === null) reasons.push(`Unrecognized registration_type "${registrationRaw}".`);
+    else if (registrationType) record.registration_type = registrationType;
 
     const status = normEnum(SALE_STATUS, col(row, 'status'));
     if (status === null) reasons.push(`Unrecognized status "${col(row, 'status')}".`);
@@ -1384,7 +1392,7 @@ const EXPENSE_MAPPING = {
 const WAITLIST_MAPPING = {
   entity: 'waitlist',
   label: 'Waitlist applications',
-  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_placement', 'pref_colors', 'ready_timing', 'program', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'notes'],
+  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing', 'program', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'notes'],
   requiredForCreate: ['name', 'email'],
 
   async loadExisting() {
@@ -1476,11 +1484,17 @@ const WAITLIST_MAPPING = {
       if (hit) record.pref_breed = hit;
       else reasons.push(`Breed "${breed}" isn't one of this kennel's breeds (left as any). Pick it on their page.`);
     }
-    const placementRaw = col(row, ...colsFor('pref_placement'));
-    if (placementRaw) {
-      const v = normEnum(PLACEMENT_TYPE, placementRaw);
-      if (v) record.pref_placement_type = v;
-      else reasons.push(`Unrecognized placement "${placementRaw}" (left as any).`);
+    // What they're looking for: one or more purposes, comma-separated ("Pet, Show").
+    // Unknown ones are flagged and dropped; the rest are kept.
+    const purposesRaw = col(row, ...colsFor('pref_purposes'));
+    if (purposesRaw) {
+      const purposes = [];
+      for (const part of purposesRaw.split(/[,;\/]/).map((x) => x.trim()).filter(Boolean)) {
+        const v = normEnum(PLACEMENT_PURPOSE, part, PURPOSE_ALIASES);
+        if (v) purposes.push(v);
+        else reasons.push(`Unrecognized purpose "${part}" (left out).`);
+      }
+      if (purposes.length) record.pref_purposes = cleanPurposes(purposes);
     }
     // The soonest they can commit (the readiness hold, Spec §15.8). "1", "1 month",
     // "3 months", "6+ months", "ASAP" all read; anything else is flagged and left blank.
@@ -1533,7 +1547,7 @@ const WAITLIST_MAPPING = {
     const changes = match ? {
       application: { ...(match.application || {}), ...application },
       application_questions: record.application_questions,
-      ...Object.fromEntries(['pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors', 'ready_timing', 'waitlist_program_id', 'notes']
+      ...Object.fromEntries(['pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing', 'waitlist_program_id', 'notes']
         .filter((k) => record[k] !== undefined).map((k) => [k, record[k]]))
     } : { ...record };
 

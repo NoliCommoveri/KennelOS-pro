@@ -11,7 +11,7 @@ import { getMyKennelId } from '../data/settings.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal, promptModal } from './ui.js';
-import { PLACEMENT_TYPE, descriptor } from '../data/vocab.js';
+import { PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
 import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges } from '../data/waitlistRules.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -87,13 +87,14 @@ export function mountKennelPicker(host, { kennel, own }) {
 
 const SEX_LABEL = { male: 'Male', female: 'Female' };
 
-// "Female · Boston Terrier · Show · brindle" — or "Any pup" when nothing is set.
+// "Female · Boston Terrier · Show, Breeding · brindle" — or "Any pup" when nothing is set.
 // Returns escaped HTML.
 export function prefsSummary(entry) {
   const parts = [];
   if (SEX_LABEL[entry.pref_sex]) parts.push(SEX_LABEL[entry.pref_sex]);
   if (entry.pref_breed) parts.push(entry.pref_breed);
-  if (entry.pref_placement_type) parts.push(descriptor(PLACEMENT_TYPE, entry.pref_placement_type).label);
+  const purposes = cleanPurposes(entry.pref_purposes);
+  if (purposes.length) parts.push(purposes.map((p) => descriptor(PLACEMENT_PURPOSE, p).label).join(', '));
   const colors = Array.isArray(entry.pref_colors) ? entry.pref_colors : [];
   if (colors.length) parts.push(colors.join(', '));
   return parts.length ? esc(parts.join(' · ')) : '<span class="faint">Any pup</span>';

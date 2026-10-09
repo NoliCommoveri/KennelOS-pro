@@ -38,7 +38,7 @@ const LOCKED_TYPE_LABEL = {
   email: 'Email address · used to spot returning families',
   pref_sex: 'Either / Male / Female · decides which pups they\'re offered',
   pref_breed: 'Breed · decides which pups they\'re offered',
-  pref_placement: 'Pet / Show / Breeding rights / Co-own · decides which pups they\'re offered',
+  pref_purposes: 'Pet / Performance / Show / Breeding / Co-own, choose all · mapped to registration (Limited, Full, Co-own), decides which pups they\'re offered',
   pref_colors: 'Colors · notes, or matching if you turn color matching on',
   ready_timing: 'ASAP / 1 month / 3 months / 6+ months · anything but ASAP is on hold that long',
   public_notice: 'Shown to every applicant · no answer'

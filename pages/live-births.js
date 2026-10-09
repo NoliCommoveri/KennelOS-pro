@@ -9,6 +9,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { createReportView } from '../assets/reportView.js';
 import { inScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
+import { periodSeries, sumOf, pct } from '../data/reportMath.js';
 
 function livePct(l) {
   const total = Number(l.puppies_born_total);
@@ -36,13 +37,37 @@ async function init() {
     scope: inScope,
     csvFilename: `live-births-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dam or sire…', text: (l) => `${name(l.dam_id)} ${name(l.sire_id)}` },
+    dateRange: { label: 'Whelped', date: (l) => l.whelp_date },
+    // The tiles pool the VISIBLE litters' own counts on each render (born and
+    // alive summed, then divided): a derived figure for what's on screen, never a
+    // stored kennel-wide rate.
+    kpis: (rows) => {
+      const born = sumOf(rows, (l) => l.puppies_born_total);
+      const alive = sumOf(rows, (l) => l.puppies_born_alive);
+      return [
+        { label: 'Litters', value: String(rows.length) },
+        { label: 'Total born', value: String(born) },
+        { label: 'Born alive', value: String(alive) },
+        { label: 'Live births', value: pct(alive, born) || '—', hint: 'alive ÷ born, these litters' }
+      ];
+    },
+    charts: (rows, ctx) => {
+      const p = periodSeries(rows.filter((l) => l.whelp_date), ctx.range, {
+        date: (l) => l.whelp_date,
+        series: [
+          { name: 'Born alive', value: (l) => l.puppies_born_alive },
+          { name: 'Born deceased', value: (l) => l.puppies_born_deceased }
+        ]
+      });
+      return [{ type: 'bar', stacked: true, title: `Puppies born by ${p.granularity}`, subtitle: 'Alive and deceased, stacked', categories: p.categories, series: p.series }];
+    },
     columns: [
       { header: 'Whelp date', value: (l) => (l.whelp_date ? fmtDate(l.whelp_date) : ''), csv: (l) => l.whelp_date || '' },
       { header: 'Litter', value: (l) => `${name(l.dam_id)} × ${name(l.sire_id)}` },
-      { header: 'Total born', value: (l) => String(l.puppies_born_total ?? '') },
-      { header: 'Born alive', value: (l) => String(l.puppies_born_alive ?? '') },
-      { header: 'Born deceased', value: (l) => String(l.puppies_born_deceased ?? '') },
-      { header: 'Live %', value: livePct }
+      { header: 'Total born', value: (l) => String(l.puppies_born_total ?? ''), total: (rows) => String(sumOf(rows, (l) => l.puppies_born_total)) },
+      { header: 'Born alive', value: (l) => String(l.puppies_born_alive ?? ''), total: (rows) => String(sumOf(rows, (l) => l.puppies_born_alive)) },
+      { header: 'Born deceased', value: (l) => String(l.puppies_born_deceased ?? ''), total: (rows) => String(sumOf(rows, (l) => l.puppies_born_deceased)) },
+      { header: 'Live %', value: livePct, total: (rows) => pct(sumOf(rows, (l) => l.puppies_born_alive), sumOf(rows, (l) => l.puppies_born_total)) || '' }
     ],
     onRowClick: (l) => { location.href = `litter.html?id=${encodeURIComponent(l.id)}`; },
     load: () => Promise.resolve(litters),

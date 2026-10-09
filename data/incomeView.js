@@ -100,6 +100,17 @@ function studComponents(s) {
   return out;
 }
 
+// When each component's money moved (or is due): the date a monthly P&L files it
+// under (reports, cash basis). A deposit on its deposit date, the balance and what
+// rides with it on the balance-paid date; unpaid money on its due date. Each falls
+// back to the sale's own date, so nothing goes undated when a date wasn't kept.
+function saleComponentDate(s, c) {
+  const fallback = s.sale_date || s.deposit_date || s.balance_paid_date || '';
+  if (c.component === 'deposit') return s.deposit_date || fallback;
+  if (c.state === 'earned') return s.balance_paid_date || fallback;
+  return s.balance_due_date || fallback;
+}
+
 function sumBy(components, state) {
   return components.reduce((t, c) => (c.state === state ? t + c.amount : t), 0);
 }
@@ -161,7 +172,8 @@ export async function getSaleFeeCredit(saleId) {
   return feeCreditsBySale(await loadWaitlistEntries(false)).get(saleId) || 0;
 }
 
-// Build the one-per-record income rows. Each carries its component breakdown plus
+// Build the one-per-record income rows. Each carries its component breakdown (each
+// component with the `when` it's filed under, saleComponentDate) plus
 // the rolled-up earned / anticipated (cash) and pick (non-cash) totals, the raw
 // status value (for a badge), a display date, and a deep-link href.
 // `kennelId` overrides the active scope with ONE named kennel — what the per-
@@ -195,7 +207,11 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
   // dog's), and both are pass-throughs when unscoped.
   for (const s of scopeTo(sales)) {
     const feeCredit = creditBySale.get(s.id) || 0;
-    const components = saleComponents(s, feeCredit);
+    // `due` is only a due date she actually set (the balance's), for Receivables'
+    // aging; `when` always has a date, for filing by month.
+    const components = saleComponents(s, feeCredit).map((c) => ({
+      ...c, when: saleComponentDate(s, c), due: c.state === 'anticipated' && c.component !== 'deposit' ? s.balance_due_date || '' : ''
+    }));
     if (!components.length) continue; // no money on this sale — nothing to show
     rows.push({
       source_type: 'sale',
@@ -219,7 +235,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
 
   for (const s of scopeTo(studs)) {
     if (s.direction !== 'outgoing') continue; // incoming = we pay = an expense
-    const components = studComponents(s);
+    const components = studComponents(s).map((c) => ({ ...c, when: s.returned_date || s.sent_date || '' }));
     if (!components.length) continue;
     rows.push({
       source_type: 'stud',
@@ -242,7 +258,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
   // carries the kennel scope like every waitlist row.
   for (const e of scopeTo(entries)) {
     if (!feeReceived(e)) continue;
-    const components = [{ component: 'application_fee', amount: num(e.fee_amount), state: 'earned' }];
+    const components = [{ component: 'application_fee', amount: num(e.fee_amount), state: 'earned', when: e.fee_received_date }];
     // A credited fee on a placed family is part of THAT pup's price, so it rolls up
     // to the pup's litter (the Sale's balance was netted by it above — without
     // this the litter P&L would lose the credit). Any other fee isn't litter money.

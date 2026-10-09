@@ -125,7 +125,7 @@ db.version(1).stores({
   kennels:       'id, public_id, is_archived',
   pairings:      'id, kennel_id, sire_id, dam_id, status, pairing_type, is_archived',
   litters:       'id, kennel_id, pairing_id, sire_id, dam_id, status, whelp_date, foster_partner_contact_id, is_archived',
-  sales:         'id, kennel_id, dog_id, buyer_contact_id, referred_by_contact_id, status, placement_type, is_archived',
+  sales:         'id, kennel_id, dog_id, buyer_contact_id, referred_by_contact_id, status, registration_type, is_archived',
   contracts:     'id, kennel_id, contract_type, status, related_sale_id, related_stud_service_id, related_dog_id, related_contact_id, is_archived',
   stud_services: 'id, kennel_id, our_dog_id, partner_dog_id, partner_contact_id, referred_by_contact_id, direction, status, pairing_id, is_archived',
   documents:     'id, kennel_id, dog_id, doc_type, doc_date, is_archived',

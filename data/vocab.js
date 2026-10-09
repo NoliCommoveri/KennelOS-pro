@@ -247,12 +247,45 @@ export const FEE_CREDIT_POLICY = [
   { value: 'refundable',           label: 'Refundable',                 badge: 'badge-blue' }
 ];
 
-export const PLACEMENT_TYPE = [
-  { value: 'pet',            label: 'Pet',            badge: 'badge-neutral' },
-  { value: 'show',           label: 'Show',           badge: 'badge-purple' },
-  { value: 'breeding_rights', label: 'Breeding rights', badge: 'badge-green' },
-  { value: 'co_own',         label: 'Co-own',         badge: 'badge-blue' }
+// Registration rights a pup is planned for (Dog.intended_registration) and sold
+// with (Sale.registration_type). AKC's two: Limited (companion and performance
+// homes) and Full (show and breeding). Co-own is a Full-registration placement
+// the kennel keeps a share of; None is for unregistered dogs.
+export const REGISTRATION_TYPE = [
+  { value: 'limited', label: 'Limited', badge: 'badge-neutral' },
+  { value: 'full',    label: 'Full',    badge: 'badge-purple' },
+  { value: 'co_own',  label: 'Co-own',  badge: 'badge-blue' },
+  { value: 'none',    label: 'None (unregistered)', badge: 'badge-gray' }
 ];
+
+// What a family wants a pup for (WaitlistEntry.pref_purposes, a multi-select on
+// the application). Each maps to the registrations that suit it; a family
+// accepts any registration its purposes map to (registrationsForPurposes), and
+// matching compares that set against the pup's intended_registration.
+export const PLACEMENT_PURPOSE = [
+  { value: 'pet',         label: 'Pet / companion',  registrations: ['limited', 'none'] },
+  { value: 'performance', label: 'Performance sports (agility, obedience…)', registrations: ['limited', 'none'] },
+  { value: 'show',        label: 'Show',             registrations: ['full'] },
+  { value: 'breeding',    label: 'Breeding',         registrations: ['full', 'none'] },
+  { value: 'co_own',      label: 'Co-own',           registrations: ['co_own'] }
+];
+
+// The purposes a family picked, cleaned to known values in vocab order. Accepts
+// an array or a comma-separated string (CSV import / hand entry).
+export function cleanPurposes(raw) {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  const picked = new Set(list.map((v) => String(v ?? '').trim()));
+  return PLACEMENT_PURPOSE.map((p) => p.value).filter((v) => picked.has(v));
+}
+
+// The registrations a family accepts, in REGISTRATION_TYPE order; null when they
+// picked no purpose (any registration).
+export function registrationsForPurposes(purposes) {
+  const picked = cleanPurposes(purposes);
+  if (!picked.length) return null;
+  const ok = new Set(PLACEMENT_PURPOSE.filter((p) => picked.includes(p.value)).flatMap((p) => p.registrations));
+  return REGISTRATION_TYPE.map((r) => r.value).filter((v) => ok.has(v));
+}
 
 export const SALE_STATUS = [
   { value: 'deposit_pending', label: 'Deposit Pending', badge: 'badge-blue' },

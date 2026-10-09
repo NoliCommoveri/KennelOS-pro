@@ -7,7 +7,7 @@ import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
-import { PLACEMENT_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, DISPOSITION, DOG_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
+import { REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, DISPOSITION, DOG_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, todayYMD, param, confirmModal, selectModal, promptModal, dogRefHtml } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
@@ -31,7 +31,7 @@ const els = {
 
 const blankSale = () => ({
   dog_id: '', buyer_contact_id: '', sale_date: '', price: '', deposit_amount: '',
-  deposit_date: '', balance_due_date: '', balance_paid_date: '', placement_type: '',
+  deposit_date: '', balance_due_date: '', balance_paid_date: '', registration_type: '',
   lead_source: '', referred_by_contact_id: '', status: '', notes: '',
   transport_fee: '', deferred_boarding_amount: '', deferred_boarding_frequency: '',
   deferred_boarding_duration_days: '', end_reason: '', end_note: ''
@@ -60,15 +60,17 @@ async function loadRefs() {
   ctx.littersById = new Map(litters.map((l) => [l.id, l]));
 }
 
-// Prefills price/deposit_amount from the dog's litter (Litter.expected_price_male/
-// _female and expected_deposit_male/_female, both by the dog's sex) — only into
-// fields still empty, so it never clobbers a value already entered (same pattern as
-// the buyer's first_contact_source -> lead_source prefill below).
+// Prefills registration_type from the dog's intended_registration, then
+// price/deposit_amount from the dog's litter (data/saleDefaults.js: by the dog's
+// sex, plus the Full-registration surcharge when the registration is Full) — only
+// into fields still empty, so it never clobbers a value already entered (same
+// pattern as the buyer's first_contact_source -> lead_source prefill below).
 function applyExpectedPricing() {
   const dog = ctx.dogsById.get(ctx.draft.dog_id);
+  if (dog && !ctx.draft.registration_type && dog.intended_registration) ctx.draft.registration_type = dog.intended_registration;
   const litter = dog && dog.litter_id ? ctx.littersById.get(dog.litter_id) : null;
   if (!litter) return;
-  const expected = expectedPricing(dog, litter);
+  const expected = expectedPricing(dog, litter, ctx.draft.registration_type);
   if (!ctx.draft.price && expected.price != null) ctx.draft.price = expected.price;
   if (!ctx.draft.deposit_amount && expected.deposit_amount != null) ctx.draft.deposit_amount = expected.deposit_amount;
 }
@@ -137,7 +139,7 @@ function renderView() {
       ${row('Buyer', editionFlags.contactsSection
         ? `<a href="contact.html?id=${encodeURIComponent(s.buyer_contact_id)}">${esc(contactName(s.buyer_contact_id) || '—')}</a>`
         : esc(contactName(s.buyer_contact_id) || '—'))}
-      ${row('Placement type', badge(PLACEMENT_TYPE, s.placement_type))}
+      ${row('Registration', badge(REGISTRATION_TYPE, s.registration_type))}
       ${row('Status', badge(SALE_STATUS, s.status))}
       ${s.end_reason ? row('Why it ended', esc(descriptor(SALE_END_REASON, s.end_reason).label)) : ''}
       ${s.end_note ? row('About it', esc(s.end_note).replace(/\n/g, '<br>')) : ''}
@@ -187,7 +189,7 @@ function renderEdit() {
     <div class="form-grid" id="sale-form" style="margin-top:14px;">
       ${field('Dog', `<select id="f-dog_id">${dogOptions(s.dog_id)}</select>`, { required: true })}
       ${field('Buyer', `<select id="f-buyer_contact_id">${contactOptions(s.buyer_contact_id)}</select>`, { required: true })}
-      ${field('Placement type', `<select id="f-placement_type">${vocabOptions(PLACEMENT_TYPE, s.placement_type, 'Select…')}</select>`, { required: true })}
+      ${field('Registration', `<select id="f-registration_type">${vocabOptions(REGISTRATION_TYPE, s.registration_type, 'Select…')}</select>`, { required: true, hint: 'Full adds the litter\'s Full-registration surcharge to a prefilled price.' })}
       ${field('Status', `<select id="f-status">${vocabOptions(SALE_STATUS, s.status, 'Select…')}</select>`, { required: true })}
       ${endReasonFields(s)}
       ${field('Price', `<input id="f-price" type="number" min="0" step="0.01" value="${esc(s.price)}">`)}
@@ -238,6 +240,20 @@ function renderEdit() {
     applyExpectedPricing();
     renderEdit();
   });
+  // A registration change moves a price still at its prefilled amount to the
+  // new registration's (the Full surcharge comes or goes); a price she typed stays.
+  document.getElementById('f-registration_type').addEventListener('change', () => {
+    const was = ctx.draft.registration_type;
+    ctx.draft = readForm();
+    const dog = ctx.dogsById.get(ctx.draft.dog_id);
+    const litter = dog && dog.litter_id ? ctx.littersById.get(dog.litter_id) : null;
+    if (litter) {
+      const before = expectedPricing(dog, litter, was).price;
+      const after = expectedPricing(dog, litter, ctx.draft.registration_type).price;
+      if (before != null && Number(ctx.draft.price) === Number(before)) ctx.draft.price = after;
+    }
+    renderEdit();
+  });
   // Prefilling lead_source from the buyer's first_contact_source (only when
   // lead_source is still empty, so it never clobbers a deliberate choice) —
   // Stage4 Revision v2 §3.
@@ -264,7 +280,7 @@ function readForm() {
     ...ctx.draft,
     dog_id: val('f-dog_id') || '',
     buyer_contact_id: val('f-buyer_contact_id') || '',
-    placement_type: val('f-placement_type'),
+    registration_type: val('f-registration_type'),
     status: val('f-status'),
     sale_date: val('f-sale_date'),
     price: val('f-price'),
@@ -586,7 +602,7 @@ async function doSave() {
 
     // Co-own placement convenience (Data Model v3 §5.6): pairs naturally with
     // adding the buyer to the dog's co_owner_contact_ids — never automatic.
-    if (saved.placement_type === 'co_own') {
+    if (saved.registration_type === 'co_own') {
       const dog = await dogRepo.getById(saved.dog_id);
       if (dog && !(dog.co_owner_contact_ids || []).includes(saved.buyer_contact_id)) {
         const ok = await confirmModal({

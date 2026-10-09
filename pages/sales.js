@@ -8,7 +8,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { inScopeOnly } from '../data/kennelScope.js';
-import { PLACEMENT_TYPE, SALE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, descriptor } from '../data/vocab.js';
+import { REGISTRATION_TYPE, SALE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate } from '../assets/ui.js';
 import { editionFlags } from '../data/editionConfig.js';
 
@@ -62,7 +62,7 @@ function saleCard(s, dogsById, contactsById, contractsBySale, linkableContracts)
       <div class="row-between">
         <div>
           <a href="sale.html?id=${encodeURIComponent(s.id)}"><strong>${esc(dog?.call_name || '—')} → ${esc(buyer?.name || '—')}</strong></a>
-          ${badge(PLACEMENT_TYPE, s.placement_type)} ${badge(SALE_STATUS, s.status)}
+          ${badge(REGISTRATION_TYPE, s.registration_type)} ${badge(SALE_STATUS, s.status)}
           <div class="muted" style="font-size:13px; margin-top:2px;">
             ${s.sale_date ? `Sale date ${esc(fmtDate(s.sale_date))}` : '<span class="faint">No sale date</span>'}
           </div>

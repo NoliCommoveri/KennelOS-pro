@@ -134,6 +134,10 @@
     // that carry raw values still read correctly; labelFor() falls back to a
     // prettified value for anything unmapped.
     var STUD_TYPE_LABELS = { in_person: 'In person', ai: 'AI / shipped' };
+    var REGISTRATION_LABELS = {
+      limited: 'Limited', full: 'Full', co_own: 'Co-own', none: 'None (unregistered)'
+    };
+    // Links made before registration replaced placement type carry placementType.
     var PLACEMENT_LABELS = {
       pet: 'Pet', show: 'Show', breeding_rights: 'Breeding rights', co_own: 'Co-own'
     };
@@ -285,6 +289,7 @@
             h += '<div class="pup">';
             h += '<div class="pname">' + esc(sexLabel(p.sex)) + ' ' + (p.callName ? esc(p.callName) : 'Puppy') + (p.markings ? ' <span class="chip">' + esc(p.markings) + '</span>' : '') + '</div>';
             var pm = '';
+            if (money(p.price) && p.registration) pm += row('Registration', esc(labelFor(REGISTRATION_LABELS, p.registration)));
             pm += row('Price', money(p.price) ? esc(money(p.price)) : '');
             pm += row('Deposit', money(p.deposit) ? esc(money(p.deposit)) : '');
             if (pm) { h += pm; anyMoney = true; }
@@ -408,7 +413,9 @@
         }
 
         var facts = '';
-        facts += row('Placement type', p.placementType ? esc(labelFor(PLACEMENT_LABELS, p.placementType)) : '');
+        facts += p.placementType && !p.registrationType
+          ? row('Placement type', esc(labelFor(PLACEMENT_LABELS, p.placementType)))
+          : row('Registration', p.registrationType ? esc(labelFor(REGISTRATION_LABELS, p.registrationType)) : '');
         facts += row('Status', p.saleStatus ? esc(labelFor(SALE_STATUS_LABELS, p.saleStatus)) : '');
         facts += row('Price', money(p.price) ? esc(money(p.price)) : '');
         facts += row('Deposit', money(p.deposit) ? esc(money(p.deposit)) : '');

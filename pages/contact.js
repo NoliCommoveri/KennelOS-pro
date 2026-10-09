@@ -7,7 +7,7 @@ import { dogRepo, ReferenceBlockedError } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { CONTACT_TYPE, DOG_STATUS, WAITLIST_STATUS, SALE_STATUS, PLACEMENT_TYPE, WAITLIST_ENTRY_STATUS } from '../data/vocab.js';
+import { CONTACT_TYPE, DOG_STATUS, WAITLIST_STATUS, SALE_STATUS, REGISTRATION_TYPE, WAITLIST_ENTRY_STATUS } from '../data/vocab.js';
 import { esc, badge, badges, param, confirmModal, promptModal } from '../assets/ui.js';
 
 const els = {
@@ -242,7 +242,7 @@ async function renderSalesSection() {
     ? `<ul class="linked-list" style="margin:14px 0 0; padding:0; list-style:none;">` + sales.map((s) => {
         const dog = dogsById.get(s.dog_id);
         return `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
-          <span>${badge(PLACEMENT_TYPE, s.placement_type)} <strong>${esc(dog ? dog.call_name : '—')}</strong> ${badge(SALE_STATUS, s.status)}${s.sale_date ? ` <span class="faint">${esc(s.sale_date)}</span>` : ''}</span>
+          <span>${badge(REGISTRATION_TYPE, s.registration_type)} <strong>${esc(dog ? dog.call_name : '—')}</strong> ${badge(SALE_STATUS, s.status)}${s.sale_date ? ` <span class="faint">${esc(s.sale_date)}</span>` : ''}</span>
           <a class="btn btn-sm" href="sale.html?id=${encodeURIComponent(s.id)}">Open →</a>
         </li>`;
       }).join('') + `</ul>`

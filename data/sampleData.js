@@ -353,6 +353,7 @@ export async function seedSampleData() {
     puppies_born_total: 3, puppies_born_alive: 3, puppies_born_deceased: 0, puppies_born_abnormalities: 0,
     expected_price_male: 2800, expected_price_female: 3000,
     expected_deposit_male: 500, expected_deposit_female: 500,
+    full_reg_surcharge_male: 1000, full_reg_surcharge_female: 1500,
     status: 'ready'
   });
   // Autumn puppies: one available (feeds the prospective bundle + Active-litters
@@ -522,6 +523,7 @@ export async function seedSampleData() {
     puppies_born_total: 2, puppies_born_alive: 2, puppies_born_deceased: 0, puppies_born_abnormalities: 0,
     expected_price_male: 2600, expected_price_female: 2800,
     expected_deposit_male: 500, expected_deposit_female: 500,
+    full_reg_surcharge_male: 1000, full_reg_surcharge_female: 1500,
     status: 'ready',
     foster_direction: 'foster_in', foster_partner_contact_id: dana.id,
     foster_comp_model: 'income_split', foster_our_share_pct: 60, foster_split_basis: 'gross',
@@ -635,7 +637,7 @@ export async function seedSampleData() {
     kennel_id: thornfield.id,
     dog_id: hazel.id, buyer_contact_id: priya.id, sale_date: '2025-12-20',
     price: 2500, deposit_amount: 500, deposit_date: '2025-11-01', balance_paid_date: '2025-12-20',
-    placement_type: 'pet', status: 'delivered', lead_source: 'Instagram',
+    registration_type: 'limited', status: 'delivered', lead_source: 'Instagram',
     // referred_by (Referral tracking): Tessa referred Priya — auto-tags Tessa as
     // a 'buyer_referrer' (she already carries the role in this seed).
     referred_by_contact_id: tessa.id,
@@ -658,7 +660,7 @@ export async function seedSampleData() {
     kennel_id: thornfield.id,
     dog_id: daisy.id, buyer_contact_id: nora.id, sale_date: '2026-05-20',
     price: 2800, deposit_amount: 600, deposit_date: '2026-04-01',
-    placement_type: 'pet', status: 'deposit_paid', lead_source: 'Website',
+    registration_type: 'limited', status: 'deposit_paid', lead_source: 'Website',
     notes: 'Reserved — pickup scheduled for late May.'
   });
   const daisyContract = await contractRepo.create({
@@ -674,15 +676,15 @@ export async function seedSampleData() {
   // Cedar (Autumn litter) on an OPEN sale to Jamal (Thread C, G2/G9): deposit
   // paid, a future balance-due date, a transport fee, and deferred pickup boarding
   // — so the family companion bundle's computed remaining-balance math is
-  // exercised (price + transport + boarding×units − deposit). A `show` placement
-  // type broadens PLACEMENT_TYPE coverage beyond `pet`.
+  // exercised (price + transport + boarding×units − deposit). A `full`
+  // registration broadens REGISTRATION_TYPE coverage beyond `limited`.
   const cedarSale = await saleRepo.create({
     kennel_id: thornfield.id,
     dog_id: cedarPup.id, buyer_contact_id: jamal.id, sale_date: daysFromToday(-20),
     price: 2800, deposit_amount: 500, deposit_date: daysFromToday(-20), balance_due_date: daysFromToday(21),
     transport_fee: 250,
     deferred_boarding_amount: 25, deferred_boarding_frequency: 'Day', deferred_boarding_duration_days: 10,
-    placement_type: 'show', status: 'deposit_paid', lead_source: 'Referral',
+    registration_type: 'full', status: 'deposit_paid', lead_source: 'Referral',
     notes: 'Reserved from the Autumn litter; buyer delayed pickup, boarding with us until then.'
   });
   manifest.sales.push(cedarSale.id);
@@ -740,7 +742,7 @@ export async function seedSampleData() {
     kennel_id: briarHollow.id,
     dog_id: maple.id, buyer_contact_id: renee.id, sale_date: daysFromToday(-30),
     price: 2200, deposit_amount: 500, deposit_date: daysFromToday(-90), balance_paid_date: daysFromToday(-30),
-    placement_type: 'pet', status: 'delivered', lead_source: 'Website',
+    registration_type: 'limited', status: 'delivered', lead_source: 'Website',
     notes: 'Went home with the Colemans in Woodstock, VT.'
   });
   manifest.dogs.push(cassius.id, opal.id, maple.id);
@@ -819,6 +821,15 @@ export async function seedSampleData() {
       details: { description: 'Eyes open' } },
     { subject_id: wrenPup.id, event_type: 'weight_check', event_date: daysFromToday(-7), title: 'Weight check',
       details: { weight_lbs: 3, weight_oz: 8, time_of_day: 'AM' } },
+    // Weekly weigh-ins for the Autumn litter (born 63 days ago), birth to 7 weeks (Wren
+    // also has the day-56 check above): the Puppy Growth report's curves. Cedar runs
+    // small, so the report flags him.
+    ...[['wren', [6, 12, 20, 28, 36, 44, 50, 53]], ['aster', [7, 13, 21, 30, 38, 46, 54, 60]], ['cedar', [5, 9, 14, 19, 25, 31, 37, 42]]]
+      .flatMap(([who, ounces]) => ounces.map((oz, week) => ({
+        subject_id: { wren: wrenPup.id, aster: asterPup.id, cedar: cedarPup.id }[who], event_type: 'weight_check',
+        event_date: daysFromToday(-63 + week * 7), title: 'Weight check',
+        details: { weight_lbs: Math.floor(oz / 16), weight_oz: oz % 16, time_of_day: 'AM' }
+      }))),
     // Cedar (Autumn, placed) — a SCHEDULED PICKUP placement event next week, with
     // the buyer as related_contact and NO stored Sale link (§D1). Drives Today's
     // "Due outs & upcoming".

@@ -32,7 +32,7 @@ import {
 } from '../data/waitlistForm.js';
 import {
   WAITLIST_ENTRY_STATUS, WAITLIST_PREF_SEX, WAITLIST_LISTEN_MODE, WAITLIST_OFFER_OUTCOME,
-  WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_TYPE, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, descriptor
+  WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, cleanPurposes, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal } from '../assets/ui.js';
@@ -678,8 +678,12 @@ function prefField(key, e, label) {
     case 'pref_breed':
       return `<div class="field"><label>${esc(label || 'Breed')}</label><select id="f-pref_breed">${breedOpts}</select>
         <span class="field-hint">${ctx.breeds.length ? 'Only pups of this breed are offered to them.' : 'No breeds yet: give this kennel\'s dogs a breed, or add preferred breeds on the kennel page.'}${current && known === null ? ' <strong>Their current breed doesn\'t match any of your dogs\' breeds, so no pup will match it. Pick the right one.</strong>' : ''}</span></div>`;
-    case 'pref_placement':
-      return `<div class="field"><label>${esc(label || 'Placement')}</label><select id="f-pref_placement_type">${options(PLACEMENT_TYPE, e.pref_placement_type || '', 'Any')}</select></div>`;
+    case 'pref_purposes': {
+      const picked = cleanPurposes(e.pref_purposes);
+      return `<div class="field field-wide"><label>${esc(label || 'Looking for')}</label>
+        <div>${PLACEMENT_PURPOSE.map((p) => `<label class="check-inline"><input type="checkbox" data-purpose="${esc(p.value)}"${picked.includes(p.value) ? ' checked' : ''}> ${esc(p.label)}</label>`).join(' ')}</div>
+        <span class="field-hint">Only pups whose intended registration fits are offered to them (pet and performance → Limited or None, show → Full, breeding → Full or None, co-own → Co-own). None ticked: any registration.</span></div>`;
+    }
     case 'ready_timing':
       return `<div class="field"><label>${esc(label || READY_TIMING_LABEL)} <span class="req">*</span></label><select id="f-ready_timing">${options(WAITLIST_READY_TIMING, e.ready_timing || '', '— Choose —')}</select>
         <span class="field-hint">Anything but ASAP puts them on hold: no offers (so no passes used) until that many months after their fee is received, or approval if there's no fee (6+ months → 6).</span></div>`;
@@ -752,7 +756,7 @@ function renderEdit() {
     </div>` : `
     <div class="form-grid" style="margin-top:14px;">
       <div class="field field-wide"><h3 style="margin:0;">Preferences</h3></div>
-      ${['pref_sex', 'pref_breed', 'pref_placement', 'pref_colors', 'ready_timing'].map((k) => prefField(k, e, k === 'ready_timing' ? ctx.form.find((q) => q.key === 'ready_timing')?.label : undefined)).join('')}
+      ${['pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing'].map((k) => prefField(k, e, k === 'ready_timing' ? ctx.form.find((q) => q.key === 'ready_timing')?.label : undefined)).join('')}
       ${programField}
 
       ${canListen ? `<div class="field field-wide"><h3 style="margin:8px 0 0;">Which litters</h3></div>
@@ -804,7 +808,7 @@ function readForm() {
   const out = {
     pref_sex: val('f-pref_sex') || 'any',
     pref_breed: val('f-pref_breed').trim(),
-    pref_placement_type: val('f-pref_placement_type') || '',
+    pref_purposes: [...els.body.querySelectorAll('[data-purpose]')].filter((x) => x.checked).map((x) => x.dataset.purpose),
     pref_colors: val('f-pref_colors').split(',').map((s) => s.trim()).filter(Boolean),
     ready_timing: val('f-ready_timing') || null,
     waitlist_program_id: val('f-program') || null,

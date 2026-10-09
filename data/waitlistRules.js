@@ -11,7 +11,7 @@
 //  - Eligibility (§6.2) is computed per litter / per pup at the moment it's needed.
 // The repos store; the pages call these functions to decide what to write.
 import { addDaysToYMD, addMonthsToYMD } from './dateUtils.js';
-import { WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_PREF_SEX, PLACEMENT_TYPE, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
+import { WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, REGISTRATION_TYPE, cleanPurposes, registrationsForPurposes, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
 
 // --- Config (Spec §4.6) -------------------------------------------------------
 
@@ -277,12 +277,12 @@ export function placeHidden(entry, offers = [], litters = [], pups = [], sales =
 // family on its kennel's list, not paused or held, gets `match` when they're
 // eligible now, else `review` when they'd be eligible with All litters and open
 // answers, with `why`: what narrows them ('listen', then the matching answers that
-// rule out some of these pups: 'sex', 'breed', 'placement', 'colors'). Derived,
+// rule out some of these pups: 'sex', 'breed', 'purposes', 'colors'). Derived,
 // nothing stored. → [{ entry, kind: 'match' | 'review', why: [] }]
 export const WHELP_NOTE_FIELDS = Object.freeze([
   { why: 'sex', open: { pref_sex: 'any' } },
   { why: 'breed', open: { pref_breed: '' } },
-  { why: 'placement', open: { pref_placement_type: '' } },
+  { why: 'purposes', open: { pref_purposes: [] } },
   { why: 'colors', open: { pref_colors: [] } }
 ]);
 export function isWhelpNoteLitter(litter) {
@@ -350,7 +350,7 @@ export function prefColorTokens(entry) {
 }
 
 // Does one pup match one family's preferences? Each unset preference matches
-// anything, and so does an unset fact on the pup (a pup with no intended placement
+// anything, and so does an unset fact on the pup (a pup with no intended registration
 // or no breed recorded matches any).
 export function pupMatchesPrefs(entry, dog, config = WAITLIST_CONFIG_DEFAULTS) {
   const sex = entry.pref_sex || 'any';
@@ -360,7 +360,10 @@ export function pupMatchesPrefs(entry, dog, config = WAITLIST_CONFIG_DEFAULTS) {
   // other free-text match in the app.
   if (key(entry.pref_breed) && key(dog.breed) && key(entry.pref_breed) !== key(dog.breed)) return false;
 
-  if (entry.pref_placement_type && dog.intended_placement && entry.pref_placement_type !== dog.intended_placement) return false;
+  // Purposes (vocab PLACEMENT_PURPOSE): the pup's intended registration must be
+  // one the family's purposes fit (pet → Limited/None, show → Full, …).
+  const accepted = registrationsForPurposes(entry.pref_purposes);
+  if (accepted && dog.intended_registration && !accepted.includes(dog.intended_registration)) return false;
 
   // Color decides eligibility only when she's turned it on (Q4). Then any one of
   // the family's colors appearing in the pup's color_markings is a match.
@@ -850,7 +853,7 @@ export function soonFamiliesForKennel(entries, offers, litters, pups, sales, opt
 // (or, for readiness, when). Families can't change these themselves (W2 makes it a
 // request she approves); every change is kept in `pref_change_log` so changing an
 // answer and changing it back is visible to her.
-export const PREF_CHANGE_FIELDS = ['pref_sex', 'pref_breed', 'pref_placement_type', 'pref_colors', 'ready_timing'];
+export const PREF_CHANGE_FIELDS = ['pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing'];
 
 const holdMonths = (v) => WAITLIST_READY_TIMING.find((t) => t.value === v)?.hold_months || 0;
 // One field's value in a comparable form: blank/'any' alike, breed and colors
@@ -858,6 +861,7 @@ const holdMonths = (v) => WAITLIST_READY_TIMING.find((t) => t.value === v)?.hold
 function prefValueKey(field, v) {
   if (field === 'pref_colors') return [...new Set(prefColorTokens({ pref_colors: v }))].sort().join(',');
   if (field === 'pref_sex') return key(v) || 'any';
+  if (field === 'pref_purposes') return cleanPurposes(v).join(',');
   return key(v);
 }
 // The value as stored in the log: colors as a clean array, the rest as a string
@@ -865,19 +869,20 @@ function prefValueKey(field, v) {
 function prefLogValue(field, v) {
   if (field === 'pref_colors') return (Array.isArray(v) ? v : String(v ?? '').split(',')).map((c) => String(c).trim()).filter(Boolean);
   if (field === 'pref_sex') return String(v ?? '').trim() || 'any';
+  if (field === 'pref_purposes') return cleanPurposes(v);
   return String(v ?? '').trim();
 }
 
 // The matching answers in words, for her history, the family-page warning and a
 // family's request on Today (Spec §15.9). Plain text.
 export const PREF_FIELD_LABEL = {
-  pref_sex: 'Sex', pref_breed: 'Breed', pref_placement_type: 'Placement', pref_colors: 'Colors', ready_timing: 'Ready to buy'
+  pref_sex: 'Sex', pref_breed: 'Breed', pref_purposes: 'Looking for', pref_colors: 'Colors', ready_timing: 'Ready to buy'
 };
 export function prefValueText(field, v) {
   switch (field) {
     case 'pref_sex': return descriptor(WAITLIST_PREF_SEX, v || 'any').label;
     case 'pref_breed': return v || 'Any breed';
-    case 'pref_placement_type': return v ? descriptor(PLACEMENT_TYPE, v).label : 'Any';
+    case 'pref_purposes': return cleanPurposes(v).map((p) => descriptor(PLACEMENT_PURPOSE, p).label).join(', ') || 'Any';
     case 'pref_colors': return (Array.isArray(v) ? v : []).join(', ') || 'None';
     case 'ready_timing': return v ? descriptor(WAITLIST_READY_TIMING, v).label : 'Not answered';
     default: return String(v ?? '');
@@ -908,6 +913,12 @@ export function narrowedPrefs(before, after, config = WAITLIST_CONFIG_DEFAULTS) 
     const b = prefValueKey(f, after[f]);
     if (a === b) return false;
     if (f === 'ready_timing') return holdMonths(after[f]) > holdMonths(before[f]);
+    if (f === 'pref_purposes') {
+      // Narrower when some registration they accepted before isn't accepted now.
+      const all = REGISTRATION_TYPE.map((r) => r.value);
+      const now = registrationsForPurposes(after[f]) || all;
+      return (registrationsForPurposes(before[f]) || all).some((r) => !now.includes(r));
+    }
     if (f === 'pref_colors') {
       if (!config.color_matching || !b) return false;
       const now = b.split(',');

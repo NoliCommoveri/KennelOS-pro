@@ -22,7 +22,7 @@ import { incomeLineItems, getSaleFeeCredit } from '../data/incomeView.js';
 import { getMyContactId, getInvoiceDefaults } from '../data/settings.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { waitlistConfig, entryName } from '../data/waitlistRules.js';
-import { PLACEMENT_TYPE, FEE_STRUCTURE, INVOICE_LINE_LABELS, FEE_CREDIT_POLICY, descriptor } from '../data/vocab.js';
+import { REGISTRATION_TYPE, FEE_STRUCTURE, INVOICE_LINE_LABELS, FEE_CREDIT_POLICY, descriptor } from '../data/vocab.js';
 import { fmtMoney } from './ui.js';
 
 // Footnote markers on a SALE invoice: deposit is refundability (*), the rest of
@@ -222,7 +222,7 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
     const policy = record.fee_credit_policy ? descriptor(FEE_CREDIT_POLICY, record.fee_credit_policy).label.toLowerCase() : '';
     re = `Re: Waitlist application fee${ownKennel ? ` for ${ownKennel.kennel_name}` : ''}${policy ? ` (${policy})` : ''}`;
   } else if (isSale) {
-    re = `Re: ${dog?.call_name || 'Puppy'}${dog?.registered_name ? ` (${dog.registered_name})` : ''} — ${descriptor(PLACEMENT_TYPE, record.placement_type).label} placement`;
+    re = `Re: ${dog?.call_name || 'Puppy'}${dog?.registered_name ? ` (${dog.registered_name})` : ''} — ${record.registration_type === 'none' ? 'unregistered' : `${descriptor(REGISTRATION_TYPE, record.registration_type).label} registration`}`;
   } else {
     re = `Re: Stud service — ${dog?.call_name || 'our dog'} × ${recipient?.name || 'partner'}${record.fee_structure ? ` (${descriptor(FEE_STRUCTURE, record.fee_structure).label})` : ''}`;
   }

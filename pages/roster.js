@@ -33,6 +33,12 @@ async function init() {
       { id: 'ownership', label: 'Ownership', options: OWNERSHIP_TYPE, match: (d, v) => d.ownership_type === v },
       { id: 'breed', label: 'Breed', options: breeds.map((b) => ({ value: b, label: b })), match: (d, v) => d.breed === v }
     ],
+    kpis: (rows) => [
+      { label: 'Dogs', value: String(rows.length) },
+      { label: 'Females', value: String(rows.filter((d) => d.sex === 'female').length) },
+      { label: 'Males', value: String(rows.filter((d) => d.sex === 'male').length) },
+      { label: 'Puppies', value: String(rows.filter((d) => d.status === 'puppy').length) }
+    ],
     columns: [
       { header: 'Call name', value: (d) => d.call_name || '' },
       { header: 'Registered name', value: (d) => d.registered_name || '' },

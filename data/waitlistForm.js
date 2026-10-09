@@ -32,7 +32,7 @@ export const CHOICE_TYPES = ['single_choice', 'checkboxes'];
 export const PREFERENCE_FIELDS = {
   pref_sex: 'pref_sex',
   pref_breed: 'pref_breed',
-  pref_placement: 'pref_placement_type',
+  pref_purposes: 'pref_purposes',
   pref_colors: 'pref_colors',
   ready_timing: 'ready_timing'
 };
@@ -49,10 +49,10 @@ export const READY_TIMING_LABEL = 'What is the soonest you are able to commit to
 export const MATCHING_NOTICE = 'The following questions are designed to match you with your perfect pup. Please note that only puppies matching your answers below will be offered. When in doubt, select the wider option.';
 
 // The preference questions that filter offers (waitlistRules.pupMatchesPrefs): sex,
-// breed and placement always; colors only when she has color matching on. Readiness
+// breed and purposes always; colors only when she has color matching on. Readiness
 // is a hold, not a match, so it isn't one of them.
 export function matchingPrefKeys(config) {
-  return ['pref_sex', 'pref_breed', 'pref_placement', ...(config && config.color_matching ? ['pref_colors'] : [])];
+  return ['pref_sex', 'pref_breed', 'pref_purposes', ...(config && config.color_matching ? ['pref_colors'] : [])];
 }
 
 const q = (o) => Object.freeze({ required: false, help: '', options: [], ...o });
@@ -64,7 +64,7 @@ export const DEFAULT_FORM_QUESTIONS = Object.freeze([
   q({ id: 'location', label: 'City / state', type: 'short_text' }),
   q({ id: 'pref_sex', key: 'pref_sex', label: 'Do you prefer a male or a female?', type: 'preference' }),
   q({ id: 'pref_breed', key: 'pref_breed', label: 'Which breed?', type: 'preference' }),
-  q({ id: 'pref_placement', key: 'pref_placement', label: 'Pet, show, or breeding?', type: 'preference' }),
+  q({ id: 'pref_purposes', key: 'pref_purposes', label: 'What are you looking for in a puppy? Choose all that apply.', type: 'preference' }),
   q({ id: 'pref_colors', key: 'pref_colors', label: 'Any color preferences?', type: 'preference' }),
   q({ id: 'ready_timing', key: 'ready_timing', label: READY_TIMING_LABEL, type: 'preference', required: true }),
   q({ id: 'household', label: 'Tell us about your household', type: 'long_text' }),
@@ -76,6 +76,17 @@ export const DEFAULT_FORM_QUESTIONS = Object.freeze([
 ]);
 
 const LOCKED_DEFAULTS = DEFAULT_FORM_QUESTIONS.filter((x) => x.key);
+
+// A form saved before the placement question became the purposes question
+// (pet/show/breeding single choice → a multi-select mapped to registration) still
+// holds the old key; it reads as the new one. Its old default wording is dropped
+// for the new default, since it no longer fits a choose-all answer.
+const LEGACY_KEYS = { pref_placement: { key: 'pref_purposes', oldLabel: 'Pet, show, or breeding?' } };
+function upgradeLegacy(raw) {
+  const legacy = raw && LEGACY_KEYS[raw.key];
+  if (!legacy) return raw;
+  return { ...raw, key: legacy.key, id: legacy.key, label: clean(raw.label) === legacy.oldLabel ? '' : raw.label };
+}
 
 export const isLocked = (question) => Boolean(question && question.key);
 export const isChoice = (question) => CHOICE_TYPES.includes(question.type);
@@ -95,8 +106,9 @@ export function formQuestions(config) {
   const out = [];
   const seenIds = new Set();
   const seenKeys = new Set();
-  for (const raw of stored) {
-    if (!raw || typeof raw !== 'object') continue;
+  for (const stale of stored) {
+    if (!stale || typeof stale !== 'object') continue;
+    const raw = upgradeLegacy(stale);
     const locked = raw.key ? LOCKED_DEFAULTS.find((d) => d.key === raw.key) : null;
     if (raw.key && (!locked || seenKeys.has(raw.key))) continue; // unknown or duplicate lock
     const id = locked ? locked.id : clean(raw.id);
@@ -234,7 +246,7 @@ export const IMPORT_ALIASES = {
   about: ['about', 'about_your_family', 'tell_us_about_your_family', 'anything_else'],
   pref_sex: ['pref_sex', 'sex', 'preferred_sex', 'male_or_female', 'gender', 'gender_preference'],
   pref_breed: ['pref_breed', 'breed', 'preferred_breed'],
-  pref_placement: ['pref_placement', 'pref_placement_type', 'placement', 'placement_type'],
+  pref_purposes: ['pref_purposes', 'purposes', 'purpose', 'looking_for', 'pref_placement', 'pref_placement_type', 'placement', 'placement_type'],
   pref_colors: ['pref_colors', 'colors', 'color', 'preferred_color'],
   ready_timing: ['ready_timing', 'ready', 'readiness', 'ready_to_purchase', 'how_soon', 'soonest', 'when_can_you_commit',
     'what_is_the_soonest_you_are_able_to_commit_to_the_purchase_of_a_puppy,_should_one_become_available?']
