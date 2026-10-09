@@ -31,7 +31,7 @@
 
     .pr-parents { display: flex; gap: 12px; margin-bottom: 8px; }
     .pr-parent {
-      flex: 1 1 0; background: var(--surface); border: 1px solid var(--border);
+      flex: 1 1 0; min-width: 0; background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 8px 12px;
     }
     .pr-parent-role {
@@ -53,7 +53,7 @@
 
     .pr-row { display: flex; gap: 6px; padding: 1px 0; font-size: 14px; }
     .pr-row .pr-k { flex: 0 0 auto; white-space: nowrap; color: var(--text-muted); }
-    .pr-row .pr-v { flex: 1; }
+    .pr-row .pr-v { flex: 1; min-width: 0; overflow-wrap: break-word; }
 
     /* Health History: three columns (owner call, 2026-10-09), on paper too.
        puppy-record.js deals the cards into three independent stacks (each into
@@ -92,11 +92,13 @@
       .pr-keep { break-inside: avoid; }
     }
 
-    /* On a narrow phone, two side-by-side parent cards squeeze each
+    /* On a narrow phone SCREEN, two side-by-side parent cards squeeze each
        .pr-row's nowrap label (e.g. "Registered name") past its shrink
-       limit, pushing the pair wider than the viewport. Stack them instead
-       — same content, one column, no horizontal overflow. */
-    @media (max-width: 640px) {
+       limit, pushing the pair wider than the viewport. Stack them there —
+       same content, one column, no horizontal overflow. Printing keeps Sire
+       and Dam on one line (owner call, 2026-10-09): iOS prints at the phone's
+       width, so this must be screen-only, like the Health History rule below. */
+    @media screen and (max-width: 640px) {
       .pr-parents { flex-direction: column; }
     }
     /* Three across is too tight to read on a phone SCREEN; stack them there.

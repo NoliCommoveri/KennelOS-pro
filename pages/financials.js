@@ -298,7 +298,7 @@ function initExpenses() {
   });
 
   const addBtn = document.getElementById('add-expense');
-  addBtn.style.display = ''; // shown only on the Expenses view (see init)
+  addBtn.hidden = false; // shown only on the Expenses view (starts `hidden` in the HTML)
   addBtn.addEventListener('click', () => openAddExpense(() => view.refresh()));
 }
 
@@ -638,12 +638,6 @@ async function init() {
   maps.littersById = new Map(litters.map((l) => [l.id, l]));
   maps.pairingsById = new Map(pairings.map((p) => [p.id, p]));
   maps.kennelsById = new Map(kennels.map((k) => [k.id, k]));
-
-  // The `+ Add Expense` button belongs only to the Expenses view. `.btn` CSS
-  // sets display, which beats the HTML `hidden` attribute on specificity, so we
-  // force it off here and initExpenses turns it back on.
-  const addBtn = document.getElementById('add-expense');
-  if (addBtn) addBtn.style.display = 'none';
 
   // The Invoice / Receipt generator is available from every Financials view —
   // except in Lite, where invoice/receipt generation is Pro-only (hide the button).
