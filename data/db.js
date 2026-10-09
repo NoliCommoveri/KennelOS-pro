@@ -117,10 +117,20 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    the rules engine never queries by key but the hard-delete guard does.
 //    `kennel_id` on all three is the kennel scope (one list per kennel). Position is
 //    DERIVED (waitlistRules.js), never stored; so are passes (counted from offers).
+//  - `accounts` is the breeder's own business accounts with vendors and
+//    registries (AKC, Good Dog, Chewy…): login details for her (`username`,
+//    `password`, `customer_id` — private tier, never plain cloud) and a
+//    shareable `referral_link`/`referral_code` with `referral_instructions` for
+//    the people she'll give them to. Program-wide (no kennel_id), with no FKs
+//    of its own, so only is_archived is indexed; sorted by name in JS.
+//  - `expenses.account_id` is an optional FK into `accounts` (which account a
+//    cost was paid through — a Chewy order, an AKC fee). Indexed because the
+//    referenceRegistry probe (ACCOUNT_REFERENCES) and the per-account spend on
+//    the Accounts page look it up. `expenses.vendor` stays free text beside it.
 db.version(1).stores({
   dogs:          'id, sire_id, dam_id, litter_id, breeder_kennel_id, owner_contact_id, *co_owner_contact_ids, status, ownership_type, sex, breed, kennel_id, is_archived',
   events:        'id, [subject_type+subject_id], event_type, event_date, reminder_date, related_dog_id, related_contact_id, is_archived',
-  expenses:      'id, event_id, [subject_type+subject_id], category, expense_date, is_archived',
+  expenses:      'id, event_id, [subject_type+subject_id], category, expense_date, account_id, is_archived',
   contacts:      'id, kennel_id, waitlist_status, is_archived',
   kennels:       'id, public_id, is_archived',
   pairings:      'id, kennel_id, sire_id, dam_id, status, pairing_type, is_archived',
@@ -131,6 +141,7 @@ db.version(1).stores({
   documents:     'id, kennel_id, dog_id, doc_type, doc_date, is_archived',
   files:         'id, created_at',
   breed_feeding_schedules: 'id, breed, is_archived',
+  accounts:      'id, is_archived',
   waitlist_entries:  'id, kennel_id, contact_id, status, waitlist_program_id, *listen_sire_ids, *listen_dam_ids, placed_sale_id, is_archived',
   waitlist_offers:   'id, entry_id, litter_id, kennel_id, chosen_dog_id, sale_id, outcome, is_archived',
   waitlist_programs: 'id, kennel_id, is_archived',

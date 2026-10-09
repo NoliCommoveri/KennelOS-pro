@@ -200,7 +200,7 @@ export const SYNC_REGISTRY = Object.freeze({
     private: [
       'subject_type', 'subject_id', 'amount', 'category', 'expense_date', 'event_id',
       'miles', 'mileage_rate', 'vendor', 'receipt_number', 'receipt_file_id',
-      'reimbursable', 'reimbursed_date', 'notes'
+      'reimbursable', 'reimbursed_date', 'notes', 'account_id'
     ],
     pending: []
   },
@@ -209,6 +209,16 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: ALL,
     cloud: ['breed', 'food_brand', 'age_columns', 'weight_rows'],
     private: ['notes'],
+    pending: []
+  },
+
+  // Decided 2026-10-09: the login details are hers alone — private tier (the
+  // encrypted vault and local backup files only, never plain cloud). The
+  // referral link/code/instructions exist to be handed out, so they're cloud.
+  accounts: {
+    rows: ALL,
+    cloud: ['name', 'account_type', 'website', 'referral_link', 'referral_code', 'referral_instructions'],
+    private: ['username', 'password', 'customer_id', 'notes'],
     pending: []
   },
 

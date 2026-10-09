@@ -64,7 +64,13 @@ body {
   color: var(--accent-dark); background: #fff; padding: 2px 6px; border-radius: 999px;
   margin-left: 2px;
 }
-.nav-kennel { font-weight: 500; color: #d7e6de; margin-left: 2px; }
+.nav-brand { min-width: 0; padding: 6px 0; }
+/* "KennelOS [edition]" on top, the kennel name (kennelSetupUI.renderKennelBanner)
+   stacked under it in smaller type — never beside it, where a long name crowded
+   the phone menu button. A very long name wraps rather than overflowing. */
+.nav-brand-text { display: flex; flex-direction: column; min-width: 0; max-width: 210px; line-height: 1.2; }
+.nav-brand-name { display: flex; align-items: center; gap: 8px; }
+.nav-kennel { font-size: 12.5px; font-weight: 500; color: #d7e6de; overflow-wrap: anywhere; }
 .nav-link {
   color: #d7e6de;
   text-decoration: none;
@@ -142,6 +148,10 @@ body {
 @media (max-width: 860px) {
   /* brand + hamburger share row 1; the links (flex-basis:100%) wrap to row 2. */
   .nav-toggle { display: inline-flex; }
+  /* The brand takes the row's spare width (and can wrap its kennel line) so the
+     menu button always keeps its place on the right. */
+  .nav-brand { flex: 1 1 0; margin-right: 8px; }
+  .nav-brand-text { max-width: none; }
   .nav-toggle:hover { background: rgba(255, 255, 255, 0.12); }
   .nav-links {
     display: none;

@@ -91,7 +91,7 @@ export const CONTACT_REFERENCES = [
   { table: 'sales',         field: 'referred_by_contact_id',  label: 'referrer on a sale' },
   { table: 'stud_services', field: 'partner_contact_id',      label: 'partner contact in a stud service' },
   { table: 'stud_services', field: 'referred_by_contact_id',  label: 'referrer on a stud service' },
-  { table: 'events',        field: 'related_contact_id',      label: 'contact on a boarding, placement, or show event' },
+  { table: 'events',        field: 'related_contact_id',      label: 'contact on a boarding, placement, show, vet visit, or surgery event' },
   { table: 'contracts',     field: 'related_contact_id',      label: 'counterparty on a contract' },
   { table: 'litters',       field: 'foster_partner_contact_id', label: 'foster partner on a litter' },
   { table: 'waitlist_entries', field: 'contact_id',             label: 'family on a waitlist' }
@@ -167,6 +167,12 @@ export const EXPENSE_REFERENCES = [];
 // free-text lookup key (matched against Dog.breed), not a stored FK, so there is
 // no reverse reference to guard.
 export const BREED_FEEDING_SCHEDULE_REFERENCES = [];
+
+// --- Account: a business account (AKC, Chewy…) is program-wide and points at
+// nothing; an expense may name the account it was paid through.
+export const ACCOUNT_REFERENCES = [
+  { table: 'expenses', field: 'account_id', label: 'account on an expense' }
+];
 
 // --- Document: a leaf entity — nothing points at a Document. Its own FK
 // (dog_id) points OUTWARD and is guarded on Dog above (DOG_REFERENCES). Its

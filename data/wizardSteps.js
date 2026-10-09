@@ -361,6 +361,31 @@ export const WIZARD_STEPS = [
     body: 'What comes out of the generator: an itemized bill with due dates, a running balance, and the payment methods you accept — ready to download as a PDF or print. Switch the doc type in the generator to produce a receipt the same way, for money already collected.'
   },
 
+  // --- Storage: Documents / Shows / Accounts --------------------------------
+  {
+    id: 'storage-intro', kind: 'hub-intro', hub: 'Storage', button: 'Explore Storage Hub →',
+    title: 'Storage',
+    body: 'Where your kennel’s records live: filed Documents for each dog, your Shows entries and results, and the business Accounts you keep — logins, member numbers and the referral codes you share with families. Switch between them with the toggle at the top.'
+  },
+  {
+    id: 'documents', hub: 'Storage', page: 'documents.html',
+    selector: '#doc-form-modal', beforeShow: { click: '#btn-add-document' },
+    title: 'Documents',
+    body: 'File a dog’s pedigree, registration, health-test results, or other paperwork here — upload a PDF, or take/choose a photo and KennelOS turns it into a compressed PDF automatically. Everything is grouped by dog and stored right on this device.'
+  },
+  {
+    id: 'shows', hub: 'Storage', page: 'shows.html',
+    selector: '#shows-tabs',
+    title: 'Shows',
+    body: 'One entry per dog per show day — upcoming entries with their handler, ring and entry deadline, and past results with judge, award and points. Championship progress builds up on each dog’s Show Record card.'
+  },
+  {
+    id: 'accounts', hub: 'Storage', page: 'accounts.html',
+    selector: '#list',
+    title: 'Accounts',
+    body: 'Your accounts with registries, vendors and services — AKC, Good Dog, Chewy. Keep your username, password and customer number for each, plus the referral link or code you hand to families, with a Copy button on everything. Expenses can name the account they were paid through, and each card totals what you’ve spent there.'
+  },
+
   // --- Sharing: Companion ---------------------------------------------------
   {
     id: 'sharing-intro', kind: 'hub-intro', hub: 'Sharing', button: 'Explore Sharing Hub →',
@@ -374,23 +399,17 @@ export const WIZARD_STEPS = [
     body: 'A place to generate snapshots of the information you want to share, in a format that looks like an app, without putting your business online. Three preconfigured Companion packages suit different audiences: pick the toggle, find the relevant contact, preview it, and send off a link. The recipient sees just what you sent, in a clean, readable format.'
   },
 
-  // --- More: Reports / Documents / Import-Export ---------------------------
+  // --- More: Reports / Import-Export --------------------------------------
   {
     id: 'more-intro', kind: 'hub-intro', hub: 'More', button: 'Explore More Hub →',
-    title: 'Reports, Documents & Backups',
-    body: 'Behind the More menu: analytics Reports, Documents for filing a dog’s paperwork, and Import / Export for backups and spreadsheet import.'
+    title: 'Reports & Backups',
+    body: 'Behind the More menu: analytics Reports, and Import / Export for backups and spreadsheet import.'
   },
   {
     id: 'reports', hub: 'More', page: 'reports.html',
     selector: 'main',
     title: 'Reports',
     body: 'The analytics — reports you can generate from information stored across the app and download as spreadsheets for your physical files.'
-  },
-  {
-    id: 'documents', hub: 'More', page: 'documents.html',
-    selector: '#doc-form-modal', beforeShow: { click: '#btn-add-document' },
-    title: 'Documents',
-    body: 'File a dog’s pedigree, registration, health-test results, or other paperwork here — upload a PDF, or take/choose a photo and KennelOS turns it into a compressed PDF automatically. Everything is grouped by dog and stored right on this device.'
   },
   {
     id: 'import-export', hub: 'More', page: 'import-export.html',

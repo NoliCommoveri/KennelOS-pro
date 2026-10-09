@@ -37,6 +37,8 @@ export const PRO_ONLY_PAGES = [
   'furever.html',
   // Per-breed feeding schedules (sent along in the Furever seed packet)
   'breed-feeding-schedules.html',
+  // Business accounts (vendor logins + referral links/codes)
+  'accounts.html',
   // Documents + file storage
   'documents.html',
   // Invoice / receipt generation (print doc)

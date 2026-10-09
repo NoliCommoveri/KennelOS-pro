@@ -141,15 +141,16 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
   });
 }
 
-// Appends " — <kennel name>" to the nav brand, once looked up. No-op if no
-// kennel has been set up yet.
+// Adds the kennel name as a second line under "KennelOS" in the nav brand, once
+// looked up — stacked rather than beside it, so a long name never crowds the
+// phone menu button. No-op if no kennel has been set up yet.
 export async function renderKennelBanner() {
   const name = await getMyKennelName();
   if (!name) return;
-  const brand = document.querySelector('.nav-brand');
-  if (!brand) return;
+  const text = document.querySelector('.nav-brand .nav-brand-text');
+  if (!text) return;
   const span = document.createElement('span');
   span.className = 'nav-kennel';
-  span.textContent = `— ${name}`;
-  brand.appendChild(span);
+  span.textContent = name;
+  text.appendChild(span);
 }

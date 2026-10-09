@@ -1,0 +1,278 @@
+// accounts.js — the Accounts page (Pro-only): one card per business account
+// (AKC, Good Dog, Chewy…) with her own login details and the referral
+// link/code she shares, each with a Copy button. The password stays masked
+// until "Show". Each card also totals the expenses paid through the account
+// (expenses.account_id) and links to them in Financials. Add/Edit is a modal;
+// archive/delete like any entity — delete is blocked while an expense names the
+// account (ACCOUNT_REFERENCES), so archive it then. Reads/writes only through
+// accountRepo / expenseRepo.
+import { accountRepo } from '../data/accountRepo.js';
+import { expenseRepo } from '../data/expenseRepo.js';
+import { ACCOUNT_TYPE } from '../data/vocab.js';
+import { esc, badge, fmtMoney, confirmModal, alertModal } from '../assets/ui.js';
+
+const els = {
+  msg: document.getElementById('page-msg'),
+  list: document.getElementById('list'),
+  search: document.getElementById('search'),
+  typeFilter: document.getElementById('type-filter'),
+  showArchived: document.getElementById('show-archived'),
+  add: document.getElementById('btn-add')
+};
+
+let accounts = [];
+let spendByAccount = new Map(); // account id -> { total, count } over active expenses
+const revealed = new Set(); // account ids whose password is showing
+
+function showError(msg) { els.msg.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; }
+function clearError() { els.msg.innerHTML = ''; }
+
+// A website typed without a scheme ("chewy.com") still opens as a link.
+function hrefFor(url) {
+  const u = String(url || '').trim();
+  if (!u) return '';
+  return /^[a-z][a-z0-9+.-]*:/i.test(u) ? u : `https://${u}`;
+}
+const isWebLink = (href) => /^https?:/i.test(href);
+
+async function copy(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const was = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = was; }, 1500);
+  } catch {
+    showError('Couldn\'t copy — select the text and copy it by hand.');
+  }
+}
+
+// --- List --------------------------------------------------------------
+
+function matches(a, q) {
+  if (!q) return true;
+  return [a.name, a.website, a.username, a.customer_id, a.referral_code, a.referral_link, a.notes]
+    .some((v) => String(v || '').toLowerCase().includes(q));
+}
+
+function copyRow(label, value, { field, secret = false, id } = {}) {
+  if (!value) return '';
+  const masked = secret && !revealed.has(id);
+  return `<div class="acct-row">
+    <span class="acct-k">${esc(label)}</span>
+    <span class="acct-v${secret ? ' acct-secret' : ''}${masked ? ' acct-masked' : ''}">${esc(masked ? '••••••' : value)}</span>
+    ${secret ? `<button class="btn btn-sm" data-act="reveal" data-id="${esc(id)}">${revealed.has(id) ? 'Hide' : 'Show'}</button>` : ''}
+    <button class="btn btn-sm" data-act="copy" data-id="${esc(id)}" data-field="${esc(field)}">Copy</button>
+  </div>`;
+}
+
+function cardHtml(a) {
+  const site = hrefFor(a.website);
+  const login = [
+    copyRow('Username', a.username, { field: 'username', id: a.id }),
+    copyRow('Password', a.password, { field: 'password', secret: true, id: a.id }),
+    copyRow('Customer ID', a.customer_id, { field: 'customer_id', id: a.id })
+  ].join('');
+  const referral = [
+    copyRow('Link', a.referral_link, { field: 'referral_link', id: a.id }),
+    copyRow('Code', a.referral_code, { field: 'referral_code', id: a.id })
+  ].join('');
+  return `<article class="card acct-card${a.is_archived ? ' row-archived' : ''}">
+    <div class="acct-head">
+      <div>
+        <h2>${esc(a.name)}${a.is_archived ? ' <span class="badge badge-gray">Archived</span>' : ''}</h2>
+        ${site ? (isWebLink(site)
+          ? `<a class="acct-site" href="${esc(site)}" target="_blank" rel="noopener noreferrer">${esc(a.website)}</a>`
+          : `<span class="acct-site muted">${esc(a.website)}</span>`) : ''}
+      </div>
+      ${a.account_type ? badge(ACCOUNT_TYPE, a.account_type) : ''}
+    </div>
+    ${login ? `<div class="acct-section"><div class="acct-section-title">Your login</div>${login}</div>` : ''}
+    ${referral || a.referral_instructions ? `<div class="acct-section"><div class="acct-section-title">Referral — to share</div>${referral}
+      ${a.referral_instructions ? `<div class="acct-instructions">${esc(a.referral_instructions)}</div>` : ''}</div>` : ''}
+    ${a.notes ? `<div class="acct-section"><div class="acct-instructions">${esc(a.notes)}</div></div>` : ''}
+    ${spendHtml(a)}
+    <div class="pill-row acct-actions">
+      <button class="btn btn-sm" data-act="edit" data-id="${esc(a.id)}">Edit</button>
+      <button class="btn btn-sm" data-act="${a.is_archived ? 'unarchive' : 'archive'}" data-id="${esc(a.id)}">${a.is_archived ? 'Unarchive' : 'Archive'}</button>
+      <button class="btn btn-danger btn-sm" data-act="delete" data-id="${esc(a.id)}">Delete</button>
+    </div>
+  </article>`;
+}
+
+function spendHtml(a) {
+  const s = spendByAccount.get(a.id);
+  if (!s) return '';
+  return `<div class="acct-section acct-row">
+    <span class="acct-v"><strong>${esc(fmtMoney(s.total))}</strong> <span class="muted">spent · ${s.count} expense${s.count === 1 ? '' : 's'}</span></span>
+    <a class="btn btn-sm" href="financials.html?view=expenses&account=${encodeURIComponent(a.id)}">View expenses →</a>
+  </div>`;
+}
+
+function render() {
+  const q = els.search.value.trim().toLowerCase();
+  const type = els.typeFilter.value;
+  const visible = accounts.filter((a) => (els.showArchived.checked || !a.is_archived)
+    && (!type || a.account_type === type) && matches(a, q));
+  if (!accounts.length) {
+    els.list.innerHTML = `<div class="card empty-state">No accounts yet. Add the registries, vendors and services you use — AKC, Good Dog, Chewy — to keep your logins and referral codes in one place.</div>`;
+    return;
+  }
+  els.list.innerHTML = visible.length
+    ? `<div class="acct-grid">${visible.map(cardHtml).join('')}</div>`
+    : `<div class="card empty-state">No accounts match.</div>`;
+}
+
+async function load() {
+  const [rows, expenses] = await Promise.all([
+    accountRepo.getAll({ includeArchived: true }),
+    expenseRepo.getAll()
+  ]);
+  accounts = rows;
+  spendByAccount = new Map();
+  for (const x of expenses) {
+    if (!x.account_id) continue;
+    const s = spendByAccount.get(x.account_id) || { total: 0, count: 0 };
+    s.total += Number(x.amount) || 0;
+    s.count += 1;
+    spendByAccount.set(x.account_id, s);
+  }
+  render();
+}
+
+els.list.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  const a = accounts.find((x) => x.id === btn.dataset.id);
+  if (!a) return;
+  clearError();
+  try {
+    switch (btn.dataset.act) {
+      case 'copy': await copy(a[btn.dataset.field] || '', btn); return;
+      case 'reveal':
+        if (revealed.has(a.id)) revealed.delete(a.id); else revealed.add(a.id);
+        render();
+        return;
+      case 'edit': openForm(a); return;
+      case 'archive': await accountRepo.archive(a.id); break;
+      case 'unarchive': await accountRepo.unarchive(a.id); break;
+      case 'delete': {
+        const blockers = await accountRepo.getDeleteBlockers(a.id);
+        if (blockers.length) {
+          await alertModal({
+            title: `${a.name} can't be deleted`,
+            message: `It's still in use (${blockers.map((b) => `${b.label} × ${b.count}`).join(', ')}). Archive it instead — it keeps the expense history and drops out of the expense form's list.`
+          });
+          return;
+        }
+        const ok = await confirmModal({
+          title: `Delete ${a.name}?`,
+          message: 'This removes the account and everything saved on it. Archive it instead to keep it out of the way.',
+          confirmLabel: 'Delete', danger: true
+        });
+        if (!ok) return;
+        await accountRepo.hardDelete(a.id);
+        break;
+      }
+      default: return;
+    }
+    await load();
+  } catch (err) {
+    showError(err.message || String(err));
+  }
+});
+
+// --- Add / edit modal ---------------------------------------------------
+
+function field(label, inner, { wide = false, hint = '', required = false } = {}) {
+  return `<div class="field${wide ? ' field-wide' : ''}"><label>${esc(label)}${required ? ' <span class="req">*</span>' : ''}</label>${inner}${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</div>`;
+}
+
+function openForm(existing = null) {
+  const a = existing || {};
+  const typeOptions = `<option value="">— none —</option>` + ACCOUNT_TYPE
+    .map((t) => `<option value="${esc(t.value)}"${t.value === a.account_type ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+    <h2 style="margin-top:0;">${existing ? 'Edit account' : 'New account'}</h2>
+    <div class="form-grid">
+      ${field('Name', `<input id="af-name" type="text" value="${esc(a.name)}" placeholder="e.g. Chewy">`, { required: true })}
+      ${field('Type', `<select id="af-type">${typeOptions}</select>`)}
+      ${field('Website', `<input id="af-website" type="text" value="${esc(a.website)}" placeholder="e.g. chewy.com">`, { wide: true })}
+    </div>
+    <h3 style="font-size:15px; margin:14px 0 4px;">Your login</h3>
+    <p class="field-hint" style="margin-top:0;">Just for you. These never go to cloud backup unencrypted — only inside your private vault, if you've turned it on.</p>
+    <div class="form-grid">
+      ${field('Username / login email', `<input id="af-username" type="text" autocomplete="off" value="${esc(a.username)}">`)}
+      ${field('Password', `<div style="display:flex; gap:6px;"><input id="af-password" type="password" autocomplete="new-password" value="${esc(a.password)}" style="flex:1;"><button type="button" class="btn btn-sm" id="af-pw-toggle">Show</button></div>`)}
+      ${field('Customer / member ID', `<input id="af-customer" type="text" value="${esc(a.customer_id)}">`)}
+    </div>
+    <h3 style="font-size:15px; margin:14px 0 4px;">Referral — to share</h3>
+    <div class="form-grid">
+      ${field('Referral link', `<input id="af-ref-link" type="text" value="${esc(a.referral_link)}" placeholder="https://…">`, { wide: true })}
+      ${field('Referral code', `<input id="af-ref-code" type="text" value="${esc(a.referral_code)}">`)}
+      ${field('Instructions for whoever uses it', `<textarea id="af-ref-instructions" placeholder="e.g. Use code at checkout for 30% off your first Autoship order.">${esc(a.referral_instructions)}</textarea>`, { wide: true, hint: 'Written for the families you\'ll share this with.' })}
+    </div>
+    <div class="form-grid" style="margin-top:14px;">
+      ${field('Notes', `<textarea id="af-notes">${esc(a.notes)}</textarea>`, { wide: true, hint: 'Private — just for you.' })}
+    </div>
+    <div id="af-error"></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" id="af-save">Save</button>
+      <button class="btn" id="af-cancel">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const $ = (sel) => overlay.querySelector(sel);
+  function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  $('#af-cancel').addEventListener('click', close);
+  $('#af-pw-toggle').addEventListener('click', (e) => {
+    const pw = $('#af-password');
+    pw.type = pw.type === 'password' ? 'text' : 'password';
+    e.currentTarget.textContent = pw.type === 'password' ? 'Show' : 'Hide';
+  });
+  $('#af-save').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
+    const val = (sel) => $(sel).value.trim();
+    const data = {
+      name: val('#af-name'),
+      account_type: $('#af-type').value || null,
+      website: val('#af-website'),
+      username: val('#af-username'),
+      password: $('#af-password').value, // kept exactly as typed — spaces can be part of a password
+      customer_id: val('#af-customer'),
+      referral_link: val('#af-ref-link'),
+      referral_code: val('#af-ref-code'),
+      referral_instructions: $('#af-ref-instructions').value.trim(),
+      notes: $('#af-notes').value.trim()
+    };
+    if (!data.name) {
+      $('#af-error').innerHTML = `<div class="inline-error">Name is required.</div>`;
+      return;
+    }
+    btn.disabled = true;
+    try {
+      if (existing) await accountRepo.update(existing.id, data);
+      else await accountRepo.create(data);
+      close();
+      await load();
+    } catch (err) {
+      $('#af-error').innerHTML = `<div class="inline-error">${esc(err.message || String(err))}</div>`;
+      btn.disabled = false;
+    }
+  });
+  $('#af-name').focus();
+}
+
+els.add.addEventListener('click', () => openForm());
+els.search.addEventListener('input', render);
+els.typeFilter.addEventListener('change', render);
+els.showArchived.addEventListener('change', render);
+els.typeFilter.innerHTML = `<option value="">All types</option>` + ACCOUNT_TYPE
+  .map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('');
+
+load().catch((err) => showError(err.message || String(err)));

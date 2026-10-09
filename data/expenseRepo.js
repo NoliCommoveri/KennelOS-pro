@@ -103,7 +103,11 @@ function normalize(data) {
     // receivable (litterFinances.js). "Reimbursable to whom" is derived from the
     // litter's foster partner, so no per-expense contact FK is stored here.
     reimbursable: !!data.reimbursable || !!(data.reimbursed_date),
-    reimbursed_date: data.reimbursed_date || null
+    reimbursed_date: data.reimbursed_date || null,
+    // The business account the cost was paid through (accounts table — Chewy,
+    // AKC…), optional. Indexed FK, guarded by ACCOUNT_REFERENCES; picked on the
+    // expense forms (Pro, editionFlags.accounts). `vendor` stays free text.
+    account_id: data.account_id || null
   };
 }
 
@@ -144,6 +148,13 @@ export const expenseRepo = {
   // expenses.event_id link. Normally 0 or 1; returns an array either way.
   async getByEvent(eventId, { includeArchived = false } = {}) {
     const rows = await db.expenses.where('event_id').equals(eventId).toArray();
+    return includeArchived ? rows : rows.filter((r) => !r.is_archived);
+  },
+
+  // Every expense paid through one account — the reverse of expenses.account_id
+  // (the Accounts page's per-account spend).
+  async getByAccount(accountId, { includeArchived = false } = {}) {
+    const rows = await db.expenses.where('account_id').equals(accountId).toArray();
     return includeArchived ? rows : rows.filter((r) => !r.is_archived);
   },
 

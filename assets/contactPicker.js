@@ -23,7 +23,9 @@ import { editionFlags } from '../data/editionConfig.js';
 // fires after the new option is appended+selected and a native `change`
 // event has been dispatched on the select, so existing change listeners
 // (e.g. sale.js's lead-source prefill) run the same as a manual pick.
-export function attachNewContactButton(selectEl, { onCreated } = {}) {
+// `defaultType` preselects the contact type (eventForm: 'vet' for a vet visit);
+// `defaultName` prefills the name (a vet's name typed before the picker existed).
+export function attachNewContactButton(selectEl, { onCreated, defaultType = '', defaultName = '' } = {}) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'btn btn-sm';
@@ -32,7 +34,7 @@ export function attachNewContactButton(selectEl, { onCreated } = {}) {
   selectEl.insertAdjacentElement('afterend', btn);
 
   btn.addEventListener('click', () => {
-    openNewContactModal(async (contact) => {
+    openNewContactModal({ defaultType, defaultName }, async (contact) => {
       // Run onCreated (typically: register the contact in the page's own
       // ctx.allContacts/contactsById) BEFORE dispatching `change` — a
       // listener that re-renders the select from that same source list needs
@@ -50,18 +52,21 @@ export function attachNewContactButton(selectEl, { onCreated } = {}) {
   return btn;
 }
 
-function openNewContactModal(onCreate) {
+function openNewContactModal({ defaultType, defaultName }, onCreate) {
+  // Lite has no Contacts section, so it offers only Buyer — plus the type the
+  // caller asked for (a vet picked from an event).
+  const types = editionFlags.contactsSection ? CONTACT_TYPE : CONTACT_TYPE.filter((t) => t.value === 'buyer' || t.value === defaultType);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
     <h2 style="margin-top:0;">New contact</h2>
     <div class="form-grid">
       <div class="field"><label>Name <span class="req">*</span></label>
-        <input id="ncp-name" type="text"></div>
+        <input id="ncp-name" type="text" value="${esc(defaultName)}"></div>
       <div class="field"><label>Contact type</label>
         <select id="ncp-type">
           <option value="">— none —</option>
-          ${(editionFlags.contactsSection ? CONTACT_TYPE : CONTACT_TYPE.filter((t) => t.value === 'buyer')).map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}
+          ${types.map((t) => `<option value="${esc(t.value)}"${t.value === defaultType ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}
         </select></div>
     </div>
     <div id="ncp-error"></div>

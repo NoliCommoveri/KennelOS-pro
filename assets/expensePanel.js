@@ -6,6 +6,8 @@
 // convenience "Cost" field on the event form.
 import { expenseRepo, mileageAmount } from '../data/expenseRepo.js';
 import { fileRepo } from '../data/fileRepo.js';
+import { accountRepo } from '../data/accountRepo.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { EXPENSE_CATEGORIES } from '../data/vocab.js';
 import { getMileageDefaults, setMileageDefaults } from '../data/settings.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, confirmModal } from './ui.js';
@@ -93,6 +95,40 @@ const CATEGORY_OPTIONS = EXPENSE_CATEGORIES.map((c) => `<option value="${esc(c.v
 // (kennel expenses have no event subject, so they don't).
 const EVENTABLE = new Set(['dog', 'litter', 'pairing']);
 
+// Account picker (editionFlags.accounts — Pro): which business account a cost was
+// paid through (expenses.account_id). Shared by this panel's modal and the
+// Financials hub's add-expense modal, like the mileage fragments above. Lite
+// gets no field at all, and an absent field leaves a stored account_id alone.
+export async function loadAccountChoices() {
+  if (!editionFlags.accounts) return null;
+  return accountRepo.getAll({ includeArchived: true });
+}
+
+// Markup for the picker (empty when `accounts` is null). Archived accounts are
+// left out unless one is the expense's current account.
+export function buildAccountField(p, accounts, currentId) {
+  if (!accounts) return '';
+  const opts = accounts
+    .filter((a) => !a.is_archived || a.id === currentId)
+    .map((a) => `<option value="${esc(a.id)}"${a.id === currentId ? ' selected' : ''}>${esc(a.name)}${a.is_archived ? ' (archived)' : ''}</option>`)
+    .join('');
+  return `<div class="field"><label>Account</label>
+    <select id="${p}-account"><option value="">— none —</option>${opts}</select>
+    <span class="field-hint">${accounts.length ? 'Which of your accounts this was paid through.' : 'Add your vendor accounts under Storage → Accounts.'}</span></div>`;
+}
+
+// Picking an account fills an empty Vendor with its name. Returns the payload
+// bits for save(): { account_id } when the field exists, {} when it doesn't.
+export function wireAccountField(modal, p, accounts) {
+  const sel = modal.querySelector(`#${p}-account`);
+  const vendorEl = modal.querySelector(`#${p}-vendor`);
+  sel?.addEventListener('change', () => {
+    const a = accounts?.find((x) => x.id === sel.value);
+    if (a && vendorEl && !vendorEl.value.trim()) vendorEl.value = a.name;
+  });
+  return () => (sel ? { account_id: sel.value || null } : {});
+}
+
 // A small modal for creating/editing one expense. Resolves via onSaved. The
 // subject is fixed by the panel's context and never editable here.
 async function openExpenseForm({ subjectType, subjectId, expense = null, onSaved }) {
@@ -102,6 +138,7 @@ async function openExpenseForm({ subjectType, subjectId, expense = null, onSaved
     const row = await fileRepo.get(expense.receipt_file_id);
     if (row) { const { blob, ...meta } = row; currentFile = meta; }
   }
+  const accounts = await loadAccountChoices();
   const draft = {
     amount: expense?.amount ?? '',
     miles: expense?.miles ?? null,
@@ -131,6 +168,7 @@ async function openExpenseForm({ subjectType, subjectId, expense = null, onSaved
           <input id="xf-date" type="date" value="${esc(draft.expense_date)}"></div>
         <div class="field"><label>Vendor</label>
           <input id="xf-vendor" type="text" value="${esc(draft.vendor)}" placeholder="Who was paid"></div>
+        ${buildAccountField('xf', accounts, expense?.account_id || '')}
         <div class="field"><label>Receipt #</label>
           <input id="xf-receipt" type="text" value="${esc(draft.receipt_number)}" placeholder="Optional — auto-filled from a scanned receipt when found"></div>
         <div class="field"><label>Reimbursable</label>
@@ -153,6 +191,7 @@ async function openExpenseForm({ subjectType, subjectId, expense = null, onSaved
   categorySel.value = draft.category;
   const mileage = wireMileageMode(modal, 'xf', categorySel);
   const receipt = wireReceiptField(modal, 'xf', { currentFile });
+  const accountBits = wireAccountField(modal, 'xf', accounts);
 
   // Reimbursable toggle reveals the "Reimbursed on" date (the repo also coerces
   // reimbursable=true whenever a reimbursed date is present, so the two agree).
@@ -180,6 +219,7 @@ async function openExpenseForm({ subjectType, subjectId, expense = null, onSaved
         reimbursed_date: reimbursableEl.checked ? (modal.querySelector('#xf-reimbursed').value || null) : null,
         notes: modal.querySelector('#xf-notes').value,
         receipt_file_id,
+        ...accountBits(),
         ...mileage.payloadBits()
       };
       const saved = isEdit
@@ -226,7 +266,15 @@ export function renderExpensePanel(opts) {
   const totalEl = mount.querySelector('#xp-total');
 
   async function refresh() {
-    const all = await expenseRepo.getForSubject(subjectType, subjectId, { includeArchived: true });
+    const [all, accounts] = await Promise.all([
+      expenseRepo.getForSubject(subjectType, subjectId, { includeArchived: true }),
+      loadAccountChoices()
+    ]);
+    // The account's name only adds anything when it isn't already the vendor.
+    const accountMeta = (x) => {
+      const name = x.account_id && accounts?.find((a) => a.id === x.account_id)?.name;
+      return name && name.toLowerCase() !== String(x.vendor || '').trim().toLowerCase() ? `Account: ${esc(name)}` : '';
+    };
     const active = all.filter((x) => !x.is_archived);
     totalEl.textContent = active.length ? `Total ${fmtMoney(expenseRepo.total(active))}` : 'No costs';
     const visible = showArchived ? all : active;
@@ -239,7 +287,7 @@ export function renderExpensePanel(opts) {
       const mileageMeta = x.miles != null
         ? `${esc(x.miles)} mi × ${esc(fmtMoney(x.mileage_rate ?? 0))}/mi` : '';
       const receiptMeta = x.receipt_number ? `Receipt ${esc(x.receipt_number)}` : '';
-      const meta = [mileageMeta, x.vendor ? esc(x.vendor) : '', receiptMeta, x.notes ? esc(x.notes) : ''].filter(Boolean).join(' — ');
+      const meta = [mileageMeta, x.vendor ? esc(x.vendor) : '', accountMeta(x), receiptMeta, x.notes ? esc(x.notes) : ''].filter(Boolean).join(' — ');
       const eventTag = x.event_id ? ' <span class="badge badge-gray" title="Captured from an event">🔗 event</span>' : '';
       const reimbursableTag = x.reimbursable
         ? (x.reimbursed_date

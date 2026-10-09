@@ -115,6 +115,18 @@ export const LITTER_STATUS = [
   { value: 'closed',   label: 'Closed',   badge: 'badge-gray' }
 ];
 
+// Account (accounts table) — what kind of business account it is. Badge + filter
+// only; nothing branches on it.
+export const ACCOUNT_TYPE = [
+  { value: 'registry',    label: 'Registry / club',     badge: 'badge-purple' },
+  { value: 'marketplace', label: 'Puppy marketplace',   badge: 'badge-green' },
+  { value: 'supplier',    label: 'Supplier / store',    badge: 'badge-blue' },
+  { value: 'health',      label: 'Health / testing lab', badge: 'badge-red' },
+  { value: 'insurance',   label: 'Insurance',           badge: 'badge-amber' },
+  { value: 'software',    label: 'Software / service',  badge: 'badge-neutral' },
+  { value: 'other',       label: 'Other',               badge: 'badge-gray' }
+];
+
 export const CONTACT_TYPE = [
   { value: 'breeder',        label: 'Breeder',        badge: 'badge-green' },
   { value: 'vet',            label: 'Vet',            badge: 'badge-blue' },
@@ -509,7 +521,14 @@ export const AKC_SHOW_AWARDS = [
 // FK belongs at the top level).
 //
 // `relatedContact` may also be a STRING, used as the picker's label (`show`
-// labels it "Handler"); `true` keeps the generic "Related contact" label.
+// labels it "Handler", `vet_visit`/`surgery` "Vet"); `true` keeps the generic
+// "Related contact" label.
+//
+// A field with `contactFallback: true` holds the related contact's plain-text
+// NAME for surfaces with no contact picker (KennelAssistant's log form) and for
+// events logged before the type had one. The main event form hides it, offers
+// a name-matched contact instead, and drops it once a contact is linked; display
+// code shows it only when no contact is linked.
 //
 // `editionFlag` (optional): the type exists only when `editionFlags[editionFlag]`
 // is on — enabledEventTypes()/eventTypesFor() drop it otherwise, so every type
@@ -555,10 +574,15 @@ export const EVENT_TYPES = [
   // end (retired out of details.end_date — there's no shipped data to migrate).
   { value: 'medication',         label: 'Medication',         badge: 'badge-blue',    subjects: ['dog'], duration: 'span',
     fields: [{ key: 'drug', label: 'Drug', type: 'text' }, { key: 'dose', label: 'Dose', type: 'text' }, { key: 'frequency', label: 'Frequency', type: 'text' }] },
-  { value: 'surgery',            label: 'Surgery',            badge: 'badge-red',     subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'procedure', label: 'Procedure', type: 'text' }, { key: 'vet', label: 'Vet', type: 'text' }, { key: 'outcome', label: 'Outcome', type: 'textarea' }] },
-  { value: 'vet_visit',          label: 'Vet visit',          badge: 'badge-blue',    subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'reason', label: 'Reason', type: 'text' }, { key: 'vet', label: 'Vet', type: 'text' }, { key: 'findings', label: 'Findings', type: 'textarea' }] },
+  // Surgery / vet visit: the vet is the top-level related_contact_id (a Contact,
+  // tagged 'vet' on save), picked or created inline like a sale's buyer. The
+  // `vet` details key is its `contactFallback` — the plain-text name, kept for
+  // events logged where no picker exists (KennelAssistant) or before the link
+  // existed; the main form hides it and clears it once a contact is linked.
+  { value: 'surgery',            label: 'Surgery',            badge: 'badge-red',     subjects: ['dog'], duration: 'instant', relatedContact: 'Vet',
+    fields: [{ key: 'procedure', label: 'Procedure', type: 'text' }, { key: 'vet', label: 'Vet', type: 'text', contactFallback: true }, { key: 'outcome', label: 'Outcome', type: 'textarea' }] },
+  { value: 'vet_visit',          label: 'Vet visit',          badge: 'badge-blue',    subjects: ['dog'], duration: 'instant', relatedContact: 'Vet',
+    fields: [{ key: 'reason', label: 'Reason', type: 'text' }, { key: 'vet', label: 'Vet', type: 'text', contactFallback: true }, { key: 'findings', label: 'Findings', type: 'textarea' }] },
   { value: 'injury',             label: 'Injury',             badge: 'badge-red',     subjects: ['dog'], duration: 'instant',
     fields: [{ key: 'description', label: 'Description', type: 'textarea' }, { key: 'severity', label: 'Severity', type: 'text' }] },
   { value: 'abnormalities',      label: 'Abnormalities',      badge: 'badge-red',     subjects: ['dog'], duration: 'instant',

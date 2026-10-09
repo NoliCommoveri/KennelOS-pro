@@ -41,7 +41,8 @@ const HUB_CHILDREN = {
   'pages/breeding.html': ['pairings.html', 'pairing.html', 'litters.html', 'litter.html', 'active-breeding.html', 'live-births.html'],
   'pages/contacts.html': ['contact.html', 'kennels.html', 'kennel.html', 'waitlist.html', 'waitlist-entry.html', 'waitlist-programs.html', 'waitlist-import.html', 'waitlist-form.html', 'waitlist-publish.html'],
   'pages/sales.html': ['sale.html', 'stud-services.html', 'stud-service.html', 'contracts.html', 'contract.html'],
-  'pages/companion.html': ['furever.html', 'assistant.html']
+  'pages/companion.html': ['furever.html', 'assistant.html'],
+  'pages/documents.html': ['shows.html', 'accounts.html']
 };
 
 function isActive(item, here) {
@@ -73,7 +74,7 @@ export function renderNav(targetId = 'app-nav') {
 
   host.innerHTML = `
     <nav class="nav-inner">
-      <a class="nav-brand" href="${prefix}index.html"><span class="paw">🐾</span> KennelOS${editionTag}</a>
+      <a class="nav-brand" href="${prefix}index.html"><span class="paw">🐾</span><span class="nav-brand-text"><span class="nav-brand-name">KennelOS${editionTag}</span></span></a>
       <button type="button" class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
       <div class="nav-links">
         ${links}

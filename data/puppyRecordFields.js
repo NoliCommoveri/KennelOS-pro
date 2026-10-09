@@ -44,7 +44,11 @@ export const PUPPY_RECORD_FIELD_GROUPS = [
   ] },
   { key: 'health', label: 'Health History', fields: [
     ...PUPPY_RECORD_HEALTH_TYPES.map((type) => ({ key: healthKey(type), label: descriptor(EVENT_TYPES, type).label })),
-    { key: 'healthNotes', label: 'Notes on each entry' }
+    { key: 'healthNotes', label: 'Notes on each entry' },
+    // The vet on each Vet visit / Surgery entry (its related_contact_id).
+    { key: 'vetName', label: 'Vet name on vet visits & surgeries' },
+    { key: 'vetPhone', label: 'Vet phone on vet visits & surgeries' },
+    { key: 'vetAddress', label: 'Vet address on vet visits & surgeries' }
   ] },
   { key: 'buyer', label: 'Buyer', fields: [
     { key: 'buyerName', label: 'Name' },

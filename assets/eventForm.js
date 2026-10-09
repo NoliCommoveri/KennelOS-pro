@@ -6,7 +6,10 @@
 // medication) also shows the plain `event_end_date` field, and a
 // `relatedContact: true` type (boarding, placement) shows a top-level Contact
 // picker — the canonical events.related_contact_id FK, never a `details` field.
-// A string `relatedContact` (show: 'Handler') is the picker's label.
+// A string `relatedContact` (show: 'Handler', vet_visit/surgery: 'Vet') is the
+// picker's label. A `contactFallback` detail field (the vet's plain-text name)
+// is hidden here: the picker replaces it, a matching contact is preselected, and
+// it's dropped on save once a contact is linked (vocab.js EVENT_TYPES).
 //
 // Generic descriptor extensions (Show Tracking Spec §2.4) — none is show-specific
 // in the code: select/combobox options may be { value, label } vocab objects;
@@ -17,7 +20,7 @@ import { HistoryEvent } from '../data/eventRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { eventTypesFor, descriptor, EVENT_TYPES, EXPENSE_CATEGORIES, defaultExpenseCategoryFor, TITLE_TRACKS } from '../data/vocab.js';
+import { eventTypesFor, descriptor, EVENT_TYPES, EXPENSE_CATEGORIES, defaultExpenseCategoryFor, TITLE_TRACKS, CONTACT_TYPE } from '../data/vocab.js';
 import { esc, todayYMD, param, confirmModal } from './ui.js';
 import { attachNewContactButton } from './contactPicker.js';
 
@@ -32,8 +35,14 @@ const LOGGED_VALUE_FIELDS = { show: ['club', 'judge'] };
 
 // The contact role a type's related contact is tagged with on save (Show
 // Tracking Spec §2.2): picking someone as a show's handler makes them a
-// Handler. contactRepo.ensureType is a no-op when the role is already there.
-const RELATED_CONTACT_ROLE = { show: 'handler' };
+// Handler, and a vet visit's or surgery's vet a Vet. contactRepo.ensureType is a
+// no-op when the role is already there. The picker lists contacts that already
+// carry the role first, and its "＋ New" contact defaults to it.
+const RELATED_CONTACT_ROLE = { show: 'handler', vet_visit: 'vet', surgery: 'vet' };
+
+// The type's `contactFallback` details key (the related contact's plain-text
+// name), or null.
+const fallbackKey = (typeDef) => (typeDef.relatedContact && typeDef.fields.find((f) => f.contactFallback)?.key) || null;
 
 // A select/combobox option is a plain string or a { value, label } vocab object.
 const optValue = (o) => (o && typeof o === 'object' ? o.value : o);
@@ -182,6 +191,19 @@ export async function openEventForm(opts) {
     perTargetDetails: {}
   };
 
+  // A vet typed as plain text (KennelAssistant, or logged before the picker)
+  // preselects the contact of that name, so saving links it. No match leaves
+  // the text in place and the picker empty — never auto-creates a contact.
+  {
+    const fb = fallbackKey(descriptor(EVENT_TYPES, draft.event_type));
+    const name = fb ? String(draft.details[fb] || '').trim().toLowerCase() : '';
+    if (name && !draft.related_contact_id) {
+      const matches = contacts.filter((c) => (c.name || '').trim().toLowerCase() === name);
+      const hit = matches.find((c) => !c.is_archived) || matches[0];
+      if (hit) draft.related_contact_id = hit.id;
+    }
+  }
+
   // Field defaults (e.g. a show's entry_status 'planned') seed a NEW event only,
   // and only where the draft has no value — a prefill always wins.
   function applyFieldDefaults() {
@@ -240,6 +262,8 @@ export async function openEventForm(opts) {
 
   function detailFieldsHtml(typeDef) {
     const perTargetKeys = isCascade ? (PER_TARGET_CASCADE_FIELDS[typeDef.value] || []) : [];
+    const fb = fallbackKey(typeDef);
+    if (fb) typeDef = { ...typeDef, fields: typeDef.fields.filter((f) => f.key !== fb) };
     if (!typeDef.fields.length) return '<p class="faint" style="margin:0;">No extra fields for this type — use the title and notes.</p>';
     if (!perTargetKeys.length) {
       return `<div class="form-grid">` + typeDef.fields.map((f) => renderField(typeDef, f)).join('') + `</div>`;
@@ -256,11 +280,33 @@ export async function openEventForm(opts) {
     return sharedHtml + perTargetHtml;
   }
 
-  function contactOptions(current) {
-    const opts = contacts
-      .map((c) => `<option value="${esc(c.id)}"${c.id === current ? ' selected' : ''}>${esc(c.name)}${c.is_archived ? ' (archived)' : ''}</option>`)
-      .join('');
-    return `<option value="">— none —</option>` + opts;
+  // With a role (a vet, a handler), contacts already carrying it are listed
+  // first in their own group; everyone else stays pickable below.
+  function contactOptions(current, role, label) {
+    const opt = (c) => `<option value="${esc(c.id)}"${c.id === current ? ' selected' : ''}>${esc(c.name)}${c.is_archived ? ' (archived)' : ''}</option>`;
+    if (!role) return `<option value="">— none —</option>` + contacts.map(opt).join('');
+    const hasRole = (c) => (c.contact_type || []).includes(role);
+    const tagged = contacts.filter(hasRole);
+    const rest = contacts.filter((c) => !hasRole(c));
+    return `<option value="">— none —</option>`
+      + (tagged.length ? `<optgroup label="${esc(label)}s">${tagged.map(opt).join('')}</optgroup>` : '')
+      + (rest.length ? `<optgroup label="${tagged.length ? 'Other contacts' : 'Contacts'}">${rest.map(opt).join('')}</optgroup>` : '');
+  }
+
+  function relatedContactFieldHtml(typeDef) {
+    const label = typeof typeDef.relatedContact === 'string' ? typeDef.relatedContact : 'Related contact';
+    const role = RELATED_CONTACT_ROLE[typeDef.value] || null;
+    const roleLabel = role ? (CONTACT_TYPE.find((t) => t.value === role)?.label || role) : '';
+    const fb = fallbackKey(typeDef);
+    const legacy = fb && !draft.related_contact_id ? String(draft.details[fb] || '').trim() : '';
+    const hint = legacy
+      ? `Recorded as “${legacy}” — pick their contact, or ＋ New to add them, to link it.`
+      : role
+        ? `Pick from your contacts, or ＋ New to add one. They're tagged ${roleLabel} automatically.`
+        : 'The person or kennel on the other side of this event.';
+    return `<div class="field"><label>${esc(label)}</label>
+          <select id="ef-related-contact">${contactOptions(draft.related_contact_id, role, label)}</select>
+          <span class="field-hint">${esc(hint)}</span></div>`;
   }
 
   function render() {
@@ -294,9 +340,7 @@ export async function openEventForm(opts) {
           <span class="field-hint">Leave blank for an open-ended/ongoing stay.</span></div>` : ''}
         <div class="field field-wide"><label>Title <span class="req">*</span></label>
           <input id="ef-title" type="text" value="${esc(draft.title)}" placeholder="Short summary shown in the timeline"></div>
-        ${typeDef.relatedContact ? `<div class="field"><label>${esc(typeof typeDef.relatedContact === 'string' ? typeDef.relatedContact : 'Related contact')}</label>
-          <select id="ef-related-contact">${contactOptions(draft.related_contact_id)}</select>
-          <span class="field-hint">The person or kennel on the other side of this event.</span></div>` : ''}
+        ${typeDef.relatedContact ? relatedContactFieldHtml(typeDef) : ''}
       </div>
       <h2 style="font-size:15px;">${esc(typeDef.label)} details</h2>
       <div id="ef-details">${detailFieldsHtml(typeDef)}</div>
@@ -340,8 +384,16 @@ export async function openEventForm(opts) {
     }
     const relatedContactEl = modal.querySelector('#ef-related-contact');
     if (relatedContactEl) {
+      const fb = fallbackKey(typeDef);
       attachNewContactButton(relatedContactEl, {
+        defaultType: RELATED_CONTACT_ROLE[typeDef.value] || '',
+        defaultName: fb ? String(draft.details[fb] || '').trim() : '',
         onCreated: (contact) => { contacts.push(contact); draft.related_contact_id = contact.id; }
+      });
+      // Once a contact is picked, the "Recorded as …" note no longer applies.
+      if (fb) relatedContactEl.addEventListener('change', () => {
+        const hintEl = relatedContactEl.parentElement.querySelector('.field-hint');
+        if (hintEl && relatedContactEl.value) hintEl.textContent = 'Linked. Saving replaces the typed name with this contact.';
       });
     }
     if (isCascade) {
@@ -372,7 +424,12 @@ export async function openEventForm(opts) {
     draft.cost = modal.querySelector('#ef-cost').value;
     draft.expenseCategory = modal.querySelector('#ef-cost-category').value;
     draft.notes = modal.querySelector('#ef-notes').value;
+    // The hidden contactFallback name isn't an input — carry it over, but only
+    // while no contact is linked (a linked vet replaces the typed name).
+    const fb = fallbackKey(descriptor(EVENT_TYPES, draft.event_type));
+    const fallbackName = fb ? draft.details[fb] : undefined;
     draft.details = {};
+    if (fallbackName && !draft.related_contact_id) draft.details[fb] = fallbackName;
     modal.querySelectorAll('[data-detail]').forEach((el) => {
       const val = el.value.trim();
       if (val !== '') draft.details[el.dataset.detail] = el.type === 'number' ? Number(val) : val;

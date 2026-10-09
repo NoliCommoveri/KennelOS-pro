@@ -13,6 +13,8 @@ function detailsSummary(ev) {
   if (!typeDef.fields?.length || !ev.details) return '';
   const parts = typeDef.fields
     .filter((f) => ev.details[f.key] != null && ev.details[f.key] !== '')
+    // A typed vet name only stands in for a linked contact, never beside one.
+    .filter((f) => !(f.contactFallback && ev.related_contact_id))
     .map((f) => {
       const v = f.type === 'date' ? fmtDate(ev.details[f.key]) : ev.details[f.key];
       return `${esc(f.label)}: ${esc(v)}`;
@@ -79,7 +81,9 @@ export function renderTimeline(opts) {
       const upcoming = ev.event_date > today;
       const summary = detailsSummary(ev);
       const contactName = ev.related_contact_id ? contactsById.get(ev.related_contact_id)?.name : '';
-      const meta = [summary, contactName ? `Contact: ${esc(contactName)}` : '', ev.notes ? esc(ev.notes) : '']
+      const relatedLabel = descriptor(EVENT_TYPES, ev.event_type).relatedContact;
+      const contactLabel = typeof relatedLabel === 'string' ? relatedLabel : 'Contact';
+      const meta = [summary, contactName ? `${esc(contactLabel)}: ${esc(contactName)}` : '', ev.notes ? esc(ev.notes) : '']
         .filter(Boolean).join(' — ');
       return `<li class="timeline-item${upcoming ? ' event-upcoming' : ''}${ev.is_archived ? ' row-archived' : ''}" data-idx="${i}">
         <div class="timeline-date">${dateCell(ev, today)}${upcoming ? ' <span class="badge badge-amber">Upcoming</span>' : ''}</div>

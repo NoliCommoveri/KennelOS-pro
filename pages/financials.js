@@ -27,7 +27,7 @@ import { eventRepo } from '../data/eventRepo.js';
 import { getIncomeRows, summarize } from '../data/incomeView.js';
 import { subjectInScope, dogInScope, inScope, isScoped, getActiveKennelId } from '../data/kennelScope.js';
 import { createReportView } from '../assets/reportView.js';
-import { buildMileageFields, wireMileageMode } from '../assets/expensePanel.js';
+import { buildMileageFields, wireMileageMode, loadAccountChoices, buildAccountField, wireAccountField } from '../assets/expensePanel.js';
 import { buildReceiptField, wireReceiptField } from '../assets/receiptCapture.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param } from '../assets/ui.js';
@@ -43,6 +43,10 @@ const CATEGORY_OPTIONS = EXPENSE_CATEGORIES.map((c) => `<option value="${esc(c.v
 // Which of the three views are we in? A bucket link (financials.html?bucket=food)
 // still lands on Expenses; a bare financials.html opens the Overview.
 const bucket = param('bucket');
+// ?account=<id> (the Accounts page's "View expenses →") narrows the Expenses
+// view to the costs paid through one account, the way a bucket narrows it to a
+// category; the summary names it and offers the way back.
+const accountParam = param('account');
 const view = param('view') || (bucket ? 'expenses' : 'overview');
 
 const VIEW_TABS = [
@@ -69,7 +73,9 @@ function renderViewTabs() {
 }
 
 // --- Shared reference data (labels for the expense report's subject column) ---
-const ref = { dogs: [], litters: [], pairings: [], kennels: [] };
+// `accounts` is null outside editionFlags.accounts (Lite): no Account field,
+// column or filter at all.
+const ref = { dogs: [], litters: [], pairings: [], kennels: [], accounts: null };
 const maps = { dogsById: new Map(), littersById: new Map(), pairingsById: new Map(), kennelsById: new Map() };
 const dogName = (id) => maps.dogsById.get(id)?.call_name || '—';
 
@@ -164,6 +170,7 @@ function openAddExpense(onSaved) {
           <input id="af-date" type="date" value="${esc(todayYMD())}"></div>
         <div class="field"><label>Vendor</label>
           <input id="af-vendor" type="text" placeholder="Who was paid"></div>
+        ${buildAccountField('af', ref.accounts, '')}
         <div class="field"><label>Receipt #</label>
           <input id="af-receipt" type="text" placeholder="Optional — auto-filled from a scanned receipt when found"></div>
         <div class="field field-wide"><label>Notes</label><textarea id="af-notes"></textarea></div>
@@ -185,6 +192,7 @@ function openAddExpense(onSaved) {
   allKennelsBox?.addEventListener('change', fillSubjects);
   const mileage = wireMileageMode(modal, 'af', modal.querySelector('#af-category'));
   const receipt = editionFlags.receiptAttach ? wireReceiptField(modal, 'af', {}) : null;
+  const accountBits = wireAccountField(modal, 'af', ref.accounts);
 
   function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
   function onKey(e) { if (e.key === 'Escape') close(); }
@@ -201,6 +209,7 @@ function openAddExpense(onSaved) {
         receipt_number: modal.querySelector('#af-receipt').value.trim(),
         notes: modal.querySelector('#af-notes').value,
         receipt_file_id,
+        ...accountBits(),
         ...mileage.payloadBits()
       });
       close();
@@ -239,9 +248,10 @@ function renderExpenseSummary(expenses) {
     </li>`).join('');
   summary.innerHTML = `
     <div class="row-between" style="align-items:baseline;">
-      <h2 style="margin:0;">Total spent${bucket ? ` — ${esc(bucketLabel)}` : ''}</h2>
+      <h2 style="margin:0;">Total spent${bucket ? ` — ${esc(bucketLabel)}` : ''}${accountParam ? ` — ${esc(accountName({ account_id: accountParam }) || 'account')}` : ''}</h2>
       <strong style="font-size:22px;">${esc(fmtMoney(grand))}</strong>
     </div>
+    ${accountParam ? `<p style="margin:4px 0 0; font-size:13px;">Only costs paid through this account. <a href="financials.html?view=expenses${bucket ? `&bucket=${encodeURIComponent(bucket)}` : ''}">Show every account →</a></p>` : ''}
     <p class="muted" style="margin:4px 0 0; font-size:13px;">Across ${expenses.length} expense${expenses.length === 1 ? '' : 's'} (active only).</p>
     ${catRows ? `<ul class="linked-list" style="margin:12px 0 0; padding:0; list-style:none;">${catRows}</ul>` : ''}`;
 }
@@ -249,8 +259,12 @@ function renderExpenseSummary(expenses) {
 async function loadExpenses() {
   const expenses = (await expenseRepo.getAll({ includeArchived: false })).filter(expenseInScope);
   expenses.sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || ''));
-  return bucket ? expenses.filter((x) => x.category === bucket) : expenses;
+  return expenses
+    .filter((x) => !bucket || x.category === bucket)
+    .filter((x) => !accountParam || x.account_id === accountParam);
 }
+
+const accountName = (x) => (x.account_id && ref.accounts?.find((a) => a.id === x.account_id)?.name) || '';
 
 function initExpenses() {
   renderExpenseBucketTabs();
@@ -261,11 +275,14 @@ function initExpenses() {
   const view = createReportView({
     mount: document.getElementById('report-mount'),
     csvFilename: `financials-${bucket ? bucket + '-' : ''}${new Date().toISOString().slice(0, 10)}.csv`,
-    search: { placeholder: 'Search subject, vendor, receipt #, or notes…', text: (x) => `${subjectLabel(x)} ${x.vendor || ''} ${x.receipt_number || ''} ${x.notes || ''}` },
+    search: { placeholder: 'Search subject, vendor, receipt #, or notes…', text: (x) => `${subjectLabel(x)} ${x.vendor || ''} ${accountName(x)} ${x.receipt_number || ''} ${x.notes || ''}` },
     filters: [
       { id: 'category', label: 'Category', options: EXPENSE_CATEGORIES, match: (x, v) => x.category === v },
       { id: 'subject_type', label: 'Attached to', options: EXPENSE_SUBJECT_TYPES, match: (x, v) => x.subject_type === v },
-      { id: 'year', label: 'Year', options: [], match: (x, v) => year(x) === v }
+      { id: 'year', label: 'Year', options: [], match: (x, v) => year(x) === v },
+      ...(ref.accounts ? [{ id: 'account', label: 'Account',
+        options: ref.accounts.map((a) => ({ value: a.id, label: a.name + (a.is_archived ? ' (archived)' : '') })),
+        match: (x, v) => x.account_id === v }] : [])
     ],
     columns: [
       { header: 'Date', value: (x) => (x.expense_date ? fmtDate(x.expense_date) : ''), csv: (x) => x.expense_date || '' },
@@ -274,6 +291,7 @@ function initExpenses() {
       { header: 'Attached to', value: (x) => subjectTypeLabel(x.subject_type) },
       { header: 'Subject', value: (x) => subjectLabel(x) },
       { header: 'Vendor', value: (x) => x.vendor || '' },
+      ...(ref.accounts ? [{ header: 'Account', value: (x) => accountName(x) }] : []),
       { header: 'Receipt #', value: (x) => x.receipt_number || '' },
       { header: 'File', value: (x) => x.receipt_file_id ? '📎' : '', csv: (x) => x.receipt_file_id ? 'yes' : '' },
       { header: 'Notes', value: (x) => x.notes || '' }
@@ -634,6 +652,7 @@ async function init() {
     kennelRepo.getAll({ includeArchived: true })
   ]);
   ref.dogs = dogs; ref.litters = litters; ref.pairings = pairings; ref.kennels = kennels;
+  ref.accounts = await loadAccountChoices();
   maps.dogsById = new Map(dogs.map((d) => [d.id, d]));
   maps.littersById = new Map(litters.map((l) => [l.id, l]));
   maps.pairingsById = new Map(pairings.map((p) => [p.id, p]));
