@@ -6,7 +6,7 @@
 // every table but the device-only ones, db.js), so it stays correct as later
 // stages add tables — no hardcoded table list (Data Model doc §9).
 import { db, dataTables } from './db.js';
-import { setLastBackupDate, markDataChanged } from './settings.js';
+import { setLastBackupDate, markDataChanged, getMyKennelId, setMyKennelId } from './settings.js';
 import { assertWritable } from './demoMode.js';
 import { enforceImportDogCap } from './editionConfig.js';
 import { SYNC_REGISTRY, overlayCloudFields, snapshotRowToLocal, isCloudField } from './syncRegistry.js';
@@ -188,7 +188,21 @@ export async function restoreBackup(obj, mode, opts = {}) {
     }
   });
   markDataChanged();
+  await pointMyKennelAtRestoredKennel();
   return entries.map(([name, rows]) => ({ name, count: rows.length }));
+}
+
+// "My kennel" (the nav banner, Furever prefill) is a settings id, not part of the
+// backup, so a file restored on a new browser leaves it unset — or pointing at a
+// kennel the replace just wiped. Same repair restoreOnNewDevice does for a cloud
+// restore: point it at the restored own kennel. A setting that still resolves to
+// an own kennel is left alone.
+async function pointMyKennelAtRestoredKennel() {
+  const current = getMyKennelId();
+  const kennel = current ? await db.kennels.get(current) : null;
+  if (kennel && kennel.is_own_kennel && !kennel.is_archived) return;
+  const own = (await db.kennels.toArray()).find((k) => k.is_own_kennel && !k.is_archived);
+  if (own) setMyKennelId(own.id);
 }
 
 // --- 'cloud-merge' (Cloud Phase 1 plan §4.3) --------------------------------
