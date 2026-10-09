@@ -5,15 +5,30 @@
 import { kennelRepo } from './kennelRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { hasSampleData } from './sampleData.js';
-import { hasOwnKennel } from './kennelScope.js';
+import { hasOwnKennel, ownKennels } from './kennelScope.js';
 import {
   getMyKennelId, setMyKennelId,
   getMyContactId, setMyContactId,
   wasSampleDataCleared
 } from './settings.js';
 
-export function hasMyKennelSetup() {
-  return getMyKennelId() != null;
+// The "My kennel" id, repaired when it's missing or stale. The setting lives in
+// localStorage, not in the records, so a backup restored before the restore
+// itself repaired it (importExport.js), or a browser whose storage was cleared,
+// has an own kennel but no setting — and the wizard would then CREATE a second
+// kennel of the same name instead of editing hers. When the setting doesn't
+// resolve to an own, non-archived kennel and exactly one exists, adopt it.
+// Never while sample data is loaded: the tour seeds an own kennel that must not
+// become the user's identity (see shouldRequireKennelSetup below).
+export async function resolveMyKennelId() {
+  const current = getMyKennelId();
+  const kennel = current ? await kennelRepo.getById(current) : null;
+  if (kennel && kennel.is_own_kennel && !kennel.is_archived) return kennel.id;
+  if (hasSampleData()) return kennel ? kennel.id : null;
+  const own = (await ownKennels()).filter((k) => !k.is_archived);
+  if (own.length !== 1) return kennel ? kennel.id : null;
+  setMyKennelId(own[0].id);
+  return own[0].id;
 }
 
 // The MANDATORY first-run gate (Multi-Kennel Scope Spec §3.2). Required, not
@@ -37,7 +52,7 @@ export async function shouldRequireKennelSetup() {
 // Current values, for prefilling the wizard when it's reopened to make a
 // change rather than run for the first time.
 export async function getKennelSetupState() {
-  const kennelId = getMyKennelId();
+  const kennelId = await resolveMyKennelId();
   const contactId = getMyContactId();
   const [kennel, contact] = await Promise.all([
     kennelId ? kennelRepo.getById(kennelId) : null,
@@ -56,7 +71,7 @@ export async function getKennelSetupState() {
 // stamps is_own_kennel: true — on first creation and again on every reopen, in
 // case an older run predates the flag (Own-Kennel Identity addendum).
 export async function completeKennelSetup({ kennelName, ownerName }) {
-  const existingKennelId = getMyKennelId();
+  const existingKennelId = await resolveMyKennelId();
   const existingKennel = existingKennelId ? await kennelRepo.getById(existingKennelId) : null;
   const kennel = existingKennel
     ? await kennelRepo.update(existingKennel.id, { kennel_name: kennelName, is_own_kennel: true })
@@ -66,7 +81,11 @@ export async function completeKennelSetup({ kennelName, ownerName }) {
   let contact = null;
   if (ownerName) {
     const existingContactId = getMyContactId();
-    const existingContact = existingContactId ? await contactRepo.getById(existingContactId) : null;
+    // No owner setting (a restored backup carries none): reuse the contact of that
+    // name already linked to this kennel rather than making a duplicate of her.
+    const existingContact = existingContactId
+      ? await contactRepo.getById(existingContactId)
+      : await findOwnerContact(kennel.id, ownerName);
     // Link the owner Contact to the kennel just created/updated above — this is
     // definitionally the breeder's own contact at their own kennel, so it should
     // never come out unlinked (kennel_id drives Furever/Companion prefill and the
@@ -82,10 +101,16 @@ export async function completeKennelSetup({ kennelName, ownerName }) {
 // For the nav banner: the current kennel name, or null if not set up (or the
 // record was since deleted out from under the setting).
 export async function getMyKennelName() {
-  const id = getMyKennelId();
+  const id = await resolveMyKennelId();
   if (!id) return null;
   const kennel = await kennelRepo.getById(id);
   return kennel ? kennel.kennel_name : null;
+}
+
+async function findOwnerContact(kennelId, ownerName) {
+  const key = ownerName.trim().toLowerCase();
+  const contacts = await contactRepo.getAll();
+  return contacts.find((c) => c.kennel_id === kennelId && (c.name || '').trim().toLowerCase() === key) || null;
 }
 
 export { getMyContactId };

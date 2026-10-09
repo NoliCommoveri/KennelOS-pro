@@ -4,7 +4,7 @@
 import { downloadBackup } from '../data/importExport.js';
 import { getLastBackupDate, getProLicense } from '../data/settings.js';
 import { isLicenseGated, releaseThisDevice } from '../data/license.js';
-import { hasMyKennelSetup, getMyKennelName } from '../data/kennelSetup.js';
+import { getMyKennelName } from '../data/kennelSetup.js';
 import { showKennelSetupModal } from '../assets/kennelSetupUI.js';
 import { isTourAvailable, restartWizard } from '../data/wizardState.js';
 import { runWizardStep } from '../assets/wizardUI.js';
@@ -51,7 +51,7 @@ renderTourStatus();
 async function renderKennelSetupStatus() {
   const status = document.getElementById('kennel-setup-status');
   const btn = document.getElementById('btn-kennel-setup');
-  const name = hasMyKennelSetup() ? await getMyKennelName() : null;
+  const name = await getMyKennelName();
   status.textContent = name
     ? `Your kennel is set to "${name}".`
     : 'Not set up yet — dogs won’t prefill an owner until this is done.';
