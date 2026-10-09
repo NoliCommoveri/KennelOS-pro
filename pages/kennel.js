@@ -29,6 +29,7 @@ import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, WAITLIST_AUT
 import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { waitlistConfig, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
+import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { renderKennelCardSection } from '../assets/kennelCardUI.js';
@@ -428,7 +429,7 @@ function waitlistCard(k) {
         </div>
         <div class="field field-wide"><label>Offer the next family automatically when…</label>
           ${WAITLIST_AUTO_OFFER_TRIGGER.map((t) => `<label class="check-inline"><input type="checkbox" data-wl-auto="${esc(t.value)}"${c.auto_offer_on.includes(t.value) ? ' checked' : ''}> ${esc(t.label)}</label>`).join('')}
-          <span class="field-hint">Unticked: you make that offer yourself, with "Offer to them" or "Offer a litter…"; the app just tells you who's next.</span>
+          <span class="field-hint">Unticked: you make that offer yourself, with "Offer to them" or "Offer a litter…"; the app just tells you who's next.${isWaitlistOnlineOffered() ? ' With your list online, KennelOS also does the ticked ones while your phone is off: a turn whose last day has passed is closed as no response (or no deposit), and a family\'s pass or leaving on their status page moves the turn on; the next family in line is offered and emailed. Your phone records it all at its next update.' : ''}</span>
         </div>
         <div class="field field-wide"><label for="wl-soon-text">"Almost your turn" message</label>
           <textarea id="wl-soon-text" style="min-height:130px;">${esc(c.soon_notice_text || SOON_NOTICE_DEFAULT)}</textarea>
@@ -439,7 +440,7 @@ function waitlistCard(k) {
           <div class="pill-row" style="margin-top:6px;"><button type="button" class="btn btn-sm" data-act="add-reason">Add a reason</button></div>
           <label class="check-inline" style="margin-top:6px;"><input id="wl-pass-other" type="checkbox"${c.pass_other !== false ? ' checked' : ''}> Also offer "Other", with a box for their own words</label>
         </div>
-        ${isWaitlistOnlineOffered() ? readySettings(c) + upcomingSwitches(c) : ''}
+        ${isWaitlistOnlineOffered() ? readySettings(c) + upcomingSwitches(c) + emailTemplateSettings(c) : ''}
       </div>
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
     </section>`;
@@ -449,6 +450,25 @@ function waitlistCard(k) {
 // on the public list and on family pages, all off until she ticks one. Shown
 // with the parents' call names and titles and her dates.
 // "Ready now?" unanswered (Waitlist Spec §16.7): her rule, and the days.
+// Her wording for the emails families get once the list is online (W2 step 6;
+// data/waitlistEmails.js). One folded block per email; a field left as the
+// default (or cleared) keeps following the default.
+function emailTemplateSettings(c) {
+  const block = ({ kind, label }) => {
+    const t = emailTemplate(c, kind);
+    return `<details style="margin:6px 0;"><summary>${esc(label)}</summary>
+        <div class="field" style="margin-top:6px;"><label>Subject</label><input type="text" maxlength="200" data-em-tpl="${esc(kind)}" data-em-part="subject" value="${esc(t.subject)}"></div>
+        <div class="field"><label>Message</label><textarea style="min-height:150px;" data-em-tpl="${esc(kind)}" data-em-part="body">${esc(t.body)}</textarea></div>
+      </details>`;
+  };
+  return `<div class="field field-wide"><label>Emails to families</label>
+      <span class="field-hint">Sent from your kennel's name when you approve, offer, record an outcome or answer a request, after you've seen each one. Every email ends with a link to the family's status page and says replies aren't read. Placeholders: ${EMAIL_PLACEHOLDERS.map((p) => `<strong>${esc(p.key)}</strong> (${esc(p.hint)})`).join(', ')}. Clear a box to go back to the default. Never put amounts or payment details here: families see those on their status page.</span>
+      <label class="check-inline" style="margin-top:6px;"><input id="wl-reminders" type="checkbox"${c.email_reminders !== false ? ' checked' : ''}> Send reminders by themselves: halfway through a turn and on its last morning, the day before a fee is due, and "Ready now?" when a family's hold ends</label>
+      <span class="field-hint">KennelOS sends these while your phone is off, once each, after 8 am in your kennel's time zone. Turns that end are closed, and the next family offered, only for the moments ticked under "Offer the next family automatically when…".</span>
+      ${EMAIL_TEMPLATE_KINDS.map(block).join('')}
+    </div>`;
+}
+
 function readySettings(c) {
   const opts = WAITLIST_READY_NO_ANSWER.map((o) => `<option value="${esc(o.value)}"${o.value === c.ready_no_answer ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
   return `<div class="field"><label>When a family doesn't answer "Ready now?"</label><select id="wl-ready-rule">${opts}</select>
@@ -502,6 +522,19 @@ async function onSaveWaitlist() {
     })).filter((r) => r.label),
     pass_other: q('#wl-pass-other').checked
   };
+  if (els.config.querySelector('[data-em-tpl]')) {
+    // Only what differs from the default is stored, so a default stays the default.
+    const templates = {};
+    for (const el of els.config.querySelectorAll('[data-em-tpl]')) {
+      const { emTpl: kind, emPart: part } = el.dataset;
+      const value = el.value.trim();
+      if (!value || value === DEFAULT_EMAIL_TEMPLATES[kind][part].trim()) continue;
+      if (part === 'subject' && /[\r\n]/.test(value)) { showError('An email subject must be one line.'); return; }
+      templates[kind] = { ...(templates[kind] || {}), [part]: value };
+    }
+    waitlist_config.email_templates = Object.keys(templates).length ? templates : null;
+    waitlist_config.email_reminders = q('#wl-reminders').checked;
+  }
   if (q('#wl-ready-rule')) {
     waitlist_config.ready_no_answer = q('#wl-ready-rule').value;
     waitlist_config.ready_answer_days = num('#wl-ready-days');

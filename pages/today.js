@@ -195,6 +195,12 @@ async function renderNudges() {
           const report = await nudge.actions[Number(btn.dataset.nudgeAction)].run();
           renderNudges();
           if (report && report.message) await alertModal(report);
+          // ...and `emails`: families to offer an email about it (the waitlist online,
+          // Pro only; nothing shows where they can't be emailed).
+          if (report && report.emails?.length) {
+            const { offerEmails } = await import('../assets/waitlistEmailUI.js');
+            await offerEmails(report.emails);
+          }
         }
         catch (e) {
           // The promote-lifecycle nudge matures a pup (a ✗→✓ dog transition); in

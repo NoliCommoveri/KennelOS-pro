@@ -32,6 +32,8 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   checkin_months: 6,
   soon_notice_text: '', // blank = SOON_NOTICE_DEFAULT
   public_intro_text: '', // blank = PUBLIC_INTRO_DEFAULT (the message under her public list's heading)
+  email_templates: null, // her wording per email kind (waitlistEmails.js; W2 step 6); null/blank = the defaults
+  email_reminders: true, // the server's reminder and "Ready now?" emails while the list is online (W2 step 7)
   pass_reasons: null, // her reasons for a pass (Spec §16.5); null = DEFAULT_PASS_REASONS
   pass_other: true, // also offer "Other" with a short text box (Q33)
   show_upcoming: null, // pairings and early litters online (Spec §16.4); null = all off, see showUpcoming
@@ -1100,7 +1102,7 @@ export function describeOfferChanges({ next = null, voided = [], offered = [], w
   // A turn (§16.1) names every litter it covers: { entry_id, litter_ids, respond_by_date }.
   const litters = (o) => (o.litter_ids || [o.litter_id]).map(litterOf).join(', ');
   for (const o of [next, ...offered].filter(Boolean)) {
-    lines.push(`${litters(o)}: now ${nameOf(o.entry_id)}'s turn, respond by ${fmtDate(o.respond_by_date)}. Let them know; nothing is sent automatically.`);
+    lines.push(`${litters(o)}: now ${nameOf(o.entry_id)}'s turn, respond by ${fmtDate(o.respond_by_date)}. Let them know.`);
   }
   for (const w of waiting) {
     lines.push(`${litters(w)}: ${nameOf(w.entry_id)} is next. No turn was offered (automatic offers are off); offer it when you're ready.`);

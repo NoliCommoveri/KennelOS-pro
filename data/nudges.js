@@ -51,6 +51,7 @@ import {
   approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange,
   markCompanionLinkSent, declineCompanionRequest
 } from './waitlistActions.js';
+import { offerSpecs } from './waitlistOutbox.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
@@ -427,7 +428,11 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
             litterOf: (id) => (littersById.get(id) ? litterLabel(littersById.get(id), dogsById) : 'A litter')
           }));
           if (!res.next && !res.waiting.length) lines.push('Nobody else on the list is eligible for your open litters right now.');
-          return { title: 'Recorded', message: lines.join('\n\n') };
+          // `emails`: who to offer an email (Today shows the preview; W2 step 6).
+          return { title: 'Recorded', message: lines.join('\n\n'), emails: [
+            { entryId: e.id, kind: 'deadline_passed', extra: { litterIds: t.offers.map((x) => x.litter_id), respondBy: t.respond_by_date } },
+            ...offerSpecs(res)
+          ] };
         }
       }]
     });
@@ -491,9 +496,10 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
           if (!turn) return { title: 'Picks are open', message: 'Nobody can be offered this litter right now: another family holds the turn and isn\'t first in line for it, or nobody on the list matches its pups yet. The Litter page shows who\'s next.' };
           const fresh = (await waitlistEntryRepo.getAll({ includeArchived: true })).find((x) => x.id === turn.entry_id);
           const who = fresh ? name(fresh) : 'The next family';
+          const emails = offerSpecs({ next: turn });
           return turn.joined
-            ? { title: 'Added to their turn', message: `${who} is first in line for ${label} too, so it joined their turn. Their deadline restarted: until ${turn.respond_by_date}. Let them know.` }
-            : { title: 'Turn offered', message: `It's ${who}'s turn. They have until ${turn.respond_by_date} to pick a pup and send the deposit, or pass. Let them know.` };
+            ? { title: 'Added to their turn', message: `${who} is first in line for ${label} too, so it joined their turn. Their deadline restarted: until ${turn.respond_by_date}. Let them know.`, emails }
+            : { title: 'Turn offered', message: `It's ${who}'s turn. They have until ${turn.respond_by_date} to pick a pup and send the deposit, or pass. Let them know.`, emails };
         }
       }]
     });
@@ -512,10 +518,14 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
   const dogName = (id) => dogsById.get(id)?.call_name || 'a dog';
   const litterName = (l) => litterLabel(l, dogsById);
   const said = (note) => (note ? ` They said: "${note}"` : '');
-  const decide = (approve, decline, done) => [
-    { label: 'Approve', run: async () => { await approve(); return { title: 'Approved', message: done }; } },
-    { label: 'Decline', run: async () => { await decline(); return { title: 'Declined', message: 'Nothing changed for them. Let them know.' }; } }
-  ];
+  // Each decision also offers the family an email saying so (W2 step 6).
+  const decide = (approve, decline, done, e, field) => {
+    const emails = (kind) => [{ entryId: e.id, kind, extra: { request: { field, request: e[field] } } }];
+    return [
+      { label: 'Approve', run: async () => { await approve(); return { title: 'Approved', message: done, emails: emails('request_approved') }; } },
+      { label: 'Decline', run: async () => { await decline(); return { title: 'Declined', message: 'Nothing changed for them. Let them know.', emails: emails('request_declined') }; } }
+    ];
+  };
   let sales = null;
   const programs = new Map();
   for (const e of entries) {
@@ -531,7 +541,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         detail: `They keep their place and aren't offered pups until then; a pause never counts as a pass.${openNote}${said(r.note)}`,
         subjectHref: href(e),
         actions: decide(() => approvePauseRequest(e.id, { date: today }), () => declinePauseRequest(e.id, { date: today }),
-          `${name(e)} is paused until ${r.until}. Let them know.`)
+          `${name(e)} is paused until ${r.until}. Let them know.`, e, 'pause_request')
       });
     }
     if (hasPendingRequest(e, 'pref_change_request')) {
@@ -559,7 +569,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         detail: lines.join(' '),
         subjectHref: href(e),
         actions: decide(() => approvePrefChange(e.id, { date: today }), () => declinePrefChange(e.id, { date: today }),
-          `${name(e)}'s answers are updated, and the change is in their answer history. Let them know.`)
+          `${name(e)}'s answers are updated, and the change is in their answer history. Let them know.`, e, 'pref_change_request')
       });
     }
     if (hasPendingRequest(e, 'listen_change_request')) {
@@ -573,7 +583,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         detail: `Narrower, so it needs you: they wouldn't be offered ${r.listen_mode === 'except' ? 'those' : 'other'} litters, and nothing is counted as a pass for those.${openNote}`,
         subjectHref: href(e),
         actions: decide(() => approveListenChange(e.id, { date: today }), () => declineListenChange(e.id, { date: today }),
-          `${name(e)} now ${r.listen_mode === 'except' ? 'skips' : 'waits only for'} those litters. Let them know.`)
+          `${name(e)} now ${r.listen_mode === 'except' ? 'skips' : 'waits only for'} those litters. Let them know.`, e, 'listen_change_request')
       });
     }
     if (hasPendingRequest(e, 'companion_request')) {

@@ -23,6 +23,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { paidOnSale, getSaleFeeCredit } from '../data/incomeView.js';
 import { DemoModeError } from '../data/demoMode.js';
+import { kennelEmailsOn, queueEmail } from '../data/waitlistOutbox.js';
 
 // A family's status-page link (W2 Plan §8), or null while the list isn't online
 // (or the waitlist online isn't offered here). Only builds the link: no network.
@@ -182,12 +183,25 @@ const MAILTO_SAFE_LENGTH = 1800;
 // In-flight families (an open offer anywhere) are listed for her information but
 // can't be selected. Opening the email or copying the addresses stamps the ticked
 // families as told (markSoonNotified); families told before are shown, not skipped.
-export function openSoonNotice({ kennel, config, rows, contactsById, litterLabelOf, litterIdsOf }) {
+// Where her list is online (W2 step 6) she can also send it from KennelOS, one
+// email per family, and `whelp` (whelpNotes rows for litters born before picks
+// open: { entry, kind: 'match' | 'review', litterIds }) offers "review your
+// preferences" and "a litter you match was born" emails.
+export function openSoonNotice({ kennel, config, rows, contactsById, litterLabelOf, litterIdsOf, whelp = [] }) {
   const nameOf = (e) => entryName(e, contactsById.get(e.contact_id));
   const emailOf = (e) => String(contactsById.get(e.contact_id)?.email || e.application?.email || '').trim();
   const send = rows.filter((r) => !r.inFlight);
   const held = rows.filter((r) => r.inFlight);
   const { text } = soonNoticeText(config, kennel.kennel_name);
+  const emailsOn = kennelEmailsOn(kennel);
+  // A family told it's almost their turn, or mid-turn already (held), gets no
+  // "a litter you match was born" note on top.
+  const sendWhelp = emailsOn ? whelp.filter((w) => w.kind === 'review' || !rows.some((r) => r.entry.id === w.entry.id)) : [];
+  const nReview = sendWhelp.filter((w) => w.kind === 'review').length;
+  const nMatch = sendWhelp.length - nReview;
+  const whelpHtml = sendWhelp.length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+      <p class="field-hint" style="margin-top:0;">A litter was born before picks open: ${[nReview ? `${nReview} ${nReview === 1 ? 'family is' : 'families are'} kept out of it only by their preferences` : '', nMatch ? `${nMatch} more ${nMatch === 1 ? 'family matches' : 'families match'} it` : ''].filter(Boolean).join(', and ')}.</p>
+      <button class="btn" id="sn-whelp" type="button">Email them about the new litter…</button></div>` : '';
 
   const sendRows = send.map((r, i) => {
     const email = emailOf(r.entry);
@@ -210,17 +224,27 @@ export function openSoonNotice({ kennel, config, rows, contactsById, litterLabel
         <textarea id="sn-text" style="width:100%;min-height:170px;font-family:inherit;">${esc(text)}</textarea>
         <span class="field-hint">The first line is the email subject. Change the standing wording in Waitlist settings.</span></div>
       <div class="pill-row" style="margin-top:8px;">
-        <a class="btn btn-primary" id="sn-mail" href="#">Open in my email</a>
+        ${emailsOn ? '<button class="btn btn-primary" id="sn-send" type="button">Send from KennelOS</button>' : ''}
+        <a class="btn${emailsOn ? '' : ' btn-primary'}" id="sn-mail" href="#">Open in my email</a>
         <button class="btn" id="sn-copy" type="button">Copy email addresses</button>
       </div>
-      <p class="field-hint" id="sn-hint">Families are BCC'd, so nobody sees anyone else's address. Opening the email or copying the addresses records today's date on each ticked family. Nothing is sent from KennelOS yet; once online status pages arrive, this will show there too.</p>`
-      : `<p class="muted">Nobody to tell right now.</p>${heldHtml}`,
+      <p class="field-hint" id="sn-hint">${emailsOn
+        ? 'Send from KennelOS emails each ticked family on their own, from your kennel\'s name, with a link to their status page. Or open it in your own email (families BCC\'d) or copy the addresses. Any of these records today\'s date on each ticked family.'
+        : 'Families are BCC\'d, so nobody sees anyone else\'s address. Opening the email or copying the addresses records today\'s date on each ticked family.'}</p>
+      ${whelpHtml}`
+      : `<p class="muted">Nobody to tell right now.</p>${heldHtml}${whelpHtml}`,
     onConfirm: async () => {}
   });
   // formModal renders synchronously, so the dialog is in the DOM now.
   const overlays = document.querySelectorAll('.modal-overlay');
   const overlay = overlays[overlays.length - 1];
   if (overlay && overlay.querySelector('#sn-mail')) wireSoonNotice(overlay, { kennel, send, emailOf, litterIdsOf });
+  overlay?.querySelector('#sn-whelp')?.addEventListener('click', async (ev) => {
+    const { offerEmails } = await import('./waitlistEmailUI.js');
+    const n = await offerEmails(sendWhelp.map((w) => ({ entryId: w.entry.id, kind: w.kind === 'review' ? 'review_prefs' : 'litter_born', extra: { litterIds: w.litterIds } })),
+      { title: 'About the new litter', intro: 'Families kept out only by their preferences get "review your preferences"; families who match get a short note. Untick anyone you\'d rather not email.' });
+    if (n) { ev.target.disabled = true; ev.target.textContent = `Sent to ${n} ${n === 1 ? 'family' : 'families'} ✓`; }
+  });
   return done;
 }
 
@@ -259,6 +283,24 @@ function wireSoonNotice(overlay, { kennel, send, emailOf, litterIdsOf }) {
     const n = notice();
     if (!n.recipients.length) { e.preventDefault(); return; }
     record(n.recipients);
+  });
+  // Sent from KennelOS (W2 step 6): one email per family, queued on their entry.
+  overlay.querySelector('#sn-send')?.addEventListener('click', async (ev) => {
+    const n = notice();
+    const to = n.recipients.filter((r) => r.email);
+    if (!to.length) return;
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    const body = `${n.body}\n\nYour status page shows your place in line, and you can review your preferences there.`;
+    try {
+      for (const r of to) await queueEmail(r.entry.id, { kind: 'almost_turn', subject: n.subject, body });
+      await record(to);
+      import('./waitlistEmailUI.js').then((m) => m.syncSoon()).catch(() => {});
+      btn.textContent = `Sent to ${to.length} ${to.length === 1 ? 'family' : 'families'} ✓`;
+    } catch (err) {
+      hint.textContent = err instanceof DemoModeError ? err.message : `Couldn't send: ${err.message || err}`;
+      btn.disabled = false;
+    }
   });
   overlay.querySelector('#sn-copy').addEventListener('click', async () => {
     const { recipients } = notice();

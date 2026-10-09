@@ -21,8 +21,17 @@
 //  - a WIDER listen-only change → applied at once (it can't dodge an offer)
 //  - a Companion link request (a family with an open sale) → a request on the
 //    entry; she sends the link from the Companion page and marks it sent
-// Events the server makes itself (deadlines and automatic offers, step 7) are
-// not handled yet: they're skipped here, and no server writes any before step 7.
+// Events the server makes itself while her phone is off (W2 step 7, only for the
+// moments she ticked in auto_offer_on) are planned by planServerEvent below:
+//  - server_close  → recordOutcome(…, 'no_response') on that turn
+//  - server_offer  → the turn the server offered, made on her device with the
+//                    server's ids (waitlistActions.applyServerOffer)
+// Each is checked against her records now like a family's action; one that no
+// longer fits (she recorded the outcome herself, another turn is open, the pups
+// were sold) becomes a line on the family's entry instead, which Today shows.
+// When the server moved the turn on after a family's pass or leave, or its own
+// close, the plan for that event carries `moveOn: false` (cloudWaitlist sets it),
+// so her device doesn't offer a second family.
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
@@ -64,7 +73,8 @@ export function planFamilyEvent(event, ctx) {
   const said = (r) => (r ? ` Their reason: ${r.label}${r.text ? `: "${r.text}"` : ''}.` : '');
   const date = arrivalDate(event.createdAt, timeZone) || String(event.createdAt || '').slice(0, 10);
   const skip = (reason) => ({ op: 'skip', reason, date, activity: null });
-  if (event.madeBy !== 'family') return skip('server_move');
+  if (event.madeBy === 'server') return planServerEvent(event, ctx);
+  if (event.madeBy !== 'family') return skip('unknown_maker');
   if (!FAMILY_EVENT_KINDS.includes(event.kind)) return skip('unknown_kind');
   if (!entry || entry.is_archived) return skip('no_entry');
   const p = event.payload && typeof event.payload === 'object' ? event.payload : {};
@@ -180,4 +190,58 @@ export function planFamilyEvent(event, ctx) {
     default:
       return skip('unknown_kind');
   }
+}
+
+// What KennelOS did on her list while her phone was off (W2 step 7). `ctx` as for
+// planFamilyEvent, plus `kennelOffers` (every offer of the kennel) and `litters`
+// (a Map of her litters). → the same plan shapes, with ops 'server_close' { offerId }
+// and 'server_offer' { turn }.
+export const SERVER_EVENT_KINDS = ['server_close', 'server_offer'];
+export function planServerEvent(event, ctx) {
+  const { entry = null, offers = [], kennelOffers = [], pups = [], sales = [], litters = new Map(), litterLabel = () => 'the litter', pupName = () => 'a pup', timeZone = null } = ctx;
+  const date = arrivalDate(event.createdAt, timeZone) || String(event.createdAt || '').slice(0, 10);
+  const skip = (reason) => ({ op: 'skip', reason, date, activity: null });
+  if (!SERVER_EVENT_KINDS.includes(event.kind)) return skip('unknown_kind');
+  if (!entry || entry.is_archived) return skip('no_entry');
+  const p = event.payload && typeof event.payload === 'object' ? event.payload : {};
+  const line = (body) => ({ id: activityId(event), at: event.createdAt, from: 'server', body });
+  const note = (body) => ({ op: 'note', date, activity: line(body) });
+  const labels = (list) => (list || []).map(litterLabel).join(', ') || 'a litter';
+
+  if (event.kind === 'server_close') {
+    const what = `Their turn on ${labels(p.litter_ids)} reached its deadline (${p.respond_by_date || 'the respond-by date'}) while your phone was off, and KennelOS closed it`;
+    const rows = offers.filter((o) => !o.is_archived && turnIdOf(o) === p.turn_id && o.outcome === 'open');
+    if (!rows.length) return note(`${what} on their status page. You'd already recorded how it ended, so nothing changed here.`);
+    const picked = rows.find((o) => o.chosen_dog_id);
+    if (picked && !p.picked_dog_id) {
+      return note(`${what} as no response, but you'd recorded ${pupName(picked.chosen_dog_id)} as their pick, so nothing was recorded here. Record the deposit or "No deposit" on their turn.`);
+    }
+    return { op: 'server_close', offerId: rows[0].id, date, activity: line(`${what} as ${picked ? 'no deposit' : 'no response'}, and emailed them.`) };
+  }
+
+  // server_offer
+  const rows = Array.isArray(p.rows) ? p.rows : [];
+  const what = `KennelOS offered them their turn on ${labels(rows.map((r) => r.litter_id))} while your phone was off (respond by ${p.respond_by_date || '?'}) and emailed them`;
+  if (!p.turn_id || !rows.length) return skip('bad_payload');
+  if (offers.some((o) => turnIdOf(o) === p.turn_id)) return skip('already_applied');
+  const why = (reason) => note(`${what}, but ${reason}, so it wasn't recorded here. Their status page showed the offer until your next update: let them know where things stand.`);
+  if (entry.status !== 'active') return why(`they're no longer on the list (${entry.status})`);
+  const open = kennelOffers.filter((o) => !o.is_archived && o.outcome === 'open');
+  if (open.length) return why('another turn is open on your records');
+  const turnRows = [];
+  for (const r of rows) {
+    const litter = litters.get(r.litter_id);
+    if (!litter || litter.is_archived || !litter.picks_opened_date) continue;
+    const dogIds = (r.dog_ids || []).filter((id) => {
+      const d = pups.find((x) => x.id === id);
+      return d && d.litter_id === r.litter_id && isPupAvailable(d, sales);
+    });
+    if (dogIds.length) turnRows.push({ offer_id: String(r.offer_id), litter_id: r.litter_id, dog_ids: dogIds });
+  }
+  if (!turnRows.length) return why('none of those pups is still available with picks open');
+  return {
+    op: 'server_offer', date,
+    turn: { turn_id: String(p.turn_id), offered_date: p.offered_date || date, respond_by_date: p.respond_by_date, rows: turnRows },
+    activity: line(`${what}.`)
+  };
 }

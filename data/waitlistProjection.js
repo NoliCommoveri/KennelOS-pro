@@ -27,6 +27,7 @@ import {
 import { addDaysToYMD } from './dateUtils.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
+import { serverEmailTemplates } from './waitlistEmails.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -325,8 +326,11 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Litters they said "Not this litter" to are listed apart: their turn leaves them
     // out, and a turn of nothing else is passed at once (§16.2).
     const { offer, prepassed } = splitPrepassed(e, ls);
+    const program = programsById.get(e.waitlist_program_id) || null;
     turnQueue.push({
       entry_id: e.id,
+      // Their window if the server offers them a turn (a program can set a longer one).
+      respond_days: program && program.respond_days_override != null && program.respond_days_override !== '' ? Number(program.respond_days_override) : Number(config.respond_days),
       litters: Object.fromEntries(offer.map((x) => [x.litter.id, x.eligibleDogs.map((d) => d.id).sort()])),
       prepassed: prepassed.map((x) => x.litter.id)
     });
@@ -354,6 +358,10 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       respond_days: Number(config.respond_days),
       max_passes: Number(config.max_passes),
       auto_offer_on: [...config.auto_offer_on],
+      // What the server sends by itself while her phone is off (W2 step 7): her
+      // wording for those emails, and whether to send reminders at all.
+      email_templates: serverEmailTemplates(config),
+      reminders: config.email_reminders !== false,
       breeds: kennelBreeds(kennel, dogs),
       // Her pass reasons and the message each shows the family (§16.5).
       pass_reasons: passReasons(config),

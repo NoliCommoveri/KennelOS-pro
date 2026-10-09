@@ -243,5 +243,8 @@ export const readWaitlistProjection = (token, publicId) =>
   getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { token });
 export const unpublishWaitlist = (token, publicId) =>
   getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { method: 'DELETE', token });
+// An email to one family, in the kennel's name (W2 step 6). → { status: 'sent' | 'failed', sentAt }
+export const sendWaitlistEmail = (token, { id, publicId, entryId, kind, subject, body }) =>
+  getJson('/waitlist/messages', { method: 'POST', token, json: { id, public_id: publicId, entry_id: entryId, kind, subject, body } });
 
 export const getNotices = () => getJson('/notice').then((b) => b.notices || []);

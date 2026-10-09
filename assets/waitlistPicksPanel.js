@@ -19,12 +19,14 @@ import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, litterQueue, nextTurn, openTurns, turnOffers, turnIdOf, eligiblePupsFor, isPupAvailable,
-  overallPositions, entryName, describeOfferChanges, soonFamiliesForLitter,
+  overallPositions, entryName, describeOfferChanges, soonFamiliesForLitter, whelpNotes,
   isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker, autoOffers, autoOfferSummary, closingTrigger
 } from '../data/waitlistRules.js';
 import { WAITLIST_OFFER_OUTCOME, SEX } from '../data/vocab.js';
 import { esc, badge, fmtDate, todayYMD, confirmModal, alertModal } from './ui.js';
 import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink } from './waitlistUI.js';
+import { offerEmails } from './waitlistEmailUI.js';
+import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
 
 const none = '<span class="faint">—</span>';
 const QUEUE_PREVIEW = 5;
@@ -202,13 +204,15 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       : { title: 'Picks are open', message: heldElsewhere || kennelTurns.length
         ? 'Another family holds the turn and isn\'t first in line for this litter, so it waits for the next turn.'
         : 'Nobody on the list is eligible for the available pups yet. A family is offered as soon as one becomes eligible and you tap "Offer to them".' });
+    if (turn) await offerEmails(offerSpecs({ next: turn }));
   });
   // Not wrapped in run(): the dialog writes nothing, so there's nothing to re-render.
   mount.querySelector('[data-pk="soon"]')?.addEventListener('click', () => {
     openSoonNotice({
       kennel: d.kennel, config: d.config, rows: soon, contactsById: d.contactsById,
       litterLabelOf: (r) => `#${r.soonPosition} in line · pups for them: ${r.eligibleDogs.map(pupLabel).join(', ')}`,
-      litterIdsOf: () => [litter.id]
+      litterIdsOf: () => [litter.id],
+      whelp: whelpNotes(d.entries, litter, d.pups, d.sales, opts).filter((w) => w.kind === 'review' || !midTurn(d.kennelOffers, w.entry.id)).map((w) => ({ ...w, litterIds: [litter.id] }))
     });
   });
   on('close', async () => {
@@ -218,6 +222,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   on('offer-next', async () => {
     const turn = await actions.offerNext(litter.id);
     if (turn) await alertModal(offeredMessage(turn, await freshEntries(litter), familyName, d.litterName));
+    if (turn) await offerEmails(offerSpecs({ next: turn }));
   });
 
   const turnNote = (outcome) => (autoOffers(d.config, outcome)
@@ -240,6 +245,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       const lines = out.depositDone
         ? [`${name} is placed.`, ...(await changeLines(out.res, await freshEntries(litter), familyName))]
         : [`${pupsById.get(out.res.offer.chosen_dog_id)?.call_name || 'The pup'} is held for ${name} until ${fmtDate(open.respond_by_date)}. Send them the deposit details (the sale has an invoice), and record "Deposit received" when it arrives.`];
+      if (out.depositDone) await offerEmails(offerSpecs(out.res));
       if (await confirmModal({ title: out.depositDone ? 'Deposit received' : 'Pick recorded', message: `${lines.join('\n\n')}\n\nOpen the sale?`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
         location.href = `sale.html?id=${encodeURIComponent(saleId)}`;
       }
@@ -248,6 +254,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       const res = await depositDialog({ offer: open, name, pupName: pickedName, sale: open.sale_id ? await saleRepo.getById(open.sale_id) : null, carried: entry?.carried_payment || null });
       if (!res) return;
       await alertModal({ title: `${name} is placed`, message: [`Deposit recorded for ${pickedName}.`, ...(await changeLines(res, await freshEntries(litter), familyName)), ...(res.next || res.waiting.length ? [] : ['Nobody else on the list is eligible for this litter right now.'])].join('\n\n') });
+      await offerEmails(offerSpecs(res));
     });
     on('change', async () => {
       const options = switchablePups(entry, litter, d.pups, d.sales, { currentDogId: open.chosen_dog_id, config: d.config });
@@ -261,8 +268,14 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
           : open.chosen_dog_id ? `No deposit from ${name}?` : `${name} didn't respond in time?`;
         const whole = also.length ? ` This closes their whole turn, including ${also.join(', ')}, and counts once.` : '';
         if (!(await confirmModal({ title, message: `${turnNote(closingTrigger(open, outcome))}${whole}${lapse}`, confirmLabel: 'Record it' }))) return;
+        const turnLitterIds = turnOffers(d.kennelOffers, turnIdOf(open)).filter((o) => o.outcome === 'open').map((o) => o.litter_id);
         const res = await actions.recordOutcome(open.id, outcome);
         await alertModal(await outcomeMessage(name, res, await freshEntries(litter), familyName));
+        // Their turn closed, and maybe the next family's began (W2 step 6).
+        await offerEmails([
+          { entryId: open.entry_id, kind: outcome === 'passed' ? 'pass_recorded' : 'deadline_passed', extra: { litterIds: turnLitterIds, respondBy: open.respond_by_date } },
+          ...offerSpecs(res)
+        ]);
       });
     }
     on('voided', async () => {
@@ -288,7 +301,8 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     const holder = holding ? entriesById.get(holding.entry_id) : null;
     const res = await undoPassDialog({ offer: o, name, holderName: holder ? familyName(holder) : null, removed: entry.status === 'removed' });
     if (!res) return;
-    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${res.offers.map((x) => d.litterName(x.litter_id)).join(', ')}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know; nothing is sent automatically.`, ...(await changeLines(res, await freshEntries(litter), familyName))].join('\n\n') });
+    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${res.offers.map((x) => d.litterName(x.litter_id)).join(', ')}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know.`, ...(await changeLines(res, await freshEntries(litter), familyName))].join('\n\n') });
+    await offerEmails([{ entryId: o.entry_id, kind: 'offer', extra: { litterIds: res.offers.map((x) => x.litter_id), respondBy: res.offer.respond_by_date } }, ...offerSpecs(res)]);
   })));
 }
 
@@ -302,8 +316,8 @@ function offeredMessage(turn, entriesById, familyName, litterName) {
   const name = e ? familyName(e) : 'the next family';
   const litters = (turn.litter_ids || []).map(litterName).join(', ');
   return turn.joined
-    ? { title: 'Added to their turn', message: `${name} is first in line for this litter too, so it joined their turn (${litters}). Their deadline restarted: until ${fmtDate(turn.respond_by_date)}. Let them know; nothing is sent automatically yet.` }
-    : { title: 'Turn offered', message: `It's ${name}'s turn (${litters}). They have until ${fmtDate(turn.respond_by_date)} to pick a pup from any of these and send the deposit, or pass. Let them know; nothing is sent automatically yet.` };
+    ? { title: 'Added to their turn', message: `${name} is first in line for this litter too, so it joined their turn (${litters}). Their deadline restarted: until ${fmtDate(turn.respond_by_date)}. Let them know.` }
+    : { title: 'Turn offered', message: `It's ${name}'s turn (${litters}). They have until ${fmtDate(turn.respond_by_date)} to pick a pup from any of these and send the deposit, or pass. Let them know.` };
 }
 
 // describeOfferChanges, with names from a fresh read: an accept or a removal may

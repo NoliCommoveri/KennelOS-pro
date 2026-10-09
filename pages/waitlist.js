@@ -18,10 +18,12 @@ import { WAITLIST_ENTRY_STATUS, WAITLIST_PRIORITY, WAITLIST_REMOVED_REASON } fro
 import {
   waitlistConfig, rankedList, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, openTurns, isPupAvailable,
-  soonFamiliesForKennel, kennelBreeds, resolveBreed
+  soonFamiliesForKennel, kennelBreeds, resolveBreed, whelpNotes
 } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal, wireActionMenu } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, openSoonNotice } from '../assets/waitlistUI.js';
+import { offerEmails } from '../assets/waitlistEmailUI.js';
+import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
 
 const els = {
   title: document.getElementById('wl-title'),
@@ -215,7 +217,8 @@ async function main() {
         if (turn) {
           const e = entriesById.get(turn.entry_id);
           const covers = (turn.litter_ids || []).map((id) => litterLabel(litters.find((x) => x.id === id) || {})).join(', ');
-          await alertModal({ title: turn.joined ? 'Added to their turn' : 'Turn offered', message: `It's ${e ? entryName(e, contactsById.get(e.contact_id)) : 'the next family'}'s turn (${covers}). They have until ${fmtDate(turn.respond_by_date)} to pick a pup from any of these and send the deposit, or pass. Let them know; nothing is sent automatically yet.` });
+          await alertModal({ title: turn.joined ? 'Added to their turn' : 'Turn offered', message: `It's ${e ? entryName(e, contactsById.get(e.contact_id)) : 'the next family'}'s turn (${covers}). They have until ${fmtDate(turn.respond_by_date)} to pick a pup from any of these and send the deposit, or pass. Let them know.` });
+          await offerEmails(offerSpecs({ next: turn }));
         } else {
           await alertModal({ title: 'No turn offered', message: kennelTurns.length
             ? 'A family holds the turn now and isn\'t first in line for this litter, so it waits for the next turn.'
@@ -238,7 +241,9 @@ async function main() {
     openSoonNotice({
       kennel, config, rows, contactsById,
       litterLabelOf: (r) => r.litters.map((x) => `${litterLabel(x.litter)}: #${x.soonPosition} in line`).join(' · '),
-      litterIdsOf: (r) => r.litters.map((x) => x.litter.id)
+      litterIdsOf: (r) => r.litters.map((x) => x.litter.id),
+      // Litters born before picks open (Spec §16.6): one row per family per litter.
+      whelp: live.flatMap((l) => whelpNotes(entries, l, dogs, sales, opts).filter((w) => w.kind === 'review' || !midTurn(offers, w.entry.id)).map((w) => ({ ...w, litterIds: [l.id] })))
     });
   };
 }

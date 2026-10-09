@@ -35,6 +35,7 @@ import { generateFormKey, currentFormKey, rotateFormKeys, openSealed } from '../
 import { applicationToEntry } from '../waitlistInbox.js';
 import { planFamilyEvent, activityId } from '../waitlistEvents.js';
 import { applyFamilyPlan, addFamilyActivity, removeForNoReadyAnswer, MESSAGE_MAX } from '../waitlistActions.js';
+import { queuedEmails, setEmailStatus } from '../waitlistOutbox.js';
 
 export const WAITLIST_ONLINE_EVENT = 'kennelos:waitlistonline';
 // After a change, wait this long for more before publishing (one publish per burst).
@@ -202,8 +203,17 @@ async function eventContext(event, kennel, cache) {
     if (!l) return 'the litter';
     return l.nickname || `${cache.dogs.get(l.dam_id)?.call_name || 'Unknown'} × ${cache.dogs.get(l.sire_id)?.call_name || 'Unknown'}`;
   };
+  // A server move (W2 step 7) checks the whole kennel: one turn at a time, and the
+  // pups of any litter it offered.
+  let kennelOffers = offers;
+  let movePups = pups;
+  if (event.madeBy === 'server') {
+    kennelOffers = await waitlistOfferRepo.getByKennel(kennel.id);
+    const moveLitters = new Set((event.payload?.rows || []).map((r) => r.litter_id));
+    movePups = [...cache.dogs.values()].filter((d) => litterIds.has(d.litter_id) || moveLitters.has(d.litter_id));
+  }
   return {
-    entry, offers, pups, sales: await saleRepo.getAll({ includeArchived: true }), pupName: name, litterLabel,
+    entry, offers, kennelOffers, pups: movePups, litters: cache.litters, sales: await saleRepo.getAll({ includeArchived: true }), pupName: name, litterLabel,
     timeZone: kennel.time_zone || null, config: waitlistConfig(kennel)
   };
 }
@@ -236,10 +246,15 @@ export async function applyFamilyEvents(token, kennels) {
       }
       backingChecked = true;
     }
+    // Where the server already moved the turn on after an event (a family's pass or
+    // leave, or its own deadline close), her device doesn't move it on again.
+    const movedOnAfter = new Set(page.events.filter((e) => e.madeBy === 'server' && e.kind === 'server_offer')
+      .map((e) => e.payload?.cause_seq).filter(Number.isInteger));
     for (const event of page.events) {
       const kennel = byPublicId.get(event.publicId);
       if (kennel) {
         const plan = planFamilyEvent(event, await eventContext(event, kennel, cache));
+        if (movedOnAfter.has(event.seq)) plan.moveOn = false;
         if (plan.op === 'skip') counts.skipped++;
         else {
           try {
@@ -255,6 +270,7 @@ export async function applyFamilyEvents(token, kennels) {
             counts.noted++;
           }
           cache.dogs = null; // a pick or a withdrawal can change pups and sales
+          cache.litters = null;
         }
       } else {
         counts.skipped++;
@@ -295,6 +311,42 @@ export async function sweepReadyChecks(token, kennels, { today = todayYMD() } = 
   return removed;
 }
 
+// Send the emails she queued (W2 step 6) for these online kennels, oldest first.
+// Runs right after publishing, so each family's status page already shows what
+// their email is about. Offline or rate-limited: they stay queued for the next
+// sync. A refusal about one email (that family isn't published, has no address)
+// marks it failed with the reason; she can retry it. → { sent, failed }
+export async function sendQueuedEmails(token, kennels) {
+  const counts = { sent: 0, failed: 0 };
+  for (const kennel of kennels.filter(isOnline)) {
+    for (const { entry, message } of queuedEmails(await waitlistEntryRepo.getByKennel(kennel.id))) {
+      let res;
+      try {
+        res = await api.sendWaitlistEmail(token, {
+          id: message.id, publicId: kennel.public_id, entryId: entry.id, kind: message.email_kind, subject: message.subject, body: message.body
+        });
+      } catch (err) {
+        // About this one email: it fails, with the reason, and the rest go on.
+        const aboutThis = (err instanceof api.CloudConflictError && ['not_published', 'no_email'].includes(err.code))
+          || (err instanceof api.CloudRequestError && err.status === 400);
+        if (aboutThis) {
+          await setEmailStatus(entry.id, message.id, { status: 'failed', error: err.code || 'bad_message' });
+          counts.failed++;
+          continue;
+        }
+        // Email down on the server, or too many this hour: everything waits for the next sync.
+        if (err instanceof api.CloudRequestError && (err.status === 503 || err.status === 429)) return counts;
+        throw err; // offline, signed out, not the backing device: the sync reports it
+      }
+      await setEmailStatus(entry.id, message.id, res.status === 'sent'
+        ? { status: 'sent', sent_at: res.sentAt || new Date().toISOString(), error: null }
+        : { status: 'failed', error: 'failed' });
+      if (res.status === 'sent') counts.sent++; else counts.failed++;
+    }
+  }
+  return counts;
+}
+
 // The projection for one kennel, from the database.
 export async function projectionFor(kennel, { today = todayYMD() } = {}) {
   const [entries, offers, programsById, litters, pairings, dogs, sales, contacts, events] = await Promise.all([
@@ -324,8 +376,8 @@ function exclusive(fn) {
   return next;
 }
 
-// Publish every online kennel whose projection changed, and unpublish every
-// kennel taken offline. `force` republishes unchanged ones too. → { status:
+// Publish every online kennel whose projection changed, unpublish every kennel
+// taken offline, then send the emails she queued. `force` republishes unchanged ones too. → { status:
 // 'skipped' | 'ok' | 'error', reason?, published: [kennelId], unpublished: [kennelId] }
 export function syncWaitlistOnline({ force = false } = {}) {
   return exclusive(async () => {
@@ -363,6 +415,7 @@ async function syncNow({ force }) {
   const unpublished = [];
   let inbox = null;
   let events = null;
+  let emails = null;
   updateWaitlistOnlineState({ lastAttemptAt: new Date().toISOString() });
   try {
     // New applications and messages first, then what families did on their
@@ -380,23 +433,35 @@ async function syncNow({ force }) {
     for (const listed of wanted) {
       const kennel = await ensureFormKey(listed);
       await ensureStatusTokens(kennel);
-      const projection = await projectionFor(kennel);
-      const hash = await sha256(JSON.stringify(projection));
+      let projection = await projectionFor(kennel);
+      let hash = await sha256(JSON.stringify(projection));
       const prev = getWaitlistOnlineState().kennels[kennel.id];
       if (!force && prev && prev.hash === hash && prev.publicId === kennel.public_id) continue;
-      const res = await api.publishWaitlist(token, kennel.public_id, projection);
+      let res;
+      try {
+        res = await api.publishWaitlist(token, kennel.public_id, projection);
+      } catch (err) {
+        // The server moved on while this device was away (W2 step 7): apply its
+        // moves first, then publish what that makes.
+        if (err?.code !== 'events_pending') throw err;
+        events = await applyFamilyEvents(token, kennels);
+        projection = await projectionFor(kennel);
+        hash = await sha256(JSON.stringify(projection));
+        res = await api.publishWaitlist(token, kennel.public_id, projection);
+      }
       updateWaitlistOnlineState({
         kennels: { ...getWaitlistOnlineState().kennels, [kennel.id]: { publicId: kennel.public_id, hash, version: res.version, publishedAt: res.publishedAt } }
       });
       published.push(kennel.id);
     }
+    if (wanted.length) emails = await sendQueuedEmails(token, wanted);
   } catch (err) {
     const code = errorCode(err);
     updateWaitlistOnlineState({ lastError: { code, at: new Date().toISOString() } });
-    return { status: 'error', reason: code, published, unpublished, inbox, events };
+    return { status: 'error', reason: code, published, unpublished, inbox, events, emails };
   }
   updateWaitlistOnlineState({ lastError: null });
-  return { status: 'ok', published, unpublished, inbox, events };
+  return { status: 'ok', published, unpublished, inbox, events, emails };
 }
 
 // What the settings card shows for one kennel.

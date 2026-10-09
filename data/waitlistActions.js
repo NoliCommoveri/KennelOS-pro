@@ -142,11 +142,11 @@ export async function markFeeExpired(entryId) {
 
 // The family left the list themselves (they told her). Any open offer they held
 // is voided and that litter's turn moves on. Returns { entry, voided, offered }.
-export async function withdraw(entryId, { date = todayYMD() } = {}) {
+export async function withdraw(entryId, { date = todayYMD(), moveOn = true } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['applied', 'approved', 'active'], 'withdraw');
   const saved = await waitlistEntryRepo.update(entryId, { status: 'withdrawn', withdrawn_date: date });
-  return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'the family withdrew from the list' })) };
+  return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'the family withdrew from the list', moveOn })) };
 }
 
 // "Ready now?" (Spec §16.7). Yes: the hold is over. No: a new date and a required
@@ -748,7 +748,7 @@ export async function undoPass(offerId, { today = todayYMD() } = {}) {
 //    again) — she offers the next turn from the litter page.
 // `passReason` ({ id, label, text }) is the family's own reason, on a pass they
 // made on their status page (§16.5); none when she records one.
-export async function recordOutcome(offerId, outcome, { date = todayYMD(), chosenDogId = null, depositDate = null, depositAmount, passReason = null } = {}) {
+export async function recordOutcome(offerId, outcome, { date = todayYMD(), chosenDogId = null, depositDate = null, depositAmount, passReason = null, moveOn = true } = {}) {
   const offer = await loadOpenOffer(offerId);
   const entry = await load(offer.entry_id);
 
@@ -795,7 +795,28 @@ export async function recordOutcome(offerId, outcome, { date = todayYMD(), chose
     throw new Error(`Unknown outcome "${outcome}".`);
   }
 
+  // `moveOn: false`: the server already moved the turn on (W2 step 7).
+  if (!moveOn) return result;
   return finishTurn(result, offer.kennel_id, date, closingTrigger(picked || offer, outcome));
+}
+
+// A turn KennelOS offered while her phone was off (W2 step 7;
+// waitlistEvents.planServerEvent checked it against her records): the same rows,
+// with the server's ids, so the family's pick on it maps to them.
+// `turn`: { turn_id, offered_date, respond_by_date, rows: [{ offer_id, litter_id, dog_ids }] }.
+export async function applyServerOffer(entryId, turn) {
+  const entry = await load(entryId);
+  const rows = [];
+  for (const r of turn.rows) {
+    const had = await waitlistOfferRepo.getById(r.offer_id);
+    if (had) { rows.push(had); continue; }
+    rows.push(await waitlistOfferRepo.create({
+      id: r.offer_id, entry_id: entry.id, litter_id: r.litter_id, kennel_id: entry.kennel_id, turn_id: turn.turn_id,
+      offered_date: turn.offered_date, respond_by_date: turn.respond_by_date, eligible_dog_ids: [...r.dog_ids], outcome: 'open',
+      notes: 'Offered by KennelOS while your phone was off (your automatic offers).'
+    }));
+  }
+  return turnView(rows);
 }
 
 // --- A lost pup (Spec §16.11) ------------------------------------------------------
@@ -901,7 +922,7 @@ export async function addFamilyActivity(entryId, items) {
   const entry = await load(entryId);
   const have = new Set((entry.messages || []).map((m) => m.id));
   const fresh = items.filter((m) => m && m.id && !have.has(m.id)).map((m) => ({
-    id: String(m.id), at: m.at || nowISO(), from: 'family', kind: m.kind === 'message' ? 'message' : 'action',
+    id: String(m.id), at: m.at || nowISO(), from: m.from === 'server' ? 'server' : 'family', kind: m.kind === 'message' ? 'message' : 'action',
     body: String(m.body ?? '').slice(0, MESSAGE_MAX), read: false
   }));
   if (!fresh.length) return null;
@@ -937,10 +958,12 @@ export async function applyFamilyPlan(entryId, plan) {
   try {
     switch (plan.op) {
       case 'pick': result = await recordPick(plan.offerId, { chosenDogId: plan.dogId, date }); break;
-      case 'pass': result = await recordOutcome(plan.offerId, 'passed', { date, passReason: plan.reason || null }); break;
+      case 'pass': result = await recordOutcome(plan.offerId, 'passed', { date, passReason: plan.reason || null, moveOn: plan.moveOn !== false }); break;
+      case 'server_close': result = await recordOutcome(plan.offerId, 'no_response', { date, moveOn: plan.moveOn !== false }); break;
+      case 'server_offer': result = await applyServerOffer(entryId, plan.turn); break;
       case 'prepass': await addPrepass(entryId, plan.prepass); break;
       case 'unprepass': await removePrepass(entryId, plan.target); break;
-      case 'withdraw': result = await withdraw(entryId, { date }); break;
+      case 'withdraw': result = await withdraw(entryId, { date, moveOn: plan.moveOn !== false }); break;
       case 'pause_request': await waitlistEntryRepo.update(entryId, { pause_request: plan.request }); break;
       case 'ready': await recordReadyAnswer(entryId, { answer: plan.answer, until: plan.until, reason: plan.reason, date, by: 'family' }); break;
       case 'listen_request': await waitlistEntryRepo.update(entryId, { listen_change_request: plan.request }); break;

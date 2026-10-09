@@ -18,6 +18,8 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import * as actions from '../data/waitlistActions.js';
+import { offerEmails, syncSoon } from '../assets/waitlistEmailUI.js';
+import { offerSpecs, retryEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches,
   entryName, canUndoRemoval, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
@@ -237,7 +239,7 @@ function statusLinkHtml(e) {
   if (!statusLinkFor(e, ctx.kennel)) return '';
   return `<div class="row-between" style="gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
       <span class="muted">Their status page: their place, offers and the fee due.</span>
-      <span class="pill-row"><button class="btn btn-sm" data-link="copy">Copy status link</button><button class="btn btn-sm" data-link="new" title="Make a new link; the old one stops working">New link</button></span>
+      <span class="pill-row"><button class="btn btn-sm" data-link="copy">Copy status link</button>${canEmail() ? '<button class="btn btn-sm" data-link="email">Send status link</button><button class="btn btn-sm" data-link="note">Email them…</button>' : ''}<button class="btn btn-sm" data-link="new" title="Make a new link; the old one stops working">New link</button></span>
     </div>`;
 }
 
@@ -261,6 +263,8 @@ function renderStatus() {
     </div>${statusLinkHtml(e)}`;
   els.status.querySelector('[data-link="copy"]')?.addEventListener('click', (ev) => copyLink(statusLinkFor(e, ctx.kennel), ev.currentTarget, { title: 'Their status page' }));
   els.status.querySelector('[data-link="new"]')?.addEventListener('click', () => onNewLink().catch((err) => showError(err.message || String(err))));
+  els.status.querySelector('[data-link="email"]')?.addEventListener('click', () => emailThem('status_link').catch((err) => showError(err.message || String(err))));
+  els.status.querySelector('[data-link="note"]')?.addEventListener('click', () => emailThem('note').catch((err) => showError(err.message || String(err))));
   const handlers = { offer: onOfferLitter, approve: onApprove, decline: onDecline, withdraw: onWithdraw, fee: onFeeReceived, expire: onExpire, move: onMove, remove: onRemove, undo: onUndo, reapply: onReapply, restore: onRestore, text: onText };
   els.status.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
@@ -308,6 +312,19 @@ function pendingRequests(e) {
   return out;
 }
 
+// One email she sent them (W2 step 6), with how it went.
+function emailItemHtml(m) {
+  const state = m.status === 'sent' ? `<span class="badge badge-green">Sent</span>`
+    : m.status === 'failed' ? `<span class="badge badge-red">Not sent</span>`
+    : `<span class="badge badge-neutral">Waiting to send</span>`;
+  return `<li style="padding:6px 0;border-top:1px solid var(--border);">
+      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.sent_at || m.at).slice(0, 10)))} · Email from you ${state}</div>
+      <div><strong>${esc(m.subject)}</strong></div>
+      <details><summary class="faint">The message</summary><div>${multiline(m.body)}</div></details>
+      ${m.status === 'failed' ? `<p class="field-hint" style="margin:2px 0;">${esc(emailErrorText(m.error))} <button class="btn btn-sm" data-email-retry="${esc(m.id)}">Retry</button></p>` : ''}
+    </li>`;
+}
+
 function renderOnline() {
   const e = ctx.entry;
   const requests = pendingRequests(e);
@@ -318,25 +335,36 @@ function renderOnline() {
       <div><p style="margin:0;">${r.text}</p>${r.note ? `<p class="faint" style="margin:2px 0 0;">They said: "${esc(r.note)}"</p>` : ''}<p class="field-hint" style="margin:2px 0 0;">${esc(r.hint)}</p></div>
       <span class="pill-row">${r.buttons || `<button class="btn btn-sm btn-primary" data-req="${r.kind}:approve">Approve</button><button class="btn btn-sm" data-req="${r.kind}:decline">Decline</button>`}</span>
     </div>`).join('');
-  const msgHtml = messages.slice(0, 50).map((m) => `<li style="padding:6px 0;border-top:1px solid var(--border);">
-      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.at).slice(0, 10)))} · ${m.kind === 'message' ? 'Message' : 'On their status page'}${m.read ? '' : ' <span class="badge badge-blue">New</span>'}</div>
-      <div>${multiline(m.body)}</div></li>`).join('');
+  const msgHtml = messages.slice(0, 50).map((m) => (m.from === 'breeder' ? emailItemHtml(m) : `<li style="padding:6px 0;border-top:1px solid var(--border);">
+      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.at).slice(0, 10)))} · ${m.kind === 'message' ? 'Message' : m.from === 'server' ? 'KennelOS, while your phone was off' : 'On their status page'}${m.read ? '' : ' <span class="badge badge-blue">New</span>'}</div>
+      <div>${multiline(m.body)}</div></li>`)).join('');
   els.online.hidden = false;
   els.online.innerHTML = `
-    <div class="row-between" style="gap:8px;flex-wrap:wrap;"><h3 style="margin:0;">From their status page</h3>
+    <div class="row-between" style="gap:8px;flex-wrap:wrap;"><h3 style="margin:0;">${messages.some((m) => m.from === 'breeder') ? 'Status page and emails' : 'From their status page'}</h3>
       ${unread ? '<button class="btn btn-sm" data-msgs="read">Mark read</button>' : ''}</div>
     ${requests.length ? `<div style="margin-top:8px;">${reqHtml}</div>` : ''}
     ${messages.length ? `<ul style="list-style:none;margin:8px 0 0;padding:0;">${msgHtml}</ul>${messages.length > 50 ? `<p class="faint">Showing the newest 50 of ${messages.length}.</p>` : ''}` : ''}
-    <p class="field-hint" style="margin-top:8px;">Nothing is sent to the family from here yet; reply by email, text or Messenger.</p>`;
+    <p class="field-hint" style="margin-top:8px;">${canEmail() ? 'Write to them with <strong>Email them…</strong> above; they answer on their status page.' : 'Reply by email, text or Messenger.'}</p>`;
   const run = (fn) => fn().then(afterAction).catch((err) => showError(err.message || String(err)));
   els.online.querySelector('[data-msgs="read"]')?.addEventListener('click', () => run(() => actions.markMessagesRead(e.id)));
+  // A decision on their request, then the email saying so (W2 step 6).
+  const decide = (field, fn, approved) => async () => {
+    const request = e[field];
+    await fn(e.id);
+    await afterAction();
+    await emailThem(approved ? 'request_approved' : 'request_declined', { request: { field, request } });
+  };
   const handlers = {
-    'pause:approve': () => actions.approvePauseRequest(e.id), 'pause:decline': () => actions.declinePauseRequest(e.id),
-    'pref:approve': () => actions.approvePrefChange(e.id), 'pref:decline': () => actions.declinePrefChange(e.id),
-    'listen:approve': () => actions.approveListenChange(e.id), 'listen:decline': () => actions.declineListenChange(e.id),
+    'pause:approve': decide('pause_request', actions.approvePauseRequest, true), 'pause:decline': decide('pause_request', actions.declinePauseRequest, false),
+    'pref:approve': decide('pref_change_request', actions.approvePrefChange, true), 'pref:decline': decide('pref_change_request', actions.declinePrefChange, false),
+    'listen:approve': decide('listen_change_request', actions.approveListenChange, true), 'listen:decline': decide('listen_change_request', actions.declineListenChange, false),
     'companion:sent': () => actions.markCompanionLinkSent(e.id), 'companion:decline': () => actions.declineCompanionRequest(e.id)
   };
   els.online.querySelectorAll('[data-req]').forEach((btn) => btn.addEventListener('click', () => run(handlers[btn.dataset.req])));
+  els.online.querySelectorAll('[data-email-retry]').forEach((btn) => btn.addEventListener('click', () => run(async () => {
+    await retryEmail(e.id, btn.dataset.emailRetry);
+    syncSoon();
+  })));
 }
 
 // Put them back in line after a lost pup (the same dialog the Sale page asks).
@@ -351,6 +379,19 @@ async function afterAction() {
   await reload();
   renderAll();
 }
+
+// --- Emails to families (W2 step 6) -------------------------------------------------
+// After an action a family should hear about, she sees the email (from her
+// templates) and sends, edits or skips it. Only where their list is online and
+// they have an address; elsewhere the actions say to tell them yourself.
+const canEmail = () => kennelEmailsOn(ctx.kennel) && Boolean(familyEmail(ctx.entry, ctx.contact));
+const emailHint = () => (canEmail() ? 'You\'ll see the email to them before it\'s sent.' : 'Nothing is sent to the family; let them know yourself.');
+
+async function emailFamilies(specs) {
+  if (await offerEmails(specs)) await afterAction();
+}
+
+const emailThem = (kind, extra = {}) => emailFamilies([{ entryId: ctx.entry.id, kind, extra }]);
 
 // Plain-text lines for the offers an action voided or made (describeOfferChanges),
 // read against the freshly reloaded context.
@@ -404,7 +445,7 @@ async function onApprove() {
         <div class="field"><label>Program</label><select id="ap-program">${programOptions(e.waitlist_program_id)}</select></div>
         ${contactChoices}
       </div>
-      <p class="field-hint">A program that waives the fee puts them straight on the list. Otherwise they owe ${esc(fmtMoney(ctx.config.fee_amount) || 'the fee')} and join the list when you mark it received. Nothing is sent to the family; let them know yourself.</p>`,
+      <p class="field-hint">A program that waives the fee puts them straight on the list. Otherwise they owe ${esc(fmtMoney(ctx.config.fee_amount) || 'the fee')} and join the list when you mark it received. ${emailHint()}</p>`,
     onConfirm: async (o) => {
       const picked = o.querySelector('input[name="ap-contact"]:checked');
       await actions.approve(e.id, {
@@ -413,7 +454,7 @@ async function onApprove() {
         contactId: picked ? picked.value || null : null
       });
     }
-  }) && (await afterAction(), await reportNextInLine());
+  }) && (await afterAction(), await emailThem(ctx.entry.status === 'active' ? 'on_list' : 'approved'), await reportNextInLine());
 }
 
 async function onDecline() {
@@ -421,6 +462,7 @@ async function onDecline() {
   if (!(await confirmModal({ title: `Decline ${name}?`, message: 'The application closes. No contact is created.', confirmLabel: 'Decline', danger: true }))) return;
   await actions.decline(ctx.entry.id);
   await afterAction();
+  await emailThem('declined');
 }
 
 async function onWithdraw() {
@@ -429,6 +471,7 @@ async function onWithdraw() {
   const res = await actions.withdraw(ctx.entry.id);
   await afterAction();
   await reportLeaving(res);
+  await emailFamilies(offerSpecs(res));
 }
 
 async function onExpire() {
@@ -444,6 +487,7 @@ async function onRemove() {
   const res = await actions.removeByBreeder(ctx.entry.id);
   await afterAction();
   await reportLeaving(res);
+  await emailFamilies(offerSpecs(res));
 }
 
 async function onUndo() {
@@ -471,7 +515,7 @@ async function onFeeReceived() {
         <div class="field"><label>Method</label><select id="fr-method">${methodOpts}</select></div>
         <div class="field"><label>Reference</label><input id="fr-ref" type="text"></div>`}
       </div>
-      <p class="field-hint">This date sets their place in line.</p>`,
+      <p class="field-hint">This date sets their place in line. ${emailHint()}</p>`,
     onConfirm: async (o) => {
       await actions.feeReceived(e.id, noFee
         ? { date: o.querySelector('#fr-date').value || todayYMD() }
@@ -482,7 +526,7 @@ async function onFeeReceived() {
             reference: o.querySelector('#fr-ref').value.trim()
           });
     }
-  }) && (await afterAction(), await reportNextInLine());
+  }) && (await afterAction(), await emailThem('on_list'), await reportNextInLine());
 }
 
 async function onMove() {
@@ -883,6 +927,7 @@ function litterChoices(e) {
 
 async function onOfferLitter() {
   const e = ctx.entry;
+  let turn = null;
   const choices = litterChoices(e);
   const offerable = choices.filter((c) => !c.blocked);
   const rowHtml = (c, i) => {
@@ -903,7 +948,7 @@ async function onOfferLitter() {
     confirmLabel: 'Offer the turn',
     bodyHtml: choices.length
       ? `${choices.map(rowHtml).join('')}
-         <p class="field-hint">Their turn covers this litter and every other open litter they match; they pick one pup from any of them, or pass on all of them. They get ${esc(days)} days to pick a pup and send the deposit. Offering someone who isn't next doesn't change anyone's place; the next family ${ctx.config.auto_offer_on.length ? 'is up (offered automatically if you chose that in Waitlist settings)' : 'is up'} once this one is settled. Nothing is sent automatically, so tell them yourself.</p>`
+         <p class="field-hint">Their turn covers this litter and every other open litter they match; they pick one pup from any of them, or pass on all of them. They get ${esc(days)} days to pick a pup and send the deposit. Offering someone who isn't next doesn't change anyone's place; the next family ${ctx.config.auto_offer_on.length ? 'is up (offered automatically if you chose that in Waitlist settings)' : 'is up'} once this one is settled. ${emailHint()}</p>`
       : '<p class="muted">No upcoming or current litters on this kennel yet.</p>',
     onConfirm: async (o) => {
       const picked = o.querySelector('input[name="ol"]:checked');
@@ -916,9 +961,9 @@ async function onOfferLitter() {
         }
         note = `Offered out of turn by you; ${familyNameById(c.next.entry.id)} was next in line.`;
       }
-      await actions.offerTo(c.litter.id, e.id, { note });
+      turn = await actions.offerTo(c.litter.id, e.id, { note });
     }
-  }) && afterAction();
+  }) && (await afterAction(), await emailFamilies(offerSpecs({ next: turn })));
 }
 
 // The turn-moves-on sentence for an outcome prompt: with automatic offers off for
@@ -939,6 +984,7 @@ async function onOfferOutcome(offer, outcome) {
     const out = await pickDialog({ offer, name, pups: live, pupLabel, carried: e.carried_payment || null });
     if (!out) return;
     await afterAction();
+    if (out.depositDone) await emailFamilies(offerSpecs(out.res));
     const saleId = out.res.sale.id;
     const message = out.depositDone
       ? [`${name} is placed.`, ...offerChangeLines(out.res)].join('\n\n')
@@ -953,6 +999,7 @@ async function onOfferOutcome(offer, outcome) {
     if (!res) return;
     await afterAction();
     await alertModal({ title: `${name} is placed`, message: [`Deposit recorded for ${dogName(offer.chosen_dog_id)}.`, ...offerChangeLines(res)].join('\n\n') });
+    await emailFamilies(offerSpecs(res));
     return;
   }
   if (outcome === 'change') {
@@ -966,7 +1013,8 @@ async function onOfferOutcome(offer, outcome) {
     if (!res) return;
     await afterAction();
     const back = res.offers.map((x) => ctx.litters.find((l) => l.id === x.litter_id)).filter(Boolean).map(litterLabel).join(', ');
-    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${back || 'this litter'}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know; nothing is sent automatically.`, ...offerChangeLines(res)].join('\n\n') });
+    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${back || 'this litter'}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit.${canEmail() ? '' : ' Let them know; nothing is sent automatically.'}`, ...offerChangeLines(res)].join('\n\n') });
+    await emailFamilies([{ entryId: e.id, kind: 'offer', extra: { litterIds: res.offers.map((x) => x.litter_id), respondBy: res.offer.respond_by_date } }, ...offerSpecs(res)]);
     return;
   }
 
@@ -983,6 +1031,7 @@ async function onOfferOutcome(offer, outcome) {
     voided: { title: 'Void this turn?', message: `Use this if the offer was a mistake or the litter fell through. It never counts as a pass for ${name}, and the turn isn't moved on automatically.${also.length ? ` It voids their whole turn, including ${also.join(', ')}.` : ''}${lapse}`, confirmLabel: 'Void it' }
   };
   if (!(await confirmModal(prompts[outcome]))) return;
+  const turnLitterIds = turnOffers(ctx.kennelOffers, turnIdOf(offer)).filter((o) => o.outcome === 'open').map((o) => o.litter_id);
   const res = await actions.recordOutcome(offer.id, outcome);
   await afterAction();
   if (res.passes) {
@@ -992,6 +1041,13 @@ async function onOfferOutcome(offer, outcome) {
     const changes = offerChangeLines(res);
     await alertModal({ title: 'Recorded', message: [msg, ...changes].join('\n\n') });
   }
+  // Their turn closed (not a void: she voided it for her own reason), and maybe the
+  // next family's turn began.
+  const closed = { passed: 'pass_recorded', no_response: 'deadline_passed' }[outcome];
+  await emailFamilies([
+    ...(closed ? [{ entryId: e.id, kind: closed, extra: { litterIds: turnLitterIds.length ? turnLitterIds : [offer.litter_id], respondBy: offer.respond_by_date } }] : []),
+    ...offerSpecs(res)
+  ]);
 }
 
 // The buttons under one offer: what she can do with it now.
