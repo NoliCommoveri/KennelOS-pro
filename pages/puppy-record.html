@@ -55,7 +55,13 @@
     .pr-row .pr-k { flex: 0 0 auto; white-space: nowrap; color: var(--text-muted); }
     .pr-row .pr-v { flex: 1; }
 
-    .pr-health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+    /* Health History: three columns (owner call, 2026-10-09), on paper too.
+       puppy-record.js deals the cards into three independent stacks (each into
+       the shortest so far), so a card is only as tall as its own entries and a
+       short card stacks under another rather than stretching to match a long
+       one beside it, as a grid row would. */
+    .pr-health-grid { display: flex; gap: 8px; align-items: flex-start; }
+    .pr-health-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
     .pr-health-card {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 6px 12px; break-inside: avoid;
@@ -74,7 +80,16 @@
     @media print {
       #app-nav, .no-print { display: none !important; }
       body { background: #fff; }
-      .pr-card, .pr-parent, .pr-health-card { break-inside: avoid; }
+      .pr-card, .pr-parent, .pr-health-card { break-inside: avoid; page-break-inside: avoid; }
+      /* iPhone/iPad (WebKit) prints in "economy" color mode unless each element
+         opts out, which can wash the light card borders out entirely — and iOS
+         also shrinks the page to fit the paper, thinning a 1px line further. So
+         on paper: opt every element out, and draw the boxes in a darker gray. */
+      .pr-wrap, .pr-wrap * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .pr-card, .pr-parent, .pr-health-card { border: 1px solid #9aa3ae; }
+      .pr-tests, .pr-health-list li { border-top-color: #c3cad3; }
+      /* A short section's heading stays on the same page as its card. */
+      .pr-keep { break-inside: avoid; }
     }
 
     /* On a narrow phone, two side-by-side parent cards squeeze each
@@ -84,6 +99,12 @@
     @media (max-width: 640px) {
       .pr-parents { flex-direction: column; }
     }
+    /* Three across is too tight to read on a phone SCREEN; stack them there.
+       Printing (even from a phone) lays out at paper width and keeps three. */
+    @media screen and (max-width: 640px) {
+      .pr-health-grid { flex-direction: column; }
+      .pr-health-col { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -92,6 +113,7 @@
     <div class="pr-actions no-print">
       <a class="btn btn-sm" id="pr-back" href="sales.html">← Back to sale</a>
       <button class="btn btn-primary btn-sm" id="pr-print">Print / Save as PDF</button>
+      <a class="btn btn-sm" id="pr-fields" href="kennels.html" hidden>Choose fields</a>
     </div>
     <div id="pr-root"><p class="pr-empty">Loading…</p></div>
   </main>

@@ -80,6 +80,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // data, so cloud, or a restore couldn't run her waitlist (decided 2026-10-07,
       // Cloud plan §5.1 decision 1).
       'waitlist_config',
+      // Which fields her printed Puppy Records show (guide §23). A print setting,
+      // not personal data.
+      'puppy_record_fields',
       // The kennel's IANA time zone: offer deadlines end at 11:59 pm there (Waitlist
       // Spec §6.5, W2 Plan §9). A setting, not personal data.
       'time_zone'

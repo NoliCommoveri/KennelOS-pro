@@ -82,7 +82,10 @@ export const PRO_ONLY_STANDALONE = [
   'assets/invoiceDoc.js', 'assets/invoicePdf.js', 'vendor/jspdf.umd.min.js',
   // The Invoice / Receipt generator modal, opened from Financials and a Sale's
   // page — both import it dynamically only when editionFlags.invoicing is on.
-  'assets/invoiceGenerator.js'
+  'assets/invoiceGenerator.js',
+  // Which fields the Puppy Record prints, read only by the Pro-only Puppy Record
+  // and Kennel pages.
+  'data/puppyRecordFields.js'
 ];
 
 // True when a link target (an href like "contact-import.html" or with a query string)

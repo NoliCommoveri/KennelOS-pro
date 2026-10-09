@@ -12,18 +12,14 @@ import { eventRepo } from '../data/eventRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { getActiveKennel } from '../data/kennelScope.js';
 import { descriptor, SEX, EVENT_TYPES } from '../data/vocab.js';
+import { PUPPY_RECORD_HEALTH_TYPES as HEALTH_EVENT_TYPES, puppyRecordShows, healthKey } from '../data/puppyRecordFields.js';
 import { esc, param } from '../assets/ui.js';
 
 const root = document.getElementById('pr-root');
 
-// Health-relevant event types only (excludes admin/lifecycle types like
-// acquisition, milestone, title_earned, heat_cycle, evaluation, boarding,
-// placement, note) — printed one card per type, in this order.
-const HEALTH_EVENT_TYPES = [
-  'vaccination', 'preventative', 'genetic_test', 'ofa_pennhip',
-  'breed_specific_test', 'illness', 'medication', 'surgery', 'vet_visit',
-  'injury', 'abnormalities', 'weight_check'
-];
+// Which fields print — the resolving kennel's "Puppy Record fields" picks
+// (data/puppyRecordFields.js), set once that kennel is known in main().
+let shows = () => true;
 
 // This page's own date format (mm/dd/yyyy) — deliberately not the shared
 // ui.js fmtDate (localized "medium" style), a print-record convention call.
@@ -130,12 +126,12 @@ async function parentCard(role, dog) {
       <div class="pr-empty">Unknown</div>
     </div>`;
   }
-  const tests = await testsLine(dog.id);
+  const tests = shows('parentTests') ? await testsLine(dog.id) : '';
   const rows = [
-    row('Registered name', dog.registered_name ? esc(dog.registered_name) : ''),
-    row('Call name', dog.call_name ? esc(dog.call_name) : ''),
-    row('Breed', dog.breed ? esc(dog.breed) : ''),
-    row('Registration #', dog.registration_number ? esc(dog.registration_number) : '')
+    shows('parentRegisteredName') && row('Registered name', dog.registered_name ? esc(dog.registered_name) : ''),
+    shows('parentCallName') && row('Call name', dog.call_name ? esc(dog.call_name) : ''),
+    shows('parentBreed') && row('Breed', dog.breed ? esc(dog.breed) : ''),
+    shows('parentRegistrationNumber') && row('Registration #', dog.registration_number ? esc(dog.registration_number) : '')
   ];
   return `<div class="pr-parent">
     <div class="pr-parent-role">${esc(role)}</div>
@@ -146,48 +142,83 @@ async function parentCard(role, dog) {
 
 function puppyInfoCard(dog, litter) {
   const rows = [
-    row('Call name', dog.call_name ? `<strong>${esc(dog.call_name)}</strong>` : ''),
-    row('Registered name', dog.registered_name ? esc(dog.registered_name) : ''),
-    row('Sex', dog.sex ? esc(descriptor(SEX, dog.sex).label) : ''),
-    row('Date of birth', dog.date_of_birth ? esc(fmtDateMDY(dog.date_of_birth)) : ''),
-    row('Breed', dog.breed ? esc(dog.breed) : ''),
-    row('Color / markings', dog.color_markings ? esc(dog.color_markings) : ''),
-    row('Microchip ID', dog.microchip_id ? esc(dog.microchip_id) : ''),
-    row('Registry', dog.registry ? esc(dog.registry) : ''),
-    row('Registration #', dog.registration_number ? esc(dog.registration_number) : ''),
-    row('Litter registration #', litter && litter.litter_registration_number ? esc(litter.litter_registration_number) : '')
+    shows('callName') && row('Call name', dog.call_name ? `<strong>${esc(dog.call_name)}</strong>` : ''),
+    shows('registeredName') && row('Registered name', dog.registered_name ? esc(dog.registered_name) : ''),
+    shows('sex') && row('Sex', dog.sex ? esc(descriptor(SEX, dog.sex).label) : ''),
+    shows('dateOfBirth') && row('Date of birth', dog.date_of_birth ? esc(fmtDateMDY(dog.date_of_birth)) : ''),
+    shows('breed') && row('Breed', dog.breed ? esc(dog.breed) : ''),
+    shows('colorMarkings') && row('Color / markings', dog.color_markings ? esc(dog.color_markings) : ''),
+    shows('microchip') && row('Microchip ID', dog.microchip_id ? esc(dog.microchip_id) : ''),
+    shows('registry') && row('Registry', dog.registry ? esc(dog.registry) : ''),
+    shows('registrationNumber') && row('Registration #', dog.registration_number ? esc(dog.registration_number) : ''),
+    shows('litterRegistration') && row('Litter registration #', litter && litter.litter_registration_number ? esc(litter.litter_registration_number) : '')
   ];
   return `<section class="pr-card">${columnedRows(rows)}</section>`;
 }
 
+// Deals the Health History cards into HEALTH_COLUMNS stacks, each card onto
+// whichever stack is shortest so far (by line count, which holds at any page
+// width — on screen or on paper). Ties go left, so the cards still read in
+// HEALTH_EVENT_TYPES order across the top row.
+const HEALTH_COLUMNS = 3;
+
+function healthCardLines(events) {
+  return 1 + healthItems(events).reduce((n, it) => n + 2 + (it.notes ? 1 : 0), 0);
+}
+
+// One line per distinct item rather than per entry (owner call, 2026-10-09): every
+// entry with the same title, details and notes — five days of Panacur — folds into
+// one line, its dates listed newest first as a comma-separated string. Entries
+// come newest first (eventRepo.getForSubject), so the lines are ordered by each
+// item's latest date. A title that only repeats the card's heading ("Preventative"
+// under Preventative) is left off.
+function healthItems(events) {
+  const items = new Map();
+  for (const ev of events) {
+    const title = ev.title && ev.title.trim().toLowerCase() !== eventTypeLabel(ev.event_type).toLowerCase() ? ev.title.trim() : '';
+    const label = [title, eventDetail(ev)].filter(Boolean).join(' — ') || eventTypeLabel(ev.event_type);
+    const notes = shows('healthNotes') ? (ev.notes || '').trim() : '';
+    const key = `${label}\u0000${notes}`;
+    if (!items.has(key)) items.set(key, { label, notes, dates: [] });
+    items.get(key).dates.push(fmtDateMDY(ev.event_date));
+  }
+  return [...items.values()];
+}
+
 function healthCardsHtml(byType) {
-  const cards = HEALTH_EVENT_TYPES
+  const groups = HEALTH_EVENT_TYPES
+    .filter((type) => shows(healthKey(type)))
     .map((type) => ({ type, events: byType.get(type) || [] }))
-    .filter((g) => g.events.length)
-    .map((g) => {
-      const items = g.events.map((ev) => {
-        const detail = eventDetail(ev);
-        return `<li>
-          <span class="pr-hdate">${esc(fmtDateMDY(ev.event_date))}</span>${ev.title ? esc(ev.title) : ''}
-          ${detail ? `<div>${esc(detail)}</div>` : ''}
-          ${ev.notes ? `<div class="pr-hnotes">${esc(ev.notes)}</div>` : ''}
-        </li>`;
-      }).join('');
-      return `<div class="pr-health-card">
-        <h3>${esc(eventTypeLabel(g.type))}</h3>
-        <ul class="pr-health-list">${items}</ul>
-      </div>`;
-    }).join('');
-  return cards ? `<div class="pr-health-grid">${cards}</div>` : '<p class="pr-empty">No health events recorded yet.</p>';
+    .filter((g) => g.events.length);
+  if (!groups.length) return '<p class="pr-empty">No health events to show.</p>';
+  const cols = Array.from({ length: HEALTH_COLUMNS }, () => ({ lines: 0, cards: [] }));
+  for (const g of groups) {
+    const col = cols.reduce((min, c) => (c.lines < min.lines ? c : min));
+    col.cards.push(healthCardHtml(g));
+    col.lines += healthCardLines(g.events);
+  }
+  return `<div class="pr-health-grid">${cols.map((c) => `<div class="pr-health-col">${c.cards.join('')}</div>`).join('')}</div>`;
+}
+
+function healthCardHtml(g) {
+  const items = healthItems(g.events).map((it) => `<li>
+      <div>${esc(it.label)}</div>
+      <div class="pr-hdate">${esc(it.dates.join(', '))}</div>
+      ${it.notes ? `<div class="pr-hnotes">${esc(it.notes)}</div>` : ''}
+    </li>`).join('');
+  return `<div class="pr-health-card">
+    <h3>${esc(eventTypeLabel(g.type))}</h3>
+    <ul class="pr-health-list">${items}</ul>
+  </div>`;
 }
 
 function buyerCardHtml(contact) {
   if (!contact) return '';
   const rows = [
-    row('Name', contact.name ? esc(contact.name) : ''),
-    row('Phone', contact.phone ? esc(contact.phone) : ''),
-    row('Email', contact.email ? esc(contact.email) : ''),
-    row('Address', contact.address ? esc(contact.address).replace(/\n/g, '<br>') : '')
+    shows('buyerName') && row('Name', contact.name ? esc(contact.name) : ''),
+    shows('buyerPhone') && row('Phone', contact.phone ? esc(contact.phone) : ''),
+    shows('buyerEmail') && row('Email', contact.email ? esc(contact.email) : ''),
+    shows('buyerAddress') && row('Address', contact.address ? esc(contact.address).replace(/\n/g, '<br>') : '')
   ];
   if (!rows.some(Boolean)) return '';
   return `<section class="pr-card">${columnedRows(rows)}</section>`;
@@ -227,6 +258,12 @@ async function main() {
     || activeKennel
     || kennels.find((k) => k.is_own_kennel && !k.is_archived)
     || null;
+  shows = puppyRecordShows(ownKennel);
+  if (ownKennel?.is_own_kennel) {
+    const pick = document.getElementById('pr-fields');
+    pick.href = `kennel.html?id=${encodeURIComponent(ownKennel.id)}#puppy-record`;
+    pick.hidden = false;
+  }
 
   const byType = new Map();
   for (const e of events) {
@@ -236,32 +273,35 @@ async function main() {
   }
 
   const [sireHtml, damHtml] = await Promise.all([parentCard('Sire', sire), parentCard('Dam', dam)]);
-  const buyerHtml = buyerCardHtml(buyer);
+  const buyerHtml = shows('buyer') ? buyerCardHtml(buyer) : '';
+  // A section whose every field is unticked is left off, heading and all.
+  const anyShown = (keys) => keys.some((k) => shows(k));
+  const puppyOn = anyShown(['callName', 'registeredName', 'sex', 'dateOfBirth', 'breed', 'colorMarkings', 'microchip', 'registry', 'registrationNumber', 'litterRegistration']);
+  const parentsOn = anyShown(['parentRegisteredName', 'parentCallName', 'parentBreed', 'parentRegistrationNumber', 'parentTests']);
+  const healthOn = anyShown(HEALTH_EVENT_TYPES.map(healthKey));
 
   const titleName = dog.call_name || dog.registered_name || 'Puppy';
   document.title = `${titleName} — Puppy Record`;
 
   root.innerHTML = `
     <div class="pr-header">
-      ${ownKennel?.logo_data_url ? `<img src="${esc(ownKennel.logo_data_url)}" alt="${esc(ownKennel.kennel_name || '')} logo" style="max-height:72px; max-width:200px; object-fit:contain; margin-bottom:6px;">` : ''}
+      ${ownKennel?.logo_data_url && shows('logo') ? `<img src="${esc(ownKennel.logo_data_url)}" alt="${esc(ownKennel.kennel_name || '')} logo" style="max-height:72px; max-width:200px; object-fit:contain; margin-bottom:6px;">` : ''}
       <h1>${esc(ownKennel?.kennel_name || 'Puppy Record')}</h1>
       <div class="pr-kennel">Puppy Record</div>
-      <div class="pr-generated">Generated ${esc(fmtDateMDY(new Date().toISOString().slice(0, 10)))}</div>
+      ${shows('generatedDate') ? `<div class="pr-generated">Generated ${esc(fmtDateMDY(new Date().toISOString().slice(0, 10)))}</div>` : ''}
     </div>
 
-    ${sectionLabel('Puppy Information')}
-    ${puppyInfoCard(dog, litter)}
+    ${puppyOn ? sectionLabel('Puppy Information') + puppyInfoCard(dog, litter) : ''}
 
-    ${sectionLabel('Parents')}
+    ${parentsOn ? `${sectionLabel('Parents')}
     <div class="pr-parents">
       ${sireHtml}
       ${damHtml}
-    </div>
+    </div>` : ''}
 
-    ${sectionLabel('Health History')}
-    ${healthCardsHtml(byType)}
+    ${healthOn ? sectionLabel('Health History') + healthCardsHtml(byType) : ''}
 
-    ${buyerHtml ? sectionLabel('Buyer') + buyerHtml : ''}
+    ${buyerHtml ? `<div class="pr-keep">${sectionLabel('Buyer')}${buyerHtml}</div>` : ''}
   `;
 
   // Launched from the Sales hub's "Print Puppy Record" modal (?autoprint=1) —

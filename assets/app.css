@@ -952,7 +952,10 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
    table rows from splitting across pages. Opt out of printing with .no-print. */
 @media print {
   @page { margin: 14mm 12mm; }
-  body { background: #fff; font-size: 12px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { background: #fff; font-size: 12px; }
+  /* Set on every element, not just body: WebKit (iPhone/iPad Safari) can apply
+     its economy print colors per element, dropping light borders and fills. */
+  *, *::before, *::after { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   #app-nav, .cloud-notice, .sample-banner, .no-print { display: none !important; }
   /* Only on a page with a letterhead (a report), where it replaces the header. */
   main:has(.print-header) .page-header, main:has(.print-header) .list-toolbar, main:has(.print-header) .seg-tabs { display: none !important; }

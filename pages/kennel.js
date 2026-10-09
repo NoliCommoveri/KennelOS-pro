@@ -29,6 +29,7 @@ import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, WAITLIST_AUT
 import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { waitlistConfig, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
+import { PUPPY_RECORD_FIELD_GROUPS, PUPPY_RECORD_FIELD_KEYS, puppyRecordFieldsValue } from '../data/puppyRecordFields.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
@@ -87,6 +88,7 @@ const SECTIONS = [
   { key: 'nudges', label: 'Lifecycle nudges', when: (k) => k.is_own_kennel },
   { key: 'logo', label: 'Logo', when: () => true },
   { key: 'tests', label: 'Preferred tests', when: (k) => k.is_own_kennel },
+  { key: 'puppy-record', label: 'Puppy Record fields', when: (k) => k.is_own_kennel && editionFlags.puppyRecord },
   { key: 'placements', label: 'Recent placements', when: (k) => k.is_own_kennel },
   { key: 'roster', label: 'Roster', when: (k) => k.is_own_kennel },
   { key: 'waitlist-settings', label: 'Waitlist settings', when: (k) => k.is_own_kennel && editionFlags.waitlist }
@@ -398,7 +400,7 @@ async function renderOverview() {
 function renderConfig() {
   if (!kennel.is_own_kennel) { els.config.innerHTML = ''; return; }
   // The waitlist online's card moved to the waitlist's Publish list page (2026-10-08).
-  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + waitlistCard(kennel);
+  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + waitlistCard(kennel);
   wireConfig();
 }
 
@@ -574,6 +576,47 @@ function feedingScheduleCard() {
     </section>`;
 }
 
+// Puppy Record fields (guide §23): tick what this kennel's printed Puppy Records
+// show. Stored as Kennel.puppy_record_fields (only what's off), so it rides the
+// backup; data/puppyRecordFields.js holds the list and the read rule. A section's
+// own box turns the whole section off; its fields grey out while it's off.
+function puppyRecordCard(k) {
+  if (!editionFlags.puppyRecord) return '';
+  const stored = k.puppy_record_fields || {};
+  const box = (key, label, group, master = false) => `<label class="check-inline" style="display:block; margin:4px 0;${master ? ' font-weight:600;' : ' padding-left:22px;'}">
+      <input type="checkbox" data-pr-field="${esc(key)}"${group ? ` data-pr-group="${esc(group)}"` : ''}${stored[key] !== false ? ' checked' : ''}${group && stored[group] === false ? ' disabled' : ''}> ${esc(label)}
+    </label>`;
+  const groups = PUPPY_RECORD_FIELD_GROUPS.map((g) => `
+      <div class="field">
+        ${g.key ? box(g.key, g.label, null, true) : `<label>${esc(g.label)}</label>`}
+        ${g.fields.map((f) => box(f.key, f.label, g.key)).join('')}
+      </div>`).join('');
+  return `
+    <section class="card" data-ks="puppy-record">
+      <h2 style="margin-top:0;">Puppy Record fields</h2>
+      <p class="field-hint">What this kennel's printed Puppy Records show. Unticked fields are left off the record entirely; a section with nothing ticked is left off, heading and all.</p>
+      <div class="form-grid">${groups}</div>
+      <div class="form-actions">
+        <button class="btn btn-primary btn-sm" data-act="save-puppy-record">Save</button>
+        <button class="btn btn-sm" data-act="puppy-record-all">Tick all</button>
+      </div>
+    </section>`;
+}
+
+async function onSavePuppyRecord() {
+  clearError();
+  const checked = {};
+  for (const key of PUPPY_RECORD_FIELD_KEYS) {
+    const cb = els.config.querySelector(`[data-pr-field="${CSS.escape(key)}"]`);
+    checked[key] = cb ? cb.checked : true;
+  }
+  try {
+    await kennelRepo.update(kennel.id, { puppy_record_fields: puppyRecordFieldsValue(checked) });
+    await reloadKennel();
+    renderConfig();
+  } catch (err) { showError(err.message || String(err)); }
+}
+
 // Lifecycle nudges (Data Integrity Brief §3.2) — opt-in, per-kennel: an enable
 // checkbox + two month thresholds, saved together.
 function nudgeCard(k) {
@@ -672,6 +715,15 @@ function applyToDogsPanel() {
 function wireConfig() {
   const saveNudges = els.config.querySelector('[data-act="save-nudges"]');
   if (saveNudges) saveNudges.addEventListener('click', onSaveNudges);
+  els.config.querySelector('[data-act="save-puppy-record"]')?.addEventListener('click', onSavePuppyRecord);
+  els.config.querySelector('[data-act="puppy-record-all"]')?.addEventListener('click', () => {
+    els.config.querySelectorAll('[data-pr-field]').forEach((cb) => { cb.checked = true; cb.disabled = false; });
+  });
+  els.config.querySelectorAll('[data-pr-field]:not([data-pr-group])').forEach((master) => {
+    master.addEventListener('change', () => {
+      els.config.querySelectorAll(`[data-pr-group="${CSS.escape(master.dataset.prField)}"]`).forEach((cb) => { cb.disabled = !master.checked; });
+    });
+  });
   const saveWaitlist = els.config.querySelector('[data-act="save-waitlist"]');
   if (saveWaitlist) saveWaitlist.addEventListener('click', onSaveWaitlist);
   els.config.querySelector('[data-act="add-reason"]')?.addEventListener('click', () => {
