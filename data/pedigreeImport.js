@@ -31,7 +31,13 @@ import { splitTitles } from './pedigreeParse.js';
 // A registration number's key: upper-cased, an "AKC" in front dropped, and only
 // letters and digits kept — "NP165114/01", "np 165114-01", "AKC NP16511401" are
 // one number however they were typed.
-export const normReg = (r) => String(r || '').toUpperCase().replace(/^\s*AKC\b[\s#:.-]*/, '').replace(/[^A-Z0-9]/g, '');
+// An AKC number is two letters and eight digits; the four digits printed after it
+// ("NP888072/07 03-25") are kept on the record but left out of the key, so the
+// number matches whether or not they were typed.
+export const normReg = (r) => {
+  const k = String(r || '').toUpperCase().replace(/^\s*AKC\b[\s#:.-]*/, '').replace(/[^A-Z0-9]/g, '');
+  return /^[A-Z]{2}\d{8}(\d{4})?$/.test(k) ? k.slice(0, 10) : k;
+};
 export const normName = (n) => String(n || '').replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"')
   .trim().replace(/\s+/g, ' ').toLowerCase();
 

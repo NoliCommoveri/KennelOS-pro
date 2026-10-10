@@ -59,6 +59,8 @@ export function wordsToSegments(words, { minConf = 0 } = {}) {
 // The digits allow OCR's usual letter-for-digit swaps (S/5, O/0, I/l/1, B/8, Z/2),
 // mapped back by akcDigits — "NPS60004/04" is NP560004/04 misread.
 const AKC_REG = /\b([A-Z]{2})\s?([0-9OSIlBZ]{6})\s?\/\s?([0-9OSIlBZ]{2})\b/;
+// The "03-25" / "03/25" after an AKC number — not followed by more of a date.
+const AKC_TAIL = /^\s*(\d{2}[-/]\d{2})(?![\d/-])/;
 const akcDigits = (t) => t.replace(/O/g, '0').replace(/S/g, '5').replace(/[Il]/g, '1').replace(/B/g, '8').replace(/Z/g, '2');
 const COLOR_WORDS = new Set(['white', 'black', 'brindle', 'seal', 'blue', 'fawn', 'red', 'brown', 'cream',
   'merle', 'liver', 'chocolate', 'lilac', 'isabella', 'tan', 'gray', 'grey', 'sable', 'pied', 'piebald',
@@ -108,7 +110,11 @@ export function parseDetails(lines) {
     if (akc && /\d/.test(akc[2]) && !out.registration_number) {
       out.registration_number = `${akc[1]}${akcDigits(akc[2])}/${akcDigits(akc[3])}`;
       out.registry = 'AKC';
-      t = t.replace(akc[0], '').replace(/^\s*\d{2}-\d{2}\b/, ''); // AKC prints the stud-book month after the number
+      t = t.replace(akc[0], '');
+      // The four digits AKC prints after the number ("NP888072/07 03-25") are
+      // part of it as breeders record it, so they're kept, as printed.
+      const tail = t.match(AKC_TAIL);
+      if (tail) { out.registration_number += ` ${tail[1]}`; t = t.replace(tail[0], ''); }
     } else if (!out.registration_number && isOtherReg(t)) {
       const m = t.match(/^([A-Z]{2,5})\.?\s+(.*)$/);
       out.registry = m[1];
@@ -167,8 +173,8 @@ export function parseHeader(segs) {
   h.date_of_birth = dob ? `${dob[3]}-${dob[1].padStart(2, '0')}-${dob[2].padStart(2, '0')}` : '';
   h.color_markings = afterLabel(segs, /Colou?rs?\s*\/\s*Markings:\s*(.+)$/i);
   h.breeder = afterLabel(segs, /Breeder\(?s?\)?:\s*(.+)$/i).replace(/\s*\/\s*$/, '').replace(/\s*Report Date.*$/i, '').trim();
-  const reg = all.match(/AKC\s*#:?\s*([A-Z]{2})\s?(\d{6})\s?\/\s?(\d{2})/i);
-  h.registration_number = reg ? `${reg[1].toUpperCase()}${reg[2]}/${reg[3]}` : '';
+  const reg = all.match(/AKC\s*#:?\s*([A-Z]{2})\s?(\d{6})\s?\/\s?(\d{2})(?:[ \t]+(\d{2}[-/]\d{2})(?![\d/-]))?/i);
+  h.registration_number = reg ? `${reg[1].toUpperCase()}${reg[2]}/${reg[3]}${reg[4] ? ` ${reg[4]}` : ''}` : '';
   h.registry = /american kennel club|\bAKC\b/i.test(all) ? 'AKC' : '';
   return h;
 }
