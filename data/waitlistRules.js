@@ -1153,8 +1153,8 @@ export const listedName = (entry, fullName) => (entry && entry.private_listing ?
 // Listen-only families show, with no marker. Programs, notes and money never do.
 // `nameOf(entry)` returns the family's full name.
 // `deciding(entry)`: a family holding a turn (placeHidden). Their row stays, at
-// their number, but the name, sex preference and date read as DECIDING_LABEL and
-// the row carries `deciding: true` (decided 2026-10-10). The online projection
+// their number, with their sex preference and date added, but the name reads
+// DECIDING_LABEL and the row carries `deciding: true` (decided 2026-10-10). The online projection
 // publishes rows unmasked and the server masks them as it serves the page, from
 // who holds a turn at that moment (cloud/src/familyPages.js listView), so a turn
 // the server closes or opens while her phone is off shows right away.
@@ -1163,14 +1163,13 @@ export function publicList(entries, kennelId, programsById = new Map(), { today,
   return rankedList(entries, kennelId, programsById)
     .map((e, i) => ({ entry: e, position: i + 1 }))
     .filter(({ entry }) => !isPaused(entry, today, config))
-    .map(({ entry, position }) => (deciding(entry)
-      ? { position, name: DECIDING_LABEL, pref_sex: null, added: null, deciding: true }
-      : {
-        position,
-        name: listedName(entry, nameOf(entry)),
-        pref_sex: entry.pref_sex || 'any',
-        added: anchorDate(entry)
-      }));
+    .map(({ entry, position }) => ({
+      position,
+      name: deciding(entry) ? DECIDING_LABEL : listedName(entry, nameOf(entry)),
+      pref_sex: entry.pref_sex || 'any',
+      added: anchorDate(entry),
+      ...(deciding(entry) ? { deciding: true } : {})
+    }));
 }
 
 const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
@@ -1180,9 +1179,7 @@ const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
 export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d) => d } = {}) {
   const head = `${kennelName ? `${kennelName} Waitlist` : 'Waitlist'}${today ? ` (updated ${fmtDate(today)})` : ''}`;
   if (!rows.length) return `${head}\nNo families to show right now.`;
-  const lines = rows.map((r) => (r.deciding
-    ? `#${r.position} ${DECIDING_LABEL}`
-    : `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`));
+  const lines = rows.map((r) => `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`);
   const gaps = rows.some((r, i) => r.position !== i + 1);
   return [head, '', ...lines, ...(gaps ? ['', 'Note: in special circumstances, some applicant names may not be displayed above. Their place is being held, but they are not currently eligible for available pups.'] : [])].join('\n');
 }

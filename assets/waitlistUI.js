@@ -158,7 +158,7 @@ export function formModal({ title, bodyHtml, confirmLabel = 'Save', cancelLabel 
         confirmBtn.disabled = false;
       }
     });
-    overlay.querySelector('[data-fm-cancel]')?.addEventListener('click', () => done(false)); // a dialog may drop Cancel (textFamilyDialog)
+    overlay.querySelector('[data-fm-cancel]')?.addEventListener('click', () => done(false)); // a dialog may drop Cancel
     overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
   });
 }
@@ -493,71 +493,45 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
   return res;
 }
 
-// --- Texting a family (decided 2026-10-08) -------------------------------------------
-// The app never sends a text. This puts the message in front of her ready to send
-// from whichever app she likes, so it can come from a business number (Google
-// Voice) rather than her own:
-//  - Share…: the phone's share sheet, with the message in it — pick Google Voice
-//    (or any app), then the family inside it;
-//  - Copy message / Open Google Voice: copies it and opens Google Voice on the web
-//    to paste (no Google Voice link can fill in a number and a message);
-//  - Texting app: an sms: link with the number and message filled in, which always
-//    opens the phone's DEFAULT texting app (on an iPhone, Messages and her own number).
-// `message` is a suggestion she can edit first. It carries their status page link
-// when the list is online (the caller builds it), and every button sends the box as
-// it stands, link included. The box grows to fit so the link is always in view.
-const GOOGLE_VOICE_URL = 'https://voice.google.com/u/0/messages';
+// --- Messaging a family yourself (decided 2026-10-08; trimmed 2026-10-10) ----------
+// The app never sends a text. "Message via…" (the Communicate dialog on the
+// family's page, waitlistEmailUI.communicateDialog) puts the message in front of
+// her to send from whichever app she likes: Share… opens the phone's share sheet
+// (Google Voice, Messenger, any app), Copy message copies it, Copy number copies
+// their phone. The message carries their status page link when the list is online.
 
-function smsHref(phone, body) {
-  const num = String(phone || '').replace(/[^\d+]/g, '');
-  // iOS reads `&body=`, everyone else `?body=`.
-  const sep = /iPad|iPhone|iPod/.test(globalThis.navigator?.userAgent || '') ? '&' : '?';
-  return `sms:${num}${sep}body=${encodeURIComponent(body)}`;
-}
-
-async function copyText(text) {
+export async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
 }
 
-export async function textFamilyDialog({ name, phone = '', message = '' }) {
-  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
-  await formModal({
-    title: `Text ${name}`,
-    confirmLabel: 'Done',
-    bodyHtml: `
-      <p style="margin-top:0;">${phone
-        ? `To <strong>${esc(phone)}</strong> <button class="btn btn-sm" type="button" data-tx="copy-number">Copy number</button>`
-        : '<span class="faint">No phone number on file for them.</span>'}</p>
-      <div class="field"><label for="tx-body">Message</label><textarea id="tx-body" style="min-height:150px;">${esc(message)}</textarea></div>
-      <div class="pill-row" style="margin:8px 0;">
-        ${canShare ? '<button class="btn btn-primary btn-sm" type="button" data-tx="share">Share…</button>' : ''}
-        <button class="btn btn-sm${canShare ? '' : ' btn-primary'}" type="button" data-tx="copy">Copy message</button>
-        <button class="btn btn-sm" type="button" data-tx="voice">Copy &amp; open Google Voice</button>
-        ${phone ? '<a class="btn btn-sm" data-tx="sms" href="#">Texting app</a>' : ''}
-      </div>
-      <p class="field-hint" data-tx="note" role="status"></p>
-      <p class="field-hint">To text from your business number: ${canShare ? '<strong>Share…</strong> and pick Google Voice, or ' : ''}<strong>Copy &amp; open Google Voice</strong> and paste it into their conversation.${phone ? ' <strong>Texting app</strong> fills in their number and the message, but opens your phone\'s own texting app, so it sends from your personal number.' : ''} Nothing is sent by KennelOS.</p>`,
-    onConfirm: async () => {}
-  }, (o) => {
-    o.querySelector('[data-fm-cancel]')?.remove(); // one way out: Done
-    const body = () => o.querySelector('#tx-body').value;
-    const note = (t) => { o.querySelector('[data-tx="note"]').textContent = t; };
-    // Show the whole message, never a scrolling box: the status page link is its
-    // last line, and below the fold it looks like it isn't there.
-    const box = o.querySelector('#tx-body');
-    const fit = () => { box.style.height = 'auto'; box.style.height = `${box.scrollHeight + 2}px`; };
-    box.addEventListener('input', fit);
-    fit();
-    o.querySelector('[data-tx="copy-number"]')?.addEventListener('click', async () => note(await copyText(phone) ? 'Number copied.' : 'Copying isn\'t allowed here; select the number and copy it.'));
-    o.querySelector('[data-tx="copy"]').addEventListener('click', async () => note(await copyText(body()) ? 'Message copied.' : 'Copying isn\'t allowed here; select the message and copy it.'));
-    o.querySelector('[data-tx="voice"]').addEventListener('click', async () => {
-      const ok = await copyText(body());
-      window.open(GOOGLE_VOICE_URL, '_blank', 'noopener');
-      note(ok ? 'Message copied. Paste it into their conversation in Google Voice.' : 'Copy the message above, then paste it in Google Voice.');
-    });
-    o.querySelector('[data-tx="share"]')?.addEventListener('click', async () => {
-      try { await navigator.share({ text: body() }); } catch (e) { if (e?.name !== 'AbortError') note('Sharing didn\'t work here. Use Copy message instead.'); }
-    });
-    o.querySelector('[data-tx="sms"]')?.addEventListener('click', (ev) => { ev.currentTarget.href = smsHref(phone, body()); });
+export const canShareText = () => typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
+// The "Message via…" panel's markup and wiring (data-mv-* attributes).
+export function messageViaHtml({ phone = '', message = '' }) {
+  return `<p style="margin-top:0;">${phone
+      ? `To <strong>${esc(phone)}</strong> <button class="btn btn-sm" type="button" data-mv="copy-number">Copy number</button>`
+      : '<span class="faint">No phone number on file for them.</span>'}</p>
+    <div class="field"><label for="mv-body">Message</label><textarea id="mv-body" style="min-height:150px;">${esc(message)}</textarea></div>
+    <div class="pill-row" style="margin:8px 0;">
+      ${canShareText() ? '<button class="btn btn-primary btn-sm" type="button" data-mv="share">Share…</button>' : ''}
+      <button class="btn btn-sm${canShareText() ? '' : ' btn-primary'}" type="button" data-mv="copy">Copy message</button>
+    </div>
+    <p class="field-hint" data-mv="note" role="status"></p>
+    <p class="field-hint">Nothing is sent by KennelOS. ${canShareText() ? '<strong>Share…</strong> lets you pick Google Voice, Messenger or any app; or ' : ''}<strong>Copy message</strong> and paste it where you talk with them.</p>`;
+}
+
+export function wireMessageVia(o, phone) {
+  const box = o.querySelector('#mv-body');
+  if (!box) return;
+  const note = (t) => { o.querySelector('[data-mv="note"]').textContent = t; };
+  // Show the whole message, never a scrolling box: the status page link is its
+  // last line, and below the fold it looks like it isn't there.
+  const fit = () => { box.style.height = 'auto'; box.style.height = `${box.scrollHeight + 2}px`; };
+  box.addEventListener('input', fit);
+  requestAnimationFrame(fit);
+  o.querySelector('[data-mv="copy-number"]')?.addEventListener('click', async () => note(await copyText(phone) ? 'Number copied.' : 'Copying isn\'t allowed here; select the number and copy it.'));
+  o.querySelector('[data-mv="copy"]').addEventListener('click', async () => note(await copyText(box.value) ? 'Message copied.' : 'Copying isn\'t allowed here; select the message and copy it.'));
+  o.querySelector('[data-mv="share"]')?.addEventListener('click', async () => {
+    try { await navigator.share({ text: box.value }); } catch (e) { if (e?.name !== 'AbortError') note('Sharing didn\'t work here. Use Copy message instead.'); }
   });
 }

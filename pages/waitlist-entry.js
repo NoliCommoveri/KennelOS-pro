@@ -1,13 +1,19 @@
 // waitlist-entry.js — one family's run through a kennel's waitlist (Waitlist Spec
-// §5–§6; End-State guide §29). New application entry (?new=1&kennel=…), the
-// status card with the step-by-step actions (approve / decline / fee received /
-// withdraw / remove / undo / move / re-apply), the edit-in-place details card
-// (preferences incl. breed, listen-only, pause, fee, application answers), and the
-// offers (offer a litter from here, record how an offer ended — the waitlist as
-// the main workflow, Spec §15.2), and the family's documents (fee receipt, Sale
-// invoice/receipt, each viewable or downloadable as a PDF). Application answers
-// follow her own form (Spec §15.1, data/waitlistForm.js). Every multi-step write
-// goes through data/waitlistActions.js. Pro-only page (proPages.js).
+// §5–§6; End-State guide §29). A new application entry (?new=1&kennel=…) or one
+// family, in three tabs (decided 2026-10-10, like the hubs' segment tabs):
+//  - Details: where they stand (position, in line since, passes, their place for
+//    what they want), their answers and application, Edit, and the one way off the
+//    list for their status ("Remove from list…": they withdrew, or you remove them;
+//    "Close application…" before they're on it).
+//  - Interact: what needs her (their status-page requests, a turn they hold, a lost
+//    pup) and what she can start: Offer pups / Move place for a family on the list
+//    (Approve, Fee received, Undo removal or Re-apply in other statuses), and
+//    Communicate… (email from her templates with a preview, or "Message via…").
+//  - History: their messages and the emails sent, every offer, answer changes, key
+//    dates, and documents (fee receipt, Sale invoice/receipt as PDFs).
+// Archive, Delete and New status link sit in the header's ⋯ menu. Application
+// answers follow her own form (Spec §15.1, data/waitlistForm.js). Every multi-step
+// write goes through data/waitlistActions.js. Pro-only page (proPages.js).
 import { waitlistEntryRepo, ReferenceBlockedError } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
@@ -18,7 +24,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import * as actions from '../data/waitlistActions.js';
-import { offerEmails, syncSoon } from '../assets/waitlistEmailUI.js';
+import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmailUI.js';
 import { offerSpecs, retryEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches,
@@ -26,7 +32,7 @@ import {
   eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
-  PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName
+  PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces
 } from '../data/waitlistRules.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq, READY_TIMING_LABEL,
@@ -37,10 +43,10 @@ import {
   WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, cleanPurposes, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
-import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
-  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, textFamilyDialog, statusLinkFor, copyLink
+  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, statusLinkFor, copyLink
 } from '../assets/waitlistUI.js';
 
 const els = {
@@ -48,12 +54,16 @@ const els = {
   subtitle: document.getElementById('entry-subtitle'),
   back: document.getElementById('back-link'),
   headerActions: document.getElementById('header-actions'),
-  status: document.getElementById('status-section'),
-  online: document.getElementById('online-section'),
+  tabs: document.getElementById('entry-tabs'),
+  panes: {
+    details: document.getElementById('tab-details'),
+    interact: document.getElementById('tab-interact'),
+    history: document.getElementById('tab-history')
+  },
+  edit: document.getElementById('edit-section'),
+  editTitle: document.getElementById('edit-title'),
   profileActions: document.getElementById('profile-actions'),
   body: document.getElementById('profile-body'),
-  offers: document.getElementById('offers-section'),
-  docs: document.getElementById('docs-section'),
   error: document.getElementById('page-error')
 };
 
@@ -66,7 +76,7 @@ const LIVE_LITTER = ['expected', 'whelped', 'weaning', 'ready'];
 const LISTEN_STATUSES = ['active'];
 
 const ctx = {
-  mode: 'view', entry: null, draft: null, kennel: null, config: null,
+  mode: 'view', tab: null, entry: null, draft: null, kennel: null, config: null,
   contact: null, contacts: [], programs: new Map(), kennelEntries: [], offers: [],
   litters: [], pairings: [], dogsById: new Map(), breeds: [], form: [], kennelOffers: [], sales: []
 };
@@ -130,13 +140,40 @@ function lostSale(e) {
   return ctx.sales.find((x) => ids.has(x.id) && lostSaleFamily(x, [e], offers)) || null;
 }
 
+// Their place for what they want (decided 2026-10-10), as their status page shows it:
+// for all their narrowed answers together, then each one, skipping a number
+// already shown. Escaped HTML, or '' for a family whose answers are all open.
+function prefPlacesText(e, overall) {
+  const places = prefPlaces(ctx.kennelEntries, ctx.kennel.id, ctx.programs, ctx.config).get(e.id) || {};
+  const label = {
+    all: 'for their preferences',
+    sex: `for ${descriptor(WAITLIST_PREF_SEX, e.pref_sex).label}`,
+    breed: `for ${e.pref_breed || ''}`,
+    purposes: `for ${(e.pref_purposes || []).map((p) => descriptor(PLACEMENT_PURPOSE, p).label).join(', ')}`,
+    colors: `for ${(Array.isArray(e.pref_colors) ? e.pref_colors : [e.pref_colors]).filter(Boolean).join(', ')}`
+  };
+  const seen = new Set([overall]);
+  const parts = [];
+  for (const k of ['all', 'sex', 'breed', 'purposes', 'colors']) {
+    const n = places[k];
+    if (!Number.isInteger(n) || seen.has(n)) continue;
+    seen.add(n);
+    parts.push(`<strong>#${esc(n)}</strong> ${esc(label[k])}`);
+  }
+  return parts.length ? `${parts.join(' · ')} <span class="faint">(counting only families ahead who'd take a pup they want)</span>` : '';
+}
+
+// A pup they lost (Spec §16.11), as one line; '' when there's none.
+function lostLine(e) {
+  const lost = lostSale(e);
+  return lost ? `<span class="badge badge-amber">Pup lost</span> ${esc(dogName(lost.dog_id))}'s sale was ${esc(lost.status)}. <a href="sale.html?id=${encodeURIComponent(lost.id)}">Open the sale →</a>` : '';
+}
+
 function statusLines(e) {
   const today = todayYMD();
   const lines = [];
-  const lost = lostSale(e);
-  if (lost) {
-    lines.push(`<span class="badge badge-amber">Pup lost</span> ${esc(dogName(lost.dog_id))}'s sale was ${esc(lost.status)}. <a href="sale.html?id=${encodeURIComponent(lost.id)}">Open the sale →</a>`);
-  }
+  const lost = lostLine(e);
+  if (lost) lines.push(lost);
   if (e.carried_payment) {
     lines.push(`Carrying <strong>${esc(fmtMoney(e.carried_payment.amount))}</strong> they paid on a pup they lost (${esc(fmtDate(e.carried_payment.date))}); it becomes the deposit on their next pick.`);
   }
@@ -152,6 +189,8 @@ function statusLines(e) {
     const total = rankedList(ctx.kennelEntries, ctx.kennel.id, ctx.programs).length;
     lines.push(`<strong style="font-size:1.3em;">#${esc(pos)}</strong> of ${esc(total)} on the list.`);
     lines.push(`In line since ${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ` <span class="badge badge-purple">Moved by you</span> <span class="faint">(fee received ${esc(fmtDate(e.fee_received_date))})</span>` : ''}.`);
+    const placesLine = prefPlacesText(e, pos);
+    if (placesLine) lines.push(placesLine);
     lines.push(`Passes used: ${passesUsed(e, ctx.offers)} of ${esc(ctx.config.max_passes)}.`);
     const flags = entryFlags(e, today, ctx.config);
     const why = isReadyHeld(e, today, ctx.config)
@@ -175,15 +214,9 @@ function statusLines(e) {
   return lines;
 }
 
-function actionButtons(e) {
-  const b = (act, label, cls = '') => `<button class="btn btn-sm ${cls}" data-act="${act}">${esc(label)}</button>`;
-  const lost = lostSale(e) ? b('restore', e.status === 'placed' ? 'Put back in line…' : 'Give their turn back…', 'btn-primary') : '';
-  return lost + actionButtonsFor(e) + b('text', 'Text them…');
-}
+// --- Communicate… (waitlistEmailUI.communicateDialog) ----------------------------------
 
-// --- Texting them (waitlistUI.textFamilyDialog) ---------------------------------------
-
-// What a text to this family would say now, for her to edit: their turn (or the pup
+// What a message to this family would say now (Message via…), for her to edit: their turn (or the pup
 // they're holding), a fee that's due, or where they are on the list — plus their
 // status page link when the list is online.
 function suggestedText(e) {
@@ -212,63 +245,37 @@ function suggestedText(e) {
   return `Hi ${first}, this is ${kennel}. ${linkLine}`.trim();
 }
 
-async function onText() {
+// The emails that fit this family right now (decided 2026-10-10): their status page
+// link and a note from her always; the fee request while approved; "on the list"
+// once on it; "It's your turn" again while they hold an open turn. Emails tied to a
+// moment (a pass, a decision, a closed turn) are offered right after that action,
+// and the reminders are KennelOS's own. [] where they can't be emailed.
+function emailChoices(e) {
+  if (!canEmail()) return [];
+  const out = [{ kind: 'status_link', label: 'Their status page link' }, { kind: 'note', label: 'A note from you' }];
+  if (e.status === 'approved') out.push({ kind: 'approved', label: 'Application approved (fee request)' });
+  if (e.status === 'active') out.push({ kind: 'on_list', label: 'You\'re on the list' });
+  const open = ctx.offers.filter((o) => o.outcome === 'open' && !o.is_archived && !o.chosen_dog_id);
+  if (open.length) {
+    out.push({ kind: 'offer', label: 'It\'s your turn (send again)', extra: { litterIds: open.map((o) => o.litter_id), respondBy: open.map((o) => o.respond_by_date).filter(Boolean).sort().pop() } });
+  }
+  return out;
+}
+
+async function onCommunicate() {
   const e = ctx.entry;
   const phone = ctx.contact?.phone || e.application?.phone || '';
-  await textFamilyDialog({ name: entryName(e, ctx.contact), phone, message: suggestedText(e) });
+  if (await communicateDialog({ entryId: e.id, name: entryName(e, ctx.contact), phone, message: suggestedText(e), emails: emailChoices(e) })) await afterAction();
 }
 
-function actionButtonsFor(e) {
-  const b = (act, label, cls = '') => `<button class="btn btn-sm ${cls}" data-act="${act}">${esc(label)}</button>`;
-  switch (e.status) {
-    case 'applied': return b('approve', 'Approve…', 'btn-primary') + b('decline', 'Decline') + b('withdraw', 'Withdrew');
-    case 'approved': {
-      const label = e.fee_amount == null ? 'Add to the list…' : 'Fee received…';
-      return b('fee', label, 'btn-primary') + b('expire', 'Fee not received') + b('withdraw', 'Withdrew');
-    }
-    case 'active': return b('offer', 'Offer a litter…', 'btn-primary') + b('move', 'Move place…') + b('withdraw', 'Withdrew') + b('remove', 'Remove from list', 'btn-danger');
-    case 'removed': return (canUndoRemoval(e, todayYMD()) ? b('undo', 'Undo removal', 'btn-primary') : '') + b('reapply', 'Re-apply');
-    default: return b('reapply', 'Re-apply');
-  }
-}
-
-// Her request (W2 Plan §8): the family's status-page link, to send by Messenger
-// or text, and "New link" if it went somewhere it shouldn't. Only while the list
-// is online.
-function statusLinkHtml(e) {
-  if (!statusLinkFor(e, ctx.kennel)) return '';
-  return `<div class="row-between" style="gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
-      <span class="muted">Their status page: their place, offers and the fee due.</span>
-      <span class="pill-row"><button class="btn btn-sm" data-link="copy">Copy status link</button>${canEmail() ? '<button class="btn btn-sm" data-link="email">Send status link</button><button class="btn btn-sm" data-link="note">Email them…</button>' : ''}<button class="btn btn-sm" data-link="new" title="Make a new link; the old one stops working">New link</button></span>
-    </div>`;
-}
-
+// Making a new status link (header ⋯ menu): the old one stops working, so it's
+// a safety step, not a way to reach them.
 async function onNewLink() {
   if (!(await confirmModal({ title: 'Make a new link?', message: 'Their current link stops working as soon as the new one is published. Send them the new link.', confirmLabel: 'Make a new link' }))) return;
   const { replaceStatusToken } = await import('../data/cloud/cloudWaitlist.js');
   await replaceStatusToken(ctx.entry.id);
   await afterAction();
   await copyLink(statusLinkFor(ctx.entry, ctx.kennel), null, { title: 'Their new status page link' });
-}
-
-function renderStatus() {
-  const e = ctx.entry;
-  els.status.innerHTML = `
-    <div class="row-between" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">
-      <div>
-        <h2 style="margin:0 0 6px;">${badge(WAITLIST_ENTRY_STATUS, e.status)}</h2>
-        ${statusLines(e).map((l) => `<p style="margin:4px 0;">${l}</p>`).join('')}
-      </div>
-      <div class="pill-row">${actionButtons(e)}</div>
-    </div>${statusLinkHtml(e)}`;
-  els.status.querySelector('[data-link="copy"]')?.addEventListener('click', (ev) => copyLink(statusLinkFor(e, ctx.kennel), ev.currentTarget, { title: 'Their status page' }));
-  els.status.querySelector('[data-link="new"]')?.addEventListener('click', () => onNewLink().catch((err) => showError(err.message || String(err))));
-  els.status.querySelector('[data-link="email"]')?.addEventListener('click', () => emailThem('status_link').catch((err) => showError(err.message || String(err))));
-  els.status.querySelector('[data-link="note"]')?.addEventListener('click', () => emailThem('note').catch((err) => showError(err.message || String(err))));
-  const handlers = { offer: onOfferLitter, approve: onApprove, decline: onDecline, withdraw: onWithdraw, fee: onFeeReceived, expire: onExpire, move: onMove, remove: onRemove, undo: onUndo, reapply: onReapply, restore: onRestore, text: onText };
-  els.status.querySelectorAll('[data-act]').forEach((btn) => {
-    btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
-  });
 }
 
 // --- From their status page (W2 step 5) ------------------------------------------
@@ -325,28 +332,20 @@ function emailItemHtml(m) {
     </li>`;
 }
 
-function renderOnline() {
-  const e = ctx.entry;
+// Their status-page requests (Interact, top): each waits for her Approve / Decline.
+function requestsHtml(e) {
   const requests = pendingRequests(e);
-  const messages = [...(e.messages || [])].reverse();
-  if (!requests.length && !messages.length) { els.online.hidden = true; els.online.innerHTML = ''; return; }
-  const unread = messages.filter((m) => !m.read).length;
-  const reqHtml = requests.map((r) => `<div class="row-between" style="gap:8px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
+  if (!requests.length) return '';
+  return `<section class="card"><h2 style="margin-top:0;">Waiting for you <span class="badge badge-amber">${requests.length}</span></h2>
+    ${requests.map((r) => `<div class="row-between" style="gap:8px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
       <div><p style="margin:0;">${r.text}</p>${r.note ? `<p class="faint" style="margin:2px 0 0;">They said: "${esc(r.note)}"</p>` : ''}<p class="field-hint" style="margin:2px 0 0;">${esc(r.hint)}</p></div>
       <span class="pill-row">${r.buttons || `<button class="btn btn-sm btn-primary" data-req="${r.kind}:approve">Approve</button><button class="btn btn-sm" data-req="${r.kind}:decline">Decline</button>`}</span>
-    </div>`).join('');
-  const msgHtml = messages.slice(0, 50).map((m) => (m.from === 'breeder' ? emailItemHtml(m) : `<li style="padding:6px 0;border-top:1px solid var(--border);">
-      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.at).slice(0, 10)))} · ${m.kind === 'message' ? 'Message' : m.from === 'server' ? 'KennelOS, while your phone was off' : 'On their status page'}${m.read ? '' : ' <span class="badge badge-blue">New</span>'}</div>
-      <div>${multiline(m.body)}</div></li>`)).join('');
-  els.online.hidden = false;
-  els.online.innerHTML = `
-    <div class="row-between" style="gap:8px;flex-wrap:wrap;"><h3 style="margin:0;">${messages.some((m) => m.from === 'breeder') ? 'Status page and emails' : 'From their status page'}</h3>
-      ${unread ? '<button class="btn btn-sm" data-msgs="read">Mark read</button>' : ''}</div>
-    ${requests.length ? `<div style="margin-top:8px;">${reqHtml}</div>` : ''}
-    ${messages.length ? `<ul style="list-style:none;margin:8px 0 0;padding:0;">${msgHtml}</ul>${messages.length > 50 ? `<p class="faint">Showing the newest 50 of ${messages.length}.</p>` : ''}` : ''}
-    <p class="field-hint" style="margin-top:8px;">${canEmail() ? 'Write to them with <strong>Email them…</strong> above; they answer on their status page.' : 'Reply by email, text or Messenger.'}</p>`;
+    </div>`).join('')}</section>`;
+}
+
+function wireRequests(root) {
+  const e = ctx.entry;
   const run = (fn) => fn().then(afterAction).catch((err) => showError(err.message || String(err)));
-  els.online.querySelector('[data-msgs="read"]')?.addEventListener('click', () => run(() => actions.markMessagesRead(e.id)));
   // A decision on their request, then the email saying so (W2 step 6).
   const decide = (field, fn, approved) => async () => {
     const request = e[field];
@@ -360,8 +359,32 @@ function renderOnline() {
     'listen:approve': decide('listen_change_request', actions.approveListenChange, true), 'listen:decline': decide('listen_change_request', actions.declineListenChange, false),
     'companion:sent': () => actions.markCompanionLinkSent(e.id), 'companion:decline': () => actions.declineCompanionRequest(e.id)
   };
-  els.online.querySelectorAll('[data-req]').forEach((btn) => btn.addEventListener('click', () => run(handlers[btn.dataset.req])));
-  els.online.querySelectorAll('[data-email-retry]').forEach((btn) => btn.addEventListener('click', () => run(async () => {
+  root.querySelectorAll('[data-req]').forEach((btn) => btn.addEventListener('click', () => run(handlers[btn.dataset.req])));
+}
+
+// Their messages, their status-page activity and the emails she sent (History),
+// newest first.
+const unreadCount = (e) => (e.messages || []).filter((m) => m.from !== 'breeder' && !m.read).length;
+function messagesHtml(e) {
+  const messages = [...(e.messages || [])].reverse();
+  if (!messages.length) return '';
+  const unread = unreadCount(e);
+  const items = messages.slice(0, 50).map((m) => (m.from === 'breeder' ? emailItemHtml(m) : `<li style="padding:6px 0;border-top:1px solid var(--border);">
+      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.at).slice(0, 10)))} · ${m.kind === 'message' ? 'Message' : m.from === 'server' ? 'KennelOS, while your phone was off' : 'On their status page'}${m.read ? '' : ' <span class="badge badge-blue">New</span>'}</div>
+      <div>${multiline(m.body)}</div></li>`)).join('');
+  return `<section class="card">
+    <div class="row-between" style="gap:8px;flex-wrap:wrap;"><h2 style="margin:0;">Messages and emails</h2>
+      ${unread ? '<button class="btn btn-sm" data-msgs="read">Mark read</button>' : ''}</div>
+    <ul style="list-style:none;margin:8px 0 0;padding:0;">${items}</ul>${messages.length > 50 ? `<p class="faint">Showing the newest 50 of ${messages.length}.</p>` : ''}
+    <p class="field-hint" style="margin-bottom:0;">${canEmail() ? 'Write to them with <strong>Communicate…</strong> on Interact; they answer on their status page.' : 'Reply by email, text or Messenger.'}</p>
+  </section>`;
+}
+
+function wireMessages(root) {
+  const e = ctx.entry;
+  const run = (fn) => fn().then(afterAction).catch((err) => showError(err.message || String(err)));
+  root.querySelector('[data-msgs="read"]')?.addEventListener('click', () => run(() => actions.markMessagesRead(e.id)));
+  root.querySelectorAll('[data-email-retry]').forEach((btn) => btn.addEventListener('click', () => run(async () => {
     await retryEmail(e.id, btn.dataset.emailRetry);
     syncSoon();
   })));
@@ -424,7 +447,7 @@ async function reportNextInLine() {
   if (!mine.length) return;
   const name = entryName(ctx.entry, ctx.contact);
   const list = mine.map((c) => `${litterLabel(c.litter)} (${c.litter.picks_opened_date ? 'picks open' : 'picks not open yet'})`).join(', ');
-  await alertModal({ title: `${name} is next in line`, message: `${name} is next for ${list}. No offer has been made. Use "Offer a litter…" when you're ready.` });
+  await alertModal({ title: `${name} is next in line`, message: `${name} is next for ${list}. No offer has been made. Use "Offer pups…" on Interact when you're ready.` });
 }
 
 async function onApprove() {
@@ -469,37 +492,54 @@ async function onApprove() {
   }) && (await afterAction(), await emailThem(ctx.entry.status === 'active' ? 'on_list' : 'approved'), await reportNextInLine());
 }
 
-async function onDecline() {
-  const name = entryName(ctx.entry, ctx.contact);
-  if (!(await confirmModal({ title: `Decline ${name}?`, message: 'The application closes. No contact is created.', confirmLabel: 'Decline', danger: true }))) return;
-  await actions.decline(ctx.entry.id);
-  await afterAction();
-  await emailThem('declined');
-}
+// The one way off the list (Details, decided 2026-10-10), by status: for a family
+// on the list, they withdrew (their choice) or she removes them (hers); before
+// they're on it, she declines the application, they withdrew, or the fee never
+// came. Each is recorded apart, so the funnel report still tells them apart.
+const LEAVE_CHOICES = {
+  active: [
+    { value: 'withdraw', label: 'They withdrew', hint: 'Their choice. Coming back means a new application, a new fee and a new place.' },
+    { value: 'remove', label: 'Remove them from the list', hint: 'Your decision. This is final: to come back they would re-apply, with a new fee and a new place.' }
+  ],
+  applied: [
+    { value: 'decline', label: 'Decline the application', hint: 'The application closes. No contact is created.' },
+    { value: 'withdraw', label: 'They withdrew', hint: 'They told you they no longer want to apply.' }
+  ],
+  approved: [
+    { value: 'expire', label: 'The fee wasn\'t received in time', hint: 'Their application closes. They can re-apply later.' },
+    { value: 'withdraw', label: 'They withdrew', hint: 'They told you they no longer want a place.' }
+  ]
+};
+const leaveLabel = (e) => (e.status === 'active' ? 'Remove from list…' : 'Close application…');
 
-async function onWithdraw() {
-  const name = entryName(ctx.entry, ctx.contact);
-  if (!(await confirmModal({ title: `${name} left the list?`, message: `Record that the family withdrew. Coming back means a new application, a new fee and a new place.${openOfferWarning()}`, confirmLabel: 'They withdrew' }))) return;
-  const res = await actions.withdraw(ctx.entry.id);
+async function onLeave() {
+  const e = ctx.entry;
+  const name = entryName(e, ctx.contact);
+  const choices = LEAVE_CHOICES[e.status] || [];
+  let res = null;
+  let did = null;
+  const ok = await formModal({
+    title: e.status === 'active' ? `${name} is leaving the list?` : `Close ${name}'s application?`,
+    confirmLabel: e.status === 'active' ? 'Take them off the list' : 'Close it',
+    danger: true,
+    bodyHtml: `${choices.map((c) => `<label class="check-inline" style="display:block;margin:8px 0;"><input type="radio" name="lv" value="${c.value}"> <strong>${esc(c.label)}</strong>
+        <div class="faint" style="margin-left:22px;">${esc(c.hint)}</div></label>`).join('')}
+      ${openOfferWarning() ? `<p class="field-hint">${esc(openOfferWarning().trim())}</p>` : ''}
+      <p class="field-hint">${emailHint()}</p>`,
+    onConfirm: async (o) => {
+      did = o.querySelector('input[name="lv"]:checked')?.value;
+      if (!did) throw new Error('Pick one.');
+      if (did === 'withdraw') res = await actions.withdraw(e.id);
+      else if (did === 'remove') res = await actions.removeByBreeder(e.id);
+      else if (did === 'decline') await actions.decline(e.id);
+      else if (did === 'expire') await actions.markFeeExpired(e.id);
+    }
+  });
+  if (!ok) return;
+  ctx.tab = 'details';
   await afterAction();
-  await reportLeaving(res);
-  await emailFamilies(offerSpecs(res));
-}
-
-async function onExpire() {
-  const name = entryName(ctx.entry, ctx.contact);
-  if (!(await confirmModal({ title: `Close ${name}'s application?`, message: 'Their fee wasn\'t received in time. They can re-apply later.', confirmLabel: 'Close it' }))) return;
-  await actions.markFeeExpired(ctx.entry.id);
-  await afterAction();
-}
-
-async function onRemove() {
-  const name = entryName(ctx.entry, ctx.contact);
-  if (!(await confirmModal({ title: `Remove ${name} from the list?`, message: `This is final. To come back they would re-apply, with a new fee and a new place.${openOfferWarning()}`, confirmLabel: 'Remove', danger: true }))) return;
-  const res = await actions.removeByBreeder(ctx.entry.id);
-  await afterAction();
-  await reportLeaving(res);
-  await emailFamilies(offerSpecs(res));
+  if (did === 'decline') await emailThem('declined');
+  if (res) { await reportLeaving(res); await emailFamilies(offerSpecs(res)); }
 }
 
 async function onUndo() {
@@ -624,15 +664,6 @@ function readySummary(e) {
     <button class="btn btn-sm" data-ready="yes" style="margin-top:4px;">They told me they're ready</button>`;
 }
 
-// Her changes to the matching answers (Spec §15.9), for the history and the
-// narrowing warning (PREF_FIELD_LABEL / prefValueText from waitlistRules).
-// Newest first, so changing an answer and back shows as neighbouring lines.
-function prefHistory(e) {
-  const log = e.pref_change_log || [];
-  if (!log.length) return '';
-  return [...log].reverse().map((x) => `${esc(fmtDate(x.date))} · ${esc(PREF_FIELD_LABEL[x.field] || x.field)}: ${esc(prefValueText(x.field, x.from))} → ${esc(prefValueText(x.field, x.to))}${x.declined ? ' <span class="faint">(they asked; you declined)</span>' : x.by === 'request' ? ' <span class="faint">(they asked)</span>' : ''}`).join('<br>');
-}
-
 // "Not this litter" (Spec §16.2): litters the family passed on ahead of time on
 // their status page, with their reason. Nothing counts until their turn comes.
 const reasonText = (r) => (r ? `${r.label}${r.text ? `: "${r.text}"` : ''}` : '');
@@ -655,20 +686,20 @@ function publicListNameHtml(e) {
   return `${esc(listedName(e, entryName(e, ctx.contact)))}${e.private_listing ? ' <span class="faint">(private)</span>' : ''}${asked}`;
 }
 
-function renderView() {
+// Who they are and what they asked for (Details tab).
+function detailsDlHtml() {
   const e = ctx.entry;
   const app = e.application || {};
   const program = ctx.programs.get(e.waitlist_program_id);
   const contactHtml = ctx.contact
     ? `<a href="contact.html?id=${encodeURIComponent(ctx.contact.id)}">${esc(ctx.contact.name)}</a>${ctx.contact.email ? ` <span class="faint">${esc(ctx.contact.email)}</span>` : ''}`
     : '<span class="faint">Not linked yet — approving links or creates one</span>';
-  els.body.innerHTML = `
+  return `
     <dl class="dl-meta" style="margin-top:14px;">
       ${row('Contact', contactHtml)}
       ${row('Program', program ? esc(program.name) + (program.is_archived ? ' <span class="badge badge-gray">archived</span>' : '') : '')}
       ${row('Wants', prefsSummary(e) + (e.pref_breed && resolveBreed(e.pref_breed, ctx.breeds) === null ? ` <span class="badge badge-red" title="No pup will match this breed. Edit to pick one of your breeds.">Unknown breed</span>` : ''))}
       ${row('Ready to buy', readySummary(e))}
-      ${row('Answer changes', prefHistory(e))}
       ${row('Listening for', LISTEN_STATUSES.includes(e.status) || isListenOnly(e) ? listenSummary(e) : '')}
       ${row('Not this litter', notThisLitterHtml(e))}
       ${row('On the public list', publicListNameHtml(e))}
@@ -685,9 +716,6 @@ function renderView() {
       ${row('Applied', e.applied_date ? esc(fmtDate(e.applied_date)) : '')}
       ${entryQuestions(e, ctx.form).map((q) => row(q.label, multiline(answerText(q, app[q.id])))).join('')}
     </dl>`;
-  // "Ready now?" answered for them (they told her by phone or message).
-  els.body.querySelector('[data-ready="yes"]')?.addEventListener('click', () => actions.recordReadyAnswer(e.id, { answer: 'yes', by: 'breeder' })
-    .then(afterAction).catch((err) => showError(err.message || String(err))));
 }
 
 // --- Details: edit / new ------------------------------------------------------------
@@ -1099,29 +1127,41 @@ function offerButtons(o, today) {
   return list.length ? `<div class="pill-row" style="margin-top:6px;">${list.join('')}</div>` : '';
 }
 
-function renderOffers() {
-  if (ctx.mode !== 'view' || !ctx.offers.length) { els.offers.innerHTML = ''; return; }
+// One offer's litter and how it stands, for the turn card and the record.
+function offerStatusHtml(o) {
+  const sale = o.sale_id && isAwaitingDeposit(o) ? ` · <a href="sale.html?id=${encodeURIComponent(o.sale_id)}">sale</a>` : '';
+  return isAwaitingDeposit(o)
+    ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>`
+    : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${o.pass_reason ? ` <span class="faint">${esc(reasonText(o.pass_reason))}</span>` : ''}`;
+}
+const litterLink = (id) => {
+  const l = ctx.litters.find((x) => x.id === id);
+  return l ? `<a href="litter.html?id=${encodeURIComponent(l.id)}">${esc(litterLabel(l))}</a>` : none;
+};
+
+// Offers she can still act on (Interact): an open turn, a pick awaiting its
+// deposit, a pick she can still switch, a pass she can still undo.
+function liveOffersHtml() {
   const today = todayYMD();
-  const offers = [...ctx.offers].sort((a, b) => (b.offered_date || '').localeCompare(a.offered_date || ''));
-  els.offers.innerHTML = `<section class="card" style="margin-top:16px;">
-      <h2 style="margin-top:0;">Offers</h2>
-      <div style="overflow-x:auto;"><table class="data"><thead><tr><th>Litter</th><th>Offered</th><th>Respond by</th><th>Outcome</th><th>Pass?</th></tr></thead><tbody>${
-        offers.map((o) => {
-          const l = ctx.litters.find((x) => x.id === o.litter_id);
-          const overdue = o.outcome === 'open' && o.respond_by_date && o.respond_by_date < today;
-          const sale = o.sale_id && isAwaitingDeposit(o) ? ` · <a href="sale.html?id=${encodeURIComponent(o.sale_id)}">sale</a>` : '';
-          const status = isAwaitingDeposit(o)
-            ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>`
-            : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${o.pass_reason ? ` <span class="faint">${esc(reasonText(o.pass_reason))}</span>` : ''}`;
-          return `<tr><td>${l ? `<a href="litter.html?id=${encodeURIComponent(l.id)}">${esc(litterLabel(l))}</a>` : none}</td>
-            <td>${esc(fmtDate(o.offered_date))}</td><td>${o.respond_by_date ? esc(fmtDate(o.respond_by_date)) : none}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</td>
-            <td>${status}${offerButtons(o, today)}</td>
-            <td>${o.counts_as_pass ? '<span class="badge badge-amber">Counts</span>' : none}${o.notes ? ` <span class="faint" title="${esc(o.notes)}">ⓘ</span>` : ''}</td></tr>`;
-        }).join('')
-      }</tbody></table></div>
-      <p class="field-hint" style="margin-bottom:0;">An offer is theirs to accept AND pay: a picked pup is held for them, but it's only theirs once the deposit arrives by the respond-by date.</p>
-    </section>`;
-  els.offers.querySelectorAll('[data-oc]').forEach((btn) => {
+  const live = [...ctx.offers].filter((o) => !o.is_archived && offerButtons(o, today))
+    .sort((a, b) => (b.offered_date || '').localeCompare(a.offered_date || ''));
+  if (!live.length) return '';
+  const open = live.some((o) => o.outcome === 'open');
+  return `<section class="card"><h2 style="margin-top:0;">${open ? 'Their turn' : 'Recent offers'}</h2>
+    ${live.map((o, i) => {
+      const overdue = o.outcome === 'open' && o.respond_by_date && o.respond_by_date < today;
+      return `<div style="padding:8px 0;${i ? 'border-top:1px solid var(--border);' : ''}">
+        <div><strong>${litterLink(o.litter_id)}</strong> · ${offerStatusHtml(o)}</div>
+        <div class="faint">Offered ${esc(fmtDate(o.offered_date))}${o.respond_by_date ? ` · respond by ${esc(fmtDate(o.respond_by_date))}` : ''}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</div>
+        ${offerButtons(o, today)}
+      </div>`;
+    }).join('')}
+    ${open ? '<p class="field-hint" style="margin-bottom:0;">An offer is theirs to accept AND pay: a picked pup is held for them, but it\'s only theirs once the deposit arrives by the respond-by date.</p>' : ''}
+  </section>`;
+}
+
+function wireOffers(root) {
+  root.querySelectorAll('[data-oc]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const offer = ctx.offers.find((o) => o.id === btn.dataset.offer);
       onOfferOutcome(offer, btn.dataset.oc).catch((err) => showError(err.message || String(err)));
@@ -1129,11 +1169,43 @@ function renderOffers() {
   });
 }
 
+// Every offer they've had (History), newest first.
+function offersHistoryHtml() {
+  if (!ctx.offers.length) return '';
+  const offers = [...ctx.offers].sort((a, b) => (b.offered_date || '').localeCompare(a.offered_date || ''));
+  return `<section class="card"><h2 style="margin-top:0;">Offers</h2>
+      <div style="overflow-x:auto;"><table class="data"><thead><tr><th>Litter</th><th>Offered</th><th>Respond by</th><th>Outcome</th><th>Pass?</th></tr></thead><tbody>${
+        offers.map((o) => `<tr><td>${litterLink(o.litter_id)}</td>
+            <td>${esc(fmtDate(o.offered_date))}</td><td>${o.respond_by_date ? esc(fmtDate(o.respond_by_date)) : none}</td>
+            <td>${offerStatusHtml(o)}</td>
+            <td>${o.counts_as_pass ? '<span class="badge badge-amber">Counts</span>' : none}${o.notes ? ` <span class="faint" title="${esc(o.notes)}">ⓘ</span>` : ''}</td></tr>`).join('')
+      }</tbody></table></div></section>`;
+}
+
+// Key dates and her changes to their answers (History): the running log of what
+// happened to this family, newest first.
+function timelineHtml() {
+  const e = ctx.entry;
+  const items = [
+    [e.applied_date, `Applied${e.source === 'online_form' ? ' through your online form' : ''}`],
+    [e.approved_date, 'Approved'],
+    [e.fee_received_date, Number(e.fee_amount) > 0 ? `Fee received (${fmtMoney(e.fee_amount)})` : 'Joined the list'],
+    [e.soon_notified_date, 'Told "almost your turn"'],
+    [e.declined_date, 'Application declined'],
+    [e.withdrawn_date, 'Withdrew'],
+    [e.removed_date, `Removed${e.removed_reason ? ` (${descriptor(WAITLIST_REMOVED_REASON, e.removed_reason).label.toLowerCase()})` : ''}`],
+    ...(e.pref_change_log || []).map((x) => [x.date, `${PREF_FIELD_LABEL[x.field] || x.field}: ${prefValueText(x.field, x.from)} → ${prefValueText(x.field, x.to)}${x.declined ? ' (they asked; you declined)' : x.by === 'request' ? ' (they asked)' : ''}`])
+  ].filter(([d]) => d).sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+  if (!items.length) return '';
+  return `<section class="card"><h2 style="margin-top:0;">Timeline</h2>
+    <ul style="list-style:none;margin:0;padding:0;">${items.map(([d, t], i) => `<li style="padding:5px 0;${i ? 'border-top:1px solid var(--border);' : ''}"><span class="faint">${esc(fmtDate(d))}</span> · ${esc(t)}</li>`).join('')}</ul>
+  </section>`;
+}
+
 // --- Documents: fee receipt, Sale invoice + receipt (Spec §15.2) ------------------------
 
-function renderDocs() {
+function familyDocs() {
   const e = ctx.entry;
-  if (ctx.mode !== 'view') { els.docs.innerHTML = ''; return; }
   const docs = [];
   if (e.fee_received_date && Number(e.fee_amount) > 0) docs.push({ label: 'Application fee receipt', source: 'waitlist', id: e.id, doc: 'receipt' });
   for (const o of ctx.offers.filter((x) => isAwaitingDeposit(x) && x.sale_id && !x.is_archived)) {
@@ -1143,9 +1215,14 @@ function renderDocs() {
     docs.push({ label: 'Puppy invoice', source: 'sale', id: e.placed_sale_id, doc: 'invoice' });
     docs.push({ label: 'Puppy receipt', source: 'sale', id: e.placed_sale_id, doc: 'receipt' });
   }
-  if (!docs.length) { els.docs.innerHTML = ''; return; }
+  return docs;
+}
+
+function docsHtml() {
+  const docs = familyDocs();
+  if (!docs.length) return '';
   const href = (d) => `invoice.html?source=${encodeURIComponent(d.source)}&id=${encodeURIComponent(d.id)}&doc=${d.doc}`;
-  els.docs.innerHTML = `<section class="card" style="margin-top:16px;">
+  return `<section class="card">
       <h2 style="margin-top:0;">Documents</h2>
       ${docs.map((d, i) => `<div class="row-between" style="padding:6px 0;border-top:${i ? '1px solid var(--border)' : '0'};">
           <span>${esc(d.label)}</span>
@@ -1153,7 +1230,11 @@ function renderDocs() {
         </div>`).join('')}
       <p class="field-hint" style="margin-bottom:0;">For partial payments, due dates or a custom number, use Invoice / Receipt in Financials.</p>
     </section>`;
-  els.docs.querySelectorAll('[data-pdf]').forEach((btn) => {
+}
+
+function wireDocs(root) {
+  const docs = familyDocs();
+  root.querySelectorAll('[data-pdf]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       try {
@@ -1171,25 +1252,24 @@ function renderDocs() {
 
 // --- Edit lifecycle -----------------------------------------------------------------
 
+function startEdit() {
+  clearError();
+  ctx.mode = 'edit';
+  ctx.draft = structuredClone(ctx.entry);
+  renderAll();
+}
+
+// Save / Cancel while editing or entering a new application (Edit itself is on
+// the Details tab).
 function renderProfileActions() {
-  if (ctx.mode === 'view') {
-    els.profileActions.innerHTML = '<button class="btn btn-sm" id="btn-edit">Edit</button>';
-    document.getElementById('btn-edit').onclick = () => {
-      clearError();
-      ctx.mode = 'edit';
-      ctx.draft = structuredClone(ctx.entry);
-      renderAll();
-    };
-  } else {
-    els.profileActions.innerHTML = `<button class="btn btn-primary btn-sm" id="btn-save">${ctx.mode === 'new' ? 'Save application' : 'Save'}</button><button class="btn btn-sm" id="btn-cancel">Cancel</button>`;
-    document.getElementById('btn-save').onclick = save;
-    document.getElementById('btn-cancel').onclick = () => {
-      clearError();
-      if (ctx.mode === 'new') { location.href = `waitlist.html?kennel=${encodeURIComponent(ctx.kennel.id)}`; return; }
-      ctx.mode = 'view';
-      renderAll();
-    };
-  }
+  els.profileActions.innerHTML = `<button class="btn btn-primary btn-sm" id="btn-save">${ctx.mode === 'new' ? 'Save application' : 'Save'}</button><button class="btn btn-sm" id="btn-cancel">Cancel</button>`;
+  document.getElementById('btn-save').onclick = save;
+  document.getElementById('btn-cancel').onclick = () => {
+    clearError();
+    if (ctx.mode === 'new') { location.href = `waitlist.html?kennel=${encodeURIComponent(ctx.kennel.id)}`; return; }
+    ctx.mode = 'view';
+    renderAll();
+  };
 }
 
 // Narrowing an answer while the family has an open offer, or is next for a litter,
@@ -1237,6 +1317,7 @@ async function save() {
   }
 }
 
+// Archive, Delete and New status link: rare, so behind one ⋯ menu (decided 2026-10-10).
 async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
   if (ctx.mode === 'new') return;
@@ -1245,9 +1326,18 @@ async function renderHeaderActions() {
   const delTitle = blockers.length
     ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
     : 'Permanently delete this entry (for a mistake).';
+  const link = statusLinkFor(e, ctx.kennel);
   els.headerActions.innerHTML = `
-    <button class="btn btn-sm" id="btn-archive">${e.is_archived ? 'Unarchive' : 'Archive'}</button>
-    <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
+    <div class="action-menu" id="entry-manage">
+      <button class="btn btn-sm" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More">⋯</button>
+      <div class="action-menu-list" role="menu" hidden>
+        ${link ? '<button type="button" role="menuitem" id="btn-newlink" title="Make a new link; the old one stops working">New status link…</button><hr>' : ''}
+        <button type="button" role="menuitem" id="btn-archive">${e.is_archived ? 'Unarchive' : 'Archive'}</button>
+        <button type="button" role="menuitem" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete…</button>
+      </div>
+    </div>`;
+  wireActionMenu(document.getElementById('entry-manage'));
+  document.getElementById('btn-newlink')?.addEventListener('click', () => onNewLink().catch((err) => showError(err.message || String(err))));
   document.getElementById('btn-archive').onclick = async () => {
     const verb = e.is_archived ? 'Unarchive' : 'Archive';
     if (!(await confirmModal({ title: `${verb} this entry?`, message: e.is_archived ? '' : `Archived entries are hidden from the waitlist and drop off the list.${openOfferWarning()}`, confirmLabel: verb }))) return;
@@ -1287,15 +1377,131 @@ function renderTitle() {
   els.subtitle.textContent = `${ctx.kennel.kennel_name} waitlist`;
 }
 
+// --- The three tabs (decided 2026-10-10) ---------------------------------------------
+
+const TABS = [
+  { id: 'details', label: 'Details' },
+  { id: 'interact', label: 'Interact' },
+  { id: 'history', label: 'History' }
+];
+
+// How many things wait on her in Interact: their requests, an open turn, a lost pup.
+function interactCount(e) {
+  return pendingRequests(e).length
+    + (ctx.offers.some((o) => o.outcome === 'open' && !o.is_archived) ? 1 : 0)
+    + (lostSale(e) ? 1 : 0);
+}
+
+// The tab a family's page opens on: Interact when something waits on her there,
+// History when only an unread message does, else Details. #details / #interact /
+// #history in the address wins (so a reload stays put).
+function defaultTab(e) {
+  const hash = location.hash.slice(1);
+  if (TABS.some((t) => t.id === hash)) return hash;
+  if (interactCount(e)) return 'interact';
+  if (unreadCount(e)) return 'history';
+  return 'details';
+}
+
+function renderTabs() {
+  const e = ctx.entry;
+  const counts = { interact: interactCount(e), history: unreadCount(e) };
+  els.tabs.innerHTML = TABS.map((t) => `<button type="button" class="seg-tab${t.id === ctx.tab ? ' active' : ''}" role="tab" aria-selected="${t.id === ctx.tab}" data-tab="${t.id}">${esc(t.label)}${counts[t.id] ? ` <span class="badge badge-amber">${counts[t.id]}</span>` : ''}</button>`).join('');
+  els.tabs.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => {
+    ctx.tab = b.dataset.tab;
+    history.replaceState(null, '', `#${ctx.tab}`);
+    renderAll();
+  }));
+  for (const t of TABS) els.panes[t.id].hidden = t.id !== ctx.tab;
+}
+
+// Details: where they stand, Edit, their answers and application, and the one way
+// off the list for their status.
+function renderDetails() {
+  const e = ctx.entry;
+  const leave = LEAVE_CHOICES[e.status] ? `<div class="pill-row" style="margin-top:12px;"><button class="btn btn-danger btn-sm" data-act="leave">${esc(leaveLabel(e))}</button></div>` : '';
+  const pane = els.panes.details;
+  pane.innerHTML = `
+    <section class="card">
+      <h2 style="margin:0 0 6px;">${badge(WAITLIST_ENTRY_STATUS, e.status)}</h2>
+      ${statusLines(e).map((l) => `<p style="margin:4px 0;">${l}</p>`).join('')}
+    </section>
+    <section class="card">
+      <div class="row-between"><h2 style="margin:0;">Their details</h2><button class="btn btn-sm" data-act="edit">Edit</button></div>
+      ${detailsDlHtml()}
+      ${leave}
+    </section>`;
+  pane.querySelector('[data-act="edit"]').addEventListener('click', startEdit);
+  pane.querySelector('[data-act="leave"]')?.addEventListener('click', () => onLeave().catch((err) => showError(err.message || String(err))));
+  // "Ready now?" answered for them (they told her by phone or message).
+  pane.querySelector('[data-ready="yes"]')?.addEventListener('click', () => actions.recordReadyAnswer(e.id, { answer: 'yes', by: 'breeder' })
+    .then(afterAction).catch((err) => showError(err.message || String(err))));
+}
+
+// Interact: what waits on her first, then what she can start for their status.
+function interactButtons(e) {
+  const b = (act, label, cls = '') => `<button class="btn ${cls}" data-act="${act}">${esc(label)}</button>`;
+  const lost = lostSale(e) ? b('restore', e.status === 'placed' ? 'Put back in line…' : 'Give their turn back…', 'btn-primary') : '';
+  let main = '';
+  switch (e.status) {
+    case 'applied': main = b('approve', 'Approve…', 'btn-primary'); break;
+    case 'approved': main = b('fee', e.fee_amount == null ? 'Add to the list…' : 'Fee received…', 'btn-primary'); break;
+    case 'active': main = b('offer', 'Offer pups…', lost ? '' : 'btn-primary') + b('move', 'Move place…'); break;
+    case 'removed': main = (canUndoRemoval(e, todayYMD()) ? b('undo', 'Undo removal', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
+    default: main = b('reapply', 'Re-apply');
+  }
+  return lost + main + b('communicate', 'Communicate…');
+}
+
+function renderInteract() {
+  const e = ctx.entry;
+  const lost = lostLine(e);
+  const pane = els.panes.interact;
+  pane.innerHTML = `
+    ${requestsHtml(e)}
+    ${lost ? `<section class="card"><p style="margin:0;">${lost}</p><p class="field-hint" style="margin-bottom:0;">Their place in line can come back for a pup lost through no fault of theirs.</p></section>` : ''}
+    ${liveOffersHtml()}
+    <section class="card">
+      <h2 style="margin-top:0;">Do something</h2>
+      <div class="pill-row">${interactButtons(e)}</div>
+    </section>`;
+  wireRequests(pane);
+  wireOffers(pane);
+  const handlers = { offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, reapply: onReapply, restore: onRestore, communicate: onCommunicate };
+  pane.querySelectorAll('[data-act]').forEach((btn) => {
+    btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
+  });
+}
+
+// History: the running log — messages and emails, every offer, key dates and
+// answer changes, documents.
+function renderHistory() {
+  const pane = els.panes.history;
+  const parts = [messagesHtml(ctx.entry), offersHistoryHtml(), timelineHtml(), docsHtml()].filter(Boolean);
+  pane.innerHTML = parts.length ? parts.join('') : '<section class="card"><p class="muted" style="margin:0;">Nothing here yet.</p></section>';
+  wireMessages(pane);
+  wireDocs(pane);
+}
+
 function renderAll() {
   els.back.href = `waitlist.html?kennel=${encodeURIComponent(ctx.kennel.id)}`;
   renderTitle();
-  renderProfileActions();
   renderHeaderActions();
-  if (ctx.mode === 'view') { renderStatus(); renderOnline(); renderView(); els.status.hidden = false; }
-  else { els.status.hidden = true; els.online.hidden = true; renderEdit(); }
-  renderOffers();
-  renderDocs();
+  const viewing = ctx.mode === 'view';
+  els.tabs.hidden = !viewing;
+  els.edit.hidden = viewing;
+  if (viewing) {
+    if (!ctx.tab) ctx.tab = defaultTab(ctx.entry);
+    renderTabs();
+    renderDetails();
+    renderInteract();
+    renderHistory();
+  } else {
+    for (const t of TABS) els.panes[t.id].hidden = true;
+    els.editTitle.textContent = ctx.mode === 'new' ? 'Application' : 'Edit details';
+    renderProfileActions();
+    renderEdit();
+  }
 }
 
 async function main() {
@@ -1316,6 +1522,13 @@ async function main() {
   await reload();
   ctx.mode = 'view';
   renderAll();
+  // A tab in the address (#interact…), from a link or Back, switches to it.
+  window.addEventListener('hashchange', () => {
+    const tab = location.hash.slice(1);
+    if (ctx.mode !== 'view' || !TABS.some((t) => t.id === tab) || tab === ctx.tab) return;
+    ctx.tab = tab;
+    renderAll();
+  });
 }
 
 main().catch((e) => showError(e.message || String(e)));

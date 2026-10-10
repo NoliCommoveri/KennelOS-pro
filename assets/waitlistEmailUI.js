@@ -8,8 +8,8 @@
 // shown where the family can't be emailed (list not online, no address), so the
 // actions behave exactly as before there.
 import { esc } from './ui.js';
-import { formModal } from './waitlistUI.js';
-import { draftsFor, queueEmail } from '../data/waitlistOutbox.js';
+import { formModal, messageViaHtml, wireMessageVia } from './waitlistUI.js';
+import { draftFor, draftsFor, queueEmail } from '../data/waitlistOutbox.js';
 import { emailProblem } from '../data/waitlistEmails.js';
 
 // Publish, then send what's queued. Loaded only here, where the list is online.
@@ -66,4 +66,69 @@ export async function reviewEmails(drafts, { title = null, intro = '', confirmLa
   });
   if (ok && queued) syncSoon();
   return ok ? queued : 0;
+}
+
+// "Communicate…" on a family's page (decided 2026-10-10): one dialog for every way
+// to reach them. A dropdown picks how:
+//  - Send email (only where their list is online and they have an address): a
+//    radio per email that fits now (`emails`: [{ kind, label, extra? }]), with the
+//    drafted email below to edit before sending;
+//  - Message via…: the message for her to send herself (Share… / Copy message,
+//    and their number), carrying their status page link.
+// → 'email' when an email was queued, else false.
+export async function communicateDialog({ entryId, name, phone = '', message = '', emails = [] }) {
+  const canEmail = emails.length > 0;
+  let sent = false;
+  const radios = emails.map((e, i) => `<label class="check-inline" style="display:block;margin:4px 0;"><input type="radio" name="cm-kind" value="${i}"${i === 0 ? ' checked' : ''}> ${esc(e.label)}</label>`).join('');
+  const ok = await formModal({
+    title: `Communicate with ${name}`,
+    confirmLabel: canEmail ? 'Send email' : 'Done',
+    bodyHtml: `
+      <div class="field"><label for="cm-how">How</label><select id="cm-how">
+        ${canEmail ? '<option value="email">Send email</option>' : ''}<option value="message">Message via…</option>
+      </select>${canEmail ? '' : '<span class="field-hint">Email needs your list online and an email address for them.</span>'}</div>
+      <div data-cm="email"${canEmail ? '' : ' hidden'}>
+        <div class="field"><label>Which email</label>${radios}</div>
+        <div class="field"><label for="cm-subject">Subject</label><input id="cm-subject" type="text" maxlength="200"></div>
+        <div class="field"><label for="cm-body">Message</label><textarea id="cm-body" style="width:100%;min-height:190px;font-family:inherit;"></textarea></div>
+        <p class="field-hint">Sent from your kennel's name. It ends with a link to their status page, and says replies to the email aren't read: families answer there. Edit the standing wording in Waitlist settings.</p>
+      </div>
+      <div data-cm="message"${canEmail ? ' hidden' : ''}>${messageViaHtml({ phone, message })}</div>`,
+    onConfirm: async (o) => {
+      if (o.querySelector('#cm-how').value !== 'email') return;
+      const pick = emails[Number(o.querySelector('input[name="cm-kind"]:checked')?.value)];
+      const draft = { subject: o.querySelector('#cm-subject').value, body: o.querySelector('#cm-body').value };
+      const problem = emailProblem(draft);
+      if (problem) throw new Error(problem);
+      await queueEmail(entryId, { kind: pick.kind, ...draft });
+      sent = true;
+    }
+  }, (o) => {
+    const confirm = o.querySelector('[data-fm-confirm]');
+    const how = o.querySelector('#cm-how');
+    const show = () => {
+      const email = how.value === 'email';
+      o.querySelector('[data-cm="email"]').hidden = !email;
+      o.querySelector('[data-cm="message"]').hidden = email;
+      confirm.textContent = email ? 'Send email' : 'Done';
+      o.querySelector('[data-fm-cancel]').hidden = !email;
+      // Size the message box now that it can be measured.
+      if (!email) o.querySelector('#mv-body')?.dispatchEvent(new Event('input'));
+    };
+    wireMessageVia(o, phone);
+    how.addEventListener('change', show);
+    show();
+    // The preview: her template for the picked email, filled in for this family.
+    const preview = async () => {
+      const pick = emails[Number(o.querySelector('input[name="cm-kind"]:checked')?.value)];
+      if (!pick) return;
+      const d = await draftFor(entryId, pick.kind, pick.extra || {}).catch(() => null);
+      o.querySelector('#cm-subject').value = d?.subject || '';
+      o.querySelector('#cm-body').value = d?.body || '';
+    };
+    o.querySelectorAll('input[name="cm-kind"]').forEach((r) => r.addEventListener('change', preview));
+    if (canEmail) preview();
+  });
+  if (ok && sent) { syncSoon(); return 'email'; }
+  return false;
 }

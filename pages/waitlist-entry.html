@@ -27,19 +27,21 @@
 
     <div id="page-error"></div>
 
-    <section class="card" id="status-section"></section>
-    <section class="card" id="online-section" hidden></section>
+    <!-- Viewing a family: three tabs (decided 2026-10-10). Details: who they are and
+         where they stand. Interact: everything that does something. History: the
+         running log, offers and documents. Editing or a new application: the form. -->
+    <nav class="seg-tabs" id="entry-tabs" role="tablist" hidden></nav>
+    <div id="tab-details" role="tabpanel" hidden></div>
+    <div id="tab-interact" role="tabpanel" hidden></div>
+    <div id="tab-history" role="tabpanel" hidden></div>
 
-    <section class="card" style="margin-top:16px;">
+    <section class="card" id="edit-section" hidden>
       <div class="row-between">
-        <h2 style="margin:0;">Details</h2>
+        <h2 style="margin:0;" id="edit-title">Details</h2>
         <div id="profile-actions" class="pill-row"></div>
       </div>
       <div id="profile-body"></div>
     </section>
-
-    <section id="offers-section"></section>
-    <section id="docs-section"></section>
   </main>
 
   <script type="module" src="../app.js"></script>
