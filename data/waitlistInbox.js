@@ -58,7 +58,7 @@ export function arrivalDate(iso, timeZone) {
 }
 
 // `item` is the inbox item ({ id, name, email, createdAt, statusToken }), `opened`
-// what the applicant sealed ({ answers, prefs }), `form` her current questions
+// what the applicant sealed ({ answers, prefs, private_request }), `form` her current questions
 // (waitlistForm.formQuestions), `breeds` the kennel's breeds. → the new entry's
 // fields (without `id`'s bookkeeping), ready for waitlistEntryRepo.create.
 export function applicationToEntry(item, opened, { kennel, form, breeds = [] }) {
@@ -89,6 +89,9 @@ export function applicationToEntry(item, opened, { kennel, form, breeds = [] }) 
     pref_colors: colors,
     ready_timing: oneOf(prefs.ready_timing, WAITLIST_READY_TIMING, null),
     listen_mode: 'all',
+    // Their ask to show privately on the public list (Spec §15.3): waits for her
+    // Approve / Decline; until then their name lists as "Jane S.".
+    ...(opened && opened.private_request === true ? { private_request: { requested_date: arrivalDate(item.createdAt, kennel.time_zone) } } : {}),
     source: 'online_form',
     ...(item.statusToken ? { status_token: item.statusToken } : {})
   };

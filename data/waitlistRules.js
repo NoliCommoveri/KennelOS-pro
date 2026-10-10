@@ -1076,8 +1076,25 @@ export function publicName(fullName) {
   return `${words[0]} ${[...last][0].toUpperCase()}.`;
 }
 
+// "A***** K" from "Andrea Kim": a family she let list privately (`private_listing`,
+// asked for on the application, approved by her). The first letter, then one
+// asterisk per letter hidden, then the last initial. One word: "A*****". Blank:
+// "Family".
+export function privateName(fullName) {
+  const words = String(fullName ?? '').trim().split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+  if (!words.length) return 'Family';
+  const first = [...words[0]];
+  const masked = `${first[0].toUpperCase()}${'*'.repeat(first.length - 1)}`;
+  if (words.length === 1) return masked;
+  return `${masked} ${[...words[words.length - 1]][0].toUpperCase()}`;
+}
+
+// The name a family shows under on the public list: "Jane S.", or "J*** S" when she
+// approved their request to list privately.
+export const listedName = (entry, fullName) => (entry && entry.private_listing ? privateName(fullName) : publicName(fullName));
+
 // The public list for one kennel: the allow-listed fields only (position, first
-// name + last initial, sex preference, date added). Positions are the REAL §6.1
+// name + last initial, or the private form of it, sex preference, date added). Positions are the REAL §6.1
 // positions; paused families are left out and their numbers skipped (#1, #2, #4),
 // so nobody's public number shifts when a pause ends (decided 2026-10-06).
 // Listen-only families show, with no marker. Programs, notes and money never do.
@@ -1090,7 +1107,7 @@ export function publicList(entries, kennelId, programsById = new Map(), { today,
     .filter(({ entry }) => !isPaused(entry, today, config) && !hidden(entry))
     .map(({ entry, position }) => ({
       position,
-      name: publicName(nameOf(entry)),
+      name: listedName(entry, nameOf(entry)),
       pref_sex: entry.pref_sex || 'any',
       added: anchorDate(entry)
     }));

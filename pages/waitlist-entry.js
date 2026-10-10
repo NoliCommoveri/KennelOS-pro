@@ -26,7 +26,7 @@ import {
   eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
-  PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily
+  PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName
 } from '../data/waitlistRules.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq, READY_TIMING_LABEL,
@@ -437,18 +437,30 @@ async function onApprove() {
         <label class="check-inline" style="display:block;"><input type="radio" name="ap-contact" value=""${matches.length && matches[0].reason === 'email' ? '' : ' checked'}> Create a new contact for ${esc(entryName(e, null))}</label>
         ${matches.length ? '<span class="field-hint">A match is only a suggestion. Pick it if it\'s the same family.</span>' : ''}
       </div>`;
+  // Their request on the application to list privately (Spec §15.3): she answers it here.
+  const full = entryName(e, ctx.contact);
+  const asksPrivate = actions.hasPendingRequest(e, 'private_request');
+  const privateAsk = asksPrivate ? `<div class="card" style="margin:10px 0 0;padding:10px 12px;">
+      <strong>Applicant requests to not display their full name on the waitlist</strong>
+      <p style="margin:6px 0;">On your public list, approve shows them as <strong>${esc(privateName(full))}</strong> and decline as <strong>${esc(publicName(full))}</strong> (their place in line is the same either way)</p>
+      <label class="check-inline" style="display:block;"><input type="radio" name="ap-private" value="yes"> Approve</label>
+      <label class="check-inline" style="display:block;"><input type="radio" name="ap-private" value="no"> Decline</label>
+    </div>` : '';
   await formModal({
-    title: `Approve ${entryName(e, ctx.contact)}?`,
+    title: `Approve ${full}?`,
     confirmLabel: 'Approve',
     bodyHtml: `<div class="form-grid">
         <div class="field"><label>Approval date</label><input id="ap-date" type="date" value="${esc(todayYMD())}"></div>
         <div class="field"><label>Program</label><select id="ap-program">${programOptions(e.waitlist_program_id)}</select></div>
         ${contactChoices}
-      </div>
+      </div>${privateAsk}
       <p class="field-hint">A program that waives the fee puts them straight on the list. Otherwise they owe ${esc(fmtMoney(ctx.config.fee_amount) || 'the fee')} and join the list when you mark it received. ${emailHint()}</p>`,
     onConfirm: async (o) => {
       const picked = o.querySelector('input[name="ap-contact"]:checked');
+      const privateChoice = o.querySelector('input[name="ap-private"]:checked');
+      if (asksPrivate && !privateChoice) throw new Error('Please approve or decline their request to not display their full name.');
       await actions.approve(e.id, {
+        ...(asksPrivate ? { privateListing: privateChoice.value === 'yes' } : {}),
         date: o.querySelector('#ap-date').value || todayYMD(),
         programId: o.querySelector('#ap-program').value || null,
         contactId: picked ? picked.value || null : null
@@ -632,6 +644,17 @@ function notThisLitterHtml(e) {
   }).join('<br>') + ((e.prepasses || []).length ? '<br><span class="faint">Left out of their turn when it comes, and it counts as a pass only then.</span>' : '');
 }
 
+// How their name shows on the public list (Spec §15.3), and what came of their
+// request to list privately.
+function publicListNameHtml(e) {
+  const req = e.private_request;
+  const asked = req && req.requested_date
+    ? (req.decided ? ` <span class="faint">— they asked to list privately; you ${req.decided === 'approved' ? 'approved' : 'declined'} it ${esc(fmtDate(req.decided_date))}</span>`
+      : ' <span class="badge badge-blue">Asked to list privately — you decide when you approve</span>')
+    : '';
+  return `${esc(listedName(e, entryName(e, ctx.contact)))}${e.private_listing ? ' <span class="faint">(private)</span>' : ''}${asked}`;
+}
+
 function renderView() {
   const e = ctx.entry;
   const app = e.application || {};
@@ -648,6 +671,7 @@ function renderView() {
       ${row('Answer changes', prefHistory(e))}
       ${row('Listening for', LISTEN_STATUSES.includes(e.status) || isListenOnly(e) ? listenSummary(e) : '')}
       ${row('Not this litter', notThisLitterHtml(e))}
+      ${row('On the public list', publicListNameHtml(e))}
       ${row('Paused until', e.paused_until ? esc(fmtDate(e.paused_until)) + (e.pause_reason ? ` <span class="faint">— ${esc(e.pause_reason)}</span>` : '') : '')}
       ${row('Fee', e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : '')}
       ${row('Fee policy', e.fee_credit_policy ? esc(descriptor(FEE_CREDIT_POLICY, e.fee_credit_policy).label) : '')}
@@ -742,6 +766,13 @@ function prefField(key, e, label) {
 // else the entry's own questions (its saved wording plus anything added since).
 const draftQuestions = () => (ctx.mode === 'new' ? ctx.form.filter(isAnswerQuestion) : entryQuestions(ctx.draft, ctx.form));
 
+// "List privately" (Spec §15.3): their name shows as "A***** K" on the public list.
+// Online, they ask on the application and she approves; here she sets it herself.
+function privateField(e) {
+  return `<div class="field field-wide"><label class="check-inline"><input id="f-private_listing" type="checkbox"${e.private_listing ? ' checked' : ''}> Show their name privately on the public list</label>
+    <span class="field-hint">Their first name shows as its first letter and an asterisk for each letter after it, then their last initial (Andrea Kim → A***** K). Their place in line is the same.</span></div>`;
+}
+
 function renderEdit() {
   const e = ctx.draft;
   const app = e.application || {};
@@ -776,7 +807,7 @@ function renderEdit() {
     if (q.type === 'notice') {
       return `<div class="field field-wide"><div class="card" style="margin:0;padding:10px 12px;background:var(--surface-2, transparent);">
         <strong>${esc(q.label)}</strong><p style="margin:6px 0 0;white-space:pre-line;">${esc(q.help)}</p>
-        <span class="field-hint">Every applicant is told this. Make sure this family has heard it.</span></div></div>`;
+        <span class="field-hint">Every applicant is told this. Make sure this family has heard it.</span></div></div>${privateField(e)}`;
     }
     return answerField(q, app[q.id]);
   }).join('');
@@ -814,6 +845,7 @@ function renderEdit() {
       <div class="field"><label>Paused until</label><input id="f-paused_until" type="date" value="${esc(e.paused_until || '')}">
         <span class="field-hint">Not offered pups until after this date. They keep their place, but don't appear on the public list while paused.</span></div>
       <div class="field"><label>Pause reason</label><input id="f-pause_reason" type="text" value="${esc(e.pause_reason || '')}"></div>
+      ${privateField(e)}
 
       <div class="field field-wide"><h3 style="margin:8px 0 0;">Fee</h3></div>
       <div class="field"><label>Fee amount</label><input id="f-fee_amount" type="number" min="0" step="0.01" value="${esc(e.fee_amount ?? '')}"></div>
@@ -860,6 +892,7 @@ function readForm() {
     application_questions: snapshotQuestions(questions),
     notes: val('f-notes')
   };
+  if (has('f-private_listing')) out.private_listing = document.getElementById('f-private_listing').checked;
   if (has('f-applied_date')) out.applied_date = val('f-applied_date') || ctx.draft.applied_date || todayYMD();
   // The fee date is the position anchor (waitlistRules.anchorDate), so it can be
   // corrected but never blanked here: a cleared box keeps the date it had.

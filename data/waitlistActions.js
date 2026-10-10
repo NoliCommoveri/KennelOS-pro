@@ -84,7 +84,11 @@ function contactFromApplication(app = {}) {
 // Approve an application. `contactId` links an existing contact (a match she
 // picked); otherwise a new contact is created from the answers. A fee-waived
 // program skips straight onto the list, anchored at the approval date (§5.3).
-export async function approve(entryId, { date = todayYMD(), contactId = null, programId } = {}) {
+// `privateListing` is her answer to their request, made on the application, to
+// show privately on the public list ("A***** K", Spec §15.3): she decides it in
+// the Approve dialog. Without a request it's ignored; with one and no answer the
+// request stays undecided (she can still set it on the Edit form).
+export async function approve(entryId, { date = todayYMD(), contactId = null, programId, privateListing } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['applied'], 'approve');
   const program_id = programId === undefined ? (entry.waitlist_program_id || null) : (programId || null);
@@ -103,6 +107,9 @@ export async function approve(entryId, { date = todayYMD(), contactId = null, pr
     fee_due_date: fee === 0 ? null : feeDueDate(date, config),
     status: 'approved'
   };
+  if (hasPendingRequest(entry, 'private_request') && typeof privateListing === 'boolean') {
+    Object.assign(changes, { private_listing: privateListing, private_request: decided(entry.private_request, privateListing ? 'approved' : 'declined', date) });
+  }
   if (fee === 0) {
     Object.assign(changes, { status: 'active', fee_received_date: date, fee_received_at: nowISO(), fee_payment_method: 'Waived' });
   }

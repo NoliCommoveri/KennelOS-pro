@@ -249,7 +249,11 @@ export const SYNC_REGISTRY = Object.freeze({
       // a restore without private backup would change every family's link.
       'status_token',
       // 'online_form' when the application came through her online form (W2 step 4).
-      'source'
+      'source',
+      // Her yes to their request to list privately ("A***** K", Spec §15.3). Cloud:
+      // the public list shows it anyway, and a restore without it would put their
+      // full first name back on a public page.
+      'private_listing'
     ],
     partial: { application: ['name', 'email'] },
     // pref_change_*: "private tier like application" (Waitlist Spec §15.9).
@@ -270,7 +274,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'companion_request',
       // What they'd paid on a pup they lost, kept for their next one (Spec
       // §16.11): money, private like fee_amount.
-      'carried_payment'
+      'carried_payment',
+      // Their ask, on the application, to list privately (Spec §15.3): private
+      // like pause_request. What she decided rides private_listing.
+      'private_request'
     ],
     pending: []
   },

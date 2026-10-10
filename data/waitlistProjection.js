@@ -124,6 +124,15 @@ function entryView(entry, ctx) {
     },
     passes: { used: passesUsed(entry, ctx.offers), max: Number(ctx.config.max_passes) },
     requests: requestsView(entry, ctx.today),
+    // How their name shows on the public list (Spec §15.3): private ("A***** K") or
+    // not, and their request to list privately as their page shows it (no expiry:
+    // it's the answer to a question on their application).
+    private_name: {
+      on: Boolean(entry.private_listing),
+      request: entry.private_request && entry.private_request.requested_date
+        ? { requested_date: entry.private_request.requested_date, decided: entry.private_request.decided || null, decided_date: orNull(entry.private_request.decided_date) }
+        : null
+    },
     // "Not this litter" (§16.2): which, and when; never their reason.
     prepasses: (entry.prepasses || []).map((p) => ({
       ...(p.litter_id ? { litter_id: p.litter_id } : { pairing_id: p.pairing_id }), date: orNull(p.date)
