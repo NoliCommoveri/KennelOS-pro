@@ -4,7 +4,7 @@
 // & Reset brief v1 covers clearing just the sample manifest; this is the
 // superset — real data included, no reference guard, since nothing survives).
 import { db, existingTableNames, dataTables } from './db.js';
-import { clearAllSettings, clearAllAppStorage, getCloudBackupState, updateCloudBackupState } from './settings.js';
+import { clearAllSettings, clearAllAppStorage, getCloudBackupState, updateCloudBackupState, clearCloudSyncState } from './settings.js';
 import { clearAll as clearNudgeDismissals } from './nudgeState.js';
 
 // Live counts for the confirmation UI, across whatever data tables exist at the
@@ -29,6 +29,7 @@ export async function resetApp() {
   clearAllSettings();
   clearNudgeDismissals();
   stopCloudBackupAfterReset();
+  clearCloudSyncState(); // its sync_meta went with the tables; it re-joins (Phase 2 plan §3.4)
 }
 
 // Cloud Phase 1 plan §3.3: a reset ALWAYS turns cloud backup off on this device,

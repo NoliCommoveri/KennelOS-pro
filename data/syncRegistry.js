@@ -487,3 +487,23 @@ export function snapshotRowToLocal(table, snapRow) {
   for (const key of entry.derived || []) delete out[key];
   return out;
 }
+
+// --- The server's copy (Cloud Phase 2 plan §6.1) ------------------------------
+// Every key a record's cloud part may carry, as plain sorted data:
+// { tables: { [table]: { keys: [...], nested: { [field]: [...] } } },
+//   eventDetails: { [eventType]: [...] } }. The cloud Worker keeps a generated
+// copy (cloud/src/lib/cloudFields.js, from cloud/scripts/cloud-fields.mjs) and
+// drops a record carrying anything else; cloud/tests/cloudFields.test.js fails
+// when the two differ.
+export function cloudFieldManifest() {
+  const tables = {};
+  for (const table of REGISTRY_TABLES) {
+    const entry = SYNC_REGISTRY[table];
+    const nested = {};
+    for (const [field, keys] of Object.entries(entry.partial || {})) nested[field] = [...keys].sort();
+    tables[table] = { keys: [...allowedSnapshotKeys(table)].sort(), nested };
+  }
+  const eventDetails = {};
+  for (const t of EVENT_TYPES) eventDetails[t.value] = [...cloudDetailKeys(t.value)].sort();
+  return { tables, eventDetails };
+}

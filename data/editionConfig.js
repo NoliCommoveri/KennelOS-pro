@@ -107,6 +107,7 @@ export const editionFlags = {
   // Multi-kennel scope (Multi-Kennel Scope Spec §12) — Pro is the edition that
   // gets more than one own kennel and the active-kennel switcher.
   multiKennel: true,
+  liveSync: true,
 };
 
 // Full nav bar (Pro has every hub).

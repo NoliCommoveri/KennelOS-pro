@@ -362,7 +362,10 @@ async function autoPassTurn(c, entry, prepassed, today) {
     id: `prepass-turn-${entry.id}-${today}-${prepassed.map((x) => x.litter.id).join('-')}`, kind: 'action',
     body: `Their turn came up on ${names}, which they'd said "Not this litter" to, so it was recorded as a pass${counts ? ` (pass ${passesUsed(entry, offers)} of ${Number(c.config.max_passes)})` : ''} and the list moved on.${removed ? ' That was their last pass, so they were removed from the list; you can undo it from their page for 7 days.' : ''}`
   }]);
-  return { entry_id: entry.id, litter_ids: prepassed.map((x) => x.litter.id), removed };
+  return {
+    entry_id: entry.id, litter_ids: prepassed.map((x) => x.litter.id), removed,
+    counted: Boolean(counts), used: passesUsed(entry, offers), max: Number(c.config.max_passes)
+  };
 }
 
 // Write a turn: one open row per litter in `ls` ([{ litter, eligibleDogs }]), and
@@ -392,13 +395,15 @@ async function makeTurn(c, entry, ls, { today, note = '', prepassed = [] }) {
 // Offer the next turn in this kennel, if nobody holds one (§16.1 rule 3). A family
 // whose whole turn they'd passed on ahead of time is passed at once and the list
 // goes on (§16.2). Returns the new turn (with `auto_passed`: the families passed on
-// the way), or null (a turn is open, or nobody is eligible for any open litter).
+// the way), `{ none: true, auto_passed }` when families were passed but nobody is
+// left to offer, or null (a turn is open, or nobody is eligible for any open
+// litter). Callers must show auto_passed: a pass she didn't see is a surprise.
 export async function offerNextTurn(kennelId, { today = todayYMD() } = {}) {
   const autoPassed = [];
   for (;;) {
     const c = await kennelContext(kennelId);
     const next = nextTurn(c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today));
-    if (!next) return null;
+    if (!next) return autoPassed.length ? { none: true, auto_passed: autoPassed } : null;
     const { offer, prepassed } = splitPrepassed(next.entry, next.litters);
     if (offer.length) return { ...(await makeTurn(c, next.entry, offer, { today, prepassed })), auto_passed: autoPassed };
     autoPassed.push(await autoPassTurn(c, next.entry, prepassed, today));
@@ -482,12 +487,25 @@ export async function closePicks(litterId) {
 // it closed: accepted / passed / no_response / no_deposit / left. With automatic
 // offers on for that moment, the next turn is offered now; otherwise (the default)
 // nobody is offered and who's next is returned so the page can tell her.
-// Returns { next, waiting } — at most one set.
+// Returns { next, waiting, auto_passed } — at most one of next / waiting set.
+// `waiting.prepassed_litter_ids` names the litters that family said "Not this
+// litter" to, so the page can say offering them records a pass.
 async function moveTurnOn(kennelId, { today = todayYMD(), trigger } = {}) {
   const c = await kennelContext(kennelId);
-  if (autoOffers(c.config, trigger)) return { next: await offerNextTurn(kennelId, { today }), waiting: null };
+  if (autoOffers(c.config, trigger)) {
+    const r = await offerNextTurn(kennelId, { today });
+    return { next: r && !r.none ? r : null, waiting: null, auto_passed: r?.auto_passed || [] };
+  }
   const n = nextTurn(c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today));
-  return { next: null, waiting: n ? { entry_id: n.entry.id, litter_ids: n.litters.map((x) => x.litter.id) } : null };
+  if (!n) return { next: null, waiting: null, auto_passed: [] };
+  const { prepassed } = splitPrepassed(n.entry, n.litters);
+  return {
+    next: null, auto_passed: [],
+    waiting: {
+      entry_id: n.entry.id, litter_ids: n.litters.map((x) => x.litter.id),
+      ...(prepassed.length ? { prepassed_litter_ids: prepassed.map((x) => x.litter.id) } : {})
+    }
+  };
 }
 
 // Fold moveTurnOn's answer into an action's result.
@@ -495,6 +513,7 @@ async function finishTurn(result, kennelId, today, trigger) {
   const moved = await moveTurnOn(kennelId, { today, trigger });
   result.next = moved.next;
   if (moved.waiting) result.waiting = [...(result.waiting || []), moved.waiting];
+  if (moved.auto_passed.length) result.auto_passed = [...(result.auto_passed || []), ...moved.auto_passed];
   return result;
 }
 
@@ -509,6 +528,7 @@ async function releaseOpenOffers(entryId, { date = todayYMD(), why, exceptOfferI
   const voided = [];
   const offered = [];
   const waiting = [];
+  const autoPassed = [];
   for (const o of open) {
     await releasePick(o, { date, why, strict: false });
     voided.push(await waitlistOfferRepo.update(o.id, {
@@ -520,8 +540,9 @@ async function releaseOpenOffers(entryId, { date = todayYMD(), why, exceptOfferI
     const moved = await moveTurnOn(voided[0].kennel_id, { today: date, trigger: 'left' });
     if (moved.next) offered.push(moved.next);
     if (moved.waiting) waiting.push(moved.waiting);
+    autoPassed.push(...moved.auto_passed);
   }
-  return { voided, offered, waiting };
+  return { voided, offered, waiting, auto_passed: autoPassed };
 }
 
 // The deposit-pending Sale holding an open offer's pick, or null.

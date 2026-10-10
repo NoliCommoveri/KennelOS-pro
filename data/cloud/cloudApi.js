@@ -238,6 +238,30 @@ export const createHandoff = (token, { keyId, wrapped, proof }) =>
 export const redeemHandoff = (token, proof) =>
   getJson('/vault/handoffs/redeem', { method: 'POST', token, json: { proof } });
 
+// --- Live sync (Cloud Phase 2 plan §6.1) ------------------------------------------
+// enable → { enabled, seq, keyId }; 409 'vault_required'. disable (fresh
+// sign-in, like signout-others). push → { seq, accepted, superseded, dropped }.
+// pull → { records, seq, more, through }; 410 'resync_required' (a
+// CloudRequestError with status 410). Every route but disable: 403 'pro_required'.
+export const enableSync = (token) => getJson('/sync/enable', { method: 'POST', token, json: {} });
+export const disableSync = (token, reauth = {}) => getJson('/sync', { method: 'DELETE', token, json: reauth });
+export const syncHead = (token) => getJson('/sync/head', { token });
+export const pushSync = (token, records) => getJson('/sync/push', { method: 'POST', token, json: { records } });
+export const pullSync = (token, since, limit = 500) =>
+  getJson(`/sync/pull?since=${encodeURIComponent(since)}&limit=${encodeURIComponent(limit)}`, { token });
+export const syncCursor = (token, seq) => getJson('/sync/cursor', { method: 'POST', token, json: { seq } });
+
+// The account-recovery check (Cloud Phase 1 plan §2.7): an unlocked device saves
+// it once; with no device signed in, the recovery code proves the account. The
+// three /recover routes take no token. 400 'no_match' when the check isn't the
+// account's (or it has none saved yet).
+export const saveRecoveryCheck = (token, { keyId, check }) =>
+  getJson('/vault/check', { method: 'PUT', token, json: { keyId, check } });
+export const getRecoveryWrap = (email) => getJson('/recover/wrap', { method: 'POST', json: { email } });
+export const checkRecovery = (email, check) => getJson('/recover/check', { method: 'POST', json: { email, check } });
+export const requestRecoveryEmail = ({ email, check, newEmail, code }) =>
+  getJson('/recover/email', { method: 'POST', json: { email, check, newEmail, code } });
+
 // --- Public -------------------------------------------------------------------
 // Service notices (the shutdown channel). → [{ id, level, message, until }]
 // --- The waitlist online, her side (Waitlist W2 Plan §5) -------------------------------

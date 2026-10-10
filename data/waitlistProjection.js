@@ -22,7 +22,8 @@
 import {
   waitlistConfig, entryName, publicList, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
-  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, whelpNotes, readyCheck, publicIntroText
+  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, whelpNotes, readyCheck, publicIntroText,
+  messengerLink
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
@@ -366,6 +367,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       // Her pass reasons and the message each shows the family (§16.5).
       pass_reasons: passReasons(config),
       color_matching: Boolean(config.color_matching),
+      // "Message us on Facebook" (Spec §11): only while she has it switched on.
+      ...(config.facebook_button && messengerLink(config.facebook_page) ? { messenger: messengerLink(config.facebook_page) } : {}),
       parents: parentsSection(kennel, live, { dogs, litters, pairings }),
       ...(formKey ? { message_key: { key_id: formKey.id, public_key: formKey.public_key } } : {}),
       ...(config.online_form && formKey ? { form: formSection(kennel, config, formKey, dogs) } : {})

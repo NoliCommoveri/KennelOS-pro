@@ -13,13 +13,12 @@ import Dexie from '../vendor/dexie.min.mjs';
 export const db = new Dexie('KennelOSBreedingApp');
 
 // --- Schema ---------------------------------------------------------------
-// Fresh repo, no shipped data yet — schema starts collapsed at a SINGLE
-// version(1) block covering all ten tables. That ladder only exists to
-// protect real-data migrations, and nothing has shipped — there is no live data
-// to migrate, so this block absorbs every change and is edited in place. The
-// first `.version(2)` block should be added only at the first real release;
-// from then on, additive versioning applies as Dexie expects and this block
-// is never edited again.
+// FROZEN (2026-10-10). version(1) is what every installed device has: real
+// users have kept records in production since 2026-10-07, so this block is
+// NEVER edited again. Every schema change from here on is ADDITIVE, in a new
+// `db.version(N).stores({...})` block below that lists only the tables it adds
+// or re-indexes (Dexie 4 carries the rest forward), and a shipped block is
+// never edited either. A new field needs no block at all unless it's indexed.
 //
 // Index notes:
 //  - events '[subject_type+subject_id]' is a COMPOUND index, required for fast
@@ -148,6 +147,15 @@ db.version(1).stores({
   device_secrets:    'id'
 });
 
+// version(2), 2026-10-10 (Cloud Phase 2 plan §3.4): `sync_meta`, device-only.
+// One row per record this device has synced: id `<table>:<row id>`, `tbl`,
+// `row_id`, `seq` (the server's seq for the version this device last pushed or
+// pulled) and `hash` (the row's syncRecords.rowHash then). data/cloud/syncState.js
+// is its only reader/writer.
+db.version(2).stores({
+  sync_meta: 'id, tbl'
+});
+
 // --- Device-only tables ---------------------------------------------------
 // `device_secrets` holds this device's unlocked private-vault key as a
 // CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js is its only
@@ -156,7 +164,10 @@ db.version(1).stores({
 // and it has no syncRegistry entry. Reset App and remote erase still clear it
 // (appReset.js clears every table). Code that means "the kennel's records"
 // iterates dataTables(), not db.tables.
-export const DEVICE_ONLY_TABLES = Object.freeze(['device_secrets']);
+//
+// `sync_meta` (version 2) is device-only for the same reasons: it records what
+// THIS device has synced (Cloud Phase 2 plan §3.4), so it never travels.
+export const DEVICE_ONLY_TABLES = Object.freeze(['device_secrets', 'sync_meta']);
 
 export function dataTables() {
   return db.tables.filter((t) => !DEVICE_ONLY_TABLES.includes(t.name));

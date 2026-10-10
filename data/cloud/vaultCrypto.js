@@ -160,6 +160,21 @@ export async function handoffProof(code) {
   return toHex(new Uint8Array(bits));
 }
 
+// --- The account-recovery check (Cloud Phase 1 plan §2.7) ---------------------------
+// A value only the vault key's holder can make, so the recovery code (which opens
+// the key) can prove the account when no device is signed in. The server keeps
+// its SHA-256, saved by any unlocked device; it can't learn the key from it.
+export async function accountCheck(vaultKey, keyId) {
+  const raw = new Uint8Array(await subtle().exportKey('raw', vaultKey));
+  const base = await subtle().importKey('raw', raw, 'HKDF', false, ['deriveBits']);
+  raw.fill(0);
+  const bits = await subtle().deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('kennelos-vault'), info: enc.encode(`kennelos-vault/account-check/v1/${checkKeyId(keyId)}`) },
+    base, 256
+  );
+  return toHex(new Uint8Array(bits));
+}
+
 // A fresh random PRF salt for a new passkey wrap (stored beside it; not secret).
 export const newPrfSalt = () => toBase64(randomBytes(32));
 

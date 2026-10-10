@@ -28,7 +28,7 @@ import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
-import { waitlistConfig, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
+import { waitlistConfig, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES, messengerLink } from '../data/waitlistRules.js';
 import { PUPPY_RECORD_FIELD_GROUPS, PUPPY_RECORD_FIELD_KEYS, puppyRecordFieldsValue } from '../data/puppyRecordFields.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
@@ -55,6 +55,14 @@ const RECENT_PLACEMENTS = 5;
 // Keeps the backup-riding string small; a program logo needs no more resolution
 // than this on a printed one-page document.
 const LOGO_MAX_EDGE = 480;
+// A stored logo stays under about 300 KB (decided 2026-10-10): live sync carries
+// it twice in one record (readable + sealed) against the server's ~2 MB row
+// (Cloud Phase 2 plan §4.1). A PNG over it is redrawn at smaller sizes; an SVG
+// (kept as markup) over it is refused. Upload only: an older, larger logo already
+// on a kennel or in a backup still restores.
+const LOGO_MAX_CHARS = 300_000;
+const LOGO_STEP_EDGES = [LOGO_MAX_EDGE, 360, 240, 160];
+const LOGO_TOO_LARGE = 'That logo is too large. Try a smaller image.';
 
 let kennel = null;      // the kennel being viewed
 let allDogs = [];        // loaded once, for the "Apply to dogs" picker
@@ -137,7 +145,8 @@ window.addEventListener('hashchange', () => { if (kennel) renderSectionPicker(ke
 // The logo is a plain (unindexed) data-URL string on the Kennel record, so it
 // rides JSON backups and needs no schema/index change. Uploads are downscaled
 // on a canvas to LOGO_MAX_EDGE and re-encoded as PNG (preserves transparency)
-// before storing, so an oversized photo never bloats the record. The invoice /
+// before storing, then stepped down further until under LOGO_MAX_CHARS, so an
+// oversized photo never bloats the record. The invoice /
 // receipt generator and the puppy record read this field back verbatim.
 function renderLogo() {
   const k = kennel;
@@ -178,18 +187,25 @@ function fileToLogoDataUrl(file) {
     reader.onerror = () => reject(new Error('Could not read that file.'));
     reader.onload = () => {
       const dataUrl = String(reader.result);
-      if (file.type === 'image/svg+xml') { resolve(dataUrl); return; }
+      if (file.type === 'image/svg+xml') {
+        if (dataUrl.length > LOGO_MAX_CHARS) reject(new Error(LOGO_TOO_LARGE)); else resolve(dataUrl);
+        return;
+      }
       const img = new Image();
       img.onerror = () => reject(new Error('That image could not be loaded.'));
       img.onload = () => {
-        const scale = Math.min(1, LOGO_MAX_EDGE / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/png'));
+        for (const edge of LOGO_STEP_EDGES) {
+          const scale = Math.min(1, edge / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          const png = canvas.toDataURL('image/png');
+          if (png.length <= LOGO_MAX_CHARS) { resolve(png); return; }
+        }
+        reject(new Error(LOGO_TOO_LARGE));
       };
       img.src = dataUrl;
     };
@@ -442,7 +458,7 @@ function waitlistCard(k) {
           <div class="pill-row" style="margin-top:6px;"><button type="button" class="btn btn-sm" data-act="add-reason">Add a reason</button></div>
           <label class="check-inline" style="margin-top:6px;"><input id="wl-pass-other" type="checkbox"${c.pass_other !== false ? ' checked' : ''}> Also offer "Other", with a box for their own words</label>
         </div>
-        ${isWaitlistOnlineOffered() ? readySettings(c) + upcomingSwitches(c) + emailTemplateSettings(c) : ''}
+        ${isWaitlistOnlineOffered() ? readySettings(c) + upcomingSwitches(c) + emailTemplateSettings(c) + facebookSettings(c) : ''}
       </div>
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
     </section>`;
@@ -468,6 +484,18 @@ function emailTemplateSettings(c) {
       <label class="check-inline" style="margin-top:6px;"><input id="wl-reminders" type="checkbox"${c.email_reminders !== false ? ' checked' : ''}> Send reminders by themselves: halfway through a turn and on its last morning, the day before a fee is due, and "Ready now?" when a family's hold ends</label>
       <span class="field-hint">KennelOS sends these while your phone is off, once each, after 8 am in your kennel's time zone. Turns that end are closed, and the next family offered, only for the moments ticked under "Offer the next family automatically when…".</span>
       ${EMAIL_TEMPLATE_KINDS.map(block).join('')}
+    </div>`;
+}
+
+// "Message us on Facebook" on status pages (Waitlist Spec §11): off by default,
+// and only with a facebook.com or m.me link (messengerLink).
+function facebookSettings(c) {
+  return `<div class="field field-wide">
+      <label class="check-inline"><input id="wl-fb-on" type="checkbox"${c.facebook_button ? ' checked' : ''}> Show "Message us on Facebook" on status pages</label>
+      <label for="wl-fb-page" style="margin-top:6px;">Your Facebook Page link</label>
+      <input id="wl-fb-page" type="url" inputmode="url" autocomplete="url" value="${esc(c.facebook_page || '')}" placeholder="facebook.com/yourkennel">
+      <span class="field-hint">A facebook.com or m.me address.</span>
+      <span class="field-hint">Messages sent there stay in Messenger. They aren't added to the family's entry, and they don't count as a reply to an offer.</span>
     </div>`;
 }
 
@@ -536,6 +564,14 @@ async function onSaveWaitlist() {
     }
     waitlist_config.email_templates = Object.keys(templates).length ? templates : null;
     waitlist_config.email_reminders = q('#wl-reminders').checked;
+  }
+  if (q('#wl-fb-on')) {
+    const page = q('#wl-fb-page').value.trim();
+    const on = q('#wl-fb-on').checked;
+    if (on && !page) { showError('Add your Page link first.'); return; }
+    if (page && !messengerLink(page)) { showError('That link isn\'t a Facebook Page. Use a facebook.com or m.me address.'); return; }
+    waitlist_config.facebook_button = on;
+    waitlist_config.facebook_page = page;
   }
   if (q('#wl-ready-rule')) {
     waitlist_config.ready_no_answer = q('#wl-ready-rule').value;

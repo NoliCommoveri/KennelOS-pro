@@ -15,13 +15,15 @@
 // never goes to our server.
 import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
-import { sessionToken, markSessionExpired, recordEmailChangeState } from './cloudAuth.js';
+import { sessionToken, currentAccount, markSessionExpired, recordEmailChangeState } from './cloudAuth.js';
 import {
   getCloudBackupState, updateCloudBackupState, getProLicense,
   getPendingEraseAck, setPendingEraseAck, clearPendingEraseAck
 } from '../settings.js';
 import { isLicenseGated, deactivate } from '../license.js';
 import { eraseThisDevice as wipeThisDevice } from '../appReset.js';
+import { getVaultKey } from './vaultKeyStore.js';
+import { accountCheck } from './vaultCrypto.js';
 
 export const CHECK_IN_EVERY_MS = 15 * 60 * 1000;
 export const CHECK_IN_MIN_GAP_MS = 60 * 1000;
@@ -32,6 +34,8 @@ export const DEVICE_ERASED_EVENT = 'kennelos:deviceerased';
 export function cacheNotices(notices) {
   try { globalThis.sessionStorage?.setItem(NOTICE_CACHE, JSON.stringify(notices)); } catch { /* fine */ }
 }
+
+const currentProgramId = () => currentAccount()?.programId || null;
 
 // The Pro activation this device holds, for the device list. Lite has none.
 function thisLicenseInstanceId() {
@@ -57,6 +61,7 @@ export function checkIn({ force = false, minGapMs = CHECK_IN_EVERY_MS } = {}) {
       updateCloudBackupState({ lastCheckInAt: new Date().toISOString() });
       cacheNotices(notices);
       recordEmailChangeState(res.emailChange); // Phase 1 plan §2.6
+      if (res.recoveryCheckNeeded) await saveRecoveryCheck(token); // §2.7
       return { notices };
     } catch (err) {
       if (err instanceof api.CloudErasedError) {
@@ -70,6 +75,21 @@ export function checkIn({ force = false, minGapMs = CHECK_IN_EVERY_MS } = {}) {
     }
   })();
   return inFlight;
+}
+
+// The account-recovery check (Phase 1 plan §2.7): when the server has none for
+// this vault and this device holds its key, save it. Best effort: another
+// device, or the next check-in, does it otherwise. → true when sent.
+export async function saveRecoveryCheck(token = sessionToken(), programId = currentProgramId()) {
+  if (!isCloudAvailable() || !token || !programId) return false;
+  try {
+    const vault = await getVaultKey(programId);
+    if (!vault) return false;
+    await api.saveRecoveryCheck(token, { keyId: vault.keyId, check: await accountCheck(vault.key, vault.keyId) });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const sinceLastCheckIn = () => Date.now() - (Date.parse(getCloudBackupState().lastCheckInAt || '') || 0);

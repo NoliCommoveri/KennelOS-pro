@@ -39,8 +39,33 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   show_upcoming: null, // pairings and early litters online (Spec §16.4); null = all off, see showUpcoming
   online_since: null, // the day her list last went online (set by the Online list card); the ready check starts there
   ready_no_answer: 'keep_paused', // "Ready now?" unanswered (Spec §16.7): WAITLIST_READY_NO_ANSWER
-  ready_answer_days: 14 // remove_after: days to answer; keep_paused: when Today flags them
+  ready_answer_days: 14, // remove_after: days to answer; keep_paused: when Today flags them
+  facebook_button: false, // "Message us on Facebook" on status pages (Spec §11, W2 step 8); needs facebook_page
+  facebook_page: '' // her Facebook Page link, as she typed it (facebook.com/… or m.me/…)
 });
+
+// Her Facebook Page link → the Messenger link the status page's button opens
+// (https://m.me/<page>), or null when it isn't a facebook.com or m.me address
+// naming a Page. A profile.php?id= link uses the id.
+const FACEBOOK_NOT_A_PAGE = new Set([
+  'groups', 'events', 'share', 'sharer', 'sharer.php', 'watch', 'marketplace', 'gaming', 'login', 'login.php',
+  'home.php', 'search', 'photo', 'photo.php', 'story.php', 'permalink.php', 'messages', 'help', 'policies', 'pages'
+]);
+export function messengerLink(raw) {
+  let text = String(raw ?? '').trim();
+  if (!text) return null;
+  if (!/^https?:\/\//i.test(text)) text = `https://${text}`;
+  let url;
+  try { url = new URL(text); } catch { return null; }
+  let host = url.hostname.toLowerCase();
+  if (/^(www|m|web|business)\.facebook\.com$/.test(host)) host = 'facebook.com';
+  else if (host === 'www.m.me') host = 'm.me';
+  if (host !== 'facebook.com' && host !== 'm.me') return null;
+  let page = url.pathname.split('/').filter(Boolean)[0] || '';
+  if (host === 'facebook.com' && page.toLowerCase() === 'profile.php') page = url.searchParams.get('id') || '';
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(page) || FACEBOOK_NOT_A_PAGE.has(page.toLowerCase())) return null;
+  return `https://m.me/${page}`;
+}
 
 // The three stages she can show before picks open (Spec §16.4), each on the public
 // list and on family pages separately. All off unless she switches one on.
@@ -1094,8 +1119,36 @@ export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d
 // `waiting` lists the families who are next but were NOT offered because she has
 // automatic offers turned off (waitlist_config.auto_offer_next): [{ litter_id,
 // entry_id }]. She offers them herself.
-export function describeOfferChanges({ next = null, voided = [], offered = [], waiting = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {
+// One auto-passed family (offerNextTurn's auto_passed item), as a sentence.
+export function autoPassedLine(a, { nameOf, litterOf }) {
+  const litters = (a.litter_ids || []).map(litterOf).join(', ');
+  const count = a.counted ? ` (pass ${a.used} of ${a.max})` : '';
+  const removed = a.removed ? ' That was their last pass, so they were removed from the list; you can undo it from their page for 7 days.' : '';
+  return `${nameOf(a.entry_id)} had said "Not this litter" to ${litters}, so their turn was recorded as a pass${count} and the list moved on.${removed}`;
+}
+
+// The "Next turn" line's warning (Spec §16.2): which of the next family's turn
+// litters they said "Not this litter" to, and what offering will do. '' when none.
+// `ls` is nextTurn's litters; `litterOf(litter)` names one.
+export function nextTurnPrepassNote(entry, ls, { offers = [], config = WAITLIST_CONFIG_DEFAULTS, program = null, litterOf }) {
+  const { offer, prepassed } = splitPrepassed(entry, ls);
+  if (!prepassed.length) return '';
+  const names = prepassed.map((x) => litterOf(x.litter)).join(', ');
+  if (offer.length) return `They said "Not this litter" to ${names}, so their turn will cover ${offer.map((x) => litterOf(x.litter)).join(', ')} only.`;
+  const counts = countsAsPass('passed', { config, program });
+  const used = passesUsed(entry, offers) + 1;
+  const max = Number(config.max_passes);
+  const last = counts && used >= max ? ' That will be their last pass, so they\'ll be removed from the list.' : '';
+  return `They said "Not this litter" to ${prepassed.length === 1 ? names : `all of these (${names})`}. "Offer to them" records their turn as a pass${counts ? ` (pass ${used} of ${max})` : ''} and offers the next family.${last}`;
+}
+
+export function describeOfferChanges({ next = null, voided = [], offered = [], waiting = [], auto_passed = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {
   const lines = [];
+  // Families whose turn was passed at once ("Not this litter" to all of it, §16.2):
+  // always said, so a pass never happens out of her sight.
+  for (const a of [...auto_passed, ...((next && next.auto_passed) || [])]) {
+    lines.push(autoPassedLine(a, { nameOf, litterOf }));
+  }
   if (voided.length) {
     lines.push(`Their open offer${voided.length === 1 ? '' : 's'} on ${voided.map((o) => litterOf(o.litter_id)).join(', ')} ${voided.length === 1 ? 'was' : 'were'} voided (not a pass).`);
   }
@@ -1105,7 +1158,12 @@ export function describeOfferChanges({ next = null, voided = [], offered = [], w
     lines.push(`${litters(o)}: now ${nameOf(o.entry_id)}'s turn, respond by ${fmtDate(o.respond_by_date)}. Let them know.`);
   }
   for (const w of waiting) {
-    lines.push(`${litters(w)}: ${nameOf(w.entry_id)} is next. No turn was offered (automatic offers are off); offer it when you're ready.`);
+    const pre = w.prepassed_litter_ids || [];
+    if (pre.length && pre.length === (w.litter_ids || []).length) {
+      lines.push(`${litters(w)}: ${nameOf(w.entry_id)} is next, but they said "Not this litter" to ${pre.length === 1 ? 'it' : 'all of these'}. "Offer to them" will record that as a pass and offer the next family.`);
+    } else {
+      lines.push(`${litters(w)}: ${nameOf(w.entry_id)} is next${pre.length ? ` (they said "Not this litter" to ${pre.map(litterOf).join(', ')})` : ''}. No turn was offered (automatic offers are off); offer it when you're ready.`);
+    }
   }
   if (voided.length && !offered.length && !waiting.length) lines.push('Nobody else on the list is eligible for those litters right now.');
   return lines;

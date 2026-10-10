@@ -607,6 +607,38 @@ export function clearCloudBackupState() {
   localStorage.removeItem(CLOUD_BACKUP_STATE_KEY);
 }
 
+// Live sync on this device (Cloud Phase 2 plan §3.4; data/cloud/cloudSync.js):
+//   enabled     this device keeps in step
+//   cursor      the highest server seq this device has applied
+//   lastPushAt / lastPullAt / lastCursorSentAt   ISO times
+//   lastError   { code, at, detail } | null: what paused it (vault_locked,
+//               pro_required, sync_off, vault_key_stale, resync_required,
+//               shrink, offline …)
+//   rejected    { '<table>:<id>': hash } — records the server dropped; skipped
+//               until they change again (plan §11)
+//   activity    [{ at, kind: 'kept_theirs' | 'archived_instead' | 'dropped', tbl,
+//               id, by }] — the last 30 days, newest first, at most 100
+// Outside KEYS like the backup state. Reset App clears it (appReset.js).
+const CLOUD_SYNC_STATE_KEY = 'kennelOS.cloudSyncState';
+const CLOUD_SYNC_STATE_DEFAULTS = {
+  enabled: false, cursor: 0, lastPushAt: null, lastPullAt: null, lastCursorSentAt: null,
+  lastError: null, rejected: {}, activity: []
+};
+
+export function getCloudSyncState() {
+  return { ...CLOUD_SYNC_STATE_DEFAULTS, ...(readJsonKey(CLOUD_SYNC_STATE_KEY) || {}) };
+}
+
+export function updateCloudSyncState(patch) {
+  const next = { ...getCloudSyncState(), ...patch };
+  localStorage.setItem(CLOUD_SYNC_STATE_KEY, JSON.stringify(next));
+  return next;
+}
+
+export function clearCloudSyncState() {
+  localStorage.removeItem(CLOUD_SYNC_STATE_KEY);
+}
+
 // The waitlist online on this device (data/cloud/cloudWaitlist.js, W2 Plan §5):
 // per kennel id, what was last published { publicId, hash, version, publishedAt },
 // plus the last error. Outside KEYS like the rest of the cloud state, so Reset

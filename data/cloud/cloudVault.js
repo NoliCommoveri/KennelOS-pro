@@ -13,6 +13,10 @@
 //   VaultLockedError (vaultCrypto) — that recovery code (or the code typed on
 //     the approving device, or the passkey's output) doesn't open the vault;
 //   PasskeyError (vaultPasskey) — 'unsupported', 'cancelled', 'exists';
+//   RecoveryError (account recovery, Cloud Phase 1 plan §2.7) — 'no_match' (the
+//     code doesn't open this address's vault, or there's no such account or
+//     vault: the server won't say which), 'not_ready' (the code opens the vault,
+//     but no device has saved the account's check yet);
 //   VaultSetupError — code 'confirm_mismatch' (the typed-back group is wrong),
 //     'no_vault' (nothing to unlock), 'locked' (this device has no key to
 //     re-wrap), 'program_changed' (a draft from another sign-in), 'expired'
@@ -29,16 +33,25 @@ import {
   generateVaultKey, newRecoveryCode, formatCode, normalizeRecoveryCode,
   kekFromRecoveryCode, wrapVaultKey, unwrapVaultKey,
   newPairingCode, generatePairingKeyPair, exportPublicKey, kekFromPairing,
-  kekFromPrf, newPrfSalt, newHandoffCode, kekFromHandoffCode, handoffProof, VaultLockedError
+  kekFromPrf, newPrfSalt, newHandoffCode, kekFromHandoffCode, handoffProof, accountCheck, VaultLockedError
 } from './vaultCrypto.js';
 import { createPasskey, getPrfOutput, forgetPasskey, passkeySupported } from './vaultPasskey.js';
 import { pushIfDirty, restoreSnapshotVault } from './cloudBackup.js';
+import { saveRecoveryCheck } from './cloudDevices.js';
 import { getCloudBackupState, updateCloudBackupState, setCloudRestoredAt } from '../settings.js';
 
 export class VaultSetupError extends Error {
   constructor(code, message) {
     super(message || `Private backup: ${code}.`);
     this.name = 'VaultSetupError';
+    this.code = code;
+  }
+}
+
+export class RecoveryError extends Error {
+  constructor(code, message) {
+    super(message || `Account recovery: ${code}.`);
+    this.name = 'RecoveryError';
     this.code = code;
   }
 }
@@ -73,6 +86,7 @@ export async function vaultStatus() {
     local = null;
   }
   recordVaultState(!v.enabled ? 'off' : local ? 'on' : 'locked');
+  if (v.enabled && local && v.recoveryCheck === false) saveRecoveryCheck(token, programId); // Phase 1 plan §2.7, best effort
   const wraps = v.wraps || [];
   const recovery = wraps.find((w) => w.kind === 'recovery');
   return {
@@ -125,6 +139,7 @@ export async function finishVaultSetup(setup, { confirmation, onProgress } = {})
   await api.enableVault(token, { keyId, recoveryWrap });
   await setVaultKey(programId, { key, keyId });
   recordVaultState('on');
+  await saveRecoveryCheck(token, programId); // Phase 1 plan §2.7, best effort
   if (!getCloudBackupState().enabled) return { status: 'skipped', reason: 'off' };
   return pushIfDirty({ force: true, onProgress });
 }
@@ -158,6 +173,7 @@ export async function quickVaultSetup({ label = null, onProgress } = {}) {
     forgetPasskey(credentialId);
     throw err;
   }
+  await saveRecoveryCheck(token, programId); // Phase 1 plan §2.7, best effort
   if (!getCloudBackupState().enabled) return { status: 'skipped', reason: 'off' };
   return pushIfDirty({ force: true, onProgress });
 }
@@ -455,4 +471,46 @@ export async function disableVault({ reauth = {} } = {}) {
   await clearVaultKey();
   await clearUnsavedRecoveryCode();
   recordVaultState('off');
+}
+
+// --- Recovering the account with no signed-in device (Cloud Phase 1 plan §2.7) ----
+// Lost the account's email and no device still signed in: the recovery code
+// proves the account. No session is needed (or used): the code opens the
+// vault's recovery wrap, and the vault key makes the check the server compares
+// with the one unlocked devices saved. Nothing is kept on this device; the new
+// address then waits a day, and the owner signs in with it as usual.
+
+// Screen 1. → { email, check } for finishAccountRecovery. RecoveryError
+// 'no_match' / 'not_ready'; the cloudApi errors (429 'rate_limited', offline).
+export async function startAccountRecovery(email, rawCode) {
+  if (!isCloudAvailable()) throw new api.CloudUnavailableError();
+  const code = normalizeRecoveryCode(rawCode);
+  if (!code) throw new RecoveryError('no_match');
+  const addr = String(email ?? '').trim();
+  const wrap = await api.getRecoveryWrap(addr);
+  let key;
+  try {
+    key = await unwrapVaultKey(wrap.wrapped, await kekFromRecoveryCode(code), { keyId: wrap.keyId, kind: 'recovery' });
+  } catch (err) {
+    if (err instanceof VaultLockedError) throw new RecoveryError('no_match');
+    throw err;
+  }
+  const check = await accountCheck(key, wrap.keyId);
+  try {
+    await api.checkRecovery(addr, check);
+  } catch (err) {
+    // The code opened the real vault, so the account is theirs; the server just
+    // has no check for it yet.
+    if (err instanceof api.CloudRequestError && err.code === 'no_match') throw new RecoveryError('not_ready');
+    throw err;
+  }
+  return { email: addr, check };
+}
+
+// Screens 2–3: the new address and the code sent to it (cloudAuth's sign-in
+// start sends it). → { status: 'pending', effectiveAt }. 409 'email_taken',
+// 400 'same_email' / 'invalid_code' / 'too_many_attempts' (CloudRequestError).
+export async function finishAccountRecovery({ email, check }, { newEmail, code }) {
+  if (!isCloudAvailable()) throw new api.CloudUnavailableError();
+  return api.requestRecoveryEmail({ email, check, newEmail: String(newEmail ?? '').trim(), code: String(code ?? '').trim() });
 }

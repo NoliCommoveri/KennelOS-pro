@@ -38,7 +38,7 @@ import { listDevices, requestErase, cancelErase, releaseDeviceLicense } from '..
 import {
   entitlement, cachedEntitlement, startPurchaseLink, finishPurchaseLink, unlinkPurchaseEmails
 } from '../data/cloud/cloudEntitlement.js';
-import { CloudOfflineError, CloudRequestError, CloudAuthError } from '../data/cloud/cloudApi.js';
+import { CloudOfflineError, CloudRequestError, CloudAuthError, CloudConflictError } from '../data/cloud/cloudApi.js';
 import {
   getCloudRestoredAt, setCloudRestoredAt, getProLicense, getLastBackupDate
 } from '../data/settings.js';
@@ -110,6 +110,10 @@ function pausedReason(lastError) {
 export function errorText(e) {
   if (e instanceof CloudOfflineError) return 'No internet connection (or cloud backup is briefly down for maintenance). Try again shortly.';
   if (e instanceof CloudAuthError) return 'Your cloud sign-in has expired. Sign in again.';
+  // A 409 is a conflict error; only email_taken has wording of its own.
+  if (e instanceof CloudConflictError && e.code === 'email_taken') {
+    return 'That email already has its own KennelOS account. Use another address, or delete that account first.';
+  }
   if (e instanceof CloudRequestError) {
     switch (e.code) {
       case 'bad_email': return "That doesn't look like an email address.";
@@ -217,7 +221,12 @@ export function signInModal({ title = 'Sign in to cloud backup', intro = '', ema
         <div class="form-actions">
           <button class="btn btn-primary" id="si-send">Email me a code</button>
           <button class="btn" id="si-cancel">Cancel</button>
-        </div>`;
+        </div>
+        ${isVaultOffered() ? '<p class="field-hint"><a href="#" id="si-lost">Lost access to your email?</a></p>' : ''}`;
+      body.querySelector('#si-lost')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        recoverAccountScreens(body, { email: body.querySelector('#si-email').value.trim(), onBack: () => showEmail(), onDone: () => done(null) });
+      });
       const input = body.querySelector('#si-email');
       const send = async () => {
         email = input.value.trim();
@@ -278,6 +287,134 @@ export function signInModal({ title = 'Sign in to cloud backup', intro = '', ema
     }
   });
 }
+
+// --- Recovering the account with no signed-in device (Phase 1 plan §2.7) ----------
+// "Lost access to your email?" on the sign-in screen: the recovery code proves
+// the account, then a new address (with its code) waits a day. Drawn into the
+// sign-in modal's body; `onBack` returns to its email screen, `onDone` closes it.
+function recoverAccountScreens(body, { email = '', onBack, onDone }) {
+  let recovery = null; // { email, check } once the code is proven
+  let newEmail = '';
+  const vault = () => import('../data/cloud/cloudVault.js');
+
+  const showProve = (errorMsg = '') => {
+    body.innerHTML = `
+      <h2 style="margin-top:0;">Get back into your account</h2>
+      <p class="muted">If you can't get email at your old address and no device is still signed in, your recovery code can prove the account is yours.</p>
+      <div class="field field-wide"><label for="ra-email">Your account's email</label>
+        <input id="ra-email" type="email" autocomplete="email" inputmode="email" value="${esc(email)}" placeholder="you@example.com"></div>
+      <div class="field field-wide"><label for="ra-code">Recovery code</label>
+        <input id="ra-code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"></div>
+      ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
+      <div class="form-actions">
+        <button class="btn btn-primary" id="ra-go">Continue</button>
+        <button class="btn" id="ra-back">Back</button>
+      </div>`;
+    const go = async () => {
+      email = body.querySelector('#ra-email').value.trim();
+      const code = body.querySelector('#ra-code').value;
+      const btn = body.querySelector('#ra-go');
+      btn.disabled = true; btn.textContent = 'Checking…';
+      try {
+        const { startAccountRecovery } = await vault();
+        recovery = await startAccountRecovery(email, code);
+        showNewEmail();
+      } catch (e) {
+        showProve(recoveryErrorText(e));
+      }
+    };
+    body.querySelector('#ra-go').addEventListener('click', go);
+    body.querySelector('#ra-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    body.querySelector('#ra-back').addEventListener('click', () => onBack());
+    body.querySelector(email ? '#ra-code' : '#ra-email').focus();
+  };
+
+  const showNewEmail = (errorMsg = '') => {
+    body.innerHTML = `
+      <h2 style="margin-top:0;">Your new email</h2>
+      <p class="muted">We'll send a code to check it. This becomes your account's email.</p>
+      <div class="field field-wide"><label for="ra-new">New email</label>
+        <input id="ra-new" type="email" autocomplete="email" inputmode="email" value="${esc(newEmail)}" placeholder="you@example.com"></div>
+      ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
+      <div class="form-actions">
+        <button class="btn btn-primary" id="ra-send">Email me a code</button>
+        <button class="btn" id="ra-cancel">Cancel</button>
+      </div>`;
+    const send = async () => {
+      newEmail = body.querySelector('#ra-new').value.trim();
+      const btn = body.querySelector('#ra-send');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try { await startSignIn(newEmail); showNewCode(); } catch (e) { showNewEmail(errorText(e)); }
+    };
+    body.querySelector('#ra-send').addEventListener('click', send);
+    body.querySelector('#ra-new').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+    body.querySelector('#ra-cancel').addEventListener('click', () => onDone());
+    body.querySelector('#ra-new').focus();
+  };
+
+  const showNewCode = (errorMsg = '', note = '') => {
+    body.innerHTML = `
+      <h2 style="margin-top:0;">Check your email</h2>
+      <p class="muted">We sent a 6-digit code to <strong>${esc(newEmail)}</strong>. Type it here within 10 minutes.</p>
+      <div class="field"><label for="ra-ncode">Code</label>
+        <input id="ra-ncode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" style="font-size:20px;letter-spacing:4px;max-width:180px;"></div>
+      ${note ? `<p class="field-hint">${esc(note)}</p>` : ''}
+      ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
+      <p class="field-hint">Didn't get it? Check your spam folder, or <a href="#" id="ra-resend">send a new code</a>.</p>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="ra-verify">Continue</button>
+        <button class="btn" id="ra-other">Use a different email</button>
+        <button class="btn" id="ra-cancel">Cancel</button>
+      </div>`;
+    const verify = async () => {
+      const btn = body.querySelector('#ra-verify');
+      btn.disabled = true; btn.textContent = 'Checking…';
+      try {
+        const { finishAccountRecovery } = await vault();
+        const res = await finishAccountRecovery(recovery, { newEmail, code: body.querySelector('#ra-ncode').value });
+        showPending(res.effectiveAt);
+      } catch (e) {
+        if (e instanceof CloudRequestError && e.code === 'too_many_attempts') showNewEmail(errorText(e));
+        else if (e?.code === 'email_taken' || e?.code === 'same_email') showNewEmail(errorText(e));
+        else showNewCode(errorText(e));
+      }
+    };
+    body.querySelector('#ra-verify').addEventListener('click', verify);
+    body.querySelector('#ra-ncode').addEventListener('keydown', (e) => { if (e.key === 'Enter') verify(); });
+    body.querySelector('#ra-resend').addEventListener('click', async (e) => {
+      e.preventDefault();
+      try { await startSignIn(newEmail); showNewCode('', 'A new code is on its way. Only the newest code works.'); } catch (err) { showNewCode(errorText(err)); }
+    });
+    body.querySelector('#ra-other').addEventListener('click', () => showNewEmail());
+    body.querySelector('#ra-cancel').addEventListener('click', () => onDone());
+    body.querySelector('#ra-ncode').focus();
+  };
+
+  const showPending = (effectiveAt) => {
+    const when = new Date(effectiveAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    body.innerHTML = `
+      <h2 style="margin-top:0;">Your email will change in 1 day</h2>
+      <p>To keep your account safe, the change takes effect on <strong>${esc(when)}</strong>. Then sign in with <strong>${esc(newEmail)}</strong> and restore your backup. If a device is still signed in somewhere, it will show this change with a way to cancel it.</p>
+      <div class="form-actions"><button class="btn btn-primary" id="ra-done">Done</button></div>`;
+    body.querySelector('#ra-done').addEventListener('click', () => onDone());
+  };
+
+  showProve();
+}
+
+function recoveryErrorText(e) {
+  if (e?.name === 'RecoveryError') {
+    return e.code === 'not_ready'
+      ? "This account can't be recovered with a recovery code. Recovery codes come with Sensitive records, and none has been set up here. If any device can still get into your old email, sign in there instead."
+      : "That recovery code doesn't match this account. Check it and try again.";
+  }
+  return errorText(e);
+}
+
+// Who asked for a pending email change, for its notice (Account card, Today).
+const changeRequestedBy = (c) => (c?.via === 'recovery'
+  ? 'Requested with your recovery code'
+  : `Requested on ${esc(c?.deviceLabel || 'one of your devices')}`);
 
 // --- "What gets backed up" (plan §2.1 step 3) ------------------------------------
 // Information only, opened from "What's backed up?" (since 2026-10-10 it's no
@@ -836,7 +973,7 @@ function emailChangeNoticeHtml() {
   const c = getBackupStatus().emailChange;
   if (!c) return '';
   return `<div class="inline-warn" style="margin-bottom:12px;">
-      <strong>Your account's email is changing.</strong> Requested on ${esc(c.deviceLabel || 'one of your devices')};
+      <strong>Your account's email is changing.</strong> ${changeRequestedBy(c)};
       it takes effect ${esc(shortDate(c.effectiveAt))}. Not you?
       <button class="btn btn-sm" data-act="email-cancel" style="margin-left:4px;">Cancel it</button>
     </div>`;
@@ -1321,7 +1458,7 @@ export function renderTodayCloudNudge(el) {
     if (change && !expired) {
       html = `<div class="row-between">
           <div><strong>✉️ Your account's email is changing.</strong>
-            <div class="muted" style="font-size:13px;">Requested on ${esc(change.deviceLabel || 'one of your devices')}; it takes effect ${esc(shortDate(change.effectiveAt))}. Not you? Cancel it.</div></div>
+            <div class="muted" style="font-size:13px;">${changeRequestedBy(change)}; it takes effect ${esc(shortDate(change.effectiveAt))}. Not you? Cancel it.</div></div>
           <div class="pill-row"><button class="btn btn-sm" data-act="email-cancel">Cancel it</button></div>
         </div>`;
     } else if (unsavedCode && status.enabled && !paused && !expired) {
