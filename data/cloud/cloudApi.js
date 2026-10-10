@@ -229,6 +229,15 @@ export const approvePairing = (token, pairingId, { approverKey, wrapped, keyId }
 // { status: 'approved', approverKey, wrapped, keyId } (once: the row goes as it's read).
 export const pollPairing = (token, pairingId) => getJson(`/vault/pairings/${encodeURIComponent(pairingId)}`, { token });
 
+// Handoff codes (Private Vault Plan §5.4): an unlocked device leaves a one-hour
+// wrap; another device signed in to the account shows the code's proof and gets
+// it, once. → { handoffId, expiresAt } / { keyId, wrapped }; 404 'not_found' for
+// a wrong, used or expired code.
+export const createHandoff = (token, { keyId, wrapped, proof }) =>
+  getJson('/vault/handoffs', { method: 'POST', token, json: { keyId, wrapped, proof } });
+export const redeemHandoff = (token, proof) =>
+  getJson('/vault/handoffs/redeem', { method: 'POST', token, json: { proof } });
+
 // --- Public -------------------------------------------------------------------
 // Service notices (the shutdown channel). → [{ id, level, message, until }]
 // --- The waitlist online, her side (Waitlist W2 Plan §5) -------------------------------
@@ -248,3 +257,11 @@ export const sendWaitlistEmail = (token, { id, publicId, entryId, kind, subject,
   getJson('/waitlist/messages', { method: 'POST', token, json: { id, public_id: publicId, entry_id: entryId, kind, subject, body } });
 
 export const getNotices = () => getJson('/notice').then((b) => b.notices || []);
+
+// --- Changing the account's email (Phase 1 plan §2.6) ---------------------------
+// → { pending: {requestedAt, effectiveAt, deviceLabel} | null, changedAt }
+export const getEmailChange = (token) => getJson('/account/email', { token });
+// {email, code, oldEmail?, oldCode?} → { status: 'changed' } | { status: 'pending', effectiveAt }.
+// 409 'email_taken'; 400 'same_email', 'invalid_code', 'invalid_old_code'.
+export const changeEmail = (token, body) => getJson('/account/email', { method: 'POST', token, json: body });
+export const cancelEmailChange = (token) => getJson('/account/email', { method: 'DELETE', token });

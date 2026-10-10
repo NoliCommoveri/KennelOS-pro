@@ -8,9 +8,9 @@
 //     trigger the JSON backup export, THEN head to checkout (which redirects into
 //     Pro post-purchase to import it). This is the SAME action the cap upgrade
 //     nudge runs, so both go through runUpgradeBridge() below (one source of truth
-//     for the export-first sequence). An owner signed in to cloud backup is also
-//     told they can sign in on Pro with the same email and restore, after this
-//     device's latest changes are backed up.
+//     for the sequence). An owner whose cloud backup holds everything (Sensitive
+//     records on and unlocked) skips the file: they sign in on Pro and restore,
+//     with "Save a backup file too" as the secondary button.
 //
 // These render in two spots (decided): the nav "More" menu (every page) and a
 // footer on Today. Both are driven entirely by demoUrl / upgradeUrl from
@@ -26,49 +26,149 @@ export function hasEditionLinks() {
   return Boolean(demoUrl || upgradeUrl);
 }
 
-// Run the Lite→Pro bridge: export the owner's backup to Downloads first, THEN go
-// to checkout. downloadBackup is lazy-imported so this module — pulled into the
-// nav on every page — doesn't eagerly load the import/export machinery until the
-// button is actually clicked. Throws if the export fails (caller surfaces it);
-// on success either navigates away (upgradeUrl set → returns 'redirecting' as the
-// page unloads) or returns 'exported' so the caller can show a "backup saved,
-// continue in Pro" fallback when no checkout URL is configured yet.
+// Run the Lite→Pro bridge (Editions Plan, "Converting Lite → Pro"). Two paths:
+//   • Cloud first: this device is signed in to cloud backup with Sensitive records
+//     (the private vault) on and unlocked, and both are up to date after a last
+//     push. Signing in on Pro and unlocking brings everything back, so no file is
+//     needed; a dialog says so, with "Save a backup file too" as the secondary
+//     button (the file is the fallback, not the main path).
+//   • File first: anything else (no cloud, backup off or paused, Sensitive records
+//     off or locked, offline). Export the backup to Downloads, THEN go to
+//     checkout; a signed-in owner is also told about sign-in-and-restore.
+// The import/export and cloud modules are lazy-imported so this module, pulled
+// into the nav on every page, loads nothing until the button is clicked. Throws
+// if the export fails (caller surfaces it). Returns 'redirecting' (the page is
+// heading to checkout), 'cancelled' (the owner chose Not now), or, when no
+// checkout URL is configured, 'exported' / 'cloud' so the caller can show a
+// "continue in Pro" fallback.
 export async function runUpgradeBridge() {
+  const cloud = await cloudUpgradeReadiness();
+  if (cloud?.complete) {
+    const choice = await cloudUpgradeDialog(cloud);
+    if (choice === 'cancel') return 'cancelled';
+    return goToCheckout('cloud');
+  }
   const { downloadBackup } = await import('../data/importExport.js');
   await downloadBackup();
-  await cloudUpgradeNote();
+  if (cloud) await fileUpgradeNote(cloud);
+  return goToCheckout('exported');
+}
+
+function goToCheckout(fallback) {
   if (upgradeUrl) {
     window.location.assign(upgradeUrl);
     return 'redirecting';
   }
-  return 'exported';
+  return fallback;
 }
 
-// Editions Plan, "Converting Lite → Pro": with cloud backup on, Pro can restore
-// the program by signing in with the same email. Cloud backup holds only the
-// kennel-records tier (Cloud Phase 1 plan §5), so the file still matters: it
-// brings prices, Financials, contacts' details and notes. Until the private
-// vault, the file stays the complete path and this is an addition to it.
-// Silent (no modal) unless this device is signed in; the cloud modules are
-// loaded only when the edition has a server.
-async function cloudUpgradeNote() {
+// null when this edition has no server or the device isn't signed in; else
+// { email, complete }. Pro restores the latest backup, so bring it up to date
+// first. A paused backup (another device, a shrink warning, locked Sensitive
+// records) is left for the owner to resolve, and the file path covers it. Any
+// failure here (offline, an expired session) just means "not complete".
+async function cloudUpgradeReadiness() {
   const { isCloudAvailable } = await import('../data/cloud/cloudConfig.js');
-  if (!isCloudAvailable()) return;
+  if (!isCloudAvailable()) return null;
   const { currentAccount } = await import('../data/cloud/cloudAuth.js');
   const account = currentAccount();
-  if (!account?.signedIn) return;
-  const { getBackupStatus, pushIfDirty } = await import('../data/cloud/cloudBackup.js');
-  const status = getBackupStatus();
-  // Pro restores the latest backup, so bring it up to date first. A paused
-  // backup (another device, a shrink warning) is left for the owner to resolve.
-  if (status.enabled && status.dirty && !status.paused) {
-    try { await pushIfDirty({ force: true }); } catch { /* the file still has everything */ }
+  if (!account?.signedIn) return null;
+  const email = account.email || 'your email';
+  try {
+    const { getBackupStatus, pushIfDirty, holdsEverything } = await import('../data/cloud/cloudBackup.js');
+    let status = getBackupStatus();
+    if (status.enabled && status.dirty && !status.paused) {
+      try { await pushIfDirty({ force: true }); } catch { /* checked below */ }
+      status = getBackupStatus();
+    }
+    if (!status.enabled || status.paused || status.dirty) return { email, complete: false };
+    const { vaultStatus } = await import('../data/cloud/cloudVault.js');
+    const vault = await vaultStatus();
+    return { email, complete: holdsEverything(getBackupStatus(), vault) };
+  } catch {
+    return { email, complete: false };
   }
+}
+
+// Cloud first: Continue to Pro (primary), Save a backup file too (secondary;
+// downloads and stays open), Not now. Resolves 'continue' | 'cancel'. The
+// backdrop does nothing, so a stray tap neither buys nor cancels.
+// It also makes a one-hour unlock code (Private Vault Plan §5.4) for Pro's
+// "Use another device", shown with Copy and copied again on Continue, since
+// checkout replaces this page. Without a code (offline, an error) Pro still
+// unlocks with the passkey or recovery code, and the dialog says so.
+function cloudUpgradeDialog({ email }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h2 style="margin-top:0;">Switch Products Seamlessly</h2>
+      <p class="muted" style="white-space:pre-wrap;">${esc(
+        `Since you're using cloud backup, switching is easy! Once you've purchased your Pro license, select "I already use KennelOS" and log in using the email ${email}.\n\n`
+        + `Use the same email (${email}) when you buy Pro, so your Pro features online are ready right away.`)}</p>
+      <div class="upgrade-handoff"><p class="muted">Making your unlock code…</p></div>
+      <p class="muted">Optionally, you can also save a backup file below before switching.</p>
+      <p class="muted upgrade-file-note" role="status" hidden></p>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="ug-continue">Continue to Pro</button>
+        <button class="btn" id="ug-file">Save a backup file too</button>
+        <button class="btn" id="ug-cancel">Not now</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const done = (val) => { overlay.remove(); resolve(val); };
+    let handoff = null; // { code, copy }
+    const slot = overlay.querySelector('.upgrade-handoff');
+    (async () => {
+      try {
+        const [{ createHandoffCode }, ui] = await Promise.all([
+          import('../data/cloud/cloudVault.js'), import('./cloudVaultUI.js')
+        ]);
+        const { code } = await createHandoffCode();
+        handoff = { code, copy: ui.copyHandoffCode };
+        slot.innerHTML = `<p class="muted">When Pro asks you to unlock your sensitive records, choose "Use another device" and paste this code. It works once, for 1 hour:</p>
+          ${ui.handoffCodeHtml(code)}`;
+        ui.wireHandoffCopy(slot, code);
+      } catch {
+        slot.innerHTML = `<p class="muted">When Pro asks you to unlock your sensitive records, use your passkey or recovery code.</p>`;
+      }
+    })();
+    const fileBtn = overlay.querySelector('#ug-file');
+    const fileNote = overlay.querySelector('.upgrade-file-note');
+    fileBtn.addEventListener('click', async () => {
+      fileBtn.disabled = true;
+      fileBtn.textContent = 'Saving…';
+      try {
+        const { downloadBackup } = await import('../data/importExport.js');
+        await downloadBackup();
+        fileBtn.textContent = 'Backup file saved ✓';
+      } catch (e) {
+        fileBtn.disabled = false;
+        fileBtn.textContent = 'Save a backup file too';
+        fileNote.hidden = false;
+        fileNote.textContent = `Couldn't save the file (${e.message || e}). Your cloud backup still has everything.`;
+      }
+    });
+    overlay.querySelector('#ug-continue').addEventListener('click', async () => {
+      if (handoff) await handoff.copy(handoff.code); // on the clipboard for Pro
+      done('continue');
+    });
+    overlay.querySelector('#ug-cancel').addEventListener('click', () => done('cancel'));
+  });
+}
+
+// File first, for a signed-in owner whose cloud backup can't carry everything
+// (Sensitive records off or locked here, backup off or paused, offline): the
+// file is the complete path, and sign-in-and-restore is the easier way in for
+// what cloud backup does hold.
+async function fileUpgradeNote({ email }) {
   await alertModal({
     title: 'Your backup file is downloading',
-    message: `You also use cloud backup (${account.email || 'your email'}), so there's an easier way in.\n\n`
+    message: `You also use cloud backup (${email}), so there's an easier way in.\n\n`
+      + `Use the same email (${email}) when you buy Pro, so your Pro features online are ready right away.\n\n`
       + `After you buy Pro, open KennelOS Pro, choose "I already use KennelOS → sign in and restore", and sign in with the same email. Your dogs, litters, pairings, health records and contact names come straight back.\n\n`
-      + `Then, in Pro, go to Import / Export, choose this file and "Merge into current data" to add what cloud backup doesn't hold: prices and payments, Financials, contacts' phone, email and address, and your notes.`,
+      + `Then, in Pro, go to Import / Export, choose this file and "Merge into current data" to add what cloud backup doesn't hold: prices and payments, Financials, contacts' phone, email and address, and your notes.\n\n`
+      + `Tip: with Sensitive records on and unlocked (Import / Export → Cloud), cloud backup holds those too, and you won't need the file.`,
     okLabel: 'Continue to Pro'
   });
 }
@@ -123,7 +223,7 @@ async function onUpgradeClick(btn) {
   const original = btn.textContent;
   const setNote = (msg) => { if (note) { note.hidden = false; note.textContent = msg; } };
   btn.disabled = true;
-  btn.textContent = 'Exporting your backup…';
+  btn.textContent = 'Getting your records ready…';
   if (note) { note.hidden = true; note.textContent = ''; }
   try {
     const result = await runUpgradeBridge();
@@ -131,6 +231,12 @@ async function onUpgradeClick(btn) {
     if (result === 'exported') {
       btn.textContent = 'Backup exported ✓';
       setNote('Backup saved. Continue to Pro and import this file to finish upgrading.');
+    } else if (result === 'cloud') {
+      btn.textContent = 'Backed up ✓';
+      setNote('Everything is backed up. Open KennelOS Pro and sign in with the same email to restore.');
+    } else if (result === 'cancelled') {
+      btn.disabled = false;
+      btn.textContent = original;
     }
   } catch (e) {
     btn.disabled = false;

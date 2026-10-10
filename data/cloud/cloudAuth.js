@@ -45,7 +45,67 @@ export async function verifySignIn(email, code, { deviceLabel = defaultDeviceLab
     // (The vault key here is tagged with the other program, so it's never used.)
     updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null, vault: null });
   }
-  return setCloudSession({ token: res.token, email: cleanEmail, programId: res.programId, deviceId: res.deviceId, deviceLabel: deviceLabel || null });
+  return setCloudSession({
+    token: res.token, email: cleanEmail, programId: res.programId, deviceId: res.deviceId, deviceLabel: deviceLabel || null,
+    emailSince: new Date().toISOString()
+  });
+}
+
+// --- Changing the account's email (Phase 1 plan §2.6) -------------------------------
+// The new address's code comes from startSignIn(newEmail). With the old inbox
+// (its code from startSignIn(oldEmail), or a sign-in under 15 minutes old) the
+// change happens at once and this device shows the new address; without it,
+// it waits a day, shown on every signed-in device with Cancel.
+// → { status: 'changed' } | { status: 'pending', effectiveAt }
+export async function changeAccountEmail({ email, code, oldEmail = null, oldCode = null }) {
+  requireCloud();
+  const token = sessionToken();
+  if (!token) throw new api.CloudAuthError({ status: 401, code: 'unauthorized' });
+  const cleanEmail = String(email ?? '').trim();
+  const res = await api.changeEmail(token, {
+    email: cleanEmail,
+    code: String(code ?? '').replace(/\s/g, ''),
+    ...(oldCode ? { oldEmail: String(oldEmail ?? '').trim(), oldCode: String(oldCode).replace(/\s/g, '') } : {})
+  });
+  if (res.status === 'changed') {
+    const s = getCloudSession();
+    if (s) setCloudSession({ ...s, email: cleanEmail, emailSince: new Date().toISOString() });
+    updateCloudBackupState({ emailChange: null });
+  } else {
+    updateCloudBackupState({ emailChange: { requestedAt: new Date().toISOString(), effectiveAt: res.effectiveAt, deviceLabel: currentAccount()?.deviceLabel || null } });
+  }
+  return res;
+}
+
+export async function cancelAccountEmailChange() {
+  requireCloud();
+  const token = sessionToken();
+  if (!token) throw new api.CloudAuthError({ status: 401, code: 'unauthorized' });
+  await api.cancelEmailChange(token);
+  updateCloudBackupState({ emailChange: null });
+}
+
+// Records what the server said (check-in, or the Account card's read): the
+// pending change for every device to show, and, when the email changed after
+// this device last knew it, forgets the old address here. The server holds
+// only a hash, so it can't say what the new one is: the UI then says "your
+// new email" until this device signs in with it.
+export function recordEmailChangeState(state) {
+  if (!state || typeof state !== 'object') return;
+  updateCloudBackupState({ emailChange: state.pending || null });
+  const s = getCloudSession();
+  if (s && state.changedAt && (!s.emailSince || state.changedAt > s.emailSince)) {
+    setCloudSession({ ...s, email: null, emailSince: state.changedAt });
+  }
+}
+
+export async function refreshEmailChangeState() {
+  requireCloud();
+  const token = sessionToken();
+  if (!token) return null;
+  const state = await api.getEmailChange(token);
+  recordEmailChangeState(state);
+  return state;
 }
 
 // The session, or null. `signedIn` is false when the token was dropped after a

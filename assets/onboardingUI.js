@@ -1,14 +1,14 @@
-// onboardingUI.js — the first-run welcome sequence, shown once on a brand-new
-// (empty, no-choice-yet) install: a non-dismissible Welcome card, a tour offer,
-// and — for anyone who declines the tour — a backups/install card that hands off
-// to the kennel-setup ("New Kennel") modal. Sits at the shell level next to
-// sampleDataUI.js / kennelSetupUI.js; app.js's boot is the only caller.
+// onboardingUI.js — the first-run welcome, shown once on a brand-new (empty,
+// no-choice-yet) install: one non-dismissible Welcome card with the ways in.
+// Sits at the shell level next to sampleDataUI.js / kennelSetupUI.js; app.js's
+// boot is the only caller. (Installing as an app is a dismissible card on Today.)
 //
-// The two branches:
-//   "Show me around!"  → seed the Thornfield sample data, start the guided tour,
-//                        reload so the destination page's runWizardStep picks it up.
-//   "No thanks…"       → no sample data (declineSampleData), show backups/install,
-//                        then the New Kennel modal — a blank kennel of the user's own.
+// The branches:
+//   "Start my kennel"        → no sample data (declineSampleData), then the kennel
+//                              setup modal, whose optional email turns on backup.
+//   "Take the tour"          → seed the Thornfield sample data, start the guided
+//                              tour, reload so the destination page picks it up.
+//   "I already use KennelOS" → sign in and restore (only with a cloud server).
 import { shouldOfferFirstRunPrompt, declineSampleData } from '../data/sampleData.js';
 import { seedSampleData } from '../data/editionTour.js';
 import { startWizard } from '../data/wizardState.js';
@@ -55,28 +55,8 @@ const WELCOME_HTML = `
     <li><strong>Track the money</strong> — income and expenses, with a running picture of your net.</li>
     <li><strong>Generate documents</strong> — puppy records, invoices and receipts, ready to print.</li>
   </ul>
-  <p>Everything lives securely on this device — no account, no cloud, nothing leaves your browser.</p>`;
-
-const TOUR_OFFER_HTML = `
-  <h2 class="onboard-title">Would you like a quick tour?</h2>
-  <p>To help you learn your way around, there’s a brief guided tour that walks through the major
-  features that make KennelOS such a powerful tool. It takes just a couple of minutes, and you can
-  leave it at any time.</p>`;
-
-const BACKUP_INSTALL_HTML = `
-  <h2 class="onboard-title">A quick note on backups</h2>
-  <p>Because your data lives only in this browser, <strong>it’s yours to safeguard.</strong> Get in the
-  habit of backing up regularly: open <strong>Import / Export</strong> and export a JSON backup. Keep it
-  somewhere safe — that file can restore everything if this device is ever lost, cleared or replaced.</p>
-  <hr class="onboard-rule">
-  <h3 class="onboard-subtitle">📲 Install KennelOS as an app</h3>
-  <p>Add KennelOS to your home screen so it opens like a normal app and works offline:</p>
-  <ul class="onboard-list">
-    <li><strong>Android (Chrome):</strong> tap the <strong>⋮</strong> menu (top-right) →
-      <strong>Add to Home screen</strong> (or <strong>Install app</strong>), then confirm.</li>
-    <li><strong>iPhone / iPad (Safari):</strong> tap the <strong>Share</strong> button (□ with an ↑) →
-      scroll down → <strong>Add to Home Screen</strong>.</li>
-  </ul>`;
+  <p>Everything lives securely on this device — no account, no cloud, nothing leaves your browser.</p>
+  <p class="muted">New here? The tour shows you around with sample records in a couple of minutes, and you can leave it at any time.</p>`;
 
 // The whole first-run sequence. Returns true when it handled the first run (so
 // app.js knows not to fall through to its own kennel-setup prompt); false when
@@ -84,24 +64,20 @@ const BACKUP_INSTALL_HTML = `
 export async function runFirstRunOnboarding() {
   if (!(await shouldOfferFirstRunPrompt())) return false;
 
-  await onboardCard({
-    bodyHtml: welcomeHtml(),
-    buttons: [{ label: 'Get started →', value: 'go', primary: true }]
-  });
-
-  // A third way in when this edition has a cloud server (Cloud Phase 1 plan
-  // §2.3): someone moving to a new phone signs in and restores, skipping both
+  // One card, three ways in (decided 2026-10-10; it replaced Welcome → tour offer
+  // → backups note). The third only when this edition has a cloud server (Cloud
+  // Phase 1 plan §2.3): someone on a new phone signs in and restores, skipping
   // the tour and kennel setup (the restored records carry the kennel). Backing
-  // out of sign-in returns to this choice.
+  // out of sign-in returns to this card.
   const buttons = [
-    { label: 'Show me around!', value: 'tour', primary: true },
-    { label: 'No thanks, I’ll explore', value: 'explore' }
+    { label: 'Start my kennel', value: 'explore', primary: true },
+    { label: 'Take the tour', value: 'tour' }
   ];
-  if (isCloudAvailable()) buttons.push({ label: 'I already use KennelOS → sign in and restore', value: 'restore' });
+  if (isCloudAvailable()) buttons.push({ label: 'I already use KennelOS', value: 'restore' });
 
   let choice;
   for (;;) {
-    choice = await onboardCard({ bodyHtml: TOUR_OFFER_HTML, buttons });
+    choice = await onboardCard({ bodyHtml: welcomeHtml(), buttons });
     if (choice !== 'restore') break;
     const { runSignInAndRestore } = await import('./cloudBackupUI.js');
     const restored = await runSignInAndRestore();
@@ -124,14 +100,10 @@ export async function runFirstRunOnboarding() {
     return true;              // (never returns past the reload)
   }
 
-  // "I'll explore" — a blank kennel, no sample data ever seeded on this path.
+  // "Start my kennel": a blank kennel, no sample data ever seeded on this path.
+  // Required, not skippable (spec §3.2): there is no kennel anywhere yet and
+  // nothing they create could be filed. Its optional email turns on cloud backup.
   declineSampleData();
-  await onboardCard({
-    bodyHtml: BACKUP_INSTALL_HTML,
-    buttons: [{ label: 'Got it!', value: 'ok', primary: true }]
-  });
-  // Required, not skippable (spec §3.2): the user has declined sample data, so
-  // there is no kennel anywhere yet and nothing they create could be filed.
   showKennelSetupModal({ mode: 'required' });
   return true;
 }

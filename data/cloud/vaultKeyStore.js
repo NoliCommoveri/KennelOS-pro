@@ -15,6 +15,7 @@ import { db } from '../db.js';
 
 const ROW_ID = 'vault-key';
 const PAIRING_ROW_ID = 'vault-pairing';
+const RECOVERY_ROW_ID = 'vault-recovery-unsaved';
 
 // → { key: CryptoKey, keyId } for `programId`, or null (locked on this device,
 // or the stored key belongs to another program).
@@ -57,4 +58,26 @@ export async function setPendingPairing(programId, { pairingId, privateKey, code
 
 export async function clearPendingPairing() {
   await db.device_secrets.delete(PAIRING_ROW_ID);
+}
+
+// --- A recovery code not saved yet (Private Vault Plan §2.1, passkey first) ----
+// Turning the vault on with a passkey makes the recovery code too (the server
+// requires its wrap), but shows it afterwards: Today keeps asking until the
+// owner saves it. Kept beside the key it opens, which is no more exposed here
+// than the key itself. Tagged with the program and keyId, so a code for a
+// replaced vault is never shown.
+//   { code, keyId }
+export async function getUnsavedRecoveryCode(programId) {
+  if (!programId) return null;
+  const row = await db.device_secrets.get(RECOVERY_ROW_ID);
+  if (!row || row.program_id !== programId) return null;
+  return { code: row.code, keyId: row.key_id };
+}
+
+export async function setUnsavedRecoveryCode(programId, { code, keyId }) {
+  await db.device_secrets.put({ id: RECOVERY_ROW_ID, program_id: programId, code, key_id: keyId });
+}
+
+export async function clearUnsavedRecoveryCode() {
+  await db.device_secrets.delete(RECOVERY_ROW_ID);
 }

@@ -2,12 +2,12 @@
 // (KennelOS_Lite_Cap_Enforcement_Spec.md §6). The repos hard-throw a
 // CapExceededError (a repo can't prompt); the dog / litter / puppy forms catch
 // it and call renderUpgradeNudge() to show a friendly upgrade prompt — never a
-// raw error — with the "Upgrade to Pro →" CTA wired to the export→checkout→
-// import bridge (editions plan §"Converting Lite → Pro").
+// raw error — with the "Upgrade to Pro →" CTA wired to the Lite→Pro bridge
+// (editions plan §"Converting Lite → Pro").
 //
 // This is shared code, so it must stay edition-agnostic. The one CTA click runs
-// the shared export-first bridge (runUpgradeBridge in editionLinks.js) — trigger
-// the existing JSON backup export, then send the owner to checkout — so this
+// the shared bridge (runUpgradeBridge in editionLinks.js) — cloud first when the
+// backup holds everything, else the JSON backup export, then checkout — so this
 // nudge and Lite's standing "Upgrade to Pro →" links run the identical sequence.
 import { esc } from './ui.js';
 import { runUpgradeBridge } from './editionLinks.js';
@@ -51,17 +51,23 @@ export function renderUpgradeNudge(container, err, context = 'create') {
   const cta = container.querySelector('#upgrade-cta');
   cta.addEventListener('click', async () => {
     cta.disabled = true;
-    cta.textContent = 'Exporting your backup…';
+    cta.textContent = 'Getting your records ready…';
     try {
-      // The bridge exports the owner's data into Downloads, then heads to checkout
-      // (which redirects into Pro post-purchase to import it). If no checkout URL
-      // is configured yet it returns 'exported' — leave them on the backup they
-      // just got, with a plain instruction.
+      // The bridge either confirms the cloud backup holds everything (sign in on
+      // Pro to restore) or exports the owner's data into Downloads, then heads to
+      // checkout. If no checkout URL is configured yet it returns 'cloud' /
+      // 'exported' — leave them with a plain instruction.
       const result = await runUpgradeBridge();
+      const detail = container.querySelector('.upgrade-nudge-detail');
       if (result === 'exported') {
         cta.textContent = 'Backup exported ✓';
-        container.querySelector('.upgrade-nudge-detail').textContent =
-          'Backup exported. Continue to Pro and import this file to finish upgrading.';
+        detail.textContent = 'Backup exported. Continue to Pro and import this file to finish upgrading.';
+      } else if (result === 'cloud') {
+        cta.textContent = 'Backed up ✓';
+        detail.textContent = 'Everything is backed up. Open KennelOS Pro and sign in with the same email to restore.';
+      } else if (result === 'cancelled') {
+        cta.disabled = false;
+        cta.textContent = 'Upgrade to Pro →';
       }
     } catch (e) {
       // If the export somehow fails we still don't want to strand them mid-flow;

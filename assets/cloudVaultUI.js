@@ -2,12 +2,14 @@
 // Imported dynamically, and only by cloudBackupUI.js, so an edition with
 // `cloudUrl: null` never loads it. Shared, not Pro-gated (Lite and Pro alike).
 //
-//   turnOnVaultFlow({ offer })   §2.1: "Also back up your private info?" → the
-//                                recovery code (print / save / copy, then type the
-//                                last group back) → the first encrypted backup
+//   turnOnVaultFlow({ offer })   §2.1: one card; the passkey turns it on (the
+//                                recovery code waits on Today), or the recovery code
+//                                first (print / save / copy, type the last group back)
+//   saveRecoveryCodeFlow()       Today's "Save your recovery code" after a passkey setup
 //   unlockModal({ merge })       §2.3: passkey · recovery code · another device · not now
 //   unlockBeforeRestore()        the restore paths' unlock step (§2.3)
-//   approveDevicesModal()        §2.4: unlock another device from this one
+//   approveDevicesModal()        §2.4: unlock another device from this one, or
+//                                make a one-hour code to paste into it (§5.4)
 //   passkeysModal()              §2.2, §5.2: the vault's passkeys; add / remove
 //   newRecoveryCodeFlow()        §2.2
 //   turnOffVaultFlow()           §2.5
@@ -18,7 +20,8 @@ import {
   openModal, progressModal, errorText, withFreshSignIn, typedConfirm, notify, handlePushResult
 } from './cloudBackupUI.js';
 import {
-  vaultStatus, startVaultSetup, finishVaultSetup, unlockWithRecoveryCode,
+  vaultStatus, startVaultSetup, finishVaultSetup, unlockWithRecoveryCode, unlockWithHandoffCode, createHandoffCode,
+  quickVaultSetup, unsavedRecoveryCode, markRecoveryCodeSaved,
   requestDeviceUnlock, pendingDeviceUnlock, waitForDeviceUnlock, cancelDeviceUnlock,
   listUnlockRequests, approveDeviceUnlock, startNewRecoveryCode, finishNewRecoveryCode,
   disableVault, addPasskey, unlockWithPasskey, removePasskey, VaultSetupError
@@ -53,6 +56,7 @@ function vaultErrorText(e) {
   if (e?.name === 'CloudConflictError' && e.code === 'vault_exists') return 'Sensitive records backup was just turned on from another device. Unlock it here with that device\'s recovery code.';
   if (e?.name === 'CloudConflictError' && e.code === 'already_approved') return 'Another device already answered that request.';
   if (e?.name === 'CloudRequestError' && e.code === 'too_many_pairings') return 'Too many open requests. Wait ten minutes, then ask again.';
+  if (e?.name === 'CloudRequestError' && e.code === 'too_many_handoffs') return 'Too many unlock codes are open. Wait an hour, or use one you already made.';
   return errorText(e);
 }
 
@@ -60,19 +64,24 @@ const done = (overlay, resolve, v) => { overlay.remove(); resolve(v); };
 const buttons = (overlay, resolve) => overlay.querySelectorAll('[data-v]').forEach((b) =>
   b.addEventListener('click', () => done(overlay, resolve, b.dataset.v)));
 
-// --- Turning it on (§2.1) ----------------------------------------------------------
-function introModal({ offer }) {
+// --- Turning it on (§2.1; passkey first, decided 2026-10-10) ---------------------------
+// One card. Where passkeys can try, its main button is the passkey: the prompt
+// turns it on, and the recovery code waits on Today (saveRecoveryCodeFlow).
+// Otherwise, or by choice, the recovery code comes first, as before.
+// Resolves 'passkey' | 'code' | 'no'.
+function introModal({ offer, canPasskey, errorMsg = '' }) {
   return new Promise((resolve) => {
     const overlay = openModal(`
-      <h2 style="margin-top:0;">${offer ? 'Also back up your sensitive records?' : 'Back up your sensitive records'}</h2>
-      <p>Contacts' phone, email and address, prices and payments, Financials, contracts, receipts and your
-        private notes can be backed up too, <strong>encrypted on this device before upload</strong>. We can't read
-        them, and neither can anyone who gets into our server.</p>
-      <p class="muted">You'll get a recovery code to keep somewhere safe. On a new phone, you unlock your private
-        info with that code, or from another of your devices that's already unlocked.</p>
-      <p class="field-hint">Strongly suggested if you use the waitlist: applicants' answers and fees are private.</p>
+      <h2 style="margin-top:0;">${offer ? 'Protect your sensitive records too?' : 'Back up your sensitive records'}</h2>
+      <p>Contacts' phone, email and address, prices, Financials, contracts and your notes, <strong>encrypted on
+        this device before upload</strong>. We can't read them, and neither can anyone who gets into our server.</p>
+      ${canPasskey
+        ? '<p class="muted">Turn it on with Face ID, your fingerprint or your device PIN. You\'ll also get a recovery code to save afterwards.</p>'
+        : '<p class="muted">You\'ll get a recovery code to keep somewhere safe. On a new phone, you unlock with that code, or from another of your devices.</p>'}
+      ${errorMsg ? `<div class="inline-error">${esc(errorMsg)}</div>` : ''}
       <div class="form-actions">
-        <button class="btn btn-primary" data-v="on">Continue</button>
+        ${canPasskey ? '<button class="btn btn-primary" data-v="passkey">Turn on with passkey</button>' : '<button class="btn btn-primary" data-v="code">Continue</button>'}
+        ${canPasskey ? '<button class="btn" data-v="code">Use a recovery code instead</button>' : ''}
         <button class="btn" data-v="no">Not now</button>
       </div>`, { width: 520 });
     buttons(overlay, resolve);
@@ -170,10 +179,41 @@ function printText(text) {
   setTimeout(() => frame.remove(), 60 * 1000);
 }
 
-// `offer: true` is the step inside "Turn on cloud backup" (its intro has "Not
-// now"). Resolves true when it's on.
+// `offer: true` is the step inside "Turn on cloud backup" (its card says "too").
+// Resolves true when it's on.
 export async function turnOnVaultFlow({ offer = false } = {}) {
-  if ((await introModal({ offer })) !== 'on') return false;
+  const canPasskey = await passkeySupported();
+  let errorMsg = '';
+  for (;;) {
+    const choice = await introModal({ offer, canPasskey, errorMsg });
+    if (choice === 'no') return false;
+    if (choice === 'code') return codeFirstVaultFlow({ offerPasskey: canPasskey });
+    const pg = progressModal('Turning on sensitive records backup…');
+    let push;
+    try {
+      push = await quickVaultSetup({
+        label: currentAccount()?.deviceLabel,
+        onProgress: (p) => {
+          if (p.phase === 'files' && p.total) pg.update(`Uploading documents: ${p.done + 1} of ${p.total}…`, p.done, p.total);
+          else pg.update('Uploading your encrypted records…');
+        }
+      });
+    } catch (e) {
+      pg.close();
+      // A passkey that can't do PRF: the recovery code is the way, as before.
+      if (e?.name === 'PasskeyError' && e.code === 'unsupported') return codeFirstVaultFlow({ offerPasskey: false });
+      errorMsg = vaultErrorText(e);
+      continue;
+    }
+    pg.close();
+    notify();
+    if (push && !['pushed', 'unchanged', 'skipped'].includes(push.status)) await handlePushResult(push);
+    return true;
+  }
+}
+
+// The recovery code first (no passkey here, or the owner chose it).
+async function codeFirstVaultFlow({ offerPasskey }) {
   let setup;
   try { setup = await startVaultSetup(); } catch (e) { await alertModal({ title: "That didn't work", message: vaultErrorText(e) }); return false; }
   let push = null;
@@ -194,9 +234,22 @@ export async function turnOnVaultFlow({ offer = false } = {}) {
   if (!ok) return false;
   notify();
   if (push && push.status !== 'pushed' && push.status !== 'unchanged' && push.status !== 'skipped') await handlePushResult(push);
-  else await alertModal({ title: 'Sensitive records backup is on', message: 'Your sensitive records are now backed up, encrypted, with every backup. Keep your recovery code safe.' });
-  if (await passkeySupported()) await offerPasskeyModal();
+  if (offerPasskey) await offerPasskeyModal();
   return true;
+}
+
+// Today's "Save your recovery code" (passkey-first setup): the code with Print /
+// Save / Copy, and its last group typed back. Resolves true once saved.
+export async function saveRecoveryCodeFlow() {
+  const code = await unsavedRecoveryCode();
+  if (!code) return true;
+  const ok = await recoveryCodeModal({ recoveryCode: code }, {
+    title: 'Save your recovery code',
+    confirmLabel: "I've saved it",
+    onConfirm: (typed) => markRecoveryCodeSaved(typed)
+  });
+  if (ok) notify();
+  return ok;
 }
 
 // §2.1 step 3: "Unlock with Face ID / fingerprint next time?" Skippable; the
@@ -327,7 +380,12 @@ export function unlockModal({ merge = true, intro = '' } = {}) {
       }
       body.innerHTML = `
         <h2 style="margin-top:0;">Use another device</h2>
-        <p class="muted">On a device where your sensitive records are already unlocked, open KennelOS, then
+        <p class="muted">Have an unlock code from KennelOS Lite or another device? Paste it here:</p>
+        <div class="field field-wide"><label for="ul-handoff">Unlock code</label>
+          <input id="ul-handoff" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" style="font-family:ui-monospace,monospace;"></div>
+        <div class="inline-error" id="ul-handoff-error" hidden></div>
+        <div class="form-actions" style="margin-top:0;"><button class="btn btn-primary" id="ul-handoff-ok">Unlock</button></div>
+        <p class="muted" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">Or, on a device where your sensitive records are already unlocked, open KennelOS, then
           <strong>Import / Export → Cloud → Sensitive records → Unlock another device</strong>, and type this code:</p>
         <p style="font-family:ui-monospace,monospace;font-size:24px;letter-spacing:2px;text-align:center;padding:12px;border:1px solid var(--border);border-radius:8px;">${esc(req.code)}</p>
         <p class="field-hint" id="ul-wait">Waiting for the other device… This code works for 10 minutes.</p>
@@ -336,6 +394,27 @@ export function unlockModal({ merge = true, intro = '' } = {}) {
       controller = new AbortController();
       const mine = controller;
       body.querySelector('#ul-back').addEventListener('click', () => { mine.abort(); showChoices(); });
+      const handoffInput = body.querySelector('#ul-handoff');
+      const handoffError = body.querySelector('#ul-handoff-error');
+      const redeem = async () => {
+        const btn = body.querySelector('#ul-handoff-ok');
+        btn.disabled = true; btn.textContent = 'Unlocking…';
+        handoffError.hidden = true;
+        try {
+          const { merged } = await unlockWithHandoffCode(handoffInput.value, { merge });
+          mine.abort();
+          cancelDeviceUnlock().catch(() => {});
+          await unlocked(merged);
+        } catch (e) {
+          btn.disabled = false; btn.textContent = 'Unlock';
+          handoffError.hidden = false;
+          handoffError.textContent = e?.name === 'VaultLockedError'
+            ? "That code didn't work. Codes work once, for an hour: make a new one on the other device if it's used or old."
+            : vaultErrorText(e);
+        }
+      };
+      body.querySelector('#ul-handoff-ok').addEventListener('click', redeem);
+      handoffInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') redeem(); });
       try {
         const r = await waitForDeviceUnlock({ signal: mine.signal, merge });
         if (r.status === 'unlocked') await unlocked(r.merged);
@@ -368,6 +447,26 @@ export async function unlockBeforeRestore() {
   return unlockModal({ merge: false });
 }
 
+// A handoff code (§5.4) on screen, with Copy. Shared by the approve modal here
+// and Lite's upgrade dialog (editionLinks.js).
+export function handoffCodeHtml(code) {
+  return `<div class="handoff-code" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;">
+      <code style="font-family:ui-monospace,monospace;font-size:15px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;user-select:all;white-space:nowrap;max-width:100%;overflow-x:auto;">${esc(code)}</code>
+      <button type="button" class="btn btn-sm" data-copy-handoff>Copy code</button>
+    </div>`;
+}
+
+export async function copyHandoffCode(code) {
+  try { await navigator.clipboard.writeText(code); return true; } catch { return false; }
+}
+
+export function wireHandoffCopy(scope, code) {
+  const btn = scope.querySelector('[data-copy-handoff]');
+  btn?.addEventListener('click', async () => {
+    btn.textContent = (await copyHandoffCode(code)) ? 'Copied ✓' : 'Select it and copy';
+  });
+}
+
 // --- Unlock another device, from this one (§2.4) ---------------------------------------
 export function approveDevicesModal() {
   return new Promise((resolve) => {
@@ -393,11 +492,33 @@ export function approveDevicesModal() {
           </li>`).join('')}</ul>` : '<p class="field-hint">No device is waiting yet.</p>'}
         <div class="form-actions">
           <button class="btn" id="ap-refresh">Check again</button>
+          <button class="btn" id="ap-handoff">Make an unlock code instead</button>
           <button class="btn" id="ap-close">Close</button>
         </div>`;
       body.querySelector('#ap-refresh').addEventListener('click', () => showList());
+      body.querySelector('#ap-handoff').addEventListener('click', () => showHandoff());
       body.querySelector('#ap-close').addEventListener('click', finish);
       body.querySelectorAll('[data-id]').forEach((b) => b.addEventListener('click', () => showCode(requests.find((r) => r.id === b.dataset.id))));
+    };
+
+    // A code to paste into the other device (§5.4), e.g. KennelOS Pro on this phone.
+    const showHandoff = async () => {
+      body.innerHTML = '<p class="muted">Making a code…</p>';
+      let made;
+      try { made = await createHandoffCode(); } catch (e) {
+        body.innerHTML = `<h2 style="margin-top:0;">Unlock code</h2><div class="inline-error">${esc(vaultErrorText(e))}</div>
+          <div class="form-actions"><button class="btn" id="ap-back">Back</button></div>`;
+        body.querySelector('#ap-back').addEventListener('click', () => showList());
+        return;
+      }
+      body.innerHTML = `
+        <h2 style="margin-top:0;">Unlock code</h2>
+        <p class="muted">On the other device (KennelOS Pro, a new phone…), sign in with the same email, choose
+          <strong>Unlock your sensitive records → Use another device</strong>, and paste this code. It works once, for 1 hour.</p>
+        ${handoffCodeHtml(made.code)}
+        <div class="form-actions"><button class="btn btn-primary" id="ap-close">Done</button></div>`;
+      wireHandoffCopy(body, made.code);
+      body.querySelector('#ap-close').addEventListener('click', finish);
     };
 
     const showCode = (req, errorMsg = '') => {

@@ -32,8 +32,8 @@ function registerServiceWorker() {
   navigator.serviceWorker.register(swUrl, { scope: new URL('./', import.meta.url) });
 }
 
-// First run shows the onboarding sequence (Welcome → tour offer → tour or
-// backups+New Kennel). On a non-fresh load it does nothing and returns false, so
+// First run shows the onboarding Welcome card (Start my kennel → New Kennel, Take
+// the tour, or I already use KennelOS → sign in and restore). On a non-fresh load it does nothing and returns false, so
 // we fall through to the MANDATORY kennel-setup gate, which fires on every load
 // until an own kennel exists (shouldRequireKennelSetup gates it — Multi-Kennel
 // Scope Spec §3.2). That fall-through is what makes the gate inescapable: a user

@@ -9,7 +9,6 @@ import {
 import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js';
 import { esc } from './ui.js';
 import { renderBreedPicker } from './breedTestPicker.js';
-import { setCloudOfferPending } from '../data/settings.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
 // The mandatory first-run gate (Multi-Kennel Scope Spec §3.2), called from
@@ -38,6 +37,10 @@ export async function maybeShowKennelSetupPrompt() {
 export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
   const required = mode !== 'cancellable';
   const initial = await getKennelSetupState();
+  // First run with a cloud server: an optional email turns on free cloud backup
+  // in the same step (decided 2026-10-10; it replaced the separate offer card).
+  // Filling it in is the opt-in; left blank, nothing talks to the server.
+  const askEmail = required && isCloudAvailable() && !(await signedInToCloud());
 
   // The optional breed+test prefill (Test Planning Addendum §8–9). Populated
   // async from the bundled starter file after the modal is on screen; if the
@@ -58,6 +61,9 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
           <input id="ks-kennel" type="text" placeholder="e.g. Thornfield Kennels" value="${esc(initial.kennelName)}"></div>
         <div class="field field-wide"><label>Your name (as owner)</label>
           <input id="ks-owner" type="text" placeholder="Used to prefill Owner on dogs you own" value="${esc(initial.ownerName)}"></div>
+        ${askEmail ? `<div class="field field-wide"><label for="ks-email">Email for free cloud backup <span class="faint" style="font-weight:normal;">— optional</span></label>
+          <input id="ks-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com">
+          <span class="field-hint">Backs up your records automatically, so a lost or new phone gets them back. We'll email you a code; no password.</span></div>` : ''}
       </div>
       <div id="ks-seed"></div>
       <div id="ks-error"></div>
@@ -90,16 +96,26 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
   overlay.querySelector('[data-act="save"]').addEventListener('click', async () => {
     const kennelName = overlay.querySelector('#ks-kennel').value.trim();
     const ownerName = overlay.querySelector('#ks-owner').value.trim();
+    const email = overlay.querySelector('#ks-email')?.value.trim() || '';
     if (!kennelName) {
       errorBox.innerHTML = `<div class="inline-error">Kennel name is required.</div>`;
+      return;
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errorBox.innerHTML = `<div class="inline-error">That email doesn't look right. Check it, or leave it blank to skip cloud backup.</div>`;
       return;
     }
     try {
       const { kennel } = await completeKennelSetup({ kennelName, ownerName });
       if (selectedBreeds.size) await applySeedToKennel(kennel.id, seedGroups, selectedBreeds);
-      // First kennel saved: offer cloud backup once, on the load after this reload
-      // (cloudBackupUI's bootCloud; a no-op in an edition without a server).
-      if (required) setCloudOfferPending(true);
+      // The kennel is saved either way; an email then signs in (its code is sent
+      // at once) and turns backup on. Backing out keeps the kennel, and Today's
+      // card still offers backup later.
+      if (email) {
+        overlay.style.display = 'none';
+        const { turnOnFlow } = await import('./cloudBackupUI.js');
+        await turnOnFlow({ email }).catch(() => {});
+      }
       location.reload();
     } catch (e) {
       errorBox.innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
@@ -139,6 +155,13 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
     overlay.remove();
     onDone?.(false);
   });
+}
+
+async function signedInToCloud() {
+  try {
+    const { currentAccount } = await import('../data/cloud/cloudAuth.js');
+    return Boolean(currentAccount()?.signedIn);
+  } catch { return false; }
 }
 
 // Adds the kennel name as a second line under "KennelOS" in the nav brand, once

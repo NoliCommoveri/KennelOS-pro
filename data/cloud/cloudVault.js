@@ -22,13 +22,14 @@ import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
 import { currentAccount, sessionToken } from './cloudAuth.js';
 import {
-  getVaultKey, setVaultKey, clearVaultKey, getPendingPairing, setPendingPairing, clearPendingPairing
+  getVaultKey, setVaultKey, clearVaultKey, getPendingPairing, setPendingPairing, clearPendingPairing,
+  getUnsavedRecoveryCode, setUnsavedRecoveryCode, clearUnsavedRecoveryCode
 } from './vaultKeyStore.js';
 import {
   generateVaultKey, newRecoveryCode, formatCode, normalizeRecoveryCode,
   kekFromRecoveryCode, wrapVaultKey, unwrapVaultKey,
   newPairingCode, generatePairingKeyPair, exportPublicKey, kekFromPairing,
-  kekFromPrf, newPrfSalt
+  kekFromPrf, newPrfSalt, newHandoffCode, kekFromHandoffCode, handoffProof, VaultLockedError
 } from './vaultCrypto.js';
 import { createPasskey, getPrfOutput, forgetPasskey, passkeySupported } from './vaultPasskey.js';
 import { pushIfDirty, restoreSnapshotVault } from './cloudBackup.js';
@@ -128,6 +129,60 @@ export async function finishVaultSetup(setup, { confirmation, onProgress } = {})
   return pushIfDirty({ force: true, onProgress });
 }
 
+// --- Turning it on with a passkey first (§2.1, decided 2026-10-10) ----------------
+// One tap: the passkey prompt turns the vault on. The recovery code is made at
+// the same time (the server requires its wrap, so it always exists) but shown
+// afterwards: it's kept on this device as "unsaved" until the owner saves it
+// (unsavedRecoveryCode / markRecoveryCodeSaved), and Today keeps asking.
+// The passkey is made FIRST, before any request, because browsers only allow
+// the prompt straight after the tap that started it. Throws PasskeyError
+// ('unsupported' → use turnOnVaultFlow's recovery-code screen instead;
+// 'cancelled'), and 409 'vault_exists' (CloudConflictError) when another device
+// turned it on first. → the push result, as finishVaultSetup.
+export async function quickVaultSetup({ label = null, onProgress } = {}) {
+  const { token, programId } = requireSession();
+  const { key, keyId } = await generateVaultKey();
+  const code = newRecoveryCode();
+  const prfSalt = newPrfSalt();
+  const account = currentAccount();
+  const { credentialId, prfOutput } = await createPasskey({ userId: programId, userName: account?.email, prfSalt });
+  try {
+    const passkeyWrap = await wrapVaultKey(key, await kekFromPrf(prfOutput), { keyId, kind: 'passkey' });
+    const recoveryWrap = await wrapVaultKey(key, await kekFromRecoveryCode(code), { keyId, kind: 'recovery' });
+    await api.enableVault(token, { keyId, recoveryWrap });
+    await setVaultKey(programId, { key, keyId });
+    await setUnsavedRecoveryCode(programId, { code, keyId });
+    recordVaultState('on');
+    await api.addVaultWrap(token, { kind: 'passkey', keyId, wrapped: passkeyWrap, credentialId, prfSalt, label });
+  } catch (err) {
+    forgetPasskey(credentialId);
+    throw err;
+  }
+  if (!getCloudBackupState().enabled) return { status: 'skipped', reason: 'off' };
+  return pushIfDirty({ force: true, onProgress });
+}
+
+// The recovery code a passkey-first setup made and the owner hasn't saved yet,
+// formatted, or null. A code for a vault this device no longer holds is dropped.
+export async function unsavedRecoveryCode() {
+  const programId = currentAccount()?.programId;
+  const row = await getUnsavedRecoveryCode(programId);
+  if (!row) return null;
+  const vault = await getVaultKey(programId);
+  if (!vault || vault.keyId !== row.keyId) { await clearUnsavedRecoveryCode(); return null; }
+  return formatCode(row.code);
+}
+
+// `typed` is its last group, typed back (as when turning the vault on with the
+// code first). Throws VaultSetupError 'confirm_mismatch'.
+export async function markRecoveryCodeSaved(typed) {
+  const programId = currentAccount()?.programId;
+  const row = await getUnsavedRecoveryCode(programId);
+  if (!row) return;
+  checkConfirmation({ code: row.code, lastGroup: row.code.slice(-4) }, typed);
+  await clearUnsavedRecoveryCode();
+}
+
 // --- Unlocking this device (§2.3, §5.1) -------------------------------------------
 // Opens the vault with the recovery code and keeps the key here. Then, unless
 // `merge: false`, merges the latest backup's private tier in (the "Not now,
@@ -160,6 +215,45 @@ export async function mergeLatestVault({ onProgress } = {}) {
   const r = await restoreSnapshotVault(program.latestSnapshotId, { overwrite: false, onProgress });
   if (r.status === 'restored') setCloudRestoredAt(null); // private details are back: no "blank here" hint
   return r;
+}
+
+// --- Handoff codes (§5.4) ------------------------------------------------------------
+// The reverse of a device unlock, for a device that's being left behind (Lite,
+// upgrading to Pro on the same phone or another): this unlocked device makes a
+// code that works once, for an hour, and the owner pastes it into the other
+// device after signing in there. A new code replaces this device's last one.
+// → { code: 'XXXX-XXXX-…', expiresAt }. VaultSetupError 'locked' when this
+// device can't open the vault itself.
+export async function createHandoffCode() {
+  const { token, programId } = requireSession();
+  const vault = await getVaultKey(programId);
+  if (!vault) throw new VaultSetupError('locked');
+  const code = newHandoffCode();
+  const wrapped = await wrapVaultKey(vault.key, await kekFromHandoffCode(code), { keyId: vault.keyId, kind: 'handoff' });
+  const { expiresAt } = await api.createHandoff(token, { keyId: vault.keyId, wrapped, proof: await handoffProof(code) });
+  return { code: formatCode(code), expiresAt };
+}
+
+// Unlock this device with a handoff code. A 24-character code that isn't a
+// live handoff is tried as the recovery code (same length), so whichever one
+// the owner pastes works. Throws VaultLockedError when neither opens it.
+// → { merged } as for unlockWithRecoveryCode.
+export async function unlockWithHandoffCode(rawCode, { merge = true, onProgress } = {}) {
+  const { token, programId } = requireSession();
+  const code = normalizeRecoveryCode(rawCode);
+  if (!code) throw new VaultLockedError('That code is not the right length.');
+  let h;
+  try {
+    h = await api.redeemHandoff(token, await handoffProof(code));
+  } catch (err) {
+    if (err instanceof api.CloudRequestError && err.code === 'not_found') return unlockWithRecoveryCode(code, { merge, onProgress });
+    if (err instanceof api.CloudRequestError && err.code === 'no_vault') throw new VaultSetupError('no_vault');
+    throw err;
+  }
+  const key = await unwrapVaultKey(h.wrapped, await kekFromHandoffCode(code), { keyId: h.keyId, kind: 'handoff' });
+  await setVaultKey(programId, { key, keyId: h.keyId });
+  recordVaultState('on');
+  return { merged: merge ? await mergeLatestVault({ onProgress }) : null };
 }
 
 // --- Unlocking from another device (§2.4, §5.3) --------------------------------------
@@ -348,6 +442,7 @@ export async function finishNewRecoveryCode(d, { confirmation, reauth = {} } = {
   const kek = await kekFromRecoveryCode(d.code);
   const wrapped = await wrapVaultKey(vault.key, kek, { keyId: vault.keyId, kind: 'recovery' });
   await api.replaceRecoveryWrap(token, { keyId: vault.keyId, wrapped }, reauth);
+  await clearUnsavedRecoveryCode(); // the new code replaces any unsaved one
 }
 
 // --- Turning it off (§2.5) ----------------------------------------------------------
@@ -358,5 +453,6 @@ export async function disableVault({ reauth = {} } = {}) {
   const { token } = requireSession();
   await api.disableVault(token, reauth);
   await clearVaultKey();
+  await clearUnsavedRecoveryCode();
   recordVaultState('off');
 }

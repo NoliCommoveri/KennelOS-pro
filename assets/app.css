@@ -983,6 +983,9 @@ a.kt-loner:hover { color: var(--accent); }
 .onboard-list li { margin: 6px 0; }
 .onboard-rule { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .onboard-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+/* Buttons in dialogs wrap their label instead of overflowing the card at phone
+   width (".btn" is nowrap everywhere else). */
+.onboard-actions .btn, .modal .form-actions .btn { white-space: normal; max-width: 100%; text-align: center; }
 
 /* --- Cloud backup service notices (assets/cloudBackupUI.js) ------------- */
 /* The in-app shutdown/notice channel (Cloud Phase 1 plan §2.1). A strip at the

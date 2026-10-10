@@ -15,7 +15,7 @@
 // never goes to our server.
 import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
-import { sessionToken, markSessionExpired } from './cloudAuth.js';
+import { sessionToken, markSessionExpired, recordEmailChangeState } from './cloudAuth.js';
 import {
   getCloudBackupState, updateCloudBackupState, getProLicense,
   getPendingEraseAck, setPendingEraseAck, clearPendingEraseAck
@@ -56,6 +56,7 @@ export function checkIn({ force = false, minGapMs = CHECK_IN_EVERY_MS } = {}) {
       const notices = Array.isArray(res.notices) ? res.notices : [];
       updateCloudBackupState({ lastCheckInAt: new Date().toISOString() });
       cacheNotices(notices);
+      recordEmailChangeState(res.emailChange); // Phase 1 plan §2.6
       return { notices };
     } catch (err) {
       if (err instanceof api.CloudErasedError) {

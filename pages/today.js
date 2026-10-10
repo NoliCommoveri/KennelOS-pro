@@ -42,6 +42,7 @@ const nudgesEl = document.getElementById('today-nudges');
 const overviewEl = document.getElementById('today-overview');
 const editionsEl = document.getElementById('today-editions');
 const cloudEl = document.getElementById('today-cloud');
+const installEl = document.getElementById('today-install');
 
 // Subject-resolution context, loaded once. Shared by every section.
 //
@@ -458,8 +459,33 @@ function renderEditionFooter() {
   wireEditionLinks(editionsEl);
 }
 
+// --- Install as an app (moved here from the first-run cards, 2026-10-10) ------
+// A dismissible card until it's dismissed or the app is already running
+// installed (standalone), when there's nothing to say.
+const INSTALL_TIP_KEY = 'install-tip';
+function renderInstallTip() {
+  if (!installEl) return;
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  if (standalone || isDismissed(INSTALL_TIP_KEY)) { installEl.innerHTML = ''; return; }
+  installEl.innerHTML = `<section class="card" style="margin-bottom:16px;">
+      <div class="row-between">
+        <div><strong>📲 Install KennelOS as an app</strong>
+          <div class="muted" style="font-size:13px;">It opens from your home screen like any app, and works offline.</div></div>
+        <div class="pill-row"><button class="btn btn-sm" data-act="install-ok">Got it</button></div>
+      </div>
+      <details style="margin-top:8px;"><summary class="muted" style="font-size:13px;cursor:pointer;">How?</summary>
+        <ul class="muted" style="font-size:13px;margin:6px 0 0;padding-left:20px;">
+          <li><strong>Android (Chrome):</strong> tap the <strong>⋮</strong> menu → <strong>Add to Home screen</strong> (or <strong>Install app</strong>).</li>
+          <li><strong>iPhone / iPad (Safari):</strong> tap <strong>Share</strong> (□ with an ↑) → <strong>Add to Home Screen</strong>.</li>
+        </ul>
+      </details>
+    </section>`;
+  installEl.querySelector('[data-act="install-ok"]').addEventListener('click', () => { dismiss(INSTALL_TIP_KEY); renderInstallTip(); });
+}
+
 async function main() {
   renderEditionFooter();
+  renderInstallTip();
   // "Turn on free cloud backup" / "backup is paused" — only with a server, and
   // only then is the cloud UI loaded at all (plan §7).
   if (isCloudAvailable()) {

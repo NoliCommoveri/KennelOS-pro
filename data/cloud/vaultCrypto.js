@@ -12,6 +12,9 @@
 //              ephemeral key, salted with the 12-character code the user types
 //              on the approver (§5.3), so a server that swaps a public key in
 //              still can't open what it relays.
+//   handoff  — KEK from a one-hour, 120-bit code an unlocked device makes and
+//              the owner pastes into another (§5.4); a second HKDF output, the
+//              proof, lets the server hand the wrap over without opening it.
 //
 // Every wrap and every ciphertext is bound to the vault's `keyId` (AES-GCM
 // additional data), so a wrap or payload made under a replaced key fails to
@@ -95,6 +98,8 @@ export const newRecoveryCode = () => randomCode(RECOVERY_CODE_LENGTH);
 export const newPairingCode = () => randomCode(PAIRING_CODE_LENGTH);
 export const normalizeRecoveryCode = (raw) => normalizeCode(raw, RECOVERY_CODE_LENGTH);
 export const normalizePairingCode = (raw) => normalizeCode(raw, PAIRING_CODE_LENGTH);
+// Handoff codes (§5.4) are the recovery code's length: 120 bits.
+export const newHandoffCode = () => randomCode(RECOVERY_CODE_LENGTH);
 
 // --- The vault key -------------------------------------------------------------
 // Extractable: wrapping it for another unlock path needs the raw bytes (§3.3).
@@ -131,6 +136,28 @@ export async function kekFromPrf(prfOutput) {
   const bytes = new Uint8Array(prfOutput);
   if (bytes.length < 32) throw new VaultLockedError('The passkey did not return a usable key.');
   return hkdfKey(bytes, enc.encode('kennelos-vault'), 'kennelos-vault/passkey/v1', KEK_USAGES);
+}
+
+// --- Handoff codes (§5.4) -----------------------------------------------------------
+// Two independent outputs of one code: the KEK (never leaves the device) and the
+// proof (sent to the server, which stores only its SHA-256 and returns the wrap
+// to whoever shows it). Different HKDF `info`, so the proof says nothing about
+// the KEK.
+export async function kekFromHandoffCode(code) {
+  const c = normalizeRecoveryCode(code);
+  if (!c) throw new VaultLockedError('That code is not the right length.');
+  return hkdfKey(enc.encode(c), enc.encode('kennelos-vault'), 'kennelos-vault/handoff/v1', KEK_USAGES);
+}
+
+export async function handoffProof(code) {
+  const c = normalizeRecoveryCode(code);
+  if (!c) throw new VaultLockedError('That code is not the right length.');
+  const base = await subtle().importKey('raw', enc.encode(c), 'HKDF', false, ['deriveBits']);
+  const bits = await subtle().deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('kennelos-vault'), info: enc.encode('kennelos-vault/handoff-proof/v1') },
+    base, 256
+  );
+  return toHex(new Uint8Array(bits));
 }
 
 // A fresh random PRF salt for a new passkey wrap (stored beside it; not secret).
