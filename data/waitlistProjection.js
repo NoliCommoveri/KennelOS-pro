@@ -22,7 +22,7 @@
 import {
   waitlistConfig, entryName, publicList, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
-  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, whelpNotes, readyCheck, publicIntroText,
+  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
@@ -101,10 +101,20 @@ function entryView(entry, ctx) {
   Object.assign(view, {
     applied_date: orNull(entry.applied_date),
     approved_date: orNull(entry.approved_date),
-    // Their overall place only, never a per-litter one; hidden during their turn and
-    // after a turn they passed on until those litters close (placeHidden).
-    position: ctx.hidden.get(entry.id) ? null : ctx.positions.get(entry.id) ?? null,
-    place_hidden: placeHiddenView(ctx.hidden.get(entry.id), ctx.litterLabels),
+    // Their overall place only, never a per-litter one. Published during their turn
+    // too: their page shows "It's your turn!" instead (place_hidden), and the server
+    // finds their public-list row by it to show "Currently deciding" (listView).
+    position: ctx.positions.get(entry.id) ?? null,
+    place_hidden: ctx.hidden.get(entry.id) || null,
+    // Their place for what they want, under their overall number (decided
+    // 2026-10-10): per answer they narrowed, and for all of them together
+    // (waitlistRules.prefPlaces). {} when their answers are all open.
+    pref_places: { ...(ctx.prefPlaces.get(entry.id) || {}) },
+    // Litters with open picks whose turn they passed on or let lapse: their page
+    // says so and offers no "Not this litter" for them. Ids only.
+    spent_litter_ids: [...new Set(ctx.offers
+      .filter((o) => o.entry_id === entry.id && (o.outcome === 'passed' || o.outcome === 'no_response') && ctx.picksOpen.has(o.litter_id))
+      .map((o) => o.litter_id))].sort(),
     prefs: {
       sex: entry.pref_sex || 'any',
       breed: orNull(entry.pref_breed),
@@ -256,14 +266,6 @@ const toUpcomingView = (u) => ({
 
 const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by, answer: rc.answer } : null);
 
-// Why their number is hidden, as their page says it: their turn, or the litters
-// they passed on (or let lapse) that are still being offered to others.
-function placeHiddenView(h, labels) {
-  if (!h) return null;
-  if (h.reason === 'turn') return { reason: 'turn' };
-  return { reason: 'passed', litters: h.offers.sort(byId).map((o) => ({ litter_id: o.litter_id, label: labels.get(o.litter_id) || '', outcome: o.outcome })) };
-}
-
 // The projection for ONE own kennel. Callers pass that kennel's entries, offers
 // and programs (a Map), and every litter, pairing, dog, sale and contact (each is
 // filtered here). `today` is YYYY-MM-DD. `formKey` is her current form key (its
@@ -346,11 +348,12 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     });
   }
 
-  const hidden = new Map(live.map((e) => [e.id, placeHidden(e, kennelOffers, litters, dogs, sales)]));
+  const hidden = new Map(live.map((e) => [e.id, placeHidden(e, kennelOffers)]));
   const upcoming = upcomingSection(kennel, config, { litters, pairings, dogsById, titles });
   const ctx = {
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
-    positions: overallPositions(live, kennel.id, programsById), matches, litterLabels, hidden, notes,
+    picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
+    positions: overallPositions(live, kennel.id, programsById), prefPlaces: prefPlaces(live, kennel.id, programsById, config), matches, litterLabels, hidden, notes,
     openSaleBuyers: new Set(sales.filter((x) => x.buyer_contact_id && isOpenSale(x)).map((x) => x.buyer_contact_id))
   };
   const entryViews = {};
@@ -382,8 +385,10 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       ...(formKey ? { message_key: { key_id: formKey.id, public_key: formKey.public_key } } : {}),
       ...(config.online_form && formKey ? { form: formSection(kennel, config, formKey, dogs) } : {})
     },
+    // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
+    // the page is served (publicList, familyPages.listView).
     public_list: publicList(live, kennel.id, programsById, {
-      today, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)), hidden: (e) => Boolean(hidden.get(e.id)), config
+      today, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)), config
     }),
     entries: entryViews,
     litters: litterViews,

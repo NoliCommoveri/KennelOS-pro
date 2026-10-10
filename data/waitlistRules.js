@@ -217,6 +217,69 @@ export function overallPositions(entries, kennelId, programsById = new Map()) {
   return out;
 }
 
+// A family's place for what they want (decided 2026-10-10), shown on their status
+// page under their overall number: for each matching answer they narrowed, their
+// place among the families who'd take such a pup too, and, when they narrowed more
+// than one, their place for all of them together. A family ahead counts when it
+// wants the same or wider on that answer (it would take every pup this family
+// would): sex (Either covers both), breed (blank covers any), purposes (the
+// registrations they fit; none chosen covers all) and, only with color matching on,
+// colors (none covers any; else theirs include all of these). Her use case: #49
+// overall, but 30 of the 48 ahead want only females and this family wants a male.
+export const PREF_PLACE_FIELDS = Object.freeze(['sex', 'breed', 'purposes', 'colors']);
+
+// Which matching answers a family narrowed (an answer left open is not narrowed).
+export function narrowedPrefFields(entry, config = WAITLIST_CONFIG_DEFAULTS) {
+  return PREF_PLACE_FIELDS.filter((f) => {
+    if (f === 'sex') return (entry.pref_sex || 'any') !== 'any';
+    if (f === 'breed') return Boolean(key(entry.pref_breed));
+    if (f === 'purposes') return Boolean(registrationsForPurposes(entry.pref_purposes));
+    return Boolean(config.color_matching) && prefColorTokens(entry).length > 0;
+  });
+}
+
+// Does `other` want the same as `mine`, or more, on one matching answer?
+export function prefCovers(field, other, mine) {
+  if (field === 'sex') {
+    const o = other.pref_sex || 'any';
+    return o === 'any' || o === (mine.pref_sex || 'any');
+  }
+  if (field === 'breed') return !key(other.pref_breed) || key(other.pref_breed) === key(mine.pref_breed);
+  if (field === 'purposes') {
+    const o = registrationsForPurposes(other.pref_purposes);
+    if (!o) return true;
+    const m = registrationsForPurposes(mine.pref_purposes);
+    return Boolean(m) && m.every((r) => o.includes(r));
+  }
+  const o = prefColorTokens(other);
+  if (!o.length) return true;
+  const m = prefColorTokens(mine);
+  return m.length > 0 && m.every((c) => o.includes(c));
+}
+
+// Map entryId → { all?, sex?, breed?, purposes?, colors? }: their 1-based place
+// counting only the families ahead who cover that answer (`all`: every answer they
+// narrowed). Only the answers they narrowed are present, and `all` only when they
+// narrowed two or more (with one, it's the same number). Empty for a family whose
+// answers are all open: their overall place says it.
+export function prefPlaces(entries, kennelId, programsById = new Map(), config = WAITLIST_CONFIG_DEFAULTS) {
+  const ranked = rankedList(entries, kennelId, programsById);
+  const out = new Map();
+  ranked.forEach((e, i) => {
+    const fields = narrowedPrefFields(e, config);
+    const places = {};
+    if (fields.length > 1) places.all = 1;
+    for (const f of fields) places[f] = 1;
+    for (let j = 0; j < i; j++) {
+      const covers = fields.filter((f) => prefCovers(f, ranked[j], e));
+      for (const f of covers) places[f]++;
+      if (fields.length > 1 && covers.length === fields.length) places.all++;
+    }
+    out.set(e.id, places);
+  });
+  return out;
+}
+
 // --- Availability + preference matching (Spec §0, §6.2) ------------------------
 
 // Dog statuses of a pup that has left: died, or gone home (a pet home, or an
@@ -278,25 +341,15 @@ export function depositsDueLitters(litters, pups, sales, today) {
     && pups.some((d) => d.litter_id === l.id && isPupAvailable(d, sales)));
 }
 
-// Is a family's place number hidden from them (decided 2026-10-08)? A family sees
-// only its overall place, never a per-litter one, and not even that while it would
-// mislead: during their turn ("It's your turn!" instead), and after a turn they
-// passed on or let lapse, until every litter of it has closed (picks stopped, every
-// pup spoken for, or the litter sold or closed), since families below them are
-// being offered those litters meanwhile. A "Not this litter" counts once their turn
-// records it as passed. The public list leaves them out the same way, number skipped.
-// → null | { reason: 'turn' } | { reason: 'passed', offers: [the closed rows, one per litter] }
-export function placeHidden(entry, offers = [], litters = [], pups = [], sales = []) {
-  const mine = offers.filter((o) => o.entry_id === entry.id && !o.is_archived);
-  if (mine.some((o) => o.outcome === 'open')) return { reason: 'turn' };
-  const littersById = new Map(litters.map((l) => [l.id, l]));
-  const picking = (l) => Boolean(l && !l.is_archived && l.picks_opened_date && !['sold', 'closed'].includes(l.status)
-    && pups.some((d) => d.litter_id === l.id && isPupAvailable(d, sales)));
-  const spent = new Map();
-  for (const o of mine) {
-    if ((o.outcome === 'passed' || o.outcome === 'no_response') && picking(littersById.get(o.litter_id))) spent.set(o.litter_id, o);
-  }
-  return spent.size ? { reason: 'passed', offers: [...spent.values()] } : null;
+// Is a family's place number hidden from them? Only during their turn (decided
+// 2026-10-08; "It's your turn!" instead). Since 2026-10-10 a turn they passed on
+// or let lapse hides nothing: their page shows their number and the public list
+// shows their row as usual. The public list keeps the row of a family holding a
+// turn, number and all, but shows "Currently deciding" for the name (publicList
+// `deciding`), so a family waiting below can't tell whom to press.
+// → null | { reason: 'turn' }
+export function placeHidden(entry, offers = []) {
+  return offers.some((o) => o.entry_id === entry.id && !o.is_archived && o.outcome === 'open') ? { reason: 'turn' } : null;
 }
 
 // "A litter you match was born" / "Review your preferences" (Spec §16.6, Q30, Q34).
@@ -1099,18 +1152,25 @@ export const listedName = (entry, fullName) => (entry && entry.private_listing ?
 // so nobody's public number shifts when a pause ends (decided 2026-10-06).
 // Listen-only families show, with no marker. Programs, notes and money never do.
 // `nameOf(entry)` returns the family's full name.
-// `hidden(entry)`: also leave out a family whose place is hidden from them
-// (placeHidden), so their own page and the public list never disagree.
-export function publicList(entries, kennelId, programsById = new Map(), { today, nameOf = (e) => entryName(e, null), hidden = () => false, config = null } = {}) {
+// `deciding(entry)`: a family holding a turn (placeHidden). Their row stays, at
+// their number, but the name, sex preference and date read as DECIDING_LABEL and
+// the row carries `deciding: true` (decided 2026-10-10). The online projection
+// publishes rows unmasked and the server masks them as it serves the page, from
+// who holds a turn at that moment (cloud/src/familyPages.js listView), so a turn
+// the server closes or opens while her phone is off shows right away.
+export const DECIDING_LABEL = 'Currently deciding';
+export function publicList(entries, kennelId, programsById = new Map(), { today, nameOf = (e) => entryName(e, null), deciding = () => false, config = null } = {}) {
   return rankedList(entries, kennelId, programsById)
     .map((e, i) => ({ entry: e, position: i + 1 }))
-    .filter(({ entry }) => !isPaused(entry, today, config) && !hidden(entry))
-    .map(({ entry, position }) => ({
-      position,
-      name: listedName(entry, nameOf(entry)),
-      pref_sex: entry.pref_sex || 'any',
-      added: anchorDate(entry)
-    }));
+    .filter(({ entry }) => !isPaused(entry, today, config))
+    .map(({ entry, position }) => (deciding(entry)
+      ? { position, name: DECIDING_LABEL, pref_sex: null, added: null, deciding: true }
+      : {
+        position,
+        name: listedName(entry, nameOf(entry)),
+        pref_sex: entry.pref_sex || 'any',
+        added: anchorDate(entry)
+      }));
 }
 
 const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
@@ -1119,8 +1179,10 @@ const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
 // for the public link). `fmtDate` formats a YYYY-MM-DD for display.
 export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d) => d } = {}) {
   const head = `${kennelName ? `${kennelName} Waitlist` : 'Waitlist'}${today ? ` (updated ${fmtDate(today)})` : ''}`;
-  if (!rows.length) return `${head}\nNobody is on the list yet.`;
-  const lines = rows.map((r) => `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`);
+  if (!rows.length) return `${head}\nNo families to show right now.`;
+  const lines = rows.map((r) => (r.deciding
+    ? `#${r.position} ${DECIDING_LABEL}`
+    : `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`));
   const gaps = rows.some((r, i) => r.position !== i + 1);
   return [head, '', ...lines, ...(gaps ? ['', 'Note: in special circumstances, some applicant names may not be displayed above. Their place is being held, but they are not currently eligible for available pups.'] : [])].join('\n');
 }

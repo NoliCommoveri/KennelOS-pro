@@ -3,14 +3,12 @@
 // Two ways, one page: the Online list (the waitlist online, only where it's
 // offered: its card is waitlistOnlineUI.js, which used to live on the Kennel page)
 // and, under it, the list as text to copy (allow-listed fields only, paused
-// families and families between turns left out). Pro-only page (proPages.js).
+// families left out, the family holding a turn as "Currently deciding"). Pro-only
+// page (proPages.js).
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
-import { litterRepo } from '../data/litterRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { saleRepo } from '../data/saleRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { waitlistConfig, entryName, publicList, publicListText, placeHidden, PUBLIC_INTRO_DEFAULT, PUBLIC_INTRO_MAX } from '../data/waitlistRules.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -74,21 +72,18 @@ function mountIntro(kennel) {
 
 // The public list as text (Spec §15.3), the same families and fields as online.
 async function renderText(kennel) {
-  const [entries, offers, programs, contacts, litters, dogs, sales] = await Promise.all([
+  const [entries, offers, programs, contacts] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
     waitlistOfferRepo.getByKennel(kennel.id),
     waitlistProgramRepo.getMapForKennel(kennel.id),
-    contactRepo.getAll({ includeArchived: true }),
-    litterRepo.getAll(),
-    dogRepo.getAll({ includeArchived: true }),
-    saleRepo.getAll({ includeArchived: true })
+    contactRepo.getAll({ includeArchived: true })
   ]);
   const today = todayYMD();
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const rows = publicList(entries, kennel.id, programs, {
     today, config: waitlistConfig(kennel), nameOf: (e) => entryName(e, contactsById.get(e.contact_id)),
-    // Same as online: a family in their turn, or after passing until those litters close.
-    hidden: (e) => Boolean(placeHidden(e, offers, litters, dogs, sales))
+    // Same as online: the family holding a turn shows as "Currently deciding".
+    deciding: (e) => Boolean(placeHidden(e, offers))
   });
   const text = publicListText(rows, { kennelName: kennel.kennel_name, today, fmtDate });
   els.text.innerHTML = `
@@ -96,7 +91,7 @@ async function renderText(kennel) {
       <h2 style="margin:0;">Copy the list as text</h2>
       <span class="pill-row"><span class="field-hint" id="pub-copied"></span><button class="btn btn-primary btn-sm" id="pub-copy">Copy</button></span>
     </div>
-    <p class="field-hint">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details and programs are left out, and so are paused families and families between turns (holding a turn, or after passing until that litter closes). It's a snapshot: copy it again after the list changes.</p>
+    <p class="field-hint">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details and programs are left out, and so are paused families. A family holding a turn shows as "Currently deciding" in their place. It's a snapshot: copy it again after the list changes.</p>
     <textarea id="pub-text-body" readonly style="width:100%;min-height:220px;font-family:inherit;">${esc(text)}</textarea>`;
   els.text.querySelector('#pub-copy').addEventListener('click', async () => {
     const ta = els.text.querySelector('#pub-text-body');
