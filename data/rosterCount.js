@@ -29,6 +29,7 @@ export const ACTIVE_ROSTER_ADULT_STATUS = new Set([
 export function isActiveRosterDog(dog) {
   return !!dog
     && !dog.is_archived
+    && !dog.pedigree_only
     && ACTIVE_ROSTER_OWNERSHIP.has(dog.ownership_type)
     && ACTIVE_ROSTER_ADULT_STATUS.has(dog.status);
 }

@@ -79,6 +79,7 @@ function resolveSeedKennel(candidate) {
 
 const ctx = {
   mode: 'view',        // 'new' | 'view' | 'edit'
+  bringIn: false,      // editing a pedigree-only dog to bring it into regular use
   original: null,      // saved record (null in new mode)
   draft: null,         // working copy while editing
   coiEditing: false,   // Recorded COI panel has its own inline edit toggle
@@ -145,7 +146,9 @@ function setupCollapsibleCard(sectionKey) {
 // --- Data loading --------------------------------------------------------
 async function loadRefs() {
   const [dogs, contacts, litters, kennels, breeds, breedPool] = await Promise.all([
-    dogRepo.getAll({ includeArchived: true }),
+    // Pedigree-only ancestors included: they name a sire/dam and fill the
+    // Sire/Dam pickers (pedigree building). Nothing else on this page lists them.
+    dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
     contactRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: true }),
     kennelRepo.getAll({ includeArchived: true }),
@@ -237,7 +240,7 @@ function dogOptions(current, excludeId, sex) {
   const opts = ctx.allDogs
     .filter((d) => d.id !== excludeId && (ctx.pickerArchived || !d.is_archived))
     .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
+    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.pedigree_only ? ' (pedigree only)' : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
   return `<option value="">— none —</option>` + opts;
 }
@@ -302,11 +305,11 @@ function renderView() {
       ${row('Dam', dogLink(d.dam_id))}
       ${row('Litter', d.litter_id ? `<a href="litter.html?id=${encodeURIComponent(d.litter_id)}">${esc(litterLabel(d.litter_id) || 'View litter')}</a>` : '')}
       ${row('Breeder kennel', esc(kennelName(d.breeder_kennel_id)))}
-      ${row('Ownership', badge(OWNERSHIP_TYPE, d.ownership_type))}
+      ${d.pedigree_only ? '' : `${row('Ownership', badge(OWNERSHIP_TYPE, d.ownership_type))}
       ${row('Owner', esc(contactName(d.owner_contact_id)))}
       ${row('Co-owners', coOwners)}
       ${row('Kennel', esc(kennelName(d.kennel_id)))}
-      ${row('Status', badge(DOG_STATUS, d.status) + (d.status_date ? ` <span class="faint">since ${esc(fmtDate(d.status_date))}</span>` : ''))}
+      ${row('Status', badge(DOG_STATUS, d.status) + (d.status_date ? ` <span class="faint">since ${esc(fmtDate(d.status_date))}</span>` : ''))}`}
       ${d.status === 'puppy' ? row('Disposition', d.disposition ? badge(DISPOSITION, d.disposition) : '') : ''}
       ${d.status === 'puppy' ? row('Intended registration', d.intended_registration ? badge(REGISTRATION_TYPE, d.intended_registration) : '') : ''}
       ${row('Notes', d.notes ? esc(d.notes).replace(/\n/g, '<br>') : '')}
@@ -367,6 +370,13 @@ function renderEdit() {
       ${field('Notes', `<textarea id="f-notes">${esc(d.notes)}</textarea>`, { wide: true })}
     </div>
     <div id="form-warn"></div>`;
+
+  if (isPedigreeOnlyEdit()) {
+    for (const id of ['f-ownership_type', 'f-status', 'f-owner_contact_id', 'f-co_owner_contact_ids', 'f-kennel_id']) {
+      const f = document.getElementById(id)?.closest('.field');
+      if (f) f.hidden = true;
+    }
+  }
 
   const form = document.getElementById('dog-form');
   form.addEventListener('input', updateWarnings);
@@ -435,7 +445,7 @@ function renderEdit() {
 function readForm() {
   const val = (id) => document.getElementById(id)?.value ?? '';
   const coSel = document.getElementById('f-co_owner_contact_ids');
-  return {
+  const out = {
     ...ctx.draft,
     call_name: val('f-call_name').trim(),
     registered_name: val('f-registered_name').trim(),
@@ -477,6 +487,27 @@ function readForm() {
       : (ctx.draft?.kennel_id || null),
     notes: val('f-notes')
   };
+  // A pedigree-only dog's ownership fields are hidden while editing (they're
+  // fixed at external / no owner); they only change through "Bring into use".
+  if (isPedigreeOnlyEdit()) {
+    const o = ctx.original;
+    Object.assign(out, {
+      ownership_type: o.ownership_type, status: o.status, owner_contact_id: o.owner_contact_id ?? null,
+      co_owner_contact_ids: o.co_owner_contact_ids || [], kennel_id: o.kennel_id ?? null
+    });
+  }
+  return out;
+}
+
+const isPedigreeOnly = () => !!ctx.original?.pedigree_only;
+const isPedigreeOnlyEdit = () => isPedigreeOnly() && ctx.mode === 'edit' && !ctx.bringIn;
+
+// Pedigree-only dogs show their profile, recorded COI and pedigree, nothing that
+// belongs to running a kennel (Bring into use first). `hidden` on the section, so
+// each section's own render logic stays untouched.
+const KENNEL_SECTIONS = ['plannedTests', 'healthTests', 'showRecord', 'timeline', 'expenses', 'pairings', 'sales', 'studServices', 'contracts', 'litters'];
+function applyPedigreeOnlyVisibility() {
+  for (const k of KENNEL_SECTIONS) if (els[k]) els[k].hidden = isPedigreeOnly();
 }
 
 function updateWarnings() {
@@ -535,7 +566,7 @@ function updateWarnings() {
 function renderProfileActions() {
   if (ctx.mode === 'view') {
     els.profileActions.innerHTML = `<button class="btn btn-sm" id="btn-edit">Edit</button>`;
-    document.getElementById('btn-edit').onclick = enterEdit;
+    document.getElementById('btn-edit').onclick = () => enterEdit();
   } else {
     els.profileActions.innerHTML = `
       <button class="btn btn-primary btn-sm" id="btn-save">Save</button>
@@ -562,16 +593,24 @@ async function renderHeaderActions() {
   // program" departure, and a departed dog can't be brought back in Lite (so no
   // control at all once archived).
   let archiveBtn = '';
-  if (editionFlags.manualDogArchive) {
+  if (d.pedigree_only) {
+    archiveBtn = editionFlags.manualDogArchive
+      ? `<button class="btn btn-sm" id="btn-archive">${d.is_archived ? 'Unarchive' : 'Archive'}</button>` : '';
+  } else if (editionFlags.manualDogArchive) {
     archiveBtn = `<button class="btn btn-sm" id="btn-archive">${d.is_archived ? 'Unarchive' : 'Archive'}</button>`;
   } else if (!d.is_archived) {
     archiveBtn = `<button class="btn btn-sm" id="btn-depart" title="Remove this dog from your program">Remove from program</button>`;
   }
+  const bringInBtn = d.pedigree_only && !d.is_archived
+    ? '<button class="btn btn-primary btn-sm" id="btn-bring-in" title="Make this dog part of your kennel — e.g. you bought it, or are breeding to it">Bring into use</button>'
+    : '';
   els.headerActions.innerHTML = `
+    ${bringInBtn}
     ${documentsBtn}
     ${archiveBtn}
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
   document.getElementById('btn-archive')?.addEventListener('click', toggleArchive);
+  document.getElementById('btn-bring-in')?.addEventListener('click', () => enterEdit({ bringIn: true }));
   document.getElementById('btn-depart')?.addEventListener('click', departDog);
   const del = document.getElementById('btn-delete');
   if (!blockers.length) del.onclick = doDelete;
@@ -583,11 +622,16 @@ function showError(msg) {
 }
 function clearError() { els.error.innerHTML = ''; }
 
-function enterEdit() {
+function enterEdit({ bringIn = false } = {}) {
   clearError();
   ctx.mode = 'edit';
+  ctx.bringIn = bringIn;
   ctx.coiEditing = false;
   ctx.draft = { ...ctx.original, co_owner_contact_ids: [...(ctx.original.co_owner_contact_ids || [])] };
+  // Bringing a pedigree-only dog into use: its placeholder ownership/status
+  // (external / external reference) are cleared so both are chosen deliberately.
+  if (bringIn) Object.assign(ctx.draft, { ownership_type: '', status: '' });
+  renderTitle();
   renderEdit();
   renderProfileActions();
   renderRecordedCoiSection(); // hide while editing the profile
@@ -608,6 +652,8 @@ function cancel() {
   clearError();
   if (ctx.mode === 'new') { location.href = 'dogs.html'; return; }
   ctx.mode = 'view';
+  ctx.bringIn = false;
+  renderTitle();
   renderView();
   renderProfileActions();
   renderRecordedCoiSection();
@@ -682,9 +728,16 @@ async function doSave() {
       location.href = `dog.html?id=${encodeURIComponent(saved.id)}`;
       return;
     }
+    if (ctx.bringIn) {
+      candidate.pedigree_only = false;
+      if (SCOPED_OWNERSHIP.has(candidate.ownership_type) && !candidate.kennel_id) {
+        candidate.kennel_id = await resolveKennelIdForWrite();
+      }
+    }
     saved = await dogRepo.update(ctx.original.id, candidate);
     ctx.original = saved;
     ctx.mode = 'view';
+    ctx.bringIn = false;
     await loadRefs(); // names/breeds may have changed
     ctx.original = await dogRepo.getById(saved.id);
     renderAll();
@@ -749,8 +802,12 @@ function renderTitle() {
     return;
   }
   const d = ctx.original;
-  els.title.innerHTML = esc(d.call_name) + (d.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
-  els.subtitle.innerHTML = d.registered_name ? esc(d.registered_name) : '';
+  els.title.innerHTML = esc(d.call_name)
+    + (d.pedigree_only ? ' <span class="badge badge-neutral">Pedigree only</span>' : '')
+    + (d.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
+  els.subtitle.innerHTML = ctx.bringIn
+    ? 'Choose an ownership and status to bring this dog into regular use.'
+    : (d.registered_name ? esc(d.registered_name) : '');
 }
 
 // New-dog-only cap counter (cap spec §6): a plain read of the same counting
@@ -1049,7 +1106,7 @@ async function renderPlannedTestsSection(eventsP = null) {
   // Copy-plan-from sources (§5): other dogs' plans, and kennel panels (a
   // kennel source is scoped to this dog's own breed at copy time — see the
   // pt-copy handler below).
-  const dogSources = ctx.allDogs.filter((o) => o.id !== d.id && (o.planned_tests || []).length);
+  const dogSources = ctx.allDogs.filter((o) => o.id !== d.id && !o.pedigree_only && (o.planned_tests || []).length);
   const kennelSources = ctx.allKennels.filter((k) => (k.preferred_tests || []).length);
   const sourceOptions = [
     `<option value="">— choose a source —</option>`,
@@ -1282,6 +1339,7 @@ function renderPedigreeSection() {
 }
 
 function renderAll() {
+  applyPedigreeOnlyVisibility();
   renderTitle();
   renderProfileActions();
   renderHeaderActions();

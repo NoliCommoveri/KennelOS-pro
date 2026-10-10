@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Import Pedigrees — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <a class="muted" href="dogs.html">← All dogs</a>
+        <h1>Import Pedigrees</h1>
+        <p class="page-subtitle">Add one or more pedigree PDFs. Every dog on them becomes a record — pedigree only, kept out of your kennel until you bring one into use — and dogs that appear more than once, or that you already have, are matched up. Nothing is saved until you review it.</p>
+      </div>
+    </div>
+
+    <div id="page-error"></div>
+
+    <section class="card">
+      <label class="ped-drop" id="ped-drop">
+        <input type="file" id="ped-files" accept="application/pdf,.pdf,image/*" multiple hidden>
+        <strong>Choose pedigree PDFs</strong>
+        <span class="muted">or drop them here. PDFs from AKC and most pedigree software read exactly; a scan or photo is read as best it can be — check its names.</span>
+      </label>
+      <div id="ped-file-list"></div>
+    </section>
+
+    <section class="card" id="ped-review" hidden>
+      <div class="row-between" style="flex-wrap:wrap; gap:10px;">
+        <h2 style="margin:0;">Review</h2>
+        <div class="pill-row" id="ped-review-tabs"></div>
+      </div>
+      <p class="muted" id="ped-summary" style="margin:8px 0 0;"></p>
+      <div id="ped-rows"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="ped-commit" disabled>Import</button>
+        <span class="muted" id="ped-commit-note"></span>
+      </div>
+    </section>
+
+    <div id="ped-done"></div>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./pedigree-import.js"></script>
+</body>
+</html>

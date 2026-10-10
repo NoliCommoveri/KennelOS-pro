@@ -51,7 +51,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'owner_contact_id', 'co_owner_contact_ids', 'date_of_birth', 'date_of_death',
       'color_markings', 'registry', 'registration_number', 'microchip_id', 'url',
       'planned_tests', 'disposition', 'dob_is_estimated', 'recorded_coi',
-      'intended_registration' // Waitlist Spec §9
+      'intended_registration', // Waitlist Spec §9
+      'pedigree_only' // without it a cloud restore would turn every ancestor into a kennel dog
     ],
     private: ['notes'],
     pending: []

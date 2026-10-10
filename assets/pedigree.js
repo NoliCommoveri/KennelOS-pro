@@ -99,7 +99,7 @@ function nodeHtml(n) {
 //   onNavigate(dogId) — called when a node name is clicked (re-center). If
 //   omitted, name clicks fall back to navigating to the pedigree page.
 export async function renderPedigree({ mount, rootId, generations = 3, onNavigate }) {
-  const dogs = await dogRepo.getAll({ includeArchived: true });
+  const dogs = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
   const byId = new Map(dogs.map((d) => [d.id, d]));
   const rootDog = byId.get(rootId);
 

@@ -63,7 +63,8 @@ export async function buildAssistantFeed() {
   return {
     format_version: ASSISTANT_FORMAT_VERSION,
     generated_at: new Date().toISOString(),
-    dogs: dogs.map((d) => {
+    // Pedigree-only ancestors stay home; they can still name a sire/dam above.
+    dogs: dogs.filter((d) => !d.pedigree_only).map((d) => {
       const out = {};
       for (const f of ASSISTANT_DOG_FIELDS) out[f] = d[f] ?? null;
       const litter = d.litter_id ? littersById.get(d.litter_id) : null;

@@ -45,6 +45,9 @@ function normalize(data) {
     // Optional back-link to a Contract — plain, unindexed (see header). Preserved
     // across edits because update() re-normalizes { ...existing, ...changes }.
     contract_id: data.contract_id || null,
+    // The kennel scope stamp (Multi-Kennel Scope Spec §4.3) — create() asserts it,
+    // so it has to survive normalizing.
+    kennel_id: data.kennel_id || null,
     file_id: data.file_id
   };
 }

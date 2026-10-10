@@ -66,6 +66,25 @@ export async function scan(fileOrBlob, onProgress) {
   return { rawText, ...parseFields(rawText) };
 }
 
+// Recognize an image (canvas / blob) and return every word with its position,
+// in the image's own pixels: [{ text, x, y, w, h, conf }]. For layout readers
+// (pedigree import) that need WHERE text sits, not just what it says.
+export async function recognizeWords(image, onProgress) {
+  const worker = await getWorker(onProgress);
+  const { data } = await worker.recognize(image, {}, { blocks: true });
+  const words = [];
+  for (const block of data?.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        for (const w of line.words || []) {
+          words.push({ text: w.text, x: w.bbox.x0, y: w.bbox.y0, w: w.bbox.x1 - w.bbox.x0, h: w.bbox.y1 - w.bbox.y0, conf: w.confidence });
+        }
+      }
+    }
+  }
+  return words;
+}
+
 // --- Field heuristics -----------------------------------------------------
 
 const MONEY_RE = /\$?\s?(\d{1,3}(?:,\d{3})+(?:\.\d{2})?|\d+\.\d{2})/g;

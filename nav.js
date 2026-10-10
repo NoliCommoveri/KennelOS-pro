@@ -36,8 +36,8 @@ function currentFile() {
 // Child pages that belong to a hub but aren't nav entries — used only to light
 // up the right tab when the user is deep inside a consolidated workflow.
 const HUB_CHILDREN = {
-  'pages/today.html': ['dashboard.html', 'reminders.html', 'upcoming.html', 'board.html', 'scheduled-placements.html'],
-  'pages/dogs.html': ['dog.html', 'roster.html', 'pedigree.html'],
+  'pages/today.html': ['dashboard.html', 'reminders.html', 'upcoming.html', 'calendar.html', 'board.html', 'scheduled-placements.html'],
+  'pages/dogs.html': ['dog.html', 'roster.html', 'pedigree.html', 'pedigree-import.html'],
   'pages/breeding.html': ['pairings.html', 'pairing.html', 'litters.html', 'litter.html', 'active-breeding.html', 'live-births.html'],
   'pages/contacts.html': ['contact.html', 'kennels.html', 'kennel.html', 'waitlist.html', 'waitlist-entry.html', 'waitlist-programs.html', 'waitlist-import.html', 'waitlist-form.html', 'waitlist-publish.html'],
   'pages/sales.html': ['sale.html', 'stud-services.html', 'stud-service.html', 'contracts.html', 'contract.html'],

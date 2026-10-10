@@ -56,7 +56,15 @@ async function validateDog(candidate, existingId = null) {
     throw new Error('Dog: date_of_death cannot be before date_of_birth.');
   }
 
-  if (OWNER_REQUIRED_TYPES.includes(candidate.ownership_type) && !candidate.owner_contact_id) {
+  // Pedigree-only dogs (ancestors brought in for lineage, never run as part of the
+  // kennel) are always `external` and exempt from the owner requirement: a
+  // pedigree names a dog, not who owns it today. "Bring into use" clears the flag,
+  // after which the ordinary rules below apply in full.
+  if (candidate.pedigree_only && candidate.ownership_type !== 'external') {
+    throw new Error('Dog: a pedigree-only dog must have ownership "external" — bring it into use first.');
+  }
+
+  if (!candidate.pedigree_only && OWNER_REQUIRED_TYPES.includes(candidate.ownership_type) && !candidate.owner_contact_id) {
     throw new Error(`Dog: owner_contact_id is required when ownership_type is "${candidate.ownership_type}".`);
   }
 
@@ -108,6 +116,16 @@ function nullDispositionIfNotPuppy(record) {
 
 export const dogRepo = {
   ...base,
+
+  // Pedigree-only dogs (`pedigree_only: true`) are left out of every list by
+  // default, so they never reach a roster, picker, report, cap count or the
+  // waitlist. Only pedigree building asks for them: the pedigree tree and page,
+  // the dog form's Sire/Dam pickers, pedigree import, and the dog CSV import's
+  // matching. getById is unaffected, so links into them still resolve.
+  async getAll({ includeArchived = false, includePedigreeOnly = false } = {}) {
+    const all = await base.getAll({ includeArchived });
+    return includePedigreeOnly ? all : all.filter((d) => !d.pedigree_only);
+  },
 
   async create(data) {
     await validateDog(data);

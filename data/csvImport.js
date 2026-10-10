@@ -195,7 +195,9 @@ const DOG_MAPPING = {
 
   async loadExisting() {
     const [dogs, kennels] = await Promise.all([
-      dogRepo.getAll({ includeArchived: true }),
+      // Pedigree-only ancestors too: a row naming one matches it rather than
+      // duplicating it, and sire/dam names resolve onto it.
+      dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
       kennelRepo.getAll({ includeArchived: true })
     ]);
     this._kennels = buildKennelNameIndex(kennels);

@@ -123,6 +123,19 @@ export const HistoryEvent = {
     return rows.sort((a, b) => (a.event_date < b.event_date ? -1 : a.event_date > b.event_date ? 1 : 0));
   },
 
+  // Calendar page — every non-archived event whose dates touch [from, to] (both
+  // YYYY-MM-DD, inclusive): it starts on or before `to` and starts or ends on or
+  // after `from`, so a span that began last month still shows. Past and future
+  // alike; the page decides how an open-ended span is drawn (calendarMath.eventSpan).
+  async getInRange(from, to) {
+    const rows = await db.events
+      .where('event_date').belowOrEqual(to)
+      .and((e) => !e.is_archived)
+      .and((e) => e.event_date >= from || (e.event_end_date != null && e.event_end_date >= from))
+      .toArray();
+    return rows.sort((a, b) => (a.event_date < b.event_date ? -1 : a.event_date > b.event_date ? 1 : 0));
+  },
+
   // Scheduled Placements report (Stage4.5 Addendum §D3) — future-dated
   // `placement` events only. A sibling read, not a filter over getUpcoming()'s
   // result, so it stays a one-line, obviously-correct query on its own.

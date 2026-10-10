@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calendar — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Calendar</h1>
+        <p class="page-subtitle">Every logged event and pending reminder, a month at a time. Tap a day for its details and an “Add to Google Calendar” link.</p>
+      </div>
+    </div>
+
+    <div id="page-error"></div>
+    <section class="card">
+      <div class="cal-toolbar">
+        <div class="pill-row">
+          <button type="button" class="btn btn-sm" id="cal-prev" aria-label="Previous month">‹</button>
+          <button type="button" class="btn btn-sm" id="cal-today">Today</button>
+          <button type="button" class="btn btn-sm" id="cal-next" aria-label="Next month">›</button>
+        </div>
+        <h2 id="cal-month" class="cal-month-label"></h2>
+      </div>
+      <div id="cal-mount"><div class="empty-state">Loading…</div></div>
+      <div id="cal-key" class="cal-key"></div>
+    </section>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./calendar.js"></script>
+</body>
+</html>

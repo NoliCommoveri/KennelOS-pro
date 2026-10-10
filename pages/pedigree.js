@@ -28,8 +28,11 @@ function fillPicker(selectedId) {
     // can't be centered on one (cap spec §7); the renderer still draws them as
     // static ancestor/offspring nodes for lineage.
     .filter((d) => editionFlags.includeArchivedToggles || !d.is_archived)
+    // Pedigree-only ancestors aren't offered as roots (there can be hundreds);
+    // the one being viewed is, so re-centering onto an ancestor keeps the picker true.
+    .filter((d) => !d.pedigree_only || d.id === selectedId)
     .sort((a, b) => (a.call_name || '').localeCompare(b.call_name || ''))
-    .map((d) => `<option value="${esc(d.id)}"${d.id === selectedId ? ' selected' : ''}>${esc(d.call_name || '(unnamed)')}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
+    .map((d) => `<option value="${esc(d.id)}"${d.id === selectedId ? ' selected' : ''}>${esc(d.call_name || '(unnamed)')}${d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
   rootSel.innerHTML = `<option value="">— select —</option>` + opts;
 }
@@ -52,7 +55,10 @@ async function show(id) {
   const url = new URL(location.href);
   url.searchParams.set('id', id);
   history.replaceState(null, '', url);
-  if (rootSel.value !== id) rootSel.value = id;
+  if (rootSel.value !== id) {
+    if (![...rootSel.options].some((o) => o.value === id)) fillPicker(id);
+    rootSel.value = id;
+  }
 
   await renderPedigree({
     mount,
@@ -63,7 +69,7 @@ async function show(id) {
 }
 
 async function main() {
-  dogs = await dogRepo.getAll({ includeArchived: true });
+  dogs = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
   if (!dogs.length) {
     msg.innerHTML = `<div class="inline-warn" style="color:var(--accent-dark);background:var(--accent-soft);border-color:#bfe0cd;">No dogs yet. Add dogs first, then explore their pedigree here.</div>`;
     rootSel.disabled = true;
