@@ -761,6 +761,19 @@ button.cal-cell:hover { border-color: var(--accent); }
   box-shadow: none;
 }
 
+/* Whole-kennel family tree (assets/kennelTree.js) */
+.kt-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; margin-bottom: 8px; }
+.kt-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.kt-family + .kt-family { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.kt-family-head { margin: 0 0 8px; font-size: 15px; }
+.kt-family-head .faint { font-weight: 400; font-size: 13px; }
+.kt-ancestor { background: var(--surface-2); }
+.kt-loners { display: flex; flex-wrap: wrap; gap: 8px; }
+.kt-loner { border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 4px 10px; font-weight: 600; color: var(--text); text-decoration: none; background: var(--surface); }
+a.kt-loner:hover { color: var(--accent); }
+.kt-focus .ped-node, .kt-loner.kt-focus { outline: 3px solid var(--accent); outline-offset: 2px; }
+
 /* --- Small utilities ---------------------------------------------------- */
 .muted { color: var(--text-muted); }
 .faint { color: var(--text-faint); }

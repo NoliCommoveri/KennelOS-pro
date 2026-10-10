@@ -23,7 +23,12 @@
       </div>
     </div>
 
-    <section class="card">
+    <nav class="seg-tabs" id="ped-view-tabs" aria-label="Pedigree views">
+      <a class="seg-tab" data-view="dog" href="pedigree.html">One dog</a>
+      <a class="seg-tab" data-view="kennel" href="pedigree.html?view=kennel">Whole kennel</a>
+    </nav>
+
+    <section class="card" id="ped-dog-toolbar">
       <div class="list-toolbar" style="margin-bottom:0;">
         <label class="check-inline" style="color:var(--text);font-weight:600;">Dog
           <select id="ped-root" style="min-width:220px;"></select>
@@ -39,6 +44,17 @@
         <div class="toolbar-spacer"></div>
         <a class="btn btn-sm" href="pedigree-import.html">Import pedigrees</a>
         <a class="btn btn-sm" id="ped-open-record" href="#">Open record ↗</a>
+      </div>
+    </section>
+
+    <section class="card" id="ped-kennel-toolbar" hidden>
+      <div class="list-toolbar" style="margin-bottom:0;">
+        <label class="check-inline" style="color:var(--text);font-weight:600;">Find dog
+          <select id="kt-find" style="min-width:220px;"></select>
+        </label>
+        <label class="check-inline"><input type="checkbox" id="kt-ancestors"> Include pedigree-only ancestors</label>
+        <div class="toolbar-spacer"></div>
+        <a class="btn btn-sm" href="pedigree-import.html">Import pedigrees</a>
       </div>
     </section>
 

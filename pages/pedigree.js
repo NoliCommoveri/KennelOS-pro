@@ -1,6 +1,9 @@
-// pedigree.js — the standalone Pedigree page. Picks a root dog (from ?id= or the
-// dropdown), renders the ancestor tree, and re-centers in place when a node is
-// clicked (updating the URL so the view is shareable/bookmarkable).
+// pedigree.js — the standalone Pedigree page. Two views (seg tabs):
+//   One dog (default) — picks a root dog (from ?id= or the dropdown), renders the
+//     ancestor tree, and re-centers in place when a node is clicked (updating the
+//     URL so the view is shareable/bookmarkable).
+//   Whole kennel (?view=kennel) — every dog connected to its sire and dam at once,
+//     grouped into families (assets/kennelTree.js); a name opens One dog on it.
 //
 // DELIBERATELY NOT KENNEL-SCOPED (Multi-Kennel Scope Spec §7) — neither the
 // tree (see assets/pedigree.js) nor the root picker below. §9 makes ordinary
@@ -9,6 +12,7 @@
 // pedigree that stops at a kennel boundary is worse than no filter at all.
 import { dogRepo, dogName } from '../data/dogRepo.js';
 import { renderPedigree } from '../assets/pedigree.js';
+import { renderKennelTree, focusKennelTreeDog } from '../assets/kennelTree.js';
 import { esc, param } from '../assets/ui.js';
 import { editionFlags } from '../data/editionConfig.js';
 
@@ -68,7 +72,31 @@ async function show(id) {
   });
 }
 
+async function showKennel() {
+  const findSel = document.getElementById('kt-find');
+  const ancestorsBox = document.getElementById('kt-ancestors');
+  document.getElementById('ped-dog-toolbar').hidden = true;
+  document.getElementById('ped-kennel-toolbar').hidden = false;
+
+  async function draw() {
+    const drawn = await renderKennelTree({ mount, includePedigreeOnly: ancestorsBox.checked });
+    // Lite: a departed dog isn't findable (it's drawn static, cap spec §7).
+    findSel.innerHTML = `<option value="">— select —</option>` + drawn
+      .filter((d) => editionFlags.archivedDogLinks || !d.is_archived)
+      .map((d) => `<option value="${esc(d.id)}">${esc(dogName(d) || '(unnamed)')}</option>`).join('');
+  }
+  ancestorsBox.addEventListener('change', draw);
+  findSel.addEventListener('change', () => findSel.value && focusKennelTreeDog(mount, findSel.value));
+  await draw();
+}
+
 async function main() {
+  const kennelView = param('view') === 'kennel';
+  document.querySelectorAll('#ped-view-tabs .seg-tab').forEach((t) => {
+    t.classList.toggle('active', (t.dataset.view === 'kennel') === kennelView);
+  });
+  if (kennelView) return showKennel();
+
   dogs = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
   if (!dogs.length) {
     msg.innerHTML = `<div class="inline-warn" style="color:var(--accent-dark);background:var(--accent-soft);border-color:#bfe0cd;">No dogs yet. Add dogs first, then explore their pedigree here.</div>`;
