@@ -7,7 +7,7 @@
 // dog pickers scope-by-default with an escape, but this one is the exception:
 // its whole job is to center lineage on any dog you have a record of, and a
 // pedigree that stops at a kennel boundary is worse than no filter at all.
-import { dogRepo } from '../data/dogRepo.js';
+import { dogRepo, dogName } from '../data/dogRepo.js';
 import { renderPedigree } from '../assets/pedigree.js';
 import { esc, param } from '../assets/ui.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -31,8 +31,8 @@ function fillPicker(selectedId) {
     // Pedigree-only ancestors aren't offered as roots (there can be hundreds);
     // the one being viewed is, so re-centering onto an ancestor keeps the picker true.
     .filter((d) => !d.pedigree_only || d.id === selectedId)
-    .sort((a, b) => (a.call_name || '').localeCompare(b.call_name || ''))
-    .map((d) => `<option value="${esc(d.id)}"${d.id === selectedId ? ' selected' : ''}>${esc(d.call_name || '(unnamed)')}${d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
+    .sort((a, b) => dogName(a).localeCompare(dogName(b)))
+    .map((d) => `<option value="${esc(d.id)}"${d.id === selectedId ? ' selected' : ''}>${esc(dogName(d) || '(unnamed)')}${d.call_name && d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
   rootSel.innerHTML = `<option value="">— select —</option>` + opts;
 }

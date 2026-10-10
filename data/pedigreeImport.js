@@ -5,27 +5,40 @@
 //   - A registration number is the natural key. The same number anywhere — twice
 //     in one chart (line-breeding), across charts, or already in the app — is one
 //     dog, matched automatically.
+//   - A chart's names are registered names: they're compared with the registered
+//     name of every dog in the app (current kennel dogs included, titles in front
+//     ignored), never a call name.
 //   - A name alone never matches anything automatically. A dog with no number
-//     whose name equals another dog's (in the batch or already in the app), or a
-//     numbered dog whose name equals an existing dog that has no number, goes to
-//     review: same dog, or a separate one.
+//     whose name equals another dog's in the batch, or any dog whose name equals
+//     a dog already in the app (numbered or not — a number typed differently is
+//     the likelier story), goes to review: same dog, or a separate one.
 //   - Two sources that disagree on a dog's sire or dam go to review too; a parent
 //     already recorded on an existing dog is never overwritten.
-// New dogs are created pedigree-only (dogRepo `pedigree_only`); an existing dog —
+// New dogs are created pedigree-only (dogRepo `pedigree_only`) with the chart's
+// name as their registered name and no call name (a chart doesn't give one); an existing dog —
 // one of the kennel's own included — is only filled in where it's blank, never
 // overwritten, and never made pedigree-only.
 //
 // planImport is pure (tests/pedigreeImport.test.js); commitImport writes through
 // the repos inside one Dexie transaction, so a failed save leaves nothing behind.
 import { db } from './db.js';
-import { dogRepo } from './dogRepo.js';
+import { dogRepo, dogName } from './dogRepo.js';
 import { documentRepo } from './documentRepo.js';
 import { fileRepo } from './fileRepo.js';
 import { resolveKennelIdForWrite } from './kennelScope.js';
+import { splitTitles } from './pedigreeParse.js';
 
-export const normReg = (r) => String(r || '').toUpperCase().replace(/\s+/g, '');
+// A registration number's key: upper-cased, an "AKC" in front dropped, and only
+// letters and digits kept — "NP165114/01", "np 165114-01", "AKC NP16511401" are
+// one number however they were typed.
+export const normReg = (r) => String(r || '').toUpperCase().replace(/^\s*AKC\b[\s#:.-]*/, '').replace(/[^A-Z0-9]/g, '');
 export const normName = (n) => String(n || '').replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"')
   .trim().replace(/\s+/g, ' ').toLowerCase();
+
+// The key two registered names are compared by: normName without the titles in
+// front. A chart's titles go to notes when it's read, but the same dog already in
+// the app is often saved as "GCH A-K Bella", so its titles come off too.
+const nameKey = (n) => normName(splitTitles(String(n || '')).name);
 
 const srcId = (fileId, path) => `${fileId}:${path}`;
 
@@ -113,15 +126,18 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
   const byName = new Map();
   for (const d of existing) {
     if (d.registration_number) byReg.set(normReg(d.registration_number), d);
-    for (const nm of new Set([normName(d.registered_name), normName(d.call_name)])) {
-      if (!nm) continue;
-      if (!byName.has(nm)) byName.set(nm, []);
-      byName.get(nm).push(d);
-    }
+    // A chart's names are registered names, so they're compared with the
+    // registered name of every dog in the app — the kennel's own current dogs as
+    // well as archived and pedigree-only ones — never a call name ("Bella" the
+    // call name is not "Bella" the registered name).
+    const nm = nameKey(d.registered_name);
+    if (!nm) continue;
+    if (!byName.has(nm)) byName.set(nm, []);
+    byName.get(nm).push(d);
   }
   const candsByName = new Map();
   for (const c of cands.values()) {
-    const nm = normName(c.fields.registered_name);
+    const nm = nameKey(c.fields.registered_name);
     if (!nm) continue;
     if (!candsByName.has(nm)) candsByName.set(nm, []);
     candsByName.get(nm).push(c);
@@ -130,7 +146,7 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
   const rows = [];
   for (const c of cands.values()) {
     const name = c.fields.registered_name || '';
-    const nm = normName(name);
+    const nm = nameKey(name);
     const row = {
       key: c.key, name, registration_number: c.fields.registration_number || '', registry: c.fields.registry || '',
       color_markings: c.fields.color_markings || '', date_of_birth: c.fields.date_of_birth || '',
@@ -151,11 +167,17 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
       row.action = 'existing';
       row.existingId = regMatch.id;
     } else {
-      const sameName = (byName.get(nm) || []).filter((d) => !c.reg || !d.registration_number);
+      // Every dog in the app with this registered name is offered — one whose
+      // number differs too, since a number typed or read differently is far more
+      // likely than two dogs with one registered name. Never silently a new dog.
+      const sameName = byName.get(nm) || [];
+      for (const d of sameName) {
+        if (c.reg && d.registration_number) row.issues.push(`Same registered name as your ${dogName(d)}, but the registration numbers differ (this chart: ${c.fields.registration_number}; yours: ${d.registration_number}).`);
+      }
       const batchSame = (candsByName.get(nm) || []).filter((o) => o !== c && (!c.reg || !o.reg));
       if (nm && (sameName.length || batchSame.length)) {
         row.choices = [
-          ...sameName.map((d) => ({ value: `existing:${d.id}`, label: `Same as your existing ${d.call_name}${d.registration_number ? ` (${d.registration_number})` : ''}` })),
+          ...sameName.map((d) => ({ value: `existing:${d.id}`, label: `Same as your existing ${d.registered_name}${d.call_name && d.call_name !== d.registered_name ? ` “${d.call_name}”` : ''}${d.registration_number ? ` (${d.registration_number})` : ''}` })),
           ...batchSame.map((o) => ({ value: `same:${o.key}`, label: `Same as ${o.fields.registered_name}${o.reg ? ` (${o.fields.registration_number})` : ''} from another chart` })),
           { value: 'new', label: 'A separate dog' }
         ];
@@ -245,7 +267,7 @@ export async function commitImport(plan, { storeFiles = [] } = {}) {
         idOf.set(r.key, ex.id);
       } else {
         const d = await dogRepo.create({
-          call_name: r.name, registered_name: r.name, sex: r.sex || 'unknown', breed: r.breed,
+          call_name: '', registered_name: r.name, sex: r.sex || 'unknown', breed: r.breed,
           ownership_type: 'external', status: 'external_reference', pedigree_only: true,
           registration_number: r.registration_number, registry: r.registry, color_markings: r.color_markings,
           date_of_birth: r.date_of_birth || '', notes: r.notes.join('\n'), sire_id, dam_id

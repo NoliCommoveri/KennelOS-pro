@@ -16,7 +16,7 @@
 // Dogs with unknown parents render as a visible placeholder node (never a
 // truncated branch). Clicking a node re-centers the tree on that dog via the
 // caller-supplied onNavigate; a small link opens the dog's full record.
-import { dogRepo } from '../data/dogRepo.js';
+import { dogRepo, dogName } from '../data/dogRepo.js';
 import { esc, fmtDate } from './ui.js';
 import { editionFlags } from '../data/editionConfig.js';
 
@@ -80,8 +80,8 @@ function nodeHtml(n) {
   // bypass. The name still renders for lineage; it's just not clickable.
   const hideArchive = d.is_archived && !editionFlags.archivedDogLinks;
   const nameHtml = hideArchive
-    ? `<span class="ped-name ped-name-static">${esc(d.call_name || '(unnamed)')}</span>`
-    : `<a href="#" class="ped-name" data-nav="${esc(d.id)}" title="Re-center on this dog">${esc(d.call_name || '(unnamed)')}</a>`;
+    ? `<span class="ped-name ped-name-static">${esc(dogName(d) || '(unnamed)')}</span>`
+    : `<a href="#" class="ped-name" data-nav="${esc(d.id)}" title="Re-center on this dog">${esc(dogName(d) || '(unnamed)')}</a>`;
   const archBadge = d.is_archived && !hideArchive ? '<span class="badge badge-gray ped-arch">arch</span>' : '';
   const openLink = hideArchive ? '' : `<a class="ped-open" href="dog.html?id=${encodeURIComponent(d.id)}" title="Open record">↗</a>`;
   return `<div class="ped-node" style="width:${NODE_W}px;height:${NODE_H}px;border-left-color:${SEX_BORDER[d.sex] || SEX_BORDER.unknown};">
@@ -181,13 +181,13 @@ export async function renderPedigree({ mount, rootId, generations = 3, onNavigat
         const otherParentId = pup.sire_id === rootId ? pup.dam_id : pup.sire_id;
         const otherParent = otherParentId ? byId.get(otherParentId) : null;
         const role = pup.sire_id === rootId ? 'Dam' : 'Sire';
-        const otherParentName = otherParent ? esc(otherParent.call_name || '(unnamed)') : '[Unknown parent]';
+        const otherParentName = otherParent ? esc(dogName(otherParent) || '(unnamed)') : '[Unknown parent]';
         const dob = pup.date_of_birth ? fmtDate(pup.date_of_birth) : '';
         const genderIndicator = pup.sex === 'male' ? 'M' : pup.sex === 'female' ? 'F' : '?';
         // A departed (archived) offspring in Lite is plain text — re-centering the
         // tree on it would expose the departed record the same way an open link
         // would (cap spec §7).
-        const pupName = `${esc(pup.call_name || '(unnamed)')} ${genderIndicator}`;
+        const pupName = `${esc(dogName(pup) || '(unnamed)')} ${genderIndicator}`;
         const pupHtml = pup.is_archived && !editionFlags.archivedDogLinks
           ? `<span style="font-weight: 500;">${pupName}</span>`
           : `<a href="#" class="ped-pup-nav" data-pup-id="${esc(pup.id)}" style="font-weight: 500; color: var(--link-color); text-decoration: none; cursor: pointer;">${pupName}</a>`;

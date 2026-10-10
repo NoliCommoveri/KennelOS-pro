@@ -3,7 +3,7 @@
 // Build Brief B1 rules — hard blocks come from dogRepo (required fields, dates,
 // cycles), soft/interactive ones (sex mismatch warn, the deceased confirmations)
 // live here because they need the user.
-import { dogRepo, ReferenceBlockedError } from '../data/dogRepo.js';
+import { dogRepo, ReferenceBlockedError, dogName as nameOf } from '../data/dogRepo.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -191,7 +191,7 @@ function preferredOwnKennelId() {
 
 function dogName(id) {
   const d = ctx.dogsById.get(id);
-  return d ? (d.call_name + (d.registered_name ? ` (${d.registered_name})` : '')) : '';
+  return d ? (d.call_name ? d.call_name + (d.registered_name ? ` (${d.registered_name})` : '') : nameOf(d)) : '';
 }
 // Read-only dog reference → a link to that dog's detail page. Returns '' when the
 // id doesn't resolve, so row() falls back to its faint dash. Escapes the name.
@@ -212,8 +212,8 @@ function kennelName(id) {
 function litterLabel(id) {
   const l = ctx.littersById.get(id);
   if (!l) return '';
-  const dam = ctx.dogsById.get(l.dam_id)?.call_name || '—';
-  const sire = ctx.dogsById.get(l.sire_id)?.call_name || '—';
+  const dam = nameOf(ctx.dogsById.get(l.dam_id)) || '—';
+  const sire = nameOf(ctx.dogsById.get(l.sire_id)) || '—';
   return `${dam} × ${sire}${l.whelp_date ? ` (${fmtDate(l.whelp_date)})` : ''}`;
 }
 function litterOptions(current) {
@@ -240,7 +240,7 @@ function dogOptions(current, excludeId, sex) {
   const opts = ctx.allDogs
     .filter((d) => d.id !== excludeId && (ctx.pickerArchived || !d.is_archived))
     .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.pedigree_only ? ' (pedigree only)' : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
+    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(nameOf(d))}${d.call_name && d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.pedigree_only ? ' (pedigree only)' : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
     .join('');
   return `<option value="">— none —</option>` + opts;
 }
@@ -336,7 +336,7 @@ function renderEdit() {
 
   els.body.innerHTML = `
     <div class="form-grid" id="dog-form" style="margin-top:14px;">
-      ${field('Call name', `<input id="f-call_name" type="text" value="${esc(d.call_name)}">`, { required: true })}
+      ${field('Call name', `<input id="f-call_name" type="text" value="${esc(d.call_name)}">`, isPedigreeOnlyEdit() ? { hint: 'Optional for a pedigree-only dog — its registered name is shown instead.' } : { required: true })}
       ${field('Registered name', `<input id="f-registered_name" type="text" value="${esc(d.registered_name)}">`)}
       ${field('Sex', `<select id="f-sex">${vocabOptions(SEX, d.sex, 'Select…')}</select>`, { required: true })}
       ${field('Breed', `<input id="f-breed" type="text" list="breed-list" value="${esc(d.breed)}"><datalist id="breed-list">${breedList}</datalist>`, { required: true, hint: 'Type freely; suggestions come from breeds already entered or seeded from a kennel test import.' })}
@@ -757,7 +757,7 @@ async function doSave() {
 async function toggleArchive() {
   const d = ctx.original;
   const verb = d.is_archived ? 'Unarchive' : 'Archive';
-  if (!(await confirmModal({ title: `${verb} “${d.call_name}”?`, confirmLabel: verb }))) return;
+  if (!(await confirmModal({ title: `${verb} “${nameOf(d)}”?`, confirmLabel: verb }))) return;
   ctx.original = d.is_archived ? await dogRepo.unarchive(d.id) : await dogRepo.archive(d.id);
   renderAll();
 }
@@ -771,8 +771,8 @@ async function toggleArchive() {
 async function departDog() {
   const d = ctx.original;
   const ok = await confirmModal({
-    title: `Remove “${d.call_name}” from your program?`,
-    message: `This can't be undone here — ${d.call_name} leaves your roster and you won't be able to edit it or bring it back. It stays in your dogs' pedigrees for lineage.`,
+    title: `Remove “${nameOf(d)}” from your program?`,
+    message: `This can't be undone here — ${nameOf(d)} leaves your roster and you won't be able to edit it or bring it back. It stays in your dogs' pedigrees for lineage.`,
     confirmLabel: 'Remove permanently',
     cancelLabel: 'Cancel',
     danger: true,
@@ -784,7 +784,7 @@ async function departDog() {
 
 async function doDelete() {
   const d = ctx.original;
-  if (!(await confirmModal({ title: `Delete “${d.call_name}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
+  if (!(await confirmModal({ title: `Delete “${nameOf(d)}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
   try {
     await dogRepo.hardDelete(d.id);
     location.href = 'dogs.html';
@@ -802,12 +802,12 @@ function renderTitle() {
     return;
   }
   const d = ctx.original;
-  els.title.innerHTML = esc(d.call_name)
+  els.title.innerHTML = esc(nameOf(d))
     + (d.pedigree_only ? ' <span class="badge badge-neutral">Pedigree only</span>' : '')
     + (d.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
   els.subtitle.innerHTML = ctx.bringIn
     ? 'Choose an ownership and status to bring this dog into regular use.'
-    : (d.registered_name ? esc(d.registered_name) : '');
+    : (d.call_name && d.registered_name ? esc(d.registered_name) : '');
 }
 
 // New-dog-only cap counter (cap spec §6): a plain read of the same counting

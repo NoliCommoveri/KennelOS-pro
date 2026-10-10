@@ -15,6 +15,10 @@ const base = makeRepo('dogs', DOG_REFERENCES);
 const REQUIRED_FIELDS = ['call_name', 'sex', 'breed', 'ownership_type', 'status'];
 const OWNER_REQUIRED_TYPES = ['external', 'leased_in'];
 
+// The name to show for a dog. A pedigree-only ancestor usually has no call name
+// (a pedigree gives registered names), so it shows its registered name instead.
+export const dogName = (d) => (d && (d.call_name || d.registered_name)) || '';
+
 // Walk up from a starting parent id and return the set of all ancestor ids.
 // `dogsById` is a Map of the current dog table so the walk is a pure in-memory
 // graph traversal. A `visited` set guards against pre-existing bad cycles in the
@@ -39,6 +43,8 @@ function collectAncestors(startId, dogsById) {
 // belong to the Stage 2 UI, not here (a repo can't prompt the user).
 async function validateDog(candidate, existingId = null) {
   for (const f of REQUIRED_FIELDS) {
+    // A pedigree-only dog may go without a call name if it has a registered one.
+    if (f === 'call_name' && candidate.pedigree_only && candidate.registered_name) continue;
     if (candidate[f] == null || candidate[f] === '') {
       throw new Error(`Dog: "${f}" is required.`);
     }
