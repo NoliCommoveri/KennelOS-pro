@@ -156,6 +156,14 @@ db.version(2).stores({
   sync_meta: 'id, tbl'
 });
 
+// version(3), 2026-10-10 (Integrations plan §5): `sales.sales_channel_account_id`,
+// the Account a sale was sold / paid through (Good Dog, Stripe…), indexed for the
+// ACCOUNT_REFERENCES delete guard and a per-channel filter. Re-lists the sales
+// index string from version(1) with the one index added.
+db.version(3).stores({
+  sales: 'id, kennel_id, dog_id, buyer_contact_id, referred_by_contact_id, status, registration_type, sales_channel_account_id, is_archived'
+});
+
 // --- Device-only tables ---------------------------------------------------
 // `device_secrets` holds this device's unlocked private-vault key as a
 // CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js is its only

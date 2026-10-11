@@ -196,6 +196,13 @@ async function renderNudges() {
           const report = await nudge.actions[Number(btn.dataset.nudgeAction)].run();
           renderNudges();
           if (report && report.message) await alertModal(report);
+          // ...or `compose`: a note for her to send herself (the follow-up a week after
+          // a pup goes home, Integrations plan §3). Sent or copied → the nudge retires.
+          if (report && report.compose) {
+            const { openComposer } = await import('../assets/messageComposer.js');
+            const sent = await openComposer(report.compose);
+            if (sent && report.doneDismisses) { dismiss(key); renderNudges(); }
+          }
           // ...and `emails`: families to offer an email about it (the waitlist online,
           // Pro only; nothing shows where they can't be emailed).
           if (report && report.emails?.length) {

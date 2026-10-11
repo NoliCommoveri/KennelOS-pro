@@ -11,6 +11,11 @@
 // family's Sale exists (entry.placed_sale_id) the credit comes off the Sale's
 // balance here — otherwise the same money would count twice.
 //
+// A sales channel's processing fee (Sale.processing_fee_amount, Integrations plan
+// §5) comes off as negative `processing_fee` components, so `earned` is what she
+// actually received. Invoices and paidOnSale never see it: they show the buyer's
+// own amounts.
+//
 // Why derived, not stored: revenue already lives on Sale.price/deposit_amount/
 // transport_fee/deferred_boarding_amount and StudService.fee_amount. Duplicating
 // it into an income table (or adding an `is_earned` flag) would be a stored
@@ -81,6 +86,41 @@ function saleComponents(s, feeCredit = 0) {
     }
   }
   return out;
+}
+
+// The sales channel's processing fee (Sale.processing_fee_amount, Integrations
+// plan §5) as NEGATIVE `processing_fee` lines, so earned income is what she
+// actually received. The fee was taken from the buyer's payments, so it is split
+// across the sale's cash components in proportion to their size and follows each
+// one: earned with a paid deposit, anticipated with an owed balance, filed under
+// the same `when`, and dropped with whatever a released sale drops (a lost sale
+// has no components, so no fee either). Kept OUT of saleComponents on purpose:
+// that feeds the invoice and paidOnSale, which show the buyer's own amounts.
+// `components` are the sale's dated components; `gross` is the full sale value
+// they'd sum to while open, so a cancelled sale keeps only the paid share's fee.
+function feeComponents(s, components, gross) {
+  const fee = num(s.processing_fee_amount);
+  if (!(fee > 0) || !(gross > 0) || !components.length) return [];
+  const out = [];
+  for (const c of components) {
+    const share = Math.round((fee * c.amount / gross) * 100) / 100;
+    if (share) out.push({ component: 'processing_fee', amount: -share, state: c.state, when: c.when, due: '' });
+  }
+  // Cents lost to rounding go on the last line, so a fully earned sale's fee
+  // lines add up to exactly the stored fee.
+  const kept = components.reduce((t, c) => t + c.amount, 0);
+  if (out.length && Math.abs(kept - gross) < 0.005) {
+    const sum = out.reduce((t, c) => t + c.amount, 0);
+    out[out.length - 1].amount = Math.round((out[out.length - 1].amount - (fee + sum)) * 100) / 100;
+  }
+  return out;
+}
+
+// The full cash value of a sale while it's open: what its components would sum to
+// before a released status drops the unpaid part. Lost sales count nothing.
+function saleGross(s, feeCredit) {
+  const open = RELEASED_SALE_STATUSES.includes(s.status) ? { ...s, status: 'deposit_pending', end_reason: null } : s;
+  return saleComponents(open, feeCredit).reduce((t, c) => t + c.amount, 0);
 }
 
 // Break an outgoing StudService into its components. `fee_amount` is cash —
@@ -209,10 +249,11 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
     const feeCredit = creditBySale.get(s.id) || 0;
     // `due` is only a due date she actually set (the balance's), for Receivables'
     // aging; `when` always has a date, for filing by month.
-    const components = saleComponents(s, feeCredit).map((c) => ({
+    const cash = saleComponents(s, feeCredit).map((c) => ({
       ...c, when: saleComponentDate(s, c), due: c.state === 'anticipated' && c.component !== 'deposit' ? s.balance_due_date || '' : ''
     }));
-    if (!components.length) continue; // no money on this sale — nothing to show
+    if (!cash.length) continue; // no money on this sale — nothing to show
+    const components = [...cash, ...feeComponents(s, cash, saleGross(s, feeCredit))];
     rows.push({
       source_type: 'sale',
       source_id: s.id,
@@ -229,7 +270,10 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
       earned: sumBy(components, 'earned'),
       anticipated: sumBy(components, 'anticipated'),
       pick: 0,
-      fee_credit: feeCredit
+      fee_credit: feeCredit,
+      // The channel's fee on this sale (Integrations plan §5): already netted
+      // out of `earned` / `anticipated` by its negative components.
+      processing_fee: components.filter((c) => c.component === 'processing_fee').reduce((t, c) => t - c.amount, 0)
     });
   }
 

@@ -37,6 +37,9 @@ import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { todayYMD } from './dateUtils.js';
 import { getCompanionSettings } from './settings.js';
+import { accountRepo } from './accountRepo.js';
+import { editionFlags } from './editionConfig.js';
+import { sharedReferrals } from './referralShare.js';
 
 export const COMPANION_BUNDLE_VERSION = 1;
 
@@ -212,7 +215,7 @@ const PROSPECTIVE_KEYS = [
 ];
 const FAMILY_KEYS = [
   'bundleVersion', 'bundleType', 'kennelName', 'tagline', 'introText', 'announcement',
-  'personalNote', 'closer', 'familyName', 'pups', 'contracts', 'updatedAt'
+  'personalNote', 'closer', 'familyName', 'pups', 'contracts', 'recommended', 'updatedAt'
 ];
 const PARTNER_KEYS = [
   'bundleVersion', 'bundleType', 'kennelName', 'tagline', 'introText', 'announcement',
@@ -418,6 +421,13 @@ export async function buildFamilyBundle(contact) {
     }
   }
 
+  // Her referral links and codes marked "Share with families" (Accounts, Pro;
+  // Integrations plan §3): name, link, code and instructions only, copied by name
+  // in referralShare.sharedReferrals. Additive: older shells ignore it.
+  const recommended = inc.recommended && editionFlags.accounts
+    ? sharedReferrals(await accountRepo.getAll())
+    : [];
+
   const bundle = {
     bundleVersion: COMPANION_BUNDLE_VERSION,
     bundleType: 'family',
@@ -425,6 +435,7 @@ export async function buildFamilyBundle(contact) {
     familyName: contact.name || '',
     pups,
     contracts,
+    recommended,
     updatedAt
   };
   return assertOnlyKeys(bundle, FAMILY_KEYS, 'family');

@@ -27,6 +27,7 @@ import { dogRepo } from '../dogRepo.js';
 import { saleRepo } from '../saleRepo.js';
 import { contactRepo } from '../contactRepo.js';
 import { eventRepo } from '../eventRepo.js';
+import { accountRepo } from '../accountRepo.js';
 import { todayYMD } from '../dateUtils.js';
 import { waitlistConfig, kennelBreeds, readyCheckLapsed } from '../waitlistRules.js';
 import { buildProjection } from '../waitlistProjection.js';
@@ -349,7 +350,7 @@ export async function sendQueuedEmails(token, kennels) {
 
 // The projection for one kennel, from the database.
 export async function projectionFor(kennel, { today = todayYMD() } = {}) {
-  const [entries, offers, programsById, litters, pairings, dogs, sales, contacts, events] = await Promise.all([
+  const [entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, accounts] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
     waitlistOfferRepo.getByKennel(kennel.id),
     waitlistProgramRepo.getMapForKennel(kennel.id),
@@ -359,10 +360,12 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
     saleRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
     // Parents' earned titles, for the pairings and early litters she shows (§16.4).
-    eventRepo.getByType('title_earned')
+    eventRepo.getByType('title_earned'),
+    // Her referral links marked "Share with families" (Integrations plan §3).
+    editionFlags.accounts ? accountRepo.getAll() : []
   ]);
   return buildProjection({
-    kennel, entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, today,
+    kennel, entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, accounts, today,
     formKey: currentFormKey(kennel.waitlist_form_keys), eventsThrough: getWaitlistOnlineState().eventsCursor || 0
   });
 }

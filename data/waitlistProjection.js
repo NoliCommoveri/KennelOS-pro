@@ -23,12 +23,13 @@ import {
   waitlistConfig, entryName, publicList, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
-  messengerLink
+  messengerLink, embedOrigins
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
+import { sharedReferrals } from './referralShare.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -272,7 +273,7 @@ const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by,
 // PUBLIC half seals applications and family messages); `eventsThrough` the last
 // family event her device has applied (the server lets go of picked pups' holds
 // up to there, W2 step 5).
-export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], sales = [], contacts = [], events = [], today, formKey = null, eventsThrough = 0 }) {
+export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0 }) {
   if (!kennel || !kennel.public_id) throw new Error('This kennel has no public identity yet.');
   if (!today) throw new Error('buildProjection needs today.');
   const config = waitlistConfig(kennel);
@@ -383,7 +384,13 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       ...(config.facebook_button && messengerLink(config.facebook_page) ? { messenger: messengerLink(config.facebook_page) } : {}),
       parents: parentsSection(kennel, live, { dogs, litters, pairings }),
       ...(formKey ? { message_key: { key_id: formKey.id, public_key: formKey.public_key } } : {}),
-      ...(config.online_form && formKey ? { form: formSection(kennel, config, formKey, dogs) } : {})
+      ...(config.online_form && formKey ? { form: formSection(kennel, config, formKey, dogs) } : {}),
+      // Her own website may show the form and list in a frame (Integrations plan
+      // §1): only while she has it on; no sites listed = any site.
+      ...(config.embed ? { embed: { origins: embedOrigins(config) } } : {}),
+      // Her referral links marked "Share with families" (Integrations plan §3), for
+      // every family's status page: name, link, code, instructions; none = absent.
+      ...(sharedReferrals(accounts).length ? { recommended: sharedReferrals(accounts) } : {})
     },
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
     // the page is served (publicList, familyPages.listView).

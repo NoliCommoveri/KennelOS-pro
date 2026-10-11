@@ -8,7 +8,9 @@ import { saleRepo } from '../data/saleRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { CONTACT_TYPE, DOG_STATUS, WAITLIST_STATUS, SALE_STATUS, REGISTRATION_TYPE, WAITLIST_ENTRY_STATUS } from '../data/vocab.js';
-import { esc, badge, badges, param, confirmModal, promptModal } from '../assets/ui.js';
+import { esc, badge, badges, param, confirmModal, promptModal, selectModal } from '../assets/ui.js';
+import { accountRepo } from '../data/accountRepo.js';
+import { sharedReferrals, referralThanksMessage } from '../data/referralShare.js';
 
 const els = {
   title: document.getElementById('contact-title'),
@@ -274,10 +276,42 @@ async function renderHeaderActions() {
     ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
     : 'Permanently delete this contact.';
   els.headerActions.innerHTML = `
+    ${editionFlags.accounts ? '<button class="btn btn-sm" id="btn-thanks" title="A thank-you note for using your referral link or code, or for recommending you">Send a thank-you</button>' : ''}
     <button class="btn btn-sm" id="btn-archive">${c.is_archived ? 'Unarchive' : 'Archive'}</button>
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
   document.getElementById('btn-archive').onclick = toggleArchive;
   if (!blockers.length) document.getElementById('btn-delete').onclick = doDelete;
+  const thanks = document.getElementById('btn-thanks');
+  if (thanks) thanks.onclick = () => sendThanks(c).catch((err) => showError(err.message || String(err)));
+}
+
+// "Send a thank-you" (Integrations plan §3): no referral program says WHO used a
+// link or code, so this is for when a family tells her. Pick what they used (one of
+// the accounts she shares with families) or a thank-you for recommending her, then
+// the note opens to email, text or copy. Signed with the kennel of their latest sale,
+// else her own kennel.
+async function sendThanks(c) {
+  const referrals = sharedReferrals(await accountRepo.getAll());
+  const GENERAL = '__recommended_us';
+  const choice = referrals.length
+    ? await selectModal({
+      title: `Thank ${c.name}`,
+      label: 'For',
+      options: [...referrals.map((r) => ({ value: r.name, label: `Using our ${r.name} ${r.code && !r.link ? 'code' : 'link'}` })), { value: GENERAL, label: 'Recommending us to someone' }],
+      defaultValue: referrals[0].name,
+      confirmLabel: 'Write the note'
+    })
+    : GENERAL;
+  if (choice == null) return;
+  const [sales, kennels] = await Promise.all([saleRepo.getByBuyer(c.id), kennelRepo.getAll()]);
+  const latest = sales.filter((x) => !x.is_archived).sort((a, b) => (b.sale_date || '').localeCompare(a.sale_date || ''))[0];
+  const kennel = kennels.find((k) => k.id === latest?.kennel_id) || kennels.find((k) => k.is_own_kennel) || null;
+  const message = referralThanksMessage({
+    buyerName: c.name, kennelName: kennel?.kennel_name || '',
+    referral: referrals.find((r) => r.name === choice) || null
+  });
+  const { openComposer } = await import('../assets/messageComposer.js');
+  await openComposer({ title: `Thank ${c.name}`, name: c.name, email: c.email || '', phone: c.phone || '', ...message });
 }
 
 function enterEdit() {

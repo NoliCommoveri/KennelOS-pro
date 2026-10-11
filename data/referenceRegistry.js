@@ -169,9 +169,12 @@ export const EXPENSE_REFERENCES = [];
 export const BREED_FEEDING_SCHEDULE_REFERENCES = [];
 
 // --- Account: a business account (AKC, Chewy…) is program-wide and points at
-// nothing; an expense may name the account it was paid through.
+// nothing; an expense may name the account it was paid through, and a sale the
+// account it was sold / paid through.
 export const ACCOUNT_REFERENCES = [
-  { table: 'expenses', field: 'account_id', label: 'account on an expense' }
+  { table: 'expenses', field: 'account_id', label: 'account on an expense' },
+  // The channel a sale went through (Integrations plan §5): Good Dog, Stripe…
+  { table: 'sales', field: 'sales_channel_account_id', label: 'sales channel on a sale' }
 ];
 
 // --- Document: a leaf entity — nothing points at a Document. Its own FK

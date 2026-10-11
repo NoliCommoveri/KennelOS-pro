@@ -816,5 +816,9 @@ export const INCOME_COMPONENTS = [
   { value: 'boarding',  label: 'Deferred boarding',  badge: 'badge-amber' },
   { value: 'stud_fee',  label: 'Stud fees',         badge: 'badge-purple' },
   { value: 'pick',      label: 'Pick value (est.)', badge: 'badge-neutral' },
-  { value: 'application_fee', label: 'Application fees', badge: 'badge-green' }
+  { value: 'application_fee', label: 'Application fees', badge: 'badge-green' },
+  // A NEGATIVE line: what a sales channel (Good Dog, Stripe…) kept of a sale's
+  // payments (Sale.processing_fee_amount), so earned income is what she actually
+  // received (Integrations plan §5). Never on an invoice or a receivable.
+  { value: 'processing_fee', label: 'Processing fees', badge: 'badge-red' }
 ];

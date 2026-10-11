@@ -41,8 +41,36 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   ready_no_answer: 'keep_paused', // "Ready now?" unanswered (Spec §16.7): WAITLIST_READY_NO_ANSWER
   ready_answer_days: 14, // remove_after: days to answer; keep_paused: when Today flags them
   facebook_button: false, // "Message us on Facebook" on status pages (Spec §11, W2 step 8); needs facebook_page
-  facebook_page: '' // her Facebook Page link, as she typed it (facebook.com/… or m.me/…)
+  facebook_page: '', // her Facebook Page link, as she typed it (facebook.com/… or m.me/…)
+  embed: false, // her own website may show the form and list in a frame (Integrations plan §1)
+  embed_origins: [] // …only these sites (embedOrigin form, at most EMBED_ORIGINS_MAX); none = any site
 });
+
+// --- Embedding on her own website (Integrations plan §1) --------------------------
+
+// The server checks the same rule (cloud/src/familyPages.js frameAncestors).
+export const EMBED_ORIGINS_MAX = 10;
+
+// What she typed for her website ("thornfieldkennels.com", "https://www.x.com/puppies")
+// → its origin, "https://thornfieldkennels.com"; null when it isn't a web address. A
+// bare name means https. Only the scheme and host (and port) matter to a browser
+// deciding whether a page may be shown in a frame there.
+export function embedOrigin(raw) {
+  let text = String(raw ?? '').trim();
+  if (!text) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) text = `https://${text}`;
+  let url;
+  try { url = new URL(text); } catch { return null; }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(url.hostname) && url.hostname !== 'localhost') return null;
+  return url.origin;
+}
+
+// Her listed sites, cleaned: valid origins only, no repeats, at most EMBED_ORIGINS_MAX.
+export function embedOrigins(config) {
+  const raw = Array.isArray(config?.embed_origins) ? config.embed_origins : [];
+  return [...new Set(raw.map(embedOrigin).filter(Boolean))].slice(0, EMBED_ORIGINS_MAX);
+}
 
 // Her Facebook Page link → the Messenger link the status page's button opens
 // (https://m.me/<page>), or null when it isn't a facebook.com or m.me address

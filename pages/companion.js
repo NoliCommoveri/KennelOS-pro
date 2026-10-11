@@ -118,7 +118,8 @@ const INCLUDE_OPTIONS = {
     { key: 'histNote', label: 'History — Notes' },
     { key: 'histBoarding', label: 'Deferred pickup boarding' },
     { key: 'contract', label: 'Contract link' },
-    { key: 'fosterOwnerKennel', label: 'Owner kennel on foster litters' }
+    { key: 'fosterOwnerKennel', label: 'Owner kennel on foster litters' },
+    { key: 'recommended', label: 'Recommended products (accounts you share with families)' }
   ],
   partner: [
     { key: 'studServices', label: 'Stud services' },

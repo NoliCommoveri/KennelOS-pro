@@ -2,13 +2,17 @@
 // (AKC, Good Dog, Chewy…) with her own login details and the referral
 // link/code she shares, each with a Copy button. The password stays masked
 // until "Show". Each card also totals the expenses paid through the account
-// (expenses.account_id) and links to them in Financials. Add/Edit is a modal;
+// (expenses.account_id) and links to them in Financials, and shows the fee it
+// keeps when it's a sales channel (fee_percent + fee_fixed, Integrations plan §5;
+// the Sale form suggests a sale's processing fee from it). Add/Edit is a modal;
 // archive/delete like any entity — delete is blocked while an expense names the
 // account (ACCOUNT_REFERENCES), so archive it then. Reads/writes only through
 // accountRepo / expenseRepo.
 import { accountRepo } from '../data/accountRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { ACCOUNT_TYPE } from '../data/vocab.js';
+import { feeRate, rateLabel } from '../data/processingFees.js';
+import { sharedReferrals } from '../data/referralShare.js';
 import { esc, badge, fmtMoney, confirmModal, alertModal } from '../assets/ui.js';
 
 const els = {
@@ -87,9 +91,10 @@ function cardHtml(a) {
       ${a.account_type ? badge(ACCOUNT_TYPE, a.account_type) : ''}
     </div>
     ${login ? `<div class="acct-section"><div class="acct-section-title">Your login</div>${login}</div>` : ''}
-    ${referral || a.referral_instructions ? `<div class="acct-section"><div class="acct-section-title">Referral — to share</div>${referral}
+    ${referral || a.referral_instructions ? `<div class="acct-section"><div class="acct-section-title">Referral — to share${sharedReferrals([a]).length ? ' <span class="badge badge-green">Shown to families</span>' : ''}</div>${referral}
       ${a.referral_instructions ? `<div class="acct-instructions">${esc(a.referral_instructions)}</div>` : ''}</div>` : ''}
     ${a.notes ? `<div class="acct-section"><div class="acct-instructions">${esc(a.notes)}</div></div>` : ''}
+    ${feeHtml(a)}
     ${spendHtml(a)}
     <div class="pill-row acct-actions">
       <button class="btn btn-sm" data-act="edit" data-id="${esc(a.id)}">Edit</button>
@@ -97,6 +102,17 @@ function cardHtml(a) {
       <button class="btn btn-danger btn-sm" data-act="delete" data-id="${esc(a.id)}">Delete</button>
     </div>
   </article>`;
+}
+
+// A sales channel's fee (Good Dog, Stripe…): the rate, whether she usually passes
+// it on, and her note on it.
+function feeHtml(a) {
+  const rate = feeRate(a);
+  if (!rate && !a.fee_note) return '';
+  return `<div class="acct-section"><div class="acct-section-title">Processing fee</div>
+    ${rate ? `<div class="acct-row"><span class="acct-v"><strong>${esc(rateLabel(rate))}</strong> <span class="muted">per sale${a.fee_passed_to_buyer_default ? ' · usually passed to the buyer' : ''}</span></span></div>` : ''}
+    ${a.fee_note ? `<div class="acct-instructions">${esc(a.fee_note)}</div>` : ''}
+  </div>`;
 }
 
 function spendHtml(a) {
@@ -187,6 +203,8 @@ function field(label, inner, { wide = false, hint = '', required = false } = {})
   return `<div class="field${wide ? ' field-wide' : ''}"><label>${esc(label)}${required ? ' <span class="req">*</span>' : ''}</label>${inner}${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</div>`;
 }
 
+const numberOrNull = (v) => (String(v).trim() === '' ? null : Number(v));
+
 function openForm(existing = null) {
   const a = existing || {};
   const typeOptions = `<option value="">— none —</option>` + ACCOUNT_TYPE
@@ -212,6 +230,16 @@ function openForm(existing = null) {
       ${field('Referral link', `<input id="af-ref-link" type="text" value="${esc(a.referral_link)}" placeholder="https://…">`, { wide: true })}
       ${field('Referral code', `<input id="af-ref-code" type="text" value="${esc(a.referral_code)}">`)}
       ${field('Instructions for whoever uses it', `<textarea id="af-ref-instructions" placeholder="e.g. Use code at checkout for 30% off your first Autoship order.">${esc(a.referral_instructions)}</textarea>`, { wide: true, hint: 'Written for the families you\'ll share this with.' })}
+      <div class="field field-wide"><label class="check-inline"><input id="af-ref-share" type="checkbox"${a.share_with_families ? ' checked' : ''}> Share with families</label>
+        <span class="field-hint">Shows the link, code and instructions as "Recommended for your puppy" on a family's Companion page and their waitlist status page, and in the follow-up note a week after a pup goes home.</span></div>
+    </div>
+    <h3 style="font-size:15px; margin:14px 0 4px;">Processing fee — if you sell or take payments through it</h3>
+    <p class="field-hint" style="margin-top:0;">What it keeps of each sale: a percentage, a fixed amount, or both (e.g. 6.25% + $5). A sale sold through this account suggests its fee from this.</p>
+    <div class="form-grid">
+      ${field('Fee percentage', `<input id="af-fee-percent" type="number" min="0" max="99.99" step="0.01" value="${esc(a.fee_percent)}" placeholder="e.g. 6.25">`, { hint: 'Percent of the sale price.' })}
+      ${field('Fixed fee ($)', `<input id="af-fee-fixed" type="number" min="0" step="0.01" value="${esc(a.fee_fixed)}" placeholder="e.g. 5.00">`, { hint: 'Added on top, per sale.' })}
+      <div class="field field-wide"><label class="check-inline"><input id="af-fee-passed" type="checkbox"${a.fee_passed_to_buyer_default ? ' checked' : ''}> I usually pass this fee on to the buyer in a higher price</label></div>
+      ${field('About the fee', `<input id="af-fee-note" type="text" value="${esc(a.fee_note)}" placeholder="e.g. card payments only; bank transfer is free">`, { wide: true, hint: 'Private — just for you.' })}
     </div>
     <div class="form-grid" style="margin-top:14px;">
       ${field('Notes', `<textarea id="af-notes">${esc(a.notes)}</textarea>`, { wide: true, hint: 'Private — just for you.' })}
@@ -248,7 +276,12 @@ function openForm(existing = null) {
       referral_link: val('#af-ref-link'),
       referral_code: val('#af-ref-code'),
       referral_instructions: $('#af-ref-instructions').value.trim(),
-      notes: $('#af-notes').value.trim()
+      share_with_families: $('#af-ref-share').checked,
+      notes: $('#af-notes').value.trim(),
+      fee_percent: numberOrNull($('#af-fee-percent').value),
+      fee_fixed: numberOrNull($('#af-fee-fixed').value),
+      fee_passed_to_buyer_default: $('#af-fee-passed').checked,
+      fee_note: val('#af-fee-note')
     };
     if (!data.name) {
       $('#af-error').innerHTML = `<div class="inline-error">Name is required.</div>`;

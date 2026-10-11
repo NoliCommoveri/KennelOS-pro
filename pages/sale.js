@@ -7,9 +7,11 @@ import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
+import { accountRepo } from '../data/accountRepo.js';
+import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel } from '../data/processingFees.js';
 import { REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, DISPOSITION, DOG_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily } from '../data/waitlistRules.js';
-import { esc, badge, fmtDate, todayYMD, param, confirmModal, selectModal, promptModal, dogRefHtml } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, selectModal, promptModal, dogRefHtml } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -34,7 +36,8 @@ const blankSale = () => ({
   deposit_date: '', balance_due_date: '', balance_paid_date: '', registration_type: '',
   lead_source: '', referred_by_contact_id: '', status: '', notes: '',
   transport_fee: '', deferred_boarding_amount: '', deferred_boarding_frequency: '',
-  deferred_boarding_duration_days: '', end_reason: '', end_note: ''
+  deferred_boarding_duration_days: '', end_reason: '', end_note: '',
+  sales_channel_account_id: '', processing_fee_amount: '', fee_passed_to_buyer: false
 });
 
 const ctx = {
@@ -42,16 +45,24 @@ const ctx = {
   // §9's "show all kennels" escape — see dogOptions().
   pickerAllKennels: false,
   allDogs: [], allContacts: [], leadSources: [],
-  dogsById: new Map(), contactsById: new Map(), littersById: new Map()
+  dogsById: new Map(), contactsById: new Map(), littersById: new Map(),
+  // Sales channels (Pro: Accounts) and the processing fee last filled in for her
+  // (Integrations plan §5) — a fee still at that value follows the price; a fee
+  // she typed stays put.
+  accounts: [], accountsById: new Map(), suggestedFee: null
 };
 
 async function loadRefs() {
-  const [dogs, contacts, leadSources, litters] = await Promise.all([
+  const [dogs, contacts, leadSources, litters, accounts] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
     saleRepo.getLeadSources(),
-    litterRepo.getAll({ includeArchived: true })
+    litterRepo.getAll({ includeArchived: true }),
+    // Accounts are a Pro page; Lite records the fee on the sale alone.
+    editionFlags.accounts ? accountRepo.getAll({ includeArchived: true }) : []
   ]);
+  ctx.accounts = accounts;
+  ctx.accountsById = new Map(accounts.map((a) => [a.id, a]));
   ctx.allDogs = dogs;
   ctx.allContacts = contacts;
   ctx.leadSources = leadSources;
@@ -73,6 +84,31 @@ function applyExpectedPricing() {
   const expected = expectedPricing(dog, litter, ctx.draft.registration_type);
   if (!ctx.draft.price && expected.price != null) ctx.draft.price = expected.price;
   if (!ctx.draft.deposit_amount && expected.deposit_amount != null) ctx.draft.deposit_amount = expected.deposit_amount;
+}
+
+// --- Processing fee (Integrations plan §5) -----------------------------------
+// The sale's channel (an Account: Good Dog, Stripe…) carries a fee rate; the fee
+// this sale paid is stored on the sale itself, so a later rate change never
+// rewrites it. The rate only SUGGESTS the fee.
+function channelRate(draft = ctx.draft) {
+  return feeRate(ctx.accountsById.get(draft.sales_channel_account_id));
+}
+
+// Fill the fee from the channel's rate when it's empty or still the amount we
+// filled in last time (so it follows a price change); never over a fee she typed.
+function applySuggestedFee() {
+  const d = ctx.draft;
+  const rate = channelRate(d);
+  const current = d.processing_fee_amount === '' || d.processing_fee_amount == null ? null : Number(d.processing_fee_amount);
+  if (current != null && current !== ctx.suggestedFee) return;
+  const next = rate ? processingFee(d.price, rate) : null;
+  if (next == null) {
+    if (current != null && current === ctx.suggestedFee) d.processing_fee_amount = '';
+    ctx.suggestedFee = null;
+    return;
+  }
+  d.processing_fee_amount = next;
+  ctx.suggestedFee = next;
 }
 
 function dogName(id) {
@@ -122,6 +158,109 @@ function frequencyOptions(current) {
   return `<option value="">— select —</option>` + opts;
 }
 
+// Sales channels: every account (archived ones only when already chosen), by
+// name. Blank = sold directly, no channel.
+function channelOptions(current) {
+  const opts = ctx.accounts
+    .filter((a) => !a.is_archived || a.id === current)
+    .map((a) => {
+      const rate = feeRate(a);
+      return `<option value="${esc(a.id)}"${a.id === current ? ' selected' : ''}>${esc(a.name)}${rate ? ` (${esc(rateLabel(rate))})` : ''}${a.is_archived ? ' (archived)' : ''}</option>`;
+    }).join('');
+  return `<option value="">— sold directly —</option>` + opts;
+}
+
+// The fee fields of the edit form: channel (Pro), fee, passed-on flag, what she
+// nets, and the price-to-net helper.
+function feeFields(s) {
+  const rate = channelRate(s);
+  const channel = editionFlags.accounts
+    ? field('Sold / paid through', `<select id="f-sales_channel_account_id">${channelOptions(s.sales_channel_account_id)}</select>`, { hint: 'A marketplace or payment service that keeps a fee (Good Dog, Stripe…). Set its fee on the Accounts page.' })
+    : '';
+  return `${channel}
+      ${field('Processing fee', `<input id="f-processing_fee_amount" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount)}">`, { hint: rate ? `Suggested from ${rateLabel(rate)} of the price. Change it to what was actually charged.` : 'What the marketplace or payment service kept of this sale.' })}
+      <div class="field field-wide">
+        <label class="check-inline"><input id="f-fee_passed_to_buyer" type="checkbox"${s.fee_passed_to_buyer ? ' checked' : ''}> The fee is passed to the buyer in the price</label>
+        <span class="field-hint" id="fee-net-line"></span>
+      </div>
+      <details class="field field-wide" id="net-helper">
+        <summary>Work out a price that nets you a set amount</summary>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px;">
+          <span class="faint">Net</span>
+          <input id="nh-net" type="number" min="0" step="0.01" placeholder="e.g. 3000" style="flex:1; min-width:90px;">
+          <span class="faint">after</span>
+          <input id="nh-percent" type="number" min="0" max="99.99" step="0.01" value="${esc(rate ? rate.percent : '')}" placeholder="%" style="flex:1; min-width:70px;">
+          <span class="faint">% +  $</span>
+          <input id="nh-fixed" type="number" min="0" step="0.01" value="${esc(rate ? rate.fixed : '')}" placeholder="fixed" style="flex:1; min-width:70px;">
+          <button type="button" class="btn btn-sm" id="nh-apply" disabled>Set price</button>
+        </div>
+        <span class="field-hint" id="nh-preview">The fee is taken from the higher price, so adding the percentage on top isn't enough: at 6.25%, netting $3,000 takes a $3,200 price, not $3,187.50.</span>
+      </details>`;
+}
+
+// "You net $X" under the fee, live as the price or fee changes.
+function updateNetLine() {
+  const el = document.getElementById('fee-net-line');
+  if (!el) return;
+  const price = document.getElementById('f-price')?.value ?? '';
+  const fee = document.getElementById('f-processing_fee_amount')?.value ?? '';
+  el.textContent = price !== '' && fee !== '' && Number(fee) > 0
+    ? `You net ${fmtMoney(netOf(price, fee))} of the ${fmtMoney(price)} price.`
+    : '';
+}
+
+function helperRate() {
+  const v = (id) => document.getElementById(id)?.value ?? '';
+  const rate = { percent: Number(v('nh-percent') || 0), fixed: Number(v('nh-fixed') || 0) };
+  return isUsableRate(rate) ? rate : null;
+}
+
+function wireFeeFields() {
+  const priceEl = document.getElementById('f-price');
+  const feeEl = document.getElementById('f-processing_fee_amount');
+  // A price change carries a still-suggested fee along with it.
+  priceEl?.addEventListener('input', () => {
+    if (feeEl && channelRate() && (feeEl.value === '' || Number(feeEl.value) === ctx.suggestedFee)) {
+      const next = processingFee(priceEl.value, channelRate());
+      feeEl.value = next ?? '';
+      ctx.suggestedFee = next;
+    }
+    updateNetLine();
+  });
+  feeEl?.addEventListener('input', updateNetLine);
+  document.getElementById('f-sales_channel_account_id')?.addEventListener('change', (e) => {
+    ctx.draft = readForm();
+    const account = ctx.accountsById.get(e.target.value);
+    if (account) ctx.draft.fee_passed_to_buyer = !!account.fee_passed_to_buyer_default;
+    applySuggestedFee();
+    renderEdit();
+  });
+  const preview = document.getElementById('nh-preview');
+  const apply = document.getElementById('nh-apply');
+  const onHelper = () => {
+    const rate = helperRate();
+    const price = rate ? priceToNet(document.getElementById('nh-net').value, rate) : null;
+    apply.disabled = price == null;
+    if (price != null) {
+      const fee = processingFee(price, rate);
+      preview.textContent = `Price ${fmtMoney(price)} · fee ${fmtMoney(fee)} · you net ${fmtMoney(netOf(price, fee))}.`;
+    }
+  };
+  ['nh-net', 'nh-percent', 'nh-fixed'].forEach((id) => document.getElementById(id)?.addEventListener('input', onHelper));
+  apply?.addEventListener('click', () => {
+    const rate = helperRate();
+    const price = rate ? priceToNet(document.getElementById('nh-net').value, rate) : null;
+    if (price == null) return;
+    ctx.draft = readForm();
+    ctx.draft.price = price;
+    ctx.draft.processing_fee_amount = processingFee(price, rate);
+    ctx.draft.fee_passed_to_buyer = true;
+    ctx.suggestedFee = ctx.draft.processing_fee_amount;
+    renderEdit();
+  });
+  updateNetLine();
+}
+
 // --- Read-only view --------------------------------------------------------
 function row(label, valueHtml) {
   return `<dt>${esc(label)}</dt><dd>${valueHtml || '<span class="faint">—</span>'}</dd>`;
@@ -144,6 +283,9 @@ function renderView() {
       ${s.end_reason ? row('Why it ended', esc(descriptor(SALE_END_REASON, s.end_reason).label)) : ''}
       ${s.end_note ? row('About it', esc(s.end_note).replace(/\n/g, '<br>')) : ''}
       ${row('Price', esc(money(s.price)))}
+      ${editionFlags.accounts && s.sales_channel_account_id ? row('Sold / paid through', esc(ctx.accountsById.get(s.sales_channel_account_id)?.name || '—')) : ''}
+      ${s.processing_fee_amount != null && s.processing_fee_amount !== '' ? row('Processing fee', `${esc(money(s.processing_fee_amount))}${s.fee_passed_to_buyer ? ' <span class="muted">(passed to the buyer in the price)</span>' : ''}`) : ''}
+      ${s.processing_fee_amount != null && s.processing_fee_amount !== '' && s.price != null && s.price !== '' ? row('You net', esc(money(netOf(s.price, s.processing_fee_amount)))) : ''}
       ${row('Deposit amount', esc(money(s.deposit_amount)))}
       ${row('Transport fee', esc(money(s.transport_fee)))}
       ${row('Deferred pickup boarding', s.deferred_boarding_amount != null && s.deferred_boarding_amount !== '' ? `${esc(money(s.deferred_boarding_amount))}${s.deferred_boarding_frequency ? ` per ${esc(s.deferred_boarding_frequency)}` : ''}${s.deferred_boarding_duration_days ? ` × ${esc(s.deferred_boarding_duration_days)}` : ''}` : '')}
@@ -193,6 +335,7 @@ function renderEdit() {
       ${field('Status', `<select id="f-status">${vocabOptions(SALE_STATUS, s.status, 'Select…')}</select>`, { required: true })}
       ${endReasonFields(s)}
       ${field('Price', `<input id="f-price" type="number" min="0" step="0.01" value="${esc(s.price)}">`)}
+      ${feeFields(s)}
       ${field('Deposit amount', `<input id="f-deposit_amount" type="number" min="0" step="0.01" value="${esc(s.deposit_amount)}">`)}
       ${field('Transport fee', `<input id="f-transport_fee" type="number" min="0" step="0.01" value="${esc(s.transport_fee)}">`)}
       ${field('Deferred pickup boarding', `<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -218,6 +361,7 @@ function renderEdit() {
       ${field('Notes', `<textarea id="f-notes">${esc(s.notes)}</textarea>`, { wide: true })}
     </div>`;
 
+  wireFeeFields();
   document.getElementById('picker-archived')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
@@ -238,6 +382,7 @@ function renderEdit() {
   document.getElementById('f-dog_id').addEventListener('change', () => {
     ctx.draft = readForm();
     applyExpectedPricing();
+    applySuggestedFee();
     renderEdit();
   });
   // A registration change moves a price still at its prefilled amount to the
@@ -252,6 +397,7 @@ function renderEdit() {
       const after = expectedPricing(dog, litter, ctx.draft.registration_type).price;
       if (before != null && Number(ctx.draft.price) === Number(before)) ctx.draft.price = after;
     }
+    applySuggestedFee();
     renderEdit();
   });
   // Prefilling lead_source from the buyer's first_contact_source (only when
@@ -296,13 +442,19 @@ function readForm() {
     referred_by_contact_id: val('f-referred_by_contact_id') || null,
     end_reason: val('f-end_reason') || null,
     end_note: val('f-end_note').trim() || null,
+    // Lite has no channel picker: a channel set elsewhere is kept as it was.
+    sales_channel_account_id: document.getElementById('f-sales_channel_account_id')
+      ? val('f-sales_channel_account_id') || null
+      : ctx.draft.sales_channel_account_id || null,
+    processing_fee_amount: val('f-processing_fee_amount'),
+    fee_passed_to_buyer: !!document.getElementById('f-fee_passed_to_buyer')?.checked,
     notes: val('f-notes')
   };
 }
 
 // Empty numeric strings become null.
 function normalizeMoney(candidate) {
-  for (const k of ['price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount']) {
+  for (const k of ['price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount', 'processing_fee_amount']) {
     candidate[k] = candidate[k] === '' || candidate[k] == null ? null : Number(candidate[k]);
   }
   // Duration is a free-text field (e.g. "10-14"), not a number — only the
@@ -371,6 +523,7 @@ function enterEdit() {
   clearError();
   ctx.mode = 'edit';
   ctx.draft = { ...ctx.original };
+  ctx.suggestedFee = null; // a stored fee is hers: it never follows the price
   renderEdit();
   renderProfileActions();
   renderContractsSection();

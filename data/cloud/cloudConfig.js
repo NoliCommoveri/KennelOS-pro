@@ -93,6 +93,28 @@ export function publicListLink(publicId) {
   return base && publicId ? `${base}/list/${publicId}` : null;
 }
 
+// --- On her own website (Integrations plan §1) -------------------------------------
+// What she pastes into her site. The script (cloud/public/family/embed.js) shows the
+// form or list in a frame, which the server allows only while she has embedding on.
+// The button is only a link, so it works anywhere, Facebook and email included.
+const htmlAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+export function embedSnippet(publicId, view = 'apply') {
+  const base = familyPagesUrl();
+  if (!base || !publicId) return null;
+  const kind = view === 'list' ? 'list' : 'apply';
+  const link = kind === 'list' ? publicListLink(publicId) : applyFormLink(publicId);
+  const words = kind === 'list' ? 'See our puppy waitlist' : 'Apply for a puppy';
+  return `<script async src="${htmlAttr(`${base}/family/embed.js`)}" data-kennel="${htmlAttr(publicId)}" data-view="${kind}"></script>\n`
+    + `<noscript><a href="${htmlAttr(link)}">${words}</a></noscript>`;
+}
+
+export function applyButtonSnippet(publicId, label = 'Apply for a puppy') {
+  const link = applyFormLink(publicId);
+  if (!link) return null;
+  return `<a href="${htmlAttr(link)}" target="_blank" rel="noopener" style="display:inline-block;padding:12px 22px;border-radius:8px;background:#2f6f4f;color:#ffffff;font:600 16px/1.2 sans-serif;text-decoration:none;">${htmlAttr(label)}</a>`;
+}
+
 // Reads ?cloud=staging / ?cloud=off from `loc` and applies it. A sign-in and
 // the backup position belong to one server, so switching server forgets both
 // on this device (local only; nothing on either server is touched, and the

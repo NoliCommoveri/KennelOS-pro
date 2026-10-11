@@ -155,7 +155,9 @@ const COMPANION_INCLUDE_DEFAULTS = {
     histVaccination: true, histPreventative: true, histWeight: true, histMilestone: true, histNote: true,
     histBoarding: true, contract: true,
     // Same as prospective: only populated for a puppy from a foster litter.
-    fosterOwnerKennel: true
+    fosterOwnerKennel: true,
+    // Her referral links marked "Share with families" (Accounts; Integrations plan §3).
+    recommended: true
   },
   partner: {
     studServices: true, studRegisteredName: true, studCallName: true, studPhotos: true, studTests: true,

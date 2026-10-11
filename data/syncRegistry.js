@@ -137,7 +137,10 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: ALL,
     cloud: [
       'kennel_id', 'dog_id', 'buyer_contact_id', 'status', 'registration_type',
-      'sale_date', 'deposit_date', 'balance_due_date', 'balance_paid_date'
+      'sale_date', 'deposit_date', 'balance_due_date', 'balance_paid_date',
+      // Which channel it went through, and whether its fee was passed on
+      // (Integrations plan §5, D9). The fee itself is money, private like price.
+      'sales_channel_account_id', 'fee_passed_to_buyer'
     ],
     private: [
       'price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount',
@@ -146,7 +149,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'lead_source', 'referred_by_contact_id', 'notes',
       // Why a voided/returned sale ended, and her note on it (decided 2026-10-08):
       // health information about the pup, so private like notes.
-      'end_reason', 'end_note'
+      'end_reason', 'end_note',
+      'processing_fee_amount'
     ],
     pending: []
   },
@@ -218,8 +222,16 @@ export const SYNC_REGISTRY = Object.freeze({
   // referral link/code/instructions exist to be handed out, so they're cloud.
   accounts: {
     rows: ALL,
-    cloud: ['name', 'account_type', 'website', 'referral_link', 'referral_code', 'referral_instructions'],
-    private: ['username', 'password', 'customer_id', 'notes'],
+    cloud: [
+      'name', 'account_type', 'website', 'referral_link', 'referral_code', 'referral_instructions',
+      // The channel's published fee rate (Integrations plan §5, D9): a vendor's
+      // public price, not hers. Her own note on it stays private like `notes`.
+      'fee_percent', 'fee_fixed', 'fee_passed_to_buyer_default',
+      // Whether her referral link/code shows to families (Integrations plan §3):
+      // the referral fields are already cloud, made to be handed out.
+      'share_with_families'
+    ],
+    private: ['username', 'password', 'customer_id', 'notes', 'fee_note'],
     pending: []
   },
 

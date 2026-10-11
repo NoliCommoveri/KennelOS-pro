@@ -363,6 +363,26 @@
       return h2 + '</div>';
     }
 
+    // Her recommended products (Accounts marked "Share with families"): a name, a
+    // link (only a web address is ever made a link), a code and her instructions.
+    // Absent in older links; empty when she shares none.
+    function renderRecommended(b) {
+      var recs = Array.isArray(b.recommended) ? b.recommended : [];
+      if (!recs.length) return '';
+      var h = '<div class="card"><h2>Recommended for your puppy</h2>';
+      for (var i = 0; i < recs.length; i++) {
+        var r = recs[i] || {};
+        var link = typeof r.link === 'string' && /^https?:\/\//i.test(r.link) ? r.link : '';
+        h += '<div style="padding:10px 0; border-top:1px solid var(--border);">';
+        h += '<div><strong>' + esc(r.name || '') + '</strong></div>';
+        if (r.code) h += row('Code', '<strong>' + esc(r.code) + '</strong>');
+        if (r.instructions) h += '<p style="margin:6px 0 0;">' + esc(r.instructions) + '</p>';
+        if (link) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">Shop through our link →</a></p>';
+        h += '</div>';
+      }
+      return h + '</div>';
+    }
+
     function renderFamily(b) {
       var h = renderHeader(b);
       var pups = Array.isArray(b.pups) ? b.pups : [];
@@ -463,6 +483,7 @@
       }
 
       h += renderContractLinks(b);
+      h += renderRecommended(b);
       h += renderFooter(b);
       return h;
     }

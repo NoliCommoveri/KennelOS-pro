@@ -40,6 +40,8 @@ import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { contactRepo } from './contactRepo.js';
+import { accountRepo } from './accountRepo.js';
+import { goHomeDate, daysBetween, followUpMessage, sharedReferrals, FOLLOW_UP_DAYS, FOLLOW_UP_WINDOW_DAYS } from './referralShare.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import {
   overdueTurns, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, autoOffers, closingTrigger,
@@ -355,8 +357,59 @@ export async function computeNudges() {
   }
 
   if (editionFlags.waitlist) nudges.push(...(await waitlistNudges(today, litters, dogsById, { dogs, sales })));
+  if (editionFlags.accounts) nudges.push(...(await followUpNudges(today, inScopeOnly(sales), events, dogsById, kennelsById)));
 
   return nudges;
+}
+
+// --- Follow-up a week after going home (Integrations plan §3) ----------------------
+// Pro (with Accounts, whose shared referral links the note carries). A delivered
+// sale whose pup went home (its latest placement event, else the balance-paid
+// date) FOLLOW_UP_DAYS to FOLLOW_UP_WINDOW_DAYS ago suggests a note to the buyer:
+// a how-is-it-going and thank-you, with the products she shares with families.
+// The note opens in the composer (Today reads `compose`); she sends it herself.
+// Key per sale, so Dismiss (or sending it) retires it for good.
+async function followUpNudges(today, sales, events, dogsById, kennelsById) {
+  const delivered = sales.filter((s) => s.status === 'delivered' && s.buyer_contact_id);
+  if (!delivered.length) return [];
+  const [contacts, accounts] = await Promise.all([contactRepo.getAll({ includeArchived: true }), accountRepo.getAll()]);
+  const contactsById = new Map(contacts.map((c) => [c.id, c]));
+  const referrals = sharedReferrals(accounts);
+  const placements = new Map(); // dog id -> placement dates
+  for (const e of events) {
+    if (e.event_type !== 'placement' || e.subject_type !== 'dog' || !e.event_date) continue;
+    if (!placements.has(e.subject_id)) placements.set(e.subject_id, []);
+    placements.get(e.subject_id).push(e.event_date);
+  }
+  const out = [];
+  for (const s of delivered) {
+    const home = goHomeDate(s, placements.get(s.dog_id) || [], today);
+    if (!home) continue;
+    const days = daysBetween(home, today);
+    if (days < FOLLOW_UP_DAYS || days > FOLLOW_UP_WINDOW_DAYS) continue;
+    const buyer = contactsById.get(s.buyer_contact_id);
+    if (!buyer) continue;
+    const pup = dogsById.get(s.dog_id)?.call_name || 'their puppy';
+    const kennelName = kennelsById.get(s.kennel_id)?.kennel_name || '';
+    const message = followUpMessage({ buyerName: buyer.name, pupName: pup, kennelName, days, referrals });
+    out.push({
+      key: `follow-up:${s.id}`,
+      title: `Check in with ${buyer.name}: ${pup} went home ${days} days ago`,
+      detail: referrals.length
+        ? `A thank-you and how-is-it-going note, with what you recommend (${referrals.map((r) => r.name).join(', ')}).`
+        : 'A thank-you and how-is-it-going note. (Mark a referral account "Share with families" to add what you recommend.)',
+      subjectHref: `sale.html?id=${encodeURIComponent(s.id)}`,
+      actions: [{
+        label: 'Write the note',
+        run: async () => ({
+          compose: { title: `Check in with ${buyer.name}`, name: buyer.name, email: buyer.email || '', phone: buyer.phone || '', ...message },
+          // Today retires the nudge once she's sent or copied it.
+          doneDismisses: true
+        })
+      }]
+    });
+  }
+  return out;
 }
 
 // --- Waitlist (Waitlist Spec §0/§6.5) -------------------------------------------
