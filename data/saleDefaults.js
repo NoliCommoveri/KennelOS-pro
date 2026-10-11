@@ -20,3 +20,19 @@ export function expectedPricing(dog, litter, registration = dog?.intended_regist
     deposit_amount: clean(bySex(litter.expected_deposit_male, litter.expected_deposit_female))
   };
 }
+
+// The price a sale moves to when its registration changes (decided 2026-10-11):
+// the difference between the litter's expected prices for the two registrations
+// (the Full surcharge coming or going), applied to the sale's current price so any
+// discount she gave stays. `price` is the sale's current price (null/'' = none
+// yet: it takes the new expected price). Returns { from, to, delta }, or null when
+// the litter's prices don't change between the two (or aren't known).
+export function priceForRegistrationChange(dog, litter, price, fromReg, toReg) {
+  const before = expectedPricing(dog, litter, fromReg).price;
+  const after = expectedPricing(dog, litter, toReg).price;
+  if (before == null || after == null) return null;
+  const delta = Number(after) - Number(before);
+  if (!delta) return null;
+  const from = price === '' || price == null ? null : Number(price);
+  return { from, to: from == null ? Number(after) : Math.max(0, from + delta), delta };
+}

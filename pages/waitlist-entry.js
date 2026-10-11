@@ -40,14 +40,14 @@ import {
 } from '../data/waitlistForm.js';
 import {
   WAITLIST_ENTRY_STATUS, WAITLIST_PREF_SEX, WAITLIST_LISTEN_MODE, WAITLIST_OFFER_OUTCOME,
-  WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, cleanPurposes, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, descriptor
+  WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, cleanPurposes, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, RELEASED_SALE_STATUSES, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
-  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, statusLinkFor, copyLink
+  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, statusLinkFor, copyLink
 } from '../assets/waitlistUI.js';
 
 const els = {
@@ -139,6 +139,20 @@ function lostSale(e) {
   const offers = ctx.kennelOffers.filter((o) => o.entry_id === e.id);
   const ids = new Set([e.placed_sale_id, ...offers.map((o) => o.sale_id)].filter(Boolean));
   return ctx.sales.find((x) => ids.has(x.id) && lostSaleFamily(x, [e], offers)) || null;
+}
+
+// The sale "End the sale…" ends (decided 2026-10-11): the one they're placed with,
+// or the one holding the pup they picked in an open turn, while it hasn't ended
+// already. Null when there's none. { sale, placed }.
+function endableSale(e) {
+  const live = (x) => x && !x.is_archived && !RELEASED_SALE_STATUSES.includes(x.status);
+  if (e.status === 'placed') {
+    const sale = ctx.sales.find((x) => x.id === e.placed_sale_id);
+    return live(sale) ? { sale, placed: true } : null;
+  }
+  const picked = ctx.kennelOffers.find((o) => o.entry_id === e.id && !o.is_archived && o.outcome === 'open' && o.chosen_dog_id && o.sale_id);
+  const sale = picked && ctx.sales.find((x) => x.id === picked.sale_id);
+  return live(sale) ? { sale, placed: false } : null;
 }
 
 // Their place for what they want (decided 2026-10-10), as their status page shows it:
@@ -396,6 +410,18 @@ async function onRestore() {
   const sale = lostSale(ctx.entry);
   if (!sale) return;
   if (await restoreLostPupDialog({ saleId: sale.id })) await afterAction();
+}
+
+// End their sale here (the pup died, failed a health check, they backed out, …):
+// sets the sale's status as the Sale page would, then asks the same next steps.
+async function onEndSale() {
+  const found = endableSale(ctx.entry);
+  if (!found) return;
+  const ended = await endSaleDialog({
+    saleId: found.sale.id, name: entryName(ctx.entry, ctx.contact), pupName: dogName(found.sale.dog_id), placed: found.placed,
+    onError: showError
+  });
+  if (ended) await afterAction();
 }
 
 async function afterAction() {
@@ -1476,7 +1502,8 @@ function interactButtons(e) {
     case 'removed': main = (canUndoRemoval(e, todayYMD()) ? b('undo', 'Undo removal', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     default: main = b('reapply', 'Re-apply');
   }
-  return lost + main + b('communicate', 'Communicate…');
+  const end = !lost && endableSale(e) ? b('endsale', 'End the sale…') : '';
+  return lost + main + end + b('communicate', 'Communicate…');
 }
 
 function renderInteract() {
@@ -1493,7 +1520,7 @@ function renderInteract() {
     </section>`;
   wireRequests(pane);
   wireOffers(pane);
-  const handlers = { offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, reapply: onReapply, restore: onRestore, communicate: onCommunicate };
+  const handlers = { offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });

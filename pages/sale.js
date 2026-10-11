@@ -2,16 +2,17 @@
 // (contracts.related_sale_id = this sale — canonical on Contract, never a
 // Sale.contract_id, Stage4 Revision v2 §5). Buyer is a Contact (no Buyer table).
 import { saleRepo, ReferenceBlockedError } from '../data/saleRepo.js';
-import { expectedPricing } from '../data/saleDefaults.js';
+import { expectedPricing, priceForRegistrationChange } from '../data/saleDefaults.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel } from '../data/processingFees.js';
-import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, DISPOSITION, DOG_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
+import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily } from '../data/waitlistRules.js';
-import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, selectModal, promptModal, dogRefHtml } from '../assets/ui.js';
+import { promptDisposition, promptReleasedPup, askRegistrationPrice } from '../assets/salePrompts.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -385,17 +386,18 @@ function renderEdit() {
     applySuggestedFee();
     renderEdit();
   });
-  // A registration change moves a price still at its prefilled amount to the
-  // new registration's (the Full surcharge comes or goes); a price she typed stays.
-  document.getElementById('f-registration_type').addEventListener('change', () => {
+  // A registration change asks whether the price follows (decided 2026-10-11):
+  // the Full surcharge comes or goes on top of the price as it stands, so a
+  // discount she gave stays (saleDefaults.priceForRegistrationChange).
+  document.getElementById('f-registration_type').addEventListener('change', async () => {
     const was = ctx.draft.registration_type;
     ctx.draft = readForm();
     const dog = ctx.dogsById.get(ctx.draft.dog_id);
     const litter = dog && dog.litter_id ? ctx.littersById.get(dog.litter_id) : null;
     if (litter) {
-      const before = expectedPricing(dog, litter, was).price;
-      const after = expectedPricing(dog, litter, ctx.draft.registration_type).price;
-      if (before != null && Number(ctx.draft.price) === Number(before)) ctx.draft.price = after;
+      const change = priceForRegistrationChange(dog, litter, ctx.draft.price, was, ctx.draft.registration_type);
+      const price = await askRegistrationPrice(change, was, ctx.draft.registration_type);
+      if (price != null) ctx.draft.price = price;
     }
     applySuggestedFee();
     renderEdit();
@@ -658,81 +660,6 @@ function openEventFormAwait(opts) {
   });
 }
 
-// Offer to set the sold dog's disposition (breeder intent). `defaultValue` seeds
-// the dropdown (Placed on a new sale; Available when a sale falls through). Skips
-// the write when the choice matches what the dog already has.
-async function promptDisposition(sale, { title, message, defaultValue }) {
-  const dog = await dogRepo.getById(sale.dog_id);
-  if (!dog) return;
-  // Disposition is a puppy-only field (vocab.js) — never offer to set one on a
-  // dog that's moved past the puppy life-stage (e.g. a sale delivered as
-  // External flips the dog to external_reference just above this call).
-  if (dog.status !== 'puppy') return;
-  const choice = await selectModal({
-    title, message, label: 'Disposition',
-    options: DISPOSITION, defaultValue, confirmLabel: 'Update', cancelLabel: 'Skip'
-  });
-  if (choice && choice !== dog.disposition) await dogRepo.update(dog.id, { disposition: choice });
-}
-
-// The pup of a sale that just ended without it staying placed. Pup died → offer to
-// record the death (status Deceased + date). A health reason → disposition prompt
-// defaulting to Health hold (not for sale, never offered). Anything else → back to
-// Available, as before.
-const HEALTH_END_REASONS = ['failed_health_check', 'health_problem'];
-async function promptReleasedPup(sale) {
-  if (sale.end_reason === 'pup_died') {
-    const dog = await dogRepo.getById(sale.dog_id);
-    if (!dog || dog.status === 'deceased') return;
-    const date = await promptModal({
-      title: `Record ${dog.call_name}'s death?`,
-      message: `Marks ${dog.call_name} Deceased, so no one is offered this pup again.`,
-      label: 'Date of death', type: 'date', defaultValue: todayYMD(), confirmLabel: 'Record', cancelLabel: 'Skip'
-    });
-    if (date == null) return;
-    try {
-      await dogRepo.update(dog.id, { status: 'deceased', date_of_death: date });
-    } catch (e) {
-      showError(`${dog.call_name}'s death wasn't recorded: ${e.message || e} Record it on the dog's page.`);
-    }
-    return;
-  }
-  const health = HEALTH_END_REASONS.includes(sale.end_reason);
-  if (sale.status === 'returned' && await promptBackAsPuppy(sale, health)) return;
-  await promptDisposition(sale, {
-    title: 'Update this dog’s disposition?',
-    message: health
-      ? `This sale is now "${descriptor(SALE_STATUS, sale.status).label}" for a health reason. Health hold keeps the pup from being offered until you change it.`
-      : `This sale is now "${descriptor(SALE_STATUS, sale.status).label}" — update the dog's disposition back?`,
-    defaultValue: health ? 'health_hold' : 'available'
-  });
-}
-
-// A returned pup that was marked as gone home (Pet home, or External after the
-// delivery prompt) is back with you: offer to make it a puppy again — owned, with a
-// disposition (Health hold for a health return) — so it shows in its litter and
-// the waitlist sees it right. Skip leaves the dog as it is (e.g. an adult dog
-// returned long after). Resolves true when it was handled here.
-async function promptBackAsPuppy(sale, health) {
-  const dog = await dogRepo.getById(sale.dog_id);
-  if (!dog || dog.is_archived || !['pet_home', 'external_reference'].includes(dog.status)) return false;
-  const choice = await selectModal({
-    title: `${dog.call_name} is back with you`,
-    message: `${dog.call_name} is marked ${descriptor(DOG_STATUS, dog.status).label}. Bring ${dog.call_name} back into your program as a puppy?${health ? ' Health hold keeps the pup from being offered until you change it.' : ''}`,
-    label: 'Disposition', options: DISPOSITION.filter((o) => o.value !== 'placed'),
-    defaultValue: health ? 'health_hold' : 'available', confirmLabel: 'Bring back', cancelLabel: 'Skip'
-  });
-  if (!choice) return true;
-  const changes = { status: 'puppy', disposition: choice };
-  if (dog.ownership_type === 'external') Object.assign(changes, { ownership_type: 'owned', owner_contact_id: null });
-  try {
-    await dogRepo.update(dog.id, changes);
-  } catch (e) {
-    showError(`${dog.call_name} wasn't updated: ${e.message || e} Change it on the dog's page.`);
-  }
-  return true;
-}
-
 // Guards against a rapid double-tap/double-click firing save() twice before
 // the first call's await chain has a chance to disable anything itself —
 // each call would otherwise run to completion independently, e.g. creating
@@ -812,7 +739,7 @@ async function doSave() {
     // in line (Waitlist Spec §16.11). The pup goes first so a dead or held pup is
     // never offered to anyone.
     if (!isNew && RELEASED_SALE_STATUSES.includes(saved.status) && prevStatus !== saved.status) {
-      await promptReleasedPup(saved);
+      await promptReleasedPup(saved, { onError: showError });
       if (editionFlags.waitlist && restoresFamily(saved)) {
         const { restoreLostPupDialog } = await import('../assets/waitlistUI.js');
         await restoreLostPupDialog({ saleId: saved.id, asStatus: prevStatus });

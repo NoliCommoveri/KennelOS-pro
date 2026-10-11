@@ -17,6 +17,13 @@
 // (contractRepo.unlinkContract via documentRepo.unlinkContract) so no document
 // is ever left pointing at a deleted contract. The document itself always
 // stays filed on its dog.
+//
+// `furever_shareable` (decided 2026-10-11): whether the breeder lets this
+// document go into a FurEver litter pack. A plain, unindexed boolean; missing =
+// not shareable, so nothing is shared until she says so. A document already in
+// a published litter pack (published before the field existed) counts as
+// shareable until she sets it either way, so no existing pack changes by itself
+// (isFureverShareable).
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { DOCUMENT_REFERENCES } from './referenceRegistry.js';
@@ -24,6 +31,23 @@ import { assertOwnKennel } from './kennelScope.js';
 import { fileRepo } from './fileRepo.js';
 
 const base = makeRepo('documents', DOCUMENT_REFERENCES);
+
+// The ids of every document in a published FurEver litter pack
+// (Litter.furever_pack.selection.documentIds), as a Set. Pure.
+export function publishedFureverDocIds(litters) {
+  const ids = new Set();
+  for (const l of litters || []) for (const id of l?.furever_pack?.selection?.documentIds || []) ids.add(id);
+  return ids;
+}
+
+// May this document go into a FurEver pack? Her own setting when she's made one;
+// otherwise only if it's already published (`publishedIds`, publishedFureverDocIds).
+// Pure.
+export function isFureverShareable(doc, publishedIds = new Set()) {
+  if (!doc) return false;
+  if (typeof doc.furever_shareable === 'boolean') return doc.furever_shareable;
+  return publishedIds.has(doc.id);
+}
 
 function validateDocument(candidate) {
   if (!candidate.dog_id) throw new Error('Document: a dog is required.');
@@ -48,7 +72,10 @@ function normalize(data) {
     // The kennel scope stamp (Multi-Kennel Scope Spec §4.3) — create() asserts it,
     // so it has to survive normalizing.
     kennel_id: data.kennel_id || null,
-    file_id: data.file_id
+    file_id: data.file_id,
+    // FurEver sharing (see header): only ever a boolean she set; left off the
+    // record until she does, since "never set" is what isFureverShareable reads.
+    ...(typeof data.furever_shareable === 'boolean' ? { furever_shareable: data.furever_shareable } : {})
   };
 }
 

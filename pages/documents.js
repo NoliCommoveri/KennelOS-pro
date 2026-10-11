@@ -6,7 +6,9 @@
 // grouped list, filters, and refresh.
 import { esc, fmtDate, param } from '../assets/ui.js';
 import { dogRepo } from '../data/dogRepo.js';
-import { documentRepo } from '../data/documentRepo.js';
+import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { fileRepo } from '../data/fileRepo.js';
 import { DOC_TYPES, docTypeIcon } from '../data/vocab.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
@@ -15,6 +17,7 @@ import { openDocumentModal, openDocumentViewModal } from '../assets/documentModa
 let dogsById = new Map();            // dogs by id, for names + the add-form select
 let docs = [];                       // all documents (active + archived), reloaded on refresh()
 let filesById = new Map();           // file metadata (no blob) by id, for thumbnails
+let publishedIds = new Set();        // documents already in a published FurEver litter pack
 const filters = { type: 'all', dog: param('dog') || '', text: '' };
 
 const msg = document.getElementById('page-msg');
@@ -94,7 +97,17 @@ function docRowHtml(doc) {
         ${meta ? `<div class="muted" style="font-size:13px;">${esc(meta)}</div>` : ''}
       </div>
       <span class="badge ${esc(t.badge)}">${esc(t.label)}</span>
+      ${shareToggleHtml(doc)}
     </div>`;
+}
+
+// May this document go to FurEver (documentRepo.isFureverShareable)? Off until
+// she ticks it; only where the edition has FurEver.
+function shareToggleHtml(doc) {
+  if (!editionFlags.furever) return '';
+  const on = isFureverShareable(doc, publishedIds);
+  return `<label class="check-inline doc-share" title="Can be shared to FurEver (a litter's pack)" style="font-size:13px;white-space:nowrap;">
+      <input type="checkbox" data-share="${esc(doc.id)}"${on ? ' checked' : ''}> FurEver</label>`;
 }
 
 function renderList() {
@@ -115,17 +128,33 @@ function renderList() {
 
   for (const row of host.querySelectorAll('.doc-row[data-doc]')) {
     const open = () => openView(row.dataset.doc);
-    row.addEventListener('click', open);
-    row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    row.addEventListener('click', (e) => { if (!e.target.closest('.doc-share')) open(); });
+    row.addEventListener('keydown', (e) => { if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } });
+  }
+  for (const box of host.querySelectorAll('input[data-share]')) {
+    box.addEventListener('change', async () => {
+      try {
+        const saved = await documentRepo.update(box.dataset.share, { furever_shareable: box.checked });
+        docs = docs.map((d) => (d.id === saved.id ? saved : d));
+        flash(box.checked
+          ? 'Can be shared to FurEver. Tick it in the litter\'s pack on the FurEver page to publish it.'
+          : 'Not shared to FurEver. If it\'s in a published pack, it comes out on that pack\'s next publish.');
+      } catch (err) {
+        box.checked = !box.checked;
+        flash(err.message || String(err), 'error');
+      }
+    });
   }
 }
 
 async function refreshData() {
-  const [dogs_, docs_, filesMeta] = await Promise.all([
+  const [dogs_, docs_, filesMeta, litters] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     documentRepo.getAll({ includeArchived: false }),
-    fileRepo.getAllMeta()
+    fileRepo.getAllMeta(),
+    editionFlags.furever ? litterRepo.getAll({ includeArchived: true }) : []
   ]);
+  publishedIds = publishedFureverDocIds(litters);
   dogsById = new Map(dogs_.map((d) => [d.id, d]));
   docs = docs_;
   filesById = new Map(filesMeta.map((f) => [f.id, f]));

@@ -189,7 +189,9 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: (row) => CLOUD_DOC_TYPES.includes(row.doc_type),
     cloud: [
       'kennel_id', 'dog_id', 'doc_type', 'file_id', 'title', 'doc_date',
-      'issuer_or_lab', 'result', 'registry', 'registration_number'
+      'issuer_or_lab', 'result', 'registry', 'registration_number',
+      // Her "can be shared to FurEver" choice (decided 2026-10-11): a flag, no content.
+      'furever_shareable'
     ],
     // contract_id only rides contract-type documents, whose whole row stays local.
     private: ['notes', 'contract_id'],

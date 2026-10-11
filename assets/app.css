@@ -439,6 +439,8 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 
 /* --- Forms / edit-in-place --------------------------------------------- */
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 20px; }
+/* A `.form-grid` toggled by `hidden` (the pick dialog's deposit fields). */
+.form-grid[hidden] { display: none; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 /* Same `[hidden]` idiom as `.pill-row[hidden]` below: a `.field` toggled by its
    `hidden` attribute (the waitlist entry's parent picks, the sale's owner field). */

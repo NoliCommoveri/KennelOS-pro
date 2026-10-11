@@ -20,7 +20,8 @@ import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
-import { expectedPricing } from '../data/saleDefaults.js';
+import { priceForRegistrationChange } from '../data/saleDefaults.js';
+import { askRegistrationPrice } from './salePrompts.js';
 import { rankForms, splitName } from '../data/contractForms.js';
 import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, balanceDueOn } from '../data/contractSend.js';
 import { depositRequestMessage } from '../data/depositRequest.js';
@@ -144,12 +145,15 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         balance_due_date: $('#ps-balance-due').value || null,
         notes: $('#ps-notes').value
       });
-      // A registration change moves a price still at its suggested amount (saleDefaults rule).
-      $('#ps-reg').addEventListener('change', (e) => {
+      // A registration change asks whether the price follows (the Sale page's rule,
+      // salePrompts.askRegistrationPrice). `reg` is the registration the price is for.
+      let reg = sale.registration_type;
+      $('#ps-reg').addEventListener('change', async (e) => {
+        const was = reg;
+        reg = e.target.value;
         if (!litter) return;
-        const before = expectedPricing(dog, litter, sale.registration_type).price;
-        const after = expectedPricing(dog, litter, e.target.value).price;
-        if (before != null && Number(priceEl.value) === Number(before) && after != null) { priceEl.value = after; suggest(); netLine(); }
+        const price = await askRegistrationPrice(priceForRegistrationChange(dog, litter, priceEl.value, was, reg), was, reg);
+        if (price != null) { priceEl.value = price; suggest(); netLine(); }
       });
       priceEl.addEventListener('input', () => { suggest(); netLine(); });
       feeEl.addEventListener('input', netLine);

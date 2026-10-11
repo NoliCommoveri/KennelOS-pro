@@ -12,11 +12,14 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal, promptModal } from './ui.js';
 import { PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
-import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges } from '../data/waitlistRules.js';
+import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges, restoresFamily } from '../data/waitlistRules.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale } from '../data/waitlistActions.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { saleRepo } from '../data/saleRepo.js';
+import { SALE_STATUS, saleEndReasonsFor } from '../data/vocab.js';
+import { promptReleasedPup } from './salePrompts.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -491,6 +494,45 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
   lines.push(...describeOfferChanges(kind === 'placed' ? res : { ...res, voided: [] }, { nameOf: (id) => familyNames.get(id) || 'the next family', litterOf, fmtDate }));
   await alertModal({ title: kind === 'placed' ? `${name} is back in line` : `${name}'s turn is back`, message: lines.join('\n\n') });
   return res;
+}
+
+// End a family's sale from their page (decided 2026-10-11): the shortcut for
+// editing the sale's status on the Sale page, and it does what that does next.
+// The sale becomes Voided (the pup died, failed a health check, or another reason
+// on your side) or, for a placed family, Cancelled (they backed out); a delivered
+// sale becomes Returned instead. Then the pup is settled (salePrompts: record its
+// death, Health hold, …) and, for a lost pup, she's asked whether to put the family
+// back in line (restoreLostPupDialog). `onError(message)` shows a dog update that
+// failed. Resolves true once the sale is ended, false when she cancels.
+export async function endSaleDialog({ saleId, name, pupName, placed, onError = () => {} }) {
+  const sale = await saleRepo.getById(saleId);
+  if (!sale) throw new Error('That sale wasn\'t found.');
+  const status = sale.status === 'delivered' ? 'returned' : 'voided';
+  const options = saleEndReasonsFor(status).map((r) => ({ value: `${status}:${r.value}`, label: r.label }));
+  if (status === 'voided' && placed) options.push({ value: 'cancelled:', label: 'They backed out (Cancelled)' });
+  const hint = status === 'returned'
+    ? `${pupName} has gone home, so the sale is marked Returned.`
+    : `A pup that died or can't be sold voids the sale: nothing on it counts as income, and ${name} can be put back in line. ${placed ? 'If they backed out, it\'s Cancelled: a deposit they paid stays earned.' : 'If they no longer want this pup, record a pass on their offer instead.'}`;
+  let saved = null;
+  const ok = await formModal({
+    title: `End ${pupName}'s sale?`,
+    confirmLabel: 'End the sale',
+    danger: true,
+    bodyHtml: `<p style="margin-top:0;">${esc(name)}'s sale for <strong>${esc(pupName)}</strong> (now ${esc(descriptor(SALE_STATUS, sale.status).label)}).</p>
+      <div class="field"><label>What happened?</label><select id="es-why">${options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select></div>
+      <div class="field"><label>About it</label><input id="es-note" type="text" placeholder="e.g. what the vet found"></div>
+      <p class="field-hint">${esc(hint)} Next you'll be asked about ${esc(pupName)} and ${esc(name)}'s place, as on the Sale page.</p>`,
+    onConfirm: async (o) => {
+      const [newStatus, reason] = o.querySelector('#es-why').value.split(':');
+      const note = o.querySelector('#es-note').value.trim();
+      saved = await saleRepo.update(sale.id, { status: newStatus, end_reason: reason || null, end_note: reason ? (note || null) : null,
+        ...(!reason && note ? { notes: sale.notes ? `${sale.notes}\n${note}` : note } : {}) });
+    }
+  });
+  if (!ok) return false;
+  await promptReleasedPup(saved, { onError });
+  if (restoresFamily(saved)) await restoreLostPupDialog({ saleId: saved.id, asStatus: sale.status });
+  return true;
 }
 
 // --- Messaging a family yourself (decided 2026-10-08; trimmed 2026-10-10) ----------

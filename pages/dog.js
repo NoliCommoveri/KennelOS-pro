@@ -24,7 +24,9 @@ import {
   SHOW_ENTRY_STATUS, TITLE_TRACKS
 } from '../data/vocab.js';
 import { getShowRecord } from '../data/showPoints.js';
-import { esc, badge, fmtDate, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
+import { priceForRegistrationChange } from '../data/saleDefaults.js';
+import { askRegistrationPrice } from '../assets/salePrompts.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { renderTimeline } from '../assets/timeline.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
@@ -734,7 +736,11 @@ async function doSave() {
         candidate.kennel_id = await resolveKennelIdForWrite();
       }
     }
+    const prevRegistration = ctx.original.intended_registration || null;
     saved = await dogRepo.update(ctx.original.id, candidate);
+    if (saved.status === 'puppy' && saved.intended_registration && saved.intended_registration !== prevRegistration) {
+      await promptSaleRegistration(saved);
+    }
     ctx.original = saved;
     ctx.mode = 'view';
     ctx.bringIn = false;
@@ -750,6 +756,34 @@ async function doSave() {
       els.error.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } else {
       showError(e.message || String(e));
+    }
+  }
+}
+
+// A puppy's intended registration changed while it has an open sale (decided
+// 2026-10-11): offer to change the sale's registration to match, and its price
+// with it (the Full surcharge comes or goes, salePrompts.askRegistrationPrice).
+// Skip leaves the sale as it is.
+async function promptSaleRegistration(dog) {
+  const reg = dog.intended_registration;
+  const sales = (await saleRepo.getByDog(dog.id)).filter((x) => saleRepo.isOpenSale(x) && x.registration_type !== reg);
+  if (!sales.length) return;
+  const litter = dog.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+  for (const sale of sales) {
+    const buyer = sale.buyer_contact_id ? await contactRepo.getById(sale.buyer_contact_id) : null;
+    const label = (r) => (r ? descriptor(REGISTRATION_TYPE, r).label : 'no registration');
+    const ok = await confirmModal({
+      title: `Change ${buyer?.name ? `${buyer.name}'s` : 'the'} sale to ${label(reg)} too?`,
+      message: `${nameOf(dog)} has an open sale${buyer?.name ? ` to ${buyer.name}` : ''} with ${label(sale.registration_type)} registration${sale.price != null && sale.price !== '' ? ` at ${fmtMoney(sale.price)}` : ''}.`,
+      confirmLabel: 'Change the sale', cancelLabel: 'Leave the sale'
+    });
+    if (!ok) continue;
+    try {
+      const change = litter ? priceForRegistrationChange(dog, litter, sale.price, sale.registration_type, reg) : null;
+      const price = await askRegistrationPrice(change, sale.registration_type, reg);
+      await saleRepo.update(sale.id, { registration_type: reg, ...(price != null ? { price } : {}) });
+    } catch (e) {
+      showError(`The sale wasn't updated: ${e.message || e} Change it on the sale's page.`);
     }
   }
 }

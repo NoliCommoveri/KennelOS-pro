@@ -18,7 +18,9 @@
 // the caller can refresh its own view — no shared module state.
 import { esc, fmtDate, confirmModal } from './ui.js';
 import { dogRepo } from '../data/dogRepo.js';
-import { documentRepo } from '../data/documentRepo.js';
+import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { fileRepo } from '../data/fileRepo.js';
 import { photosToPdf } from '../data/pdfBuild.js';
@@ -65,6 +67,11 @@ export function openDocumentModal({
       .sort((a, b) => dogName(a).localeCompare(dogName(b), undefined, { sensitivity: 'base' }));
     let pendingFiles = null; // { kind: 'pdf'|'photo', files: File[] }
 
+    // FurEver sharing (documentRepo.isFureverShareable): off for a new document.
+    const shareable = editionFlags.furever && existing
+      ? isFureverShareable(existing, publishedFureverDocIds(await litterRepo.getAll({ includeArchived: true })))
+      : false;
+
     const selectedDogId = existing?.dog_id || defaultDogId || '';
     const initialType = existing?.doc_type || defaultType || 'pedigree';
 
@@ -107,6 +114,8 @@ export function openDocumentModal({
             <div id="doc-extra-fields" style="display:contents;">${extraFieldsHtml(initialType, existing)}</div>
             <div class="field field-wide"><label>Notes</label><textarea id="doc-notes" rows="2">${esc(existing?.notes || '')}</textarea></div>
           </div>
+          ${editionFlags.furever ? `<label class="check-inline" style="display:block;margin-top:10px;"><input type="checkbox" id="doc-furever"${shareable ? ' checked' : ''}> Can be shared to FurEver</label>
+          <p class="field-hint" style="margin:2px 0 0;">Lets you add it to its litter's pack on the FurEver page. Left off, it's never shared.</p>` : ''}
 
           <div id="doc-form-error"></div>
           <div class="form-actions">
@@ -217,6 +226,8 @@ export function openDocumentModal({
         if (!fileId) throw new Error('Choose a PDF or photo(s) first.');
 
         const payload = { dog_id: dogId, doc_type: docType, title, doc_date: docDate, notes, file_id: fileId, ...extras };
+        const shareBox = modal.querySelector('#doc-furever');
+        if (shareBox) payload.furever_shareable = shareBox.checked;
         // Stamp the contract back-link only when this modal was opened FROM a
         // contract (attach flow). On a plain edit, contract_id is absent from the
         // payload and documentRepo.update preserves whatever the record already

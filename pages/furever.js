@@ -13,7 +13,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
-import { documentRepo } from '../data/documentRepo.js';
+import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { getFureverSettings, setFureverSettings, getMyKennelId, getMyContactId } from '../data/settings.js';
 import { buildSeedPacket, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
 import { connectDrive, isDriveConnectedThisSession } from '../data/googleDrive.js';
@@ -389,17 +389,26 @@ function docTypesIn(rows) {
   return DOC_TYPES.filter((t) => present.has(t.value));
 }
 
+// Documents already in a published litter pack (documentRepo.publishedFureverDocIds),
+// set by loadContentPackagesData: they count as shareable until she says otherwise.
+let publishedDocIds = new Set();
+
+// A document she hasn't marked shareable (documentRepo.isFureverShareable) is
+// listed greyed out and can't be ticked (decided 2026-10-11); one that was
+// published comes out of the pack on the next publish (it's left unticked).
 function docCheckboxHtml(doc, selectedIds) {
-  const checked = selectedIds.has(doc.id) ? ' checked' : '';
-  const sensitive = isSensitiveDocType(doc.doc_type)
+  const shareable = isFureverShareable(doc, publishedDocIds);
+  const checked = shareable && selectedIds.has(doc.id) ? ' checked' : '';
+  const sensitive = shareable && isSensitiveDocType(doc.doc_type)
     ? ` <span class="muted" style="font-size:.8rem;">— public by link if included</span>`
     : '';
+  const off = shareable ? '' : ` <span class="muted" style="font-size:.8rem;">— not shareable${selectedIds.has(doc.id) ? ', comes out on the next publish' : ''}. <a href="documents.html?dog=${encodeURIComponent(doc.dog_id)}">Change on Documents</a></span>`;
   return `
-    <label class="cp-doc-row" style="display:flex; align-items:center; gap:6px; margin:4px 0;">
-      <input type="checkbox" class="cp-doc" value="${esc(doc.id)}" data-type="${esc(doc.doc_type)}"${checked}>
+    <label class="cp-doc-row" style="display:flex; align-items:center; gap:6px; margin:4px 0;${shareable ? '' : ' opacity:.55;'}">
+      <input type="checkbox" class="cp-doc" value="${esc(doc.id)}" data-type="${esc(doc.doc_type)}"${checked}${shareable ? '' : ' disabled'}>
       <span aria-hidden="true">${docTypeIcon(doc.doc_type)}</span>
       <span>${esc(doc.title || descriptor(DOC_TYPES, doc.doc_type).label)}</span>
-      ${badge(DOC_TYPES, doc.doc_type)}${sensitive}
+      ${badge(DOC_TYPES, doc.doc_type)}${sensitive}${off}
     </label>`;
 }
 
@@ -522,7 +531,7 @@ function collectSelectedIds(root) {
 // uncheck the underlying boxes — the DOM is the state while the panel is open,
 // so no separate selection model has to be kept in sync with it.
 function wirePicker(root) {
-  const boxes = () => Array.from(root.querySelectorAll('.cp-doc'));
+  const boxes = () => Array.from(root.querySelectorAll('.cp-doc:not(:disabled)'));
   const selectAll = root.querySelector('.cp-select-all');
   if (selectAll) {
     selectAll.addEventListener('change', () => {
@@ -537,10 +546,11 @@ function wirePicker(root) {
   });
   root.querySelectorAll('.cp-dog-group').forEach((group) => {
     const allBox = group.querySelector('.cp-dog-all');
-    const docBoxes = () => Array.from(group.querySelectorAll('.cp-doc'));
+    const docBoxes = () => Array.from(group.querySelectorAll('.cp-doc:not(:disabled)'));
     allBox.addEventListener('change', () => {
       docBoxes().forEach((b) => { b.checked = allBox.checked; });
     });
+    if (!docBoxes().length) allBox.disabled = true;
     docBoxes().forEach((b) => b.addEventListener('change', () => {
       allBox.checked = docBoxes().every((x) => x.checked);
     }));
@@ -678,7 +688,8 @@ async function doLitterPublish(litter, rows) {
   const card = els.contentPackages.querySelector(`[data-litter="${CSS.escape(litter.id)}"]`);
   const root = card.querySelector('.cp-picker');
   const docsById = flattenDocs(rows);
-  const selectedDocs = collectSelectedIds(root).map((id) => docsById.get(id)).filter(Boolean);
+  const selectedDocs = collectSelectedIds(root).map((id) => docsById.get(id))
+    .filter((d) => d && isFureverShareable(d, publishedDocIds));
   const sensitive = selectedDocs.filter((d) => isSensitiveDocType(d.doc_type));
 
   const confirmBox = card.querySelector('.cp-litter-confirm');
@@ -757,7 +768,7 @@ function litterSectionHtml(litter, rows) {
         </div>
       </div>
       <div class="r-body" style="display:none; margin-top:10px;">
-        <p class="muted" style="margin:0 0 8px; font-size:.85rem;">Sire/dam documents go to every family in this litter. A pup's own documents go only to that pup's family — check just that pup's box to send something to one family alone. Unchecking something that was already published trashes its Drive copy on the next publish — it isn't just removed from the list.</p>
+        <p class="muted" style="margin:0 0 8px; font-size:.85rem;">Sire/dam documents go to every family in this litter. A pup's own documents go only to that pup's family — check just that pup's box to send something to one family alone. Unchecking something that was already published trashes its Drive copy on the next publish — it isn't just removed from the list. Only documents marked shareable on the Documents page can be ticked.</p>
         ${pickerHtml({ prefix: `litter-${litter.id}`, rows, selectedIds, parentIds: { sireId: litter.sire_id, damId: litter.dam_id } })}
         <div class="cp-litter-confirm"></div>
         <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
@@ -771,6 +782,7 @@ function litterSectionHtml(litter, rows) {
 async function loadContentPackagesData() {
   const allDogs = await dogRepo.getAll();
   const allLitters = await litterRepo.getAll();
+  publishedDocIds = publishedFureverDocIds(await litterRepo.getAll({ includeArchived: true }));
   const litterEntries = [];
   for (const litter of allLitters) {
     const pups = await dogRepo.getByLitter(litter.id);
