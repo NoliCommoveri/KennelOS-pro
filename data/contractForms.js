@@ -124,7 +124,13 @@ export const PREFILL_FIELDS = {
     ['contractDate', 'Today\'s date (YYYY-MM-DD)'],
     ['kennelName', 'Your kennel\'s name'],
     ['kennelLocation', 'Your kennel\'s location'],
-    ['kennelWebsite', 'Your kennel\'s website']
+    ['kennelWebsite', 'Your kennel\'s website'],
+    ['breederName', 'Your full name (the contact linked to your kennel)'],
+    ['breederFirstName', 'Your first name'],
+    ['breederLastName', 'Your last name'],
+    ['breederEmail', 'Your email'],
+    ['breederPhone', 'Your phone'],
+    ['breederAddress', 'Your address']
   ],
   sale: [
     ['saleRef', 'The sale\'s reference (make it a hidden field)'],
@@ -214,7 +220,7 @@ function person(prefix, c) {
 
 // The facts to prefill, as [[name, value]] in PREFILL_FIELDS order, empties
 // dropped. `facts` holds the records the contract reaches (the caller reads
-// them): { contract, kennel, sale, buyer, puppy, sire, dam, balanceDue,
+// them): { contract, kennel, breeder, sale, buyer, puppy, sire, dam, balanceDue,
 // studService, studDog, studDam, partner, dog, today }.
 export function prefillValues(formType, facts = {}) {
   const f = facts;
@@ -225,7 +231,9 @@ export function prefillValues(formType, facts = {}) {
     ['contractDate', text(f.today)],
     ['kennelName', text(f.kennel?.kennel_name)],
     ['kennelLocation', text(f.kennel?.location)],
-    ['kennelWebsite', text(f.kennel?.website)]
+    ['kennelWebsite', text(f.kennel?.website)],
+    // Her own name and details: the contact linked to the kennel (contractSend.breederFor).
+    ...person('breeder', f.breeder)
   ];
   const groups = fieldGroupsFor(formType);
   if (groups.includes('sale') && f.sale) {

@@ -56,6 +56,12 @@ const PHRASES = {
   kennelName: ['kennel name', 'breeder kennel', 'kennel'],
   kennelLocation: ['kennel location', 'kennel address', 'breeder location'],
   kennelWebsite: ['kennel website', 'breeder website', 'website'],
+  breederName: ['breeder full name', 'seller full name', 'breeder name', 'seller name', 'kennel owner name', 'kennel owner', 'breeder', 'seller'],
+  breederFirstName: ['breeder first name', 'seller first name'],
+  breederLastName: ['breeder last name', 'seller last name'],
+  breederEmail: ['breeder email', 'seller email', 'kennel email'],
+  breederPhone: ['breeder phone', 'seller phone', 'kennel phone'],
+  breederAddress: ['breeder address', 'seller address', 'kennel address'],
   saleRef: ['sale reference', 'sale ref', 'saleref'],
   buyerName: ['buyer full name', 'buyer name', 'purchaser name', 'buyer', 'purchaser', 'full name'],
   buyerFirstName: ['buyer first name', 'first name'],
@@ -112,14 +118,23 @@ function score(fact, field) {
   const base = field.param.replace(/\[.*$/, '');
   if (!field.part && base.toLowerCase() === fact.toLowerCase()) return 1000; // she already used our fixed name
   const isFirst = /FirstName$/.test(fact); const isLast = /LastName$/.test(fact);
+  // Her own details only go where the label says so (Seller…, Breeder…): a bare
+  // Name / Email field is the other party's.
+  const ours = /^breeder/.test(fact);
+  const saysOurs = /\b(breeder|seller|kennel)\b/.test(norm(field.label));
   // A Full Name field's parts only take first / last names, and nothing else does.
   if (field.part === 'first' || field.part === 'last') {
     if (!(isFirst || isLast)) return 0;
     if ((isFirst && field.part !== 'first') || (isLast && field.part !== 'last')) return 0;
+    if (ours) return saysOurs ? 80 : 0;
     const person = fact.replace(/(First|Last)Name$/, '');
-    return 60 + (norm(field.label).includes(` ${person} `) ? 20 : 0);
+    return saysOurs ? 0 : 60 + (norm(field.label).includes(` ${person} `) ? 20 : 0);
   }
-  if (field.part === 'addr_line1') return /Address$/.test(fact) ? 60 + (norm(field.label).includes(` ${fact.replace(/Address$/, '')} `) ? 20 : 0) : 0;
+  if (field.part === 'addr_line1') {
+    if (!/Address$/.test(fact) || ours !== saysOurs) return 0;
+    return ours ? 80 : 60 + (norm(field.label).includes(` ${fact.replace(/Address$/, '')} `) ? 20 : 0);
+  }
+  if (/^(buyer|partner)/.test(fact) && saysOurs) return 0;
   const isEmail = /Email$/.test(fact); const isPhone = /Phone$/.test(fact);
   if (field.type === 'control_email' && !isEmail) return 0;
   if (field.type === 'control_phone' && !isPhone) return 0;
@@ -128,8 +143,8 @@ function score(fact, field) {
   (PHRASES[fact] || []).forEach((p, i) => {
     if (label.includes(` ${p} `)) best = Math.max(best, 20 + p.split(' ').length * 10 - i + (label.trim() === p ? 15 : 0));
   });
-  if (!best && isEmail && field.type === 'control_email') best = 25;
-  if (!best && isPhone && field.type === 'control_phone') best = 25;
+  if (!best && !ours && isEmail && field.type === 'control_email') best = 25;
+  if (!best && !ours && isPhone && field.type === 'control_phone') best = 25;
   if (best && ((isEmail && field.type === 'control_email') || (isPhone && field.type === 'control_phone'))) best += 30;
   return best;
 }

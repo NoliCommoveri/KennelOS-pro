@@ -30,6 +30,18 @@ export async function balanceDueOn(sale) {
 
 const get = (repo, id) => (id ? repo.getById(id) : null);
 
+// The breeder who signs for a kennel: the contact whose Kennel is this kennel
+// (Contact.kennel_id is an affiliation, so buyers have none). A derived query,
+// never a stored back-pointer. With several, a contact typed Breeder first, then
+// the longest-standing one. → the contact or null.
+export async function breederFor(kennelId) {
+  if (!kennelId) return null;
+  const rows = (await contactRepo.getAll()).filter((x) => x.kennel_id === kennelId);
+  const isBreeder = (x) => (Array.isArray(x.contact_type) ? x.contact_type : []).includes('breeder');
+  rows.sort((a, b) => Number(isBreeder(b)) - Number(isBreeder(a)) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  return rows[0] || null;
+}
+
 // The records a contract reaches, as contractForms.prefillValues wants them.
 export async function gatherContractFacts(c) {
   const sale = await get(saleRepo, c.related_sale_id);
@@ -42,6 +54,7 @@ export async function gatherContractFacts(c) {
   return {
     contract: c,
     kennel: await get(kennelRepo, c.kennel_id),
+    breeder: await breederFor(c.kennel_id),
     today: todayYMD(),
     sale, puppy,
     balanceDue: sale ? await balanceDueOn(sale) : null,

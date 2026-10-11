@@ -445,6 +445,7 @@ function pickForm(c, ranked, facts) {
           ${values.map(([k, v]) => `<dt><code>${esc(k)}</code></dt><dd>${esc(v)}</dd>`).join('')}
         </dl>
         <p class="field-hint">Only fields your form has (by Unique Name) get filled; the field names are listed on the Accounts page.</p>
+        ${facts.breeder ? '' : '<div class="inline-warn">Your name, email and phone aren\'t filled in: no contact is linked to this contract\'s kennel. Open your own contact and set its <strong>Kennel</strong> to this kennel.</div>'}
         ${url.length > 2000 ? '<div class="inline-warn">This link is very long, and some browsers or email apps may cut it off. Remove fields you don\'t need from the form, or shorten long values.</div>' : ''}
         <div class="form-actions">
           <button class="btn btn-primary" id="cf-go">Continue</button>
