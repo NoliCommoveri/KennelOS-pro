@@ -10,7 +10,7 @@ import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { incomeLineItems, paidOnSale, getSaleFeeCredit } from './incomeView.js';
-import { allForms, prefillValues, prefillUrl, formProvider } from './contractForms.js';
+import { allForms, prefillValues, prefillUrl, formProvider, mapValues } from './contractForms.js';
 import { todayYMD } from './dateUtils.js';
 
 // Contracts that can still go out for signature (and be sent again).
@@ -56,9 +56,10 @@ export async function gatherContractFacts(c) {
   };
 }
 
-// One form's prefilled link for these facts. → { values, url }.
+// One form's prefilled link for these facts, under her field names when the form
+// was matched through Connect Jotform (field_map). → { values, url }.
 export function buildSignatureLink(form, facts) {
-  const values = prefillValues(form.form_type, facts);
+  const values = mapValues(prefillValues(form.form_type, facts), form.field_map);
   return { values, url: prefillUrl(form.url, values) };
 }
 

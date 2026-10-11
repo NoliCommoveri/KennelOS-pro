@@ -1,6 +1,7 @@
 // vaultKeyStore.js — this device's unlocked private-vault key (Private Vault
 // Plan §3.3), and its open request to be unlocked by another device (§5.3).
-// The ONLY reader/writer of the `device_secrets` table (db.js).
+// The only reader/writer of the `device_secrets` table's vault rows (db.js);
+// data/jotformKeyStore.js keeps its own `jotform:` rows there.
 //
 // The key is stored as a CryptoKey object, which IndexedDB keeps as-is and
 // localStorage (settings.js) can't hold. One row, tagged with the program it

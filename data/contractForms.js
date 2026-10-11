@@ -37,15 +37,49 @@ const FORM_TYPES = new Set(CONTRACT_FORM_TYPE.map((t) => t.value));
 
 // An Account's saved forms, cleaned: a known type, a usable link, a label (the
 // type's name when she left it blank). Older backups have no field: [].
+// A form picked through Connect Jotform (plan §2.1b) also keeps its Jotform
+// `form_id` and the `field_map` she confirmed (cleanFieldMap); a pasted one has
+// neither and fills our fixed names.
 export function cleanForms(list) {
   return (Array.isArray(list) ? list : [])
     .filter((f) => f && FORM_TYPES.has(f.form_type) && formLink(f.url))
-    .map((f) => ({
-      id: text(f.id) || crypto.randomUUID(),
-      form_type: f.form_type,
-      label: text(f.label) || descriptor(CONTRACT_FORM_TYPE, f.form_type).label,
-      url: formLink(f.url)
-    }));
+    .map((f) => {
+      const out = {
+        id: text(f.id) || crypto.randomUUID(),
+        form_type: f.form_type,
+        label: text(f.label) || descriptor(CONTRACT_FORM_TYPE, f.form_type).label,
+        url: formLink(f.url)
+      };
+      if (/^\d{1,30}$/.test(text(f.form_id))) out.form_id = text(f.form_id);
+      const map = cleanFieldMap(f.field_map);
+      if (map) out.field_map = map;
+      return out;
+    });
+}
+
+// Every fact name a link can carry (PREFILL_FIELDS, all groups).
+const FACTS = () => new Set(Object.values(PREFILL_FIELDS).flat().map(([k]) => k));
+// A parameter of hers: a Jotform unique name, or a part of one ("name[first]").
+const PARAM = /^[A-Za-z0-9_-]{1,80}(\[[A-Za-z0-9_]{1,30}\])?$/;
+
+// { <our fact>: <her parameter> } with unknown facts and odd names dropped, or
+// null when it isn't a map at all. An empty map is kept: it means "fill nothing".
+export function cleanFieldMap(map) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
+  const facts = FACTS();
+  const out = {};
+  for (const [k, v] of Object.entries(map)) if (facts.has(k) && PARAM.test(text(v))) out[k] = text(v);
+  return out;
+}
+
+// The values renamed to her fields. With no map (a pasted form), every value goes
+// under our fixed name. With a map (a form matched through Connect Jotform), only
+// the facts she matched go, so nothing is put in the link that her form won't
+// show.
+export function mapValues(values, fieldMap) {
+  const map = cleanFieldMap(fieldMap);
+  if (!map) return values || [];
+  return (values || []).filter(([k]) => map[k]).map(([k, v]) => [map[k], v]);
 }
 
 // Every saved form across her Form service accounts (archived ones, and forms

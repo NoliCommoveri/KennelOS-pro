@@ -166,8 +166,10 @@ db.version(3).stores({
 
 // --- Device-only tables ---------------------------------------------------
 // `device_secrets` holds this device's unlocked private-vault key as a
-// CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js is its only
-// reader/writer). It is NOT kennel data: it is never in exportAll, the JSON/
+// CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js reads and
+// writes those rows), and her Jotform API keys, one `jotform:<account id>` row
+// per connected Form service account (Integrations plan §2.1b;
+// data/jotformKeyStore.js). It is NOT kennel data: it is never in exportAll, the JSON/
 // Dropbox backups, the cloud snapshot, a file restore or the sample manifest,
 // and it has no syncRegistry entry. Reset App and remote erase still clear it
 // (appReset.js clears every table). Code that means "the kennel's records"

@@ -9,7 +9,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel } from '../data/processingFees.js';
-import { REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, DISPOSITION, DOG_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
+import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, DISPOSITION, DOG_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, selectModal, promptModal, dogRefHtml } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
@@ -494,7 +494,13 @@ async function renderHeaderActions() {
   const invoiceBtn = editionFlags.invoicing
     ? '<button class="btn btn-sm" id="btn-invoice">Invoice / Receipt</button>'
     : '';
+  // Her own payment link (Integrations plan §4, Pro: it lives on an Account),
+  // while the sale is still open.
+  const payBtn = editionFlags.accounts && isOpenSale(s)
+    ? '<button class="btn btn-sm" id="btn-pay-link">Send payment link</button>'
+    : '';
   els.headerActions.innerHTML = `
+    ${payBtn}
     ${invoiceBtn}
     ${puppyRecordBtn}
     <button class="btn btn-sm" id="btn-archive">${archiveLabel}</button>
@@ -506,6 +512,20 @@ async function renderHeaderActions() {
       try {
         const { openInvoiceGenerator } = await import('../assets/invoiceGenerator.js');
         await openInvoiceGenerator({ preselect: { source: 'sale', id: s.id } });
+      } catch (err) { showError(err.message || String(err)); }
+    };
+  }
+  const pay = document.getElementById('btn-pay-link');
+  if (pay) {
+    pay.onclick = async () => {
+      clearError();
+      try {
+        const { openPaymentRequest } = await import('../assets/paymentRequestUI.js');
+        // Paying through an account fills an empty Sold / paid through: show it.
+        if (await openPaymentRequest({ saleId: s.id }) && ctx.mode === 'view') {
+          ctx.original = await saleRepo.getById(s.id);
+          renderAll();
+        }
       } catch (err) { showError(err.message || String(err)); }
     };
   }

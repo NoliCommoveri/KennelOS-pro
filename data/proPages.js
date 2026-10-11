@@ -80,6 +80,9 @@ export const PRO_ONLY_STANDALONE = [
   'assets/waitlistEmailUI.js',
   // "Review sale & send" on the waitlist family page (Integrations plan §2.6).
   'assets/pickToSend.js',
+  // "Send payment link" (Integrations plan §4): the Sale page imports it only when
+  // editionFlags.accounts is on, and the Invoice page is Pro.
+  'assets/paymentRequestUI.js',
   // Invoice / receipt document model + its PDF renderer (Waitlist Spec §15.2),
   // used only by the Pro invoice page and the waitlist family page, and the
   // vendored jsPDF they load on demand.

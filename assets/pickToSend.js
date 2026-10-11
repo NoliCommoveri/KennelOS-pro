@@ -4,7 +4,9 @@
 //   1. Sale: registration, price, deposit, transport, sold through (Good Dog…)
 //      with its processing fee (plan §5), balance due date, notes;
 //   2. Contract: one of her contract forms (§2.1a), its link prefilled;
-//   3. Send: one message with the deposit, how to pay, the contract link and the
+//   3. Send: one message with the deposit, how to pay (the payment link and
+//      instructions of the account step 1 says it's paid through, plan §4, then
+//      her waitlist payment instructions), the contract link and the
 //      invoice PDF, which she sends herself: the share sheet (PDF attached, where
 //      the device can share files), her email app, or copy + download.
 // Using any of those marks the contract sent, stamps the offer's
@@ -22,6 +24,7 @@ import { expectedPricing } from '../data/saleDefaults.js';
 import { rankForms, splitName } from '../data/contractForms.js';
 import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, balanceDueOn } from '../data/contractSend.js';
 import { depositRequestMessage } from '../data/depositRequest.js';
+import { saleChannelPayAccount } from '../data/paymentLinks.js';
 import { logOwnMessage } from '../data/waitlistOutbox.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney } from './ui.js';
@@ -100,7 +103,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           ${field('Price', `<input id="ps-price" type="number" min="0" step="0.01" value="${esc(s.price ?? '')}">`)}
           ${field('Deposit', `<input id="ps-deposit" type="number" min="0" step="0.01" value="${esc(s.deposit_amount ?? '')}">`, offer.respond_by_date ? `Due by ${fmtDate(offer.respond_by_date)}, the end of their turn.` : '')}
           ${field('Transport fee', `<input id="ps-transport" type="number" min="0" step="0.01" value="${esc(s.transport_fee ?? '')}">`)}
-          ${field('Sold / paid through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace or payment service that keeps a fee (Good Dog, Stripe…). Set its fee on the Accounts page.')}
+          ${field('Sold / paid through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace or payment service that keeps a fee (Good Dog, Stripe…). Set its fee, and the payment link the message sends, on the Accounts page.')}
           ${field('Processing fee', `<input id="ps-fee" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount ?? '')}">`, rate ? `Suggested from ${rateLabel(rate)} of the price. Change it to what was actually charged.` : 'What the marketplace or payment service keeps of this sale.')}
           <div class="field field-wide">
             <label class="check-inline"><input id="ps-passed" type="checkbox"${s.fee_passed_to_buyer ? ' checked' : ''}> The fee is passed to the buyer in the price</label>
@@ -247,7 +250,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           who, pupName: dog?.call_name || '', litterLabel,
           deposit: sale.deposit_amount != null ? fmtMoney(sale.deposit_amount) : '',
           depositDue: offer.respond_by_date ? fmtDate(offer.respond_by_date) : '',
-          paymentText,
+          payAccount: saleChannelPayAccount(sale, accounts), paymentText,
           contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '',
           invoice: true,
           balance: rest > 0 ? fmtMoney(rest) : '', balanceDue: sale.balance_due_date ? fmtDate(sale.balance_due_date) : '',
@@ -260,6 +263,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       const sentLine = offer.deposit_request_sent_date ? `<p class="field-hint">You sent them a deposit request on ${esc(fmtDate(offer.deposit_request_sent_date))}.</p>` : '';
       shell(`<p class="field-hint" style="margin-top:0;">To ${esc(contact?.name || 'them')}${email ? ` · ${esc(email)}` : ' (no email on their contact)'}. Edit anything before it goes.</p>
         ${sentLine}
+        ${saleChannelPayAccount(sale, accounts) ? '' : '<p class="field-hint">To put a payment link in the message, set <strong>Sold / paid through</strong> in step 1 (Back) to an account with a payment link (Accounts page).</p>'}
         <div class="field"><label for="ps-subject">Subject</label><input id="ps-subject" type="text" value="${esc(message.subject)}"></div>
         <div class="field"><label for="ps-body">Message</label><textarea id="ps-body" rows="14" style="width:100%; font-family:inherit;">${esc(message.body)}</textarea></div>
         <p class="field-hint">${share

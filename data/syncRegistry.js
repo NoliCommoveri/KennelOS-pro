@@ -236,8 +236,13 @@ export const SYNC_REGISTRY = Object.freeze({
       // the referral fields are already cloud, made to be handed out.
       'share_with_families',
       // Her contract forms (Integrations plan §2.1a, D15): type, her label and the
-      // form's public share link. Nothing about anyone else.
-      'contract_forms'
+      // form's public share link, and for a form picked through Connect Jotform
+      // (§2.1b) its form id and her field names (field_map). Nothing about anyone
+      // else; the API key itself is device-only (device_secrets).
+      'contract_forms',
+      // Her own payment link and payment instructions (Integrations plan §4,
+      // Level 0; D9: payment-link refs are cloud): written to be sent to buyers.
+      'payment_link', 'payment_instructions'
     ],
     private: ['username', 'password', 'customer_id', 'notes', 'fee_note'],
     pending: []

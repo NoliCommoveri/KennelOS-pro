@@ -1,9 +1,11 @@
 // depositRequest.js — the one message that goes to a family once they've picked
 // a pup from the waitlist (Integrations plan §2.6): the deposit and when it's due,
-// how to pay (her payment instructions, or a payment link once plan §4 is
-// built), the contract link to sign, and a line about the attached invoice.
+// how to pay (the sale's Sold / paid through account's payment link and
+// instructions, plan §4, and her waitlist payment instructions), the contract link to sign, and a line about the attached invoice.
 // She edits it before it goes, and sends it herself (share sheet, her email, or
 // copy). Pure: the caller formats money and dates and passes them in.
+
+import { paymentLines } from './paymentLinks.js';
 
 const text = (v) => String(v ?? '').trim();
 
@@ -13,7 +15,9 @@ const text = (v) => String(v ?? '').trim();
 //   litterLabel    its litter ("Rose × Duke, Jun 2026")
 //   deposit        the deposit, formatted ("$500.00")
 //   depositDue     when it's due, formatted
-//   paymentLink    a link to pay online (plan §4), shown before her instructions
+//   payAccount     the account the sale is paid through, when it takes payments
+//                  (plan §4): its payment link and instructions, before hers
+//   paymentLink    a bare link to pay online, when there's no payAccount
 //   paymentText    her payment instructions (the waitlist's, D21)
 //   contractLabel  the contract form's label, e.g. "Pet home contract"
 //   contractLink   its prefilled signing link
@@ -33,8 +37,9 @@ export function depositRequestMessage(p = {}) {
     lines.push('', `Deposit: ${deposit}${text(p.depositDue) ? `, due by ${text(p.depositDue)}` : ''}.`);
     if (pup) lines.push(`${pup} is held for you until then.`);
   }
-  if (text(p.paymentLink)) lines.push('', `Pay online: ${text(p.paymentLink)}`);
-  if (text(p.paymentText)) lines.push('', `${text(p.paymentLink) ? 'Or pay' : 'How to pay'}: ${text(p.paymentText)}`);
+  const pay = p.payAccount ? paymentLines(p.payAccount) : text(p.paymentLink) ? [`Pay online: ${text(p.paymentLink)}`] : [];
+  if (pay.length) lines.push('', ...pay);
+  if (text(p.paymentText)) lines.push('', `${pay.length ? 'Or pay' : 'How to pay'}: ${text(p.paymentText)}`);
   if (text(p.contractLink)) {
     lines.push('', `Please review and sign your ${text(p.contractLabel) || 'contract'}. The details are already filled in:`, text(p.contractLink));
   }

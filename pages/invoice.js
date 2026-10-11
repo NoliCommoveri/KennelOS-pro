@@ -135,6 +135,19 @@ async function main() {
   const d = await buildInvoiceDoc(req);
   if (!d) { root.innerHTML = '<p class="inv-empty">Record not found.</p>'; return; }
   render(d);
+  // An invoice for a sale can go out with her payment link (Integrations plan §4).
+  if (req.source === 'sale' && req.doc === 'invoice') {
+    const btn = document.getElementById('inv-pay-link');
+    btn.hidden = false;
+    btn.addEventListener('click', async () => {
+      try {
+        const { openPaymentRequest } = await import('../assets/paymentRequestUI.js');
+        await openPaymentRequest({ saleId: req.id });
+      } catch (e) {
+        root.insertAdjacentHTML('afterbegin', `<div class="inline-error no-print">${esc(e.message || String(e))}</div>`);
+      }
+    });
+  }
 }
 
 document.getElementById('inv-print').addEventListener('click', () => window.print());
