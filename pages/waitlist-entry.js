@@ -43,6 +43,7 @@ import {
   WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, cleanPurposes, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
@@ -325,7 +326,7 @@ function emailItemHtml(m) {
     : m.status === 'failed' ? `<span class="badge badge-red">Not sent</span>`
     : `<span class="badge badge-neutral">Waiting to send</span>`;
   return `<li style="padding:6px 0;border-top:1px solid var(--border);">
-      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.sent_at || m.at).slice(0, 10)))} · Email from you ${state}</div>
+      <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.sent_at || m.at).slice(0, 10)))} · ${m.via === 'own' ? 'Sent by you (your own email or messages)' : `Email from you ${state}`}</div>
       <div><strong>${esc(m.subject)}</strong></div>
       <details><summary class="faint">The message</summary><div>${multiline(m.body)}</div></details>
       ${m.status === 'failed' ? `<p class="field-hint" style="margin:2px 0;">${esc(emailErrorText(m.error))} <button class="btn btn-sm" data-email-retry="${esc(m.id)}">Retry</button></p>` : ''}
@@ -1050,9 +1051,27 @@ async function onOfferOutcome(offer, outcome) {
     const message = out.depositDone
       ? [`${name} is placed.`, ...offerChangeLines(out.res)].join('\n\n')
       : `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${fmtDate(offer.respond_by_date)}. Send them the deposit details (the sale's invoice is under Documents on this page). Record "Deposit received" when it arrives.`;
+    if (!out.depositDone && canPickToSend()) {
+      if (await confirmModal({ title: 'Pick recorded', message: `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${fmtDate(offer.respond_by_date)}.\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' })) {
+        await onOfferOutcome(out.res.offer, 'send');
+      }
+      return;
+    }
     if (await confirmModal({ title: out.depositDone ? 'Deposit received' : 'Pick recorded', message: `${message}\n\nOpen the sale?`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
       location.href = `sale.html?id=${encodeURIComponent(saleId)}`;
     }
+    return;
+  }
+  if (outcome === 'send') {
+    const { openPickToSend } = await import('../assets/pickToSend.js');
+    const fresh = (await waitlistOfferRepo.getById(offer.id)) || offer;
+    const litterFor = ctx.litters.find((l) => l.id === fresh.litter_id);
+    if (await openPickToSend({
+      offer: fresh, entry: e, contact: ctx.contact,
+      litterLabel: litterFor ? litterLabel(litterFor) : '',
+      paymentText: ctx.config.payment_instructions || '',
+      kennelName: ctx.kennel?.kennel_name || ''
+    })) await afterAction();
     return;
   }
   if (outcome === 'deposit') {
@@ -1111,12 +1130,19 @@ async function onOfferOutcome(offer, outcome) {
   ]);
 }
 
+// "Review sale & send" (Integrations plan §2.6) needs contracts and invoices.
+const canPickToSend = () => editionFlags.contracts && editionFlags.invoicing;
+
 // The buttons under one offer: what she can do with it now.
 function offerButtons(o, today) {
   const btn = (oc, label, primary = false, title = '') => `<button class="btn ${primary ? 'btn-primary ' : ''}btn-sm" data-oc="${oc}" data-offer="${esc(o.id)}"${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</button>`;
   let list = [];
   if (isAwaitingDeposit(o)) {
-    list = [btn('deposit', 'Deposit received…', true), btn('change', 'Change pup…'), btn('passed', 'Passed'), btn('no_response', 'No deposit'), btn('voided', 'Void')];
+    const send = canPickToSend() && o.sale_id;
+    list = [
+      ...(send ? [btn('send', o.deposit_request_sent_date ? 'Review sale & send again…' : 'Review sale & send…', true)] : []),
+      btn('deposit', 'Deposit received…', !send), btn('change', 'Change pup…'), btn('passed', 'Passed'), btn('no_response', 'No deposit'), btn('voided', 'Void')
+    ];
   } else if (o.outcome === 'open') {
     list = [btn('pick', 'Picked a pup…', true), btn('passed', 'Passed'), btn('no_response', 'No response'), btn('voided', 'Void')];
   } else if (canSwitchAcceptedPick(o, ctx.kennelOffers)) {
@@ -1131,7 +1157,7 @@ function offerButtons(o, today) {
 function offerStatusHtml(o) {
   const sale = o.sale_id && isAwaitingDeposit(o) ? ` · <a href="sale.html?id=${encodeURIComponent(o.sale_id)}">sale</a>` : '';
   return isAwaitingDeposit(o)
-    ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>`
+    ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>${o.deposit_request_sent_date ? ` <span class="badge badge-blue">Deposit request sent ${esc(fmtDate(o.deposit_request_sent_date))}</span>` : ''}`
     : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${o.pass_reason ? ` <span class="faint">${esc(reasonText(o.pass_reason))}</span>` : ''}`;
 }
 const litterLink = (id) => {

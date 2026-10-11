@@ -19,7 +19,7 @@ import { litterRepo } from './litterRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { waitlistConfig, entryName, overallPositions } from './waitlistRules.js';
 import { entryEmail } from './waitlistProjection.js';
-import { draftEmail, requestPhrase, emailProblem, EMAIL_KINDS } from './waitlistEmails.js';
+import { draftEmail, requestPhrase, emailProblem, EMAIL_KINDS, EMAIL_SUBJECT_MAX, EMAIL_BODY_MAX } from './waitlistEmails.js';
 import { MESSAGES_KEPT } from './waitlistActions.js';
 import { isWaitlistOnlineOffered } from './cloud/cloudConfig.js';
 import { editionFlags } from './editionConfig.js';
@@ -101,6 +101,22 @@ export async function queueEmail(entryId, { kind, subject, body }) {
   const message = {
     id: `em-${crypto.randomUUID()}`, at: nowISO(), from: 'breeder', kind: 'email', email_kind: kind,
     subject: subject.replace(/\s+/g, ' ').trim(), body: body.trim(), status: 'queued', sent_at: null, error: null, read: true
+  };
+  await waitlistEntryRepo.update(entryId, { messages: [...(entry.messages || []), message].slice(-MESSAGES_KEPT) });
+  return message;
+}
+
+// A message she sent the family herself (share sheet, her own email, or copied),
+// logged beside the emails KennelOS sent so the family page shows it. Already
+// sent, so sendQueuedEmails never picks it up: `via: 'own'`.
+export async function logOwnMessage(entryId, { kind, subject = '', body = '' }) {
+  const entry = await waitlistEntryRepo.getById(entryId);
+  if (!entry) throw new Error('That waitlist entry no longer exists.');
+  const at = nowISO();
+  const message = {
+    id: `em-${crypto.randomUUID()}`, at, from: 'breeder', kind: 'email', email_kind: kind, via: 'own',
+    subject: String(subject).replace(/\s+/g, ' ').trim().slice(0, EMAIL_SUBJECT_MAX), body: String(body).trim().slice(0, EMAIL_BODY_MAX),
+    status: 'sent', sent_at: at, error: null, read: true
   };
   await waitlistEntryRepo.update(entryId, { messages: [...(entry.messages || []), message].slice(-MESSAGES_KEPT) });
   return message;

@@ -3,14 +3,21 @@
 // Owns all three canonical links (related_sale_id, related_stud_service_id,
 // related_dog_id); linking is a plain field on this record, never a two-way
 // sync (Stage4 Revision v2 §5).
+// "Send for signature" (Integrations plan §2.1a): picks one of her contract forms
+// (saved on an Account), builds its link with the contract's facts prefilled
+// (contractForms.js, on the device), opens the composer, and marks it sent.
 import { contractRepo, DOG_LINK_TYPES, CONTACT_LINK_TYPES, ReferenceBlockedError } from '../data/contractRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { documentRepo } from '../data/documentRepo.js';
-import { CONTRACT_TYPE, CONTRACT_STATUS, SEX, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate, param, confirmModal } from '../assets/ui.js';
+import { rankForms, splitName, signatureMessage } from '../data/contractForms.js';
+import { SENDABLE_STATUSES, loadContractForms, gatherContractFacts, buildSignatureLink, markContractSent } from '../data/contractSend.js';
+import { editionFlags } from '../data/editionConfig.js';
+import { CONTRACT_TYPE, CONTRACT_STATUS, CONTRACT_FORM_TYPE, SEX, descriptor } from '../data/vocab.js';
+import { esc, badge, fmtDate, param, confirmModal, alertModal } from '../assets/ui.js';
+import { openComposer } from '../assets/messageComposer.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 import { resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { renderScopeNotice } from '../assets/kennelScopeUI.js';
@@ -126,10 +133,20 @@ function renderView() {
       ${c.contract_type !== 'lease' ? row('Related sale', sale ? `<a href="sale.html?id=${encodeURIComponent(sale.id)}">${esc(saleLabel(sale))}</a>` : '') : ''}
       ${c.contract_type !== 'lease' ? row('Related stud service', ss ? `<a href="stud-service.html?id=${encodeURIComponent(ss.id)}">${esc(studServiceLabel(ss))}</a>` : '') : ''}
       ${row('Document link', c.document_url ? `<a href="${esc(c.document_url)}" target="_blank" rel="noopener noreferrer">${esc(c.document_url)}</a>` : '')}
+      ${c.esign_url ? row('Sent for signature', `${esc(c.esign_form_label || 'Contract form')}${c.esign_sent_date ? ` · ${esc(fmtDate(c.esign_sent_date))}` : ''}
+        <button class="btn btn-sm" id="btn-copy-esign" style="margin-left:6px;">Copy link again</button>`) : ''}
       ${row('Terms summary', c.terms_summary ? esc(c.terms_summary).replace(/\n/g, '<br>') : '')}
       ${row('Notes', c.notes ? esc(c.notes).replace(/\n/g, '<br>') : '')}
     </dl>
     <div id="contract-docs" style="margin-top:18px;"></div>`;
+  const copyBtn = document.getElementById('btn-copy-esign');
+  if (copyBtn) copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(c.esign_url);
+      copyBtn.textContent = 'Copied ✓';
+      setTimeout(() => { copyBtn.textContent = 'Copy link again'; }, 1500);
+    } catch { showError(`Couldn't copy. The link is: ${c.esign_url}`); }
+  };
   renderContractDocs();
 }
 
@@ -276,15 +293,26 @@ function readForm() {
 }
 
 // --- Actions -------------------------------------------------------------
+// Contract forms live on Accounts, so they're offered wherever Accounts is.
+const canSend = (c) => editionFlags.accounts && SENDABLE_STATUSES.includes(c?.status || 'draft');
+
 function renderProfileActions() {
   if (ctx.mode === 'view') {
-    els.profileActions.innerHTML = `<button class="btn btn-sm" id="btn-edit">Edit</button>`;
+    const c = ctx.original;
+    els.profileActions.innerHTML = `
+      ${canSend(c) && !c.is_archived ? `<button class="btn btn-primary btn-sm" id="btn-send">${c.esign_url ? 'Send again' : 'Send for signature'}</button>` : ''}
+      <button class="btn btn-sm" id="btn-edit">Edit</button>`;
     document.getElementById('btn-edit').onclick = enterEdit;
+    const send = document.getElementById('btn-send');
+    if (send) send.onclick = () => sendForSignature(ctx.original);
   } else {
     els.profileActions.innerHTML = `
       <button class="btn btn-primary btn-sm" id="btn-save">Save</button>
+      ${ctx.mode === 'new' && editionFlags.accounts ? '<button class="btn btn-sm" id="btn-save-send">Save &amp; send for signature</button>' : ''}
       <button class="btn btn-sm" id="btn-cancel">Cancel</button>`;
     document.getElementById('btn-save').onclick = save;
+    const saveSend = document.getElementById('btn-save-send');
+    if (saveSend) saveSend.onclick = () => save({ thenSend: true });
     document.getElementById('btn-cancel').onclick = cancel;
   }
 }
@@ -328,18 +356,18 @@ function cancel() {
 // the first call's await chain has a chance to disable anything itself —
 // each call would otherwise run to completion independently, e.g. creating
 // two contracts from one "Save" tap.
-async function save() {
-  const btn = document.getElementById('btn-save');
-  if (btn?.disabled) return;
-  if (btn) btn.disabled = true;
+async function save({ thenSend = false } = {}) {
+  const btns = ['btn-save', 'btn-save-send'].map((id) => document.getElementById(id)).filter(Boolean);
+  if (btns.some((b) => b.disabled)) return;
+  btns.forEach((b) => { b.disabled = true; });
   try {
-    await doSave();
+    await doSave({ thenSend });
   } finally {
-    if (btn) btn.disabled = false;
+    btns.forEach((b) => { b.disabled = false; });
   }
 }
 
-async function doSave() {
+async function doSave({ thenSend = false } = {}) {
   clearError();
   const candidate = readForm();
   try {
@@ -356,7 +384,7 @@ async function doSave() {
         ]
       });
       const saved = await contractRepo.create(candidate);
-      location.href = `contract.html?id=${encodeURIComponent(saved.id)}`;
+      location.href = `contract.html?id=${encodeURIComponent(saved.id)}${thenSend ? '&send=1' : ''}`;
       return;
     }
     const saved = await contractRepo.update(ctx.original.id, candidate);
@@ -385,6 +413,95 @@ async function doDelete() {
   } catch (e) {
     if (e instanceof ReferenceBlockedError) { showError(e.message); await renderHeaderActions(); }
     else showError(e.message || String(e));
+  }
+}
+
+// --- Send for signature (Integrations plan §2.1a) -----------------------------
+
+// Pick a form, see what it fills. → Promise<form | null>.
+function pickForm(c, ranked, facts) {
+  return new Promise((resolve) => {
+    let showAll = !ranked.matching.length;
+    let picked = ranked.matching[0] || ranked.others[0];
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    document.body.appendChild(overlay);
+    const done = (v) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    function onKey(e) { if (e.key === 'Escape') done(null); }
+    document.addEventListener('keydown', onKey);
+    const option = (f) => `<label class="check-inline" style="display:flex; gap:8px; align-items:center; padding:4px 0;">
+      <input type="radio" name="cf-pick" value="${esc(f.id)}"${f === picked ? ' checked' : ''}>
+      <span>${esc(f.label)} ${badge(CONTRACT_FORM_TYPE, f.form_type)}${f.account_name ? ` <span class="muted" style="font-size:13px;">· ${esc(f.account_name)}</span>` : ''}</span></label>`;
+    const draw = () => {
+      const { values, url } = buildSignatureLink(picked, facts);
+      overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:620px;">
+        <h2 style="margin-top:0;">Send for signature</h2>
+        <p class="field-hint" style="margin-top:0;">Pick the form to send. The details below go into it, in the link itself.</p>
+        ${ranked.matching.length ? ranked.matching.map(option).join('') : `<p class="muted">None of your forms is for a ${esc(descriptor(CONTRACT_TYPE, c.contract_type).label.toLowerCase())} contract, so here are all of them.</p>`}
+        ${ranked.others.length && ranked.matching.length ? `<button type="button" class="btn btn-sm" id="cf-all" style="margin:4px 0;">${showAll ? 'Hide other forms' : `Show all forms (${ranked.others.length} more)`}</button>` : ''}
+        ${showAll ? ranked.others.map(option).join('') : ''}
+        <h3 style="font-size:15px; margin:14px 0 4px;">Filled in</h3>
+        <dl class="dl-meta" style="font-size:14px; max-height:220px; overflow:auto;">
+          ${values.map(([k, v]) => `<dt><code>${esc(k)}</code></dt><dd>${esc(v)}</dd>`).join('')}
+        </dl>
+        <p class="field-hint">Only fields your form has (by Unique Name) get filled; the field names are listed on the Accounts page.</p>
+        ${url.length > 2000 ? '<div class="inline-warn">This link is very long, and some browsers or email apps may cut it off. Remove fields you don\'t need from the form, or shorten long values.</div>' : ''}
+        <div class="form-actions">
+          <button class="btn btn-primary" id="cf-go">Continue</button>
+          <a class="btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Preview form</a>
+          <button class="btn" id="cf-cancel">Cancel</button>
+        </div>
+      </div>`;
+      const $ = (sel) => overlay.querySelector(sel);
+      overlay.querySelectorAll('input[name="cf-pick"]').forEach((r) => r.addEventListener('change', () => {
+        picked = [...ranked.matching, ...ranked.others].find((f) => f.id === r.value) || picked;
+        draw();
+      }));
+      $('#cf-all')?.addEventListener('click', () => { showAll = !showAll; draw(); });
+      $('#cf-go').addEventListener('click', () => done({ form: picked, url }));
+      $('#cf-cancel').addEventListener('click', () => done(null));
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+    draw();
+  });
+}
+
+async function sendForSignature(c) {
+  clearError();
+  try {
+    const forms = await loadContractForms();
+    if (!forms.length) {
+      await alertModal({
+        title: 'No contract forms yet',
+        message: 'On the Accounts page (Storage → Accounts), add your form service (for example Jotform) as an account of type Form service, add your contract forms to it (for example your pet home and breeding rights contracts), then come back here to send one.'
+      });
+      return;
+    }
+    const facts = await gatherContractFacts(c);
+    const sale = facts.sale;
+    const choice = await pickForm(c, rankForms(forms, c, sale), facts);
+    if (!choice) return;
+    const signer = facts.buyer || facts.partner;
+    const subject = facts.puppy?.call_name || facts.dog?.call_name
+      || (facts.studDog && facts.studDam ? `${facts.studDog.call_name} × ${facts.studDam.call_name}` : '');
+    const msg = signatureMessage({
+      who: signer ? splitName(signer.name)[0] : '',
+      kennelName: facts.kennel?.kennel_name || '',
+      formLabel: choice.form.label,
+      subject,
+      link: choice.url
+    });
+    const used = await openComposer({
+      title: `Send ${choice.form.label}`,
+      name: signer?.name || '', email: signer?.email || '', phone: signer?.phone || '',
+      subject: msg.subject, body: msg.body,
+      hint: 'Once you\'ve sent it, the contract is marked Sent. Mark it Signed when it comes back.'
+    });
+    if (!used) return;
+    ctx.original = await markContractSent(c, choice.form, choice.url);
+    renderAll();
+  } catch (e) {
+    showError(e.message || String(e));
   }
 }
 
@@ -449,6 +566,11 @@ async function main() {
   // one-click switch. Renders nothing in the ordinary in-scope case.
   renderScopeNotice(document.getElementById('scope-notice'), c, { kind: 'contract' });
   renderAll();
+  // "Save & send for signature" on a new contract lands here with ?send=1.
+  if (param('send') && canSend(c)) {
+    history.replaceState(null, '', `contract.html?id=${encodeURIComponent(c.id)}`);
+    sendForSignature(c);
+  }
 }
 
 main();

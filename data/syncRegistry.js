@@ -174,9 +174,14 @@ export const SYNC_REGISTRY = Object.freeze({
     cloud: [
       'kennel_id', 'contract_type', 'status', 'title', 'related_sale_id',
       'related_stud_service_id', 'related_dog_id', 'related_contact_id',
-      'signed_date', 'lease_start_date', 'lease_end_date'
+      'signed_date', 'lease_start_date', 'lease_end_date',
+      // Sent for signature through one of her contract forms (Integrations plan
+      // §2.1a, D9 / D15): which service, which form (its label then), and when.
+      'esign_provider', 'esign_form_label', 'esign_sent_date'
     ],
-    private: ['document_url', 'terms_summary', 'notes'],
+    // The link sent carries the prefilled facts in it (buyer's name, email, phone,
+    // address, price), so it's private like those fields.
+    private: ['document_url', 'terms_summary', 'notes', 'esign_url'],
     pending: []
   },
 
@@ -229,7 +234,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'fee_percent', 'fee_fixed', 'fee_passed_to_buyer_default',
       // Whether her referral link/code shows to families (Integrations plan §3):
       // the referral fields are already cloud, made to be handed out.
-      'share_with_families'
+      'share_with_families',
+      // Her contract forms (Integrations plan §2.1a, D15): type, her label and the
+      // form's public share link. Nothing about anyone else.
+      'contract_forms'
     ],
     private: ['username', 'password', 'customer_id', 'notes', 'fee_note'],
     pending: []
@@ -300,7 +308,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'entry_id', 'litter_id', 'kennel_id', 'offered_date', 'respond_by_date',
       'eligible_dog_ids', 'outcome', 'outcome_date', 'chosen_dog_id', 'counts_as_pass',
       'picked_date', 'sale_id', // §9: "every field except notes"
-      'turn_id' // the turn the row belongs to (Spec §16.1): how the list ran, like outcome
+      'turn_id', // the turn the row belongs to (Spec §16.1): how the list ran, like outcome
+      // When she sent the family their deposit request (Integrations plan §2.6, D20):
+      // a date, like picked_date.
+      'deposit_request_sent_date'
     ],
     // pass_reason: the family's own reason for a pass (Spec §16.5, decided private:
     // it can name money or health).

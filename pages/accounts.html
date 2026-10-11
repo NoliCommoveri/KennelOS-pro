@@ -27,6 +27,15 @@
     .acct-masked { white-space: nowrap; letter-spacing: .05em; }
     .acct-instructions { white-space: pre-wrap; font-size: 14px; color: var(--text-muted); margin-top: 2px; }
     .acct-actions { margin-top: auto; padding-top: 4px; }
+    .acct-k-wide { flex: 0 0 auto; }
+    .acct-k-code { flex: 0 0 170px; font-size: 12px; overflow-wrap: anywhere; }
+    .cf-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(0,1.4fr) auto; gap: 6px; margin-bottom: 6px; }
+    @media (max-width: 640px) {
+      .cf-row { grid-template-columns: minmax(0,1fr) auto; }
+      .cf-row .cf-type { grid-column: 1; } .cf-row [data-cf-remove] { grid-column: 2; grid-row: 1; }
+      .cf-row .cf-label, .cf-row .cf-url { grid-column: 1 / -1; }
+      .acct-k-code { flex-basis: 130px; }
+    }
   </style>
 </head>
 <body>

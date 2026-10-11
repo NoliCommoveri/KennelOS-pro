@@ -78,6 +78,8 @@ export const PRO_ONLY_STANDALONE = [
   // The "Email the family?" preview (W2 step 6), imported by the waitlist pages,
   // the picks panel and (dynamically) Today's waitlist nudges.
   'assets/waitlistEmailUI.js',
+  // "Review sale & send" on the waitlist family page (Integrations plan §2.6).
+  'assets/pickToSend.js',
   // Invoice / receipt document model + its PDF renderer (Waitlist Spec §15.2),
   // used only by the Pro invoice page and the waitlist family page, and the
   // vendored jsPDF they load on demand.

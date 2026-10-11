@@ -6,11 +6,14 @@
 // keeps when it's a sales channel (fee_percent + fee_fixed, Integrations plan §5;
 // the Sale form suggests a sale's processing fee from it). Add/Edit is a modal;
 // archive/delete like any entity — delete is blocked while an expense names the
-// account (ACCOUNT_REFERENCES), so archive it then. Reads/writes only through
-// accountRepo / expenseRepo.
+// account (ACCOUNT_REFERENCES), so archive it then. Her contract forms (Jotform,
+// Integrations plan §2.1a) live on a Form service account (that type only): a type, her label and the
+// form's link per row, which the Contract page's "Send for signature" offers.
+// Reads/writes only through accountRepo / expenseRepo.
 import { accountRepo } from '../data/accountRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
-import { ACCOUNT_TYPE } from '../data/vocab.js';
+import { ACCOUNT_TYPE, CONTRACT_FORM_TYPE } from '../data/vocab.js';
+import { cleanForms, formLink, PREFILL_FIELDS } from '../data/contractForms.js';
 import { feeRate, rateLabel } from '../data/processingFees.js';
 import { sharedReferrals } from '../data/referralShare.js';
 import { esc, badge, fmtMoney, confirmModal, alertModal } from '../assets/ui.js';
@@ -94,6 +97,7 @@ function cardHtml(a) {
     ${referral || a.referral_instructions ? `<div class="acct-section"><div class="acct-section-title">Referral — to share${sharedReferrals([a]).length ? ' <span class="badge badge-green">Shown to families</span>' : ''}</div>${referral}
       ${a.referral_instructions ? `<div class="acct-instructions">${esc(a.referral_instructions)}</div>` : ''}</div>` : ''}
     ${a.notes ? `<div class="acct-section"><div class="acct-instructions">${esc(a.notes)}</div></div>` : ''}
+    ${formsHtml(a)}
     ${feeHtml(a)}
     ${spendHtml(a)}
     <div class="pill-row acct-actions">
@@ -102,6 +106,44 @@ function cardHtml(a) {
       <button class="btn btn-danger btn-sm" data-act="delete" data-id="${esc(a.id)}">Delete</button>
     </div>
   </article>`;
+}
+
+// Her contract forms on this account: type, label, and a link to open the form.
+function formsHtml(a) {
+  if (a.account_type !== 'form_service') return '';
+  const forms = cleanForms(a.contract_forms);
+  if (!forms.length) return '';
+  return `<div class="acct-section"><div class="acct-section-title">Contract forms</div>
+    ${forms.map((f) => `<div class="acct-row">
+      <span class="acct-k acct-k-wide">${badge(CONTRACT_FORM_TYPE, f.form_type)}</span>
+      <span class="acct-v">${esc(f.label)}</span>
+      <a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">Open</a>
+    </div>`).join('')}
+  </div>`;
+}
+
+// The field names a contract form can use, per group, each with Copy (§2.1a).
+function fieldNamesHtml() {
+  const group = (title, rows) => `<div style="margin-top:8px;"><strong>${esc(title)}</strong>
+    ${rows.map(([k, what]) => `<div class="acct-row"><code class="acct-k acct-k-code">${esc(k)}</code><span class="acct-v muted">${esc(what)}</span><button type="button" class="btn btn-sm" data-copy-name="${esc(k)}">Copy</button></div>`).join('')}</div>`;
+  return `<details class="field-wide" style="margin-top:6px;"><summary>Field names KennelOS fills in</summary>
+    <p class="field-hint">In Jotform, open each field's settings and set its <strong>Unique Name</strong> (under Advanced) to one of these. KennelOS fills those fields when you send the form; fields with other names are left for the signer. Make prefilled fields read-only in Jotform so they can't be changed, and make the reference fields hidden.</p>
+    ${group('Every contract', PREFILL_FIELDS.every)}
+    ${group('Sale contracts (pet home, breeding rights, deposit, co-own sale)', PREFILL_FIELDS.sale)}
+    ${group('Stud service contracts', PREFILL_FIELDS.stud_service)}
+    ${group('Co-own, lease, foster and other contracts', PREFILL_FIELDS.dog)}
+  </details>`;
+}
+
+function formRowHtml(f = {}) {
+  const typeOptions = CONTRACT_FORM_TYPE
+    .map((t) => `<option value="${esc(t.value)}"${t.value === f.form_type ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
+  return `<div class="cf-row" data-id="${esc(f.id || '')}">
+    <select class="cf-type" aria-label="Contract form type"><option value="">Type…</option>${typeOptions}</select>
+    <input class="cf-label" type="text" aria-label="Label" value="${esc(f.label || '')}" placeholder="Label, e.g. Pet home – in state">
+    <input class="cf-url" type="url" aria-label="Form link" value="${esc(f.url || '')}" placeholder="https://form.jotform.com/…">
+    <button type="button" class="btn btn-sm" data-cf-remove aria-label="Remove this form">✕</button>
+  </div>`;
 }
 
 // A sales channel's fee (Good Dog, Stripe…): the rate, whether she usually passes
@@ -218,6 +260,13 @@ function openForm(existing = null) {
       ${field('Type', `<select id="af-type">${typeOptions}</select>`)}
       ${field('Website', `<input id="af-website" type="text" value="${esc(a.website)}" placeholder="e.g. chewy.com">`, { wide: true })}
     </div>
+    <div id="af-forms-section"${a.account_type === 'form_service' ? '' : ' hidden'}>
+    <h3 style="font-size:15px; margin:14px 0 4px;">Contract forms</h3>
+    <p class="field-hint" style="margin-top:0;">Your own signable forms on this service: pick what kind of contract each one is, give it a label, and paste its link. A contract's <strong>Send for signature</strong> offers the matching ones, with the details filled in.</p>
+    <div id="af-forms">${cleanForms(a.contract_forms).map(formRowHtml).join('')}</div>
+    <button type="button" class="btn btn-sm" id="af-form-add">+ Add ${cleanForms(a.contract_forms).length ? 'another ' : 'a '}contract form</button>
+    ${fieldNamesHtml()}
+    </div>
     <h3 style="font-size:15px; margin:14px 0 4px;">Your login</h3>
     <p class="field-hint" style="margin-top:0;">Just for you. These never go to cloud backup unencrypted — only inside your private vault, if you've turned it on.</p>
     <div class="form-grid">
@@ -262,6 +311,38 @@ function openForm(existing = null) {
     pw.type = pw.type === 'password' ? 'text' : 'password';
     e.currentTarget.textContent = pw.type === 'password' ? 'Show' : 'Hide';
   });
+  const formsBox = $('#af-forms');
+  // Contract forms belong to a Form service account only (Jotform…).
+  const isFormService = () => $('#af-type').value === 'form_service';
+  $('#af-type').addEventListener('change', () => { $('#af-forms-section').hidden = !isFormService(); });
+  $('#af-form-add').addEventListener('click', (e) => {
+    formsBox.insertAdjacentHTML('beforeend', formRowHtml());
+    e.currentTarget.textContent = '+ Add another contract form';
+    formsBox.lastElementChild.querySelector('.cf-type').focus();
+  });
+  overlay.addEventListener('click', async (e) => {
+    const rm = e.target.closest('[data-cf-remove]');
+    if (rm) { rm.closest('.cf-row').remove(); return; }
+    const cp = e.target.closest('[data-copy-name]');
+    if (cp) await copy(cp.dataset.copyName, cp);
+  });
+  // The rows as typed; a row left wholly blank is dropped, a half-filled one is an error.
+  function readForms() {
+    const out = []; const problems = [];
+    formsBox.querySelectorAll('.cf-row').forEach((row, i) => {
+      const f = {
+        id: row.dataset.id || crypto.randomUUID(),
+        form_type: row.querySelector('.cf-type').value,
+        label: row.querySelector('.cf-label').value.trim(),
+        url: row.querySelector('.cf-url').value.trim()
+      };
+      if (!f.form_type && !f.label && !f.url) return;
+      if (!f.form_type) problems.push(`Contract form ${i + 1}: pick its type.`);
+      if (!formLink(f.url)) problems.push(`Contract form ${i + 1}: paste the form's link (starting https://).`);
+      out.push(f);
+    });
+    return { forms: problems.length ? null : cleanForms(out), problems };
+  }
   $('#af-save').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     if (btn.disabled) return;
@@ -286,6 +367,16 @@ function openForm(existing = null) {
     if (!data.name) {
       $('#af-error').innerHTML = `<div class="inline-error">Name is required.</div>`;
       return;
+    }
+    // Another type leaves any saved forms as they are (hidden, never offered), so
+    // switching the type back brings them back.
+    if (isFormService()) {
+      const { forms, problems } = readForms();
+      if (problems.length) {
+        $('#af-error').innerHTML = `<div class="inline-error">${problems.map(esc).join('<br>')}</div>`;
+        return;
+      }
+      data.contract_forms = forms;
     }
     btn.disabled = true;
     try {

@@ -124,6 +124,9 @@ export const ACCOUNT_TYPE = [
   { value: 'health',      label: 'Health / testing lab', badge: 'badge-red' },
   { value: 'insurance',   label: 'Insurance',           badge: 'badge-amber' },
   { value: 'software',    label: 'Software / service',  badge: 'badge-neutral' },
+  // Jotform and the like: the only type that holds contract forms (contract_forms,
+  // Integrations plan §2.1a), so it's the only one whose form shows that section.
+  { value: 'form_service', label: 'Form service',       badge: 'badge-blue' },
   { value: 'other',       label: 'Other',               badge: 'badge-gray' }
 ];
 
@@ -354,6 +357,23 @@ export const CONTRACT_TYPE = [
   { value: 'lease',        label: 'Lease',        badge: 'badge-amber' },
   { value: 'foster',       label: 'Foster',       badge: 'badge-amber' },
   { value: 'other',        label: 'Other',        badge: 'badge-gray' }
+];
+
+// The kinds of contract form she can save on an Account (Integrations plan §2.1a):
+// her own Jotform forms, each tagged with one of these so the Contract page offers
+// the right one. `contractTypes` is the CONTRACT_TYPE(s) it serves. Pet home and
+// breeding rights are both `sale` contracts, told apart by the Sale's registration
+// (`registrations`, which ranks that form first); deposit ranks first while the
+// sale's deposit is still pending. Rows are matched by value, so never rename one.
+export const CONTRACT_FORM_TYPE = [
+  { value: 'pet_home',        label: 'Pet home contract',               badge: 'badge-blue',    contractTypes: ['sale'], registrations: ['limited', 'none', ''] },
+  { value: 'breeding_rights', label: 'Breeding rights contract',        badge: 'badge-purple',  contractTypes: ['sale'], registrations: ['full'] },
+  { value: 'deposit',         label: 'Deposit / reservation agreement', badge: 'badge-neutral', contractTypes: ['sale'], saleStatuses: ['deposit_pending'] },
+  { value: 'co_own',          label: 'Co-ownership contract',           badge: 'badge-green',   contractTypes: ['co_own', 'sale'], registrations: ['co_own'] },
+  { value: 'stud_service',    label: 'Stud service contract',           badge: 'badge-purple',  contractTypes: ['stud_service'] },
+  { value: 'lease',           label: 'Lease agreement',                 badge: 'badge-amber',   contractTypes: ['lease'] },
+  { value: 'foster',          label: 'Foster / guardian home',          badge: 'badge-amber',   contractTypes: ['foster'] },
+  { value: 'other',           label: 'Other',                           badge: 'badge-gray',    contractTypes: ['other'] }
 ];
 
 // Not a locked state machine (Stage4 Revision v2 §7) — moves any direction, no

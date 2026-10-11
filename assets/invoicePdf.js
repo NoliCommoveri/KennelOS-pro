@@ -238,3 +238,12 @@ export async function downloadInvoicePdf(req) {
   renderInvoicePdf(d, JsPDF).save(d.filename);
   return d.filename;
 }
+
+// The same document as a PDF File, for the share sheet (Integrations plan §2.6:
+// the invoice goes with the deposit request). Made on the device; nothing is sent.
+export async function invoicePdfFile(req) {
+  const [{ buildInvoiceDoc }, JsPDF] = await Promise.all([import('./invoiceDoc.js'), loadJsPdf()]);
+  const d = await buildInvoiceDoc(req);
+  if (!d) throw new Error('That record no longer exists.');
+  return new File([renderInvoicePdf(d, JsPDF).output('blob')], d.filename, { type: 'application/pdf' });
+}
