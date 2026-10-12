@@ -30,6 +30,7 @@ import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
 import { sharedReferrals } from './referralShare.js';
+import { feePay, withClientRef } from './waitlistFeePay.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -149,9 +150,17 @@ function entryView(entry, ctx) {
       ...(p.litter_id ? { litter_id: p.litter_id } : { pairing_id: p.pairing_id }), date: orNull(p.date)
     })),
     fee_received_date: orNull(entry.fee_received_date),
-    // What to pay and how: only while approved and unpaid (Spec §5.3, §8.1).
+    // They paid the fee online before she approved them (Integrations plan §4): the
+    // day, so their page says so instead of asking again.
+    fee_paid_online: orNull(entry.fee_paid_online?.date),
+    // What to pay and how: only while approved and unpaid (Spec §5.3, §8.1). With
+    // her fee's Payment service set, their own Pay link (and what it charges, with
+    // a passed-on card fee) too (Integrations plan §4).
     fee_due: entry.status === 'approved' && !entry.fee_received_date && fee !== null && fee > 0
-      ? { amount: fee, due_date: orNull(entry.fee_due_date), instructions: ctx.config.payment_instructions || '', credit_policy: ctx.config.fee_credit_policy }
+      ? {
+          amount: fee, due_date: orNull(entry.fee_due_date), instructions: ctx.config.payment_instructions || '', credit_policy: ctx.config.fee_credit_policy,
+          ...(ctx.feePayFor(fee, entry.id) || {})
+        }
       : null,
     // Each item she shows on family pages (§16.4): whether they're waiting for it
     // (listen-only) and, for a born litter, whether they match its available pups.
@@ -355,8 +364,16 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
     positions: overallPositions(live, kennel.id, programsById), prefPlaces: prefPlaces(live, kennel.id, programsById, config), matches, litterLabels, hidden, notes,
-    openSaleBuyers: new Set(sales.filter((x) => x.buyer_contact_id && isOpenSale(x)).map((x) => x.buyer_contact_id))
+    openSaleBuyers: new Set(sales.filter((x) => x.buyer_contact_id && isOpenSale(x)).map((x) => x.buyer_contact_id)),
+    // A family's own Pay link for a fee of `fee` (Integrations plan §4), or null.
+    feePayFor: (fee, entryId) => {
+      const pay = feePay(kennel, accounts, fee);
+      return pay ? { pay_url: withClientRef(pay.url, entryId), pay_amount: pay.amount } : null;
+    }
   };
+  // The fee at the end of the online application (fee_link_when 'apply'): the base
+  // link, the server adds each applicant's id when it's a Stripe link.
+  const applyPay = config.fee_link_when !== 'approved' ? feePay(kennel, accounts, feeForEntry(config, null)) : null;
   const entryViews = {};
   for (const e of [...live].sort(byId)) entryViews[e.id] = entryView(e, ctx);
 
@@ -390,7 +407,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       ...(config.embed ? { embed: { origins: embedOrigins(config) } } : {}),
       // Her referral links marked "Share with families" (Integrations plan §3), for
       // every family's status page: name, link, code, instructions; none = absent.
-      ...(sharedReferrals(accounts).length ? { recommended: sharedReferrals(accounts) } : {})
+      ...(sharedReferrals(accounts).length ? { recommended: sharedReferrals(accounts) } : {}),
+      ...(applyPay ? { fee_pay: { url: applyPay.url, amount: applyPay.amount, ref_param: applyPay.stripe, instructions: config.payment_instructions || '' } } : {})
     },
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
     // the page is served (publicList, familyPages.listView).

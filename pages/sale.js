@@ -8,7 +8,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
-import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel } from '../data/processingFees.js';
+import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
 import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily } from '../data/waitlistRules.js';
 import { promptDisposition, promptReleasedPup, askRegistrationPrice } from '../assets/salePrompts.js';
@@ -38,7 +38,8 @@ const blankSale = () => ({
   lead_source: '', referred_by_contact_id: '', status: '', notes: '',
   transport_fee: '', deferred_boarding_amount: '', deferred_boarding_frequency: '',
   deferred_boarding_duration_days: '', end_reason: '', end_note: '',
-  sales_channel_account_id: '', processing_fee_amount: '', fee_passed_to_buyer: false
+  sales_channel_account_id: '', processing_fee_amount: '', fee_passed_to_buyer: false,
+  deposit_paid_via_account_id: '', balance_paid_via_account_id: ''
 });
 
 const ctx = {
@@ -95,14 +96,19 @@ function channelRate(draft = ctx.draft) {
   return feeRate(ctx.accountsById.get(draft.sales_channel_account_id));
 }
 
-// Fill the fee from the channel's rate when it's empty or still the amount we
-// filled in last time (so it follows a price change); never over a fee she typed.
+// The fee the sale's accounts suggest: each payment at the rate of the account
+// it's paid via, else Sold through's (processingFees.saleFeeEstimate). Null = none.
+function estimatedFee(draft = ctx.draft) {
+  return saleFeeEstimate(draft, ctx.accountsById)?.total ?? null;
+}
+
+// Fill the fee from the estimate when it's empty or still the amount we filled in
+// last time (so it follows a price change); never over a fee she typed.
 function applySuggestedFee() {
   const d = ctx.draft;
-  const rate = channelRate(d);
   const current = d.processing_fee_amount === '' || d.processing_fee_amount == null ? null : Number(d.processing_fee_amount);
   if (current != null && current !== ctx.suggestedFee) return;
-  const next = rate ? processingFee(d.price, rate) : null;
+  const next = estimatedFee(d);
   if (next == null) {
     if (current != null && current === ctx.suggestedFee) d.processing_fee_amount = '';
     ctx.suggestedFee = null;
@@ -171,15 +177,29 @@ function channelOptions(current) {
   return `<option value="">— sold directly —</option>` + opts;
 }
 
-// The fee fields of the edit form: channel (Pro), fee, passed-on flag, what she
-// nets, and the price-to-net helper.
+// Payment service accounts for a "paid via" picker (archived ones only when chosen).
+function paidViaOptions(current) {
+  const opts = ctx.accounts
+    .filter((a) => a.account_type === 'payment_service' && (!a.is_archived || a.id === current))
+    .map((a) => {
+      const rate = feeRate(a);
+      return `<option value="${esc(a.id)}"${a.id === current ? ' selected' : ''}>${esc(a.name)}${rate ? ` (${esc(rateLabel(rate))})` : ''}${a.is_archived ? ' (archived)' : ''}</option>`;
+    }).join('');
+  return `<option value="">— not set —</option>` + opts;
+}
+
+// The fee fields of the edit form: channel and how each payment is taken (Pro),
+// fee, passed-on flag, what she nets, and the price-to-net helper.
 function feeFields(s) {
   const rate = channelRate(s);
+  const estimated = estimatedFee(s);
   const channel = editionFlags.accounts
-    ? field('Sold / paid through', `<select id="f-sales_channel_account_id">${channelOptions(s.sales_channel_account_id)}</select>`, { hint: 'A marketplace or payment service that keeps a fee (Good Dog, Stripe…). Set its fee on the Accounts page.' })
+    ? `${field('Sold through', `<select id="f-sales_channel_account_id">${channelOptions(s.sales_channel_account_id)}</select>`, { hint: 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.' })}
+      ${field('Deposit paid via', `<select id="f-deposit_paid_via_account_id">${paidViaOptions(s.deposit_paid_via_account_id)}</select>`, { hint: 'The Payment service the deposit is paid through (Stripe, Zelle…).' })}
+      ${field('Balance paid via', `<select id="f-balance_paid_via_account_id">${paidViaOptions(s.balance_paid_via_account_id)}</select>`, { hint: 'The rest of the price, transport and boarding. Blank: the deposit\'s.' })}`
     : '';
   return `${channel}
-      ${field('Processing fee', `<input id="f-processing_fee_amount" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount)}">`, { hint: rate ? `Suggested from ${rateLabel(rate)} of the price. Change it to what was actually charged.` : 'What the marketplace or payment service kept of this sale.' })}
+      ${field('Processing fee', `<input id="f-processing_fee_amount" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount)}">`, { hint: estimated != null ? `Estimated ${fmtMoney(estimated)} from each payment's account rate. Change it to what was actually charged.` : 'What the marketplace or payment service kept of this sale.' })}
       <div class="field field-wide">
         <label class="check-inline"><input id="f-fee_passed_to_buyer" type="checkbox"${s.fee_passed_to_buyer ? ' checked' : ''}> The fee is passed to the buyer in the price</label>
         <span class="field-hint" id="fee-net-line"></span>
@@ -219,15 +239,24 @@ function helperRate() {
 function wireFeeFields() {
   const priceEl = document.getElementById('f-price');
   const feeEl = document.getElementById('f-processing_fee_amount');
-  // A price change carries a still-suggested fee along with it.
-  priceEl?.addEventListener('input', () => {
-    if (feeEl && channelRate() && (feeEl.value === '' || Number(feeEl.value) === ctx.suggestedFee)) {
-      const next = processingFee(priceEl.value, channelRate());
+  // A price or deposit change carries a still-suggested fee along with it.
+  const follow = () => {
+    if (feeEl && (feeEl.value === '' || Number(feeEl.value) === ctx.suggestedFee)) {
+      const next = estimatedFee(readForm());
       feeEl.value = next ?? '';
       ctx.suggestedFee = next;
     }
     updateNetLine();
-  });
+  };
+  priceEl?.addEventListener('input', follow);
+  document.getElementById('f-deposit_amount')?.addEventListener('input', follow);
+  for (const id of ['f-deposit_paid_via_account_id', 'f-balance_paid_via_account_id']) {
+    document.getElementById(id)?.addEventListener('change', () => {
+      ctx.draft = readForm();
+      applySuggestedFee();
+      renderEdit();
+    });
+  }
   feeEl?.addEventListener('input', updateNetLine);
   document.getElementById('f-sales_channel_account_id')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
@@ -284,7 +313,12 @@ function renderView() {
       ${s.end_reason ? row('Why it ended', esc(descriptor(SALE_END_REASON, s.end_reason).label)) : ''}
       ${s.end_note ? row('About it', esc(s.end_note).replace(/\n/g, '<br>')) : ''}
       ${row('Price', esc(money(s.price)))}
-      ${editionFlags.accounts && s.sales_channel_account_id ? row('Sold / paid through', esc(ctx.accountsById.get(s.sales_channel_account_id)?.name || '—')) : ''}
+      ${editionFlags.accounts && s.sales_channel_account_id ? row('Sold through', esc(ctx.accountsById.get(s.sales_channel_account_id)?.name || '—')) : ''}
+      ${editionFlags.accounts && s.deposit_paid_via_account_id ? row('Deposit paid via', esc(ctx.accountsById.get(s.deposit_paid_via_account_id)?.name || '—')) : ''}
+      ${editionFlags.accounts && s.balance_paid_via_account_id ? row('Balance paid via', esc(ctx.accountsById.get(s.balance_paid_via_account_id)?.name || '—')) : ''}
+      ${editionFlags.accounts && s.payment_link_url ? row('Payment link', `<a href="${esc(s.payment_link_url)}" target="_blank" rel="noopener noreferrer">One-time Stripe link</a>
+        <span class="muted">· ${esc(s.payment_link_component === 'deposit' ? 'deposit' : 'balance')}${s.payment_link_amount != null ? ` ${esc(fmtMoney(s.payment_link_amount))}` : ''}${s.payment_link_date ? ` · made ${esc(fmtDate(s.payment_link_date))}` : ''} · not paid yet</span>
+        <button type="button" class="btn btn-sm" data-pl-copy>Copy</button> <button type="button" class="btn btn-sm" data-pl-check>Check now</button>`) : ''}
       ${s.processing_fee_amount != null && s.processing_fee_amount !== '' ? row('Processing fee', `${esc(money(s.processing_fee_amount))}${s.fee_passed_to_buyer ? ' <span class="muted">(passed to the buyer in the price)</span>' : ''}`) : ''}
       ${s.processing_fee_amount != null && s.processing_fee_amount !== '' && s.price != null && s.price !== '' ? row('You net', esc(money(netOf(s.price, s.processing_fee_amount)))) : ''}
       ${row('Deposit amount', esc(money(s.deposit_amount)))}
@@ -448,6 +482,13 @@ function readForm() {
     sales_channel_account_id: document.getElementById('f-sales_channel_account_id')
       ? val('f-sales_channel_account_id') || null
       : ctx.draft.sales_channel_account_id || null,
+    // How each payment is taken (Pro); Lite keeps whatever was set elsewhere.
+    deposit_paid_via_account_id: document.getElementById('f-deposit_paid_via_account_id')
+      ? val('f-deposit_paid_via_account_id') || null
+      : ctx.draft.deposit_paid_via_account_id || null,
+    balance_paid_via_account_id: document.getElementById('f-balance_paid_via_account_id')
+      ? val('f-balance_paid_via_account_id') || null
+      : ctx.draft.balance_paid_via_account_id || null,
     processing_fee_amount: val('f-processing_fee_amount'),
     fee_passed_to_buyer: !!document.getElementById('f-fee_passed_to_buyer')?.checked,
     notes: val('f-notes')
@@ -908,5 +949,27 @@ async function main() {
   renderScopeNotice(document.getElementById('scope-notice'), s, { kind: 'sale' });
   renderAll();
 }
+
+// The open one-time Stripe link on the view (Integrations plan §4): Copy, and
+// Check now (asks Stripe about this sale, whatever the 15-minute wait).
+els.body.addEventListener('click', async (e) => {
+  const copyBtn = e.target.closest('[data-pl-copy]');
+  const checkBtn = e.target.closest('[data-pl-check]');
+  if ((!copyBtn && !checkBtn) || !ctx.original) return;
+  clearError();
+  if (copyBtn) {
+    try { await navigator.clipboard.writeText(ctx.original.payment_link_url); copyBtn.textContent = 'Copied ✓'; } catch { showError('Couldn\'t copy: open the link and copy its address.'); }
+    return;
+  }
+  checkBtn.disabled = true;
+  try {
+    const { checkStripePayments } = await import('../data/stripeLinks.js');
+    const res = await checkStripePayments({ force: true, saleIds: [ctx.original.id] });
+    if (!res || !res.checked) showError('This device can\'t check: connect Stripe on the account this payment is paid via (Accounts page).');
+    ctx.original = await saleRepo.getById(ctx.original.id);
+    if (ctx.mode === 'view') renderAll();
+    if (res && res.checked && !(res.applied || res.review)) showError('Not paid yet.');
+  } catch (err) { showError(err.message || String(err)); } finally { checkBtn.disabled = false; }
+});
 
 main();

@@ -17,6 +17,7 @@
 // #<section> hash opens it directly. There's no Profile card: the kennel's name
 // and badges head the page, and identity is edited on the Kennels list.
 import { kennelRepo } from '../data/kennelRepo.js';
+import { accountRepo } from '../data/accountRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
@@ -65,6 +66,7 @@ const LOGO_STEP_EDGES = [LOGO_MAX_EDGE, 360, 240, 160];
 const LOGO_TOO_LARGE = 'That logo is too large. Try a smaller image.';
 
 let kennel = null;      // the kennel being viewed
+let paymentServices = []; // Payment service accounts, for the fee's "paid via" (Pro)
 let allDogs = [];        // loaded once, for the "Apply to dogs" picker
 let applyOpen = false;   // whether the "Apply to dogs" picker is expanded
 
@@ -441,6 +443,14 @@ function waitlistCard(k) {
         <div class="field"><label>Passes before removal</label><input id="wl-passes" type="number" min="1" step="1" value="${esc(c.max_passes)}"></div>
         <div class="field field-wide"><label>Payment instructions</label><textarea id="wl-instructions" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions)}</textarea>
           <span class="field-hint">What you tell approved families about paying the fee.</span></div>
+        ${editionFlags.accounts ? `<div class="field"><label>Fee paid online via</label><select id="wl-fee-account"><option value="">— not online —</option>${paymentServices
+            .filter((a) => !a.is_archived || a.id === k.waitlist_fee_account_id)
+            .map((a) => `<option value="${esc(a.id)}"${a.id === k.waitlist_fee_account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+          <span class="field-hint">A Payment service account (Accounts page). Families get a Pay button with its link; with Stripe connected on this device, a Stripe checkout for the exact fee that KennelOS records as received when they pay.</span></div>
+        <div class="field"><label>Ask for the fee</label><select id="wl-fee-when">
+            <option value="apply"${c.fee_link_when !== 'approved' ? ' selected' : ''}>At the end of the online application</option>
+            <option value="approved"${c.fee_link_when === 'approved' ? ' selected' : ''}>Once I approve them</option></select>
+          <span class="field-hint">Paid before you approve them: approving puts them on the list from the day they paid.</span></div>` : ''}
         <div class="field field-wide">
           <label class="check-inline"><input id="wl-noresp" type="checkbox"${c.no_response_counts_as_pass ? ' checked' : ''}> No response by the deadline counts as a pass</label>
           <label class="check-inline"><input id="wl-colors" type="checkbox"${c.color_matching ? ' checked' : ''}> Match on color (only offer pups in a color the family listed)</label>
@@ -540,6 +550,7 @@ async function onSaveWaitlist() {
     respond_days: num('#wl-respond'),
     max_passes: num('#wl-passes'),
     payment_instructions: q('#wl-instructions').value.trim(),
+    ...(q('#wl-fee-when') ? { fee_link_when: q('#wl-fee-when').value } : {}),
     no_response_counts_as_pass: q('#wl-noresp').checked,
     color_matching: q('#wl-colors').checked,
     auto_offer_on: [...els.config.querySelectorAll('[data-wl-auto]:checked')].map((b) => b.dataset.wlAuto),
@@ -590,7 +601,10 @@ async function onSaveWaitlist() {
   delete waitlist_config.auto_offer_next; // replaced by auto_offer_on (2026-10-08)
   if (waitlist_config.max_passes != null && waitlist_config.max_passes < 1) { showError('Passes before removal must be at least 1.'); return; }
   try {
-    await kennelRepo.update(kennel.id, { waitlist_config });
+    await kennelRepo.update(kennel.id, {
+      waitlist_config,
+      ...(q('#wl-fee-account') ? { waitlist_fee_account_id: q('#wl-fee-account').value || null } : {})
+    });
     await reloadKennel();
     renderConfig();
   } catch (err) { showError(err.message || String(err)); }
@@ -850,6 +864,7 @@ async function main() {
   if (!k) { showError('Kennel not found. It may have been deleted.'); return; }
   kennel = k;
   allDogs = dogs;
+  if (editionFlags.accounts) paymentServices = (await accountRepo.getAll({ includeArchived: true })).filter((a) => a.account_type === 'payment_service');
   renderHeader(k);
   renderSectionPicker(k);
   renderLogo();

@@ -86,7 +86,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'puppy_record_fields',
       // The kennel's IANA time zone: offer deadlines end at 11:59 pm there (Waitlist
       // Spec §6.5, W2 Plan §9). A setting, not personal data.
-      'time_zone'
+      'time_zone',
+      // The Payment service account her online application fee is paid through
+      // (Integrations plan §4): an id, like sales_channel_account_id.
+      'waitlist_fee_account_id'
     ],
     // Her application form's key pairs (W2 Plan §7): the private halves open every
     // online application, so they ride the private vault and file backups only.
@@ -140,7 +143,14 @@ export const SYNC_REGISTRY = Object.freeze({
       'sale_date', 'deposit_date', 'balance_due_date', 'balance_paid_date',
       // Which channel it went through, and whether its fee was passed on
       // (Integrations plan §5, D9). The fee itself is money, private like price.
-      'sales_channel_account_id', 'fee_passed_to_buyer'
+      'sales_channel_account_id', 'fee_passed_to_buyer',
+      // Which Payment service account the deposit and the balance were paid via
+      // (Integrations plan §4–§5): ids, like the channel.
+      'deposit_paid_via_account_id', 'balance_paid_via_account_id',
+      // Her open one-use Stripe link (Integrations plan §4, D9: payment-link refs are
+      // cloud, so any device can match a payment): the link, Stripe's id for it,
+      // which payment it's for and when it was made. Its amount is private.
+      'payment_link_url', 'payment_link_ref', 'payment_link_component', 'payment_link_date'
     ],
     private: [
       'price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount',
@@ -150,7 +160,13 @@ export const SYNC_REGISTRY = Object.freeze({
       // Why a voided/returned sale ended, and her note on it (decided 2026-10-08):
       // health information about the pup, so private like notes.
       'end_reason', 'end_note',
-      'processing_fee_amount'
+      'processing_fee_amount',
+      // What a connected vendor reported that her device didn't apply by itself
+      // (Integrations plan §0): amounts and references, private like the rest.
+      'integration_reviews',
+      // The open link's amount, and each payment's fee as the vendor reported it
+      // (plan §4 → §5): money, private like price and processing_fee_amount.
+      'payment_link_amount', 'processing_fee_reports'
     ],
     pending: []
   },
@@ -181,7 +197,9 @@ export const SYNC_REGISTRY = Object.freeze({
     ],
     // The link sent carries the prefilled facts in it (buyer's name, email, phone,
     // address, price), so it's private like those fields.
-    private: ['document_url', 'terms_summary', 'notes', 'esign_url'],
+    private: ['document_url', 'terms_summary', 'notes', 'esign_url',
+      // What a connected e-sign service reported that wasn't applied (plan §0).
+      'integration_reviews'],
     pending: []
   },
 
@@ -261,6 +279,8 @@ export const SYNC_REGISTRY = Object.freeze({
       // the same-day tie-breaker of the list order (waitlistRules), so cloud for
       // the reason fee_received_date is: a restore must not re-order the list
       'fee_received_at',
+      // The Payment service account the application fee was paid via (plan §4): an id.
+      'fee_paid_via_account_id',
       'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors',
       'listen_mode', 'listen_sire_ids', 'listen_dam_ids',
       'removed_reason', 'placed_sale_id',
@@ -290,6 +310,10 @@ export const SYNC_REGISTRY = Object.freeze({
     // medical situation, like pause_reason.
     private: [
       'fee_amount', 'fee_payment_method', 'fee_payment_reference',
+      // Paid online (Integrations plan §4): what the family paid (the fee, plus a
+      // card fee she passes on), what the payment service kept, and a payment that
+      // came before she approved them. Money, private like fee_amount.
+      'fee_paid_amount', 'fee_processing_amount', 'fee_paid_online',
       'fee_credit_policy', 'pause_reason', 'notes', 'pref_change_log', 'pref_change_request',
       'pause_request', 'listen_change_request', 'messages',
       // "Not this litter" with the family's reason (Spec §16.2): private like a pass reason.

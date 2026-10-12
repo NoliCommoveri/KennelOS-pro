@@ -112,6 +112,14 @@ export async function approve(entryId, { date = todayYMD(), contactId = null, pr
   }
   if (fee === 0) {
     Object.assign(changes, { status: 'active', fee_received_date: date, fee_received_at: nowISO(), fee_payment_method: 'Waived' });
+  } else if (entry.fee_paid_online && entry.fee_paid_online.date) {
+    // They paid the fee online with their application (Integrations plan §4):
+    // approving puts them on the list from the day they paid.
+    const p = entry.fee_paid_online;
+    Object.assign(changes, {
+      status: 'active', fee_received_date: p.date, fee_received_at: nowISO(),
+      fee_payment_method: p.method || 'Credit/debit card', fee_payment_reference: p.reference || ''
+    });
   }
   return waitlistEntryRepo.update(entryId, changes);
 }

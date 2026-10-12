@@ -174,7 +174,12 @@ export const BREED_FEEDING_SCHEDULE_REFERENCES = [];
 export const ACCOUNT_REFERENCES = [
   { table: 'expenses', field: 'account_id', label: 'account on an expense' },
   // The channel a sale went through (Integrations plan §5): Good Dog, Stripe…
-  { table: 'sales', field: 'sales_channel_account_id', label: 'sales channel on a sale' }
+  { table: 'sales', field: 'sales_channel_account_id', label: 'sales channel on a sale' },
+  // How each payment was taken (Integrations plan §4–§5, db.version(4)).
+  { table: 'sales', field: 'deposit_paid_via_account_id', label: 'deposit paid via, on a sale' },
+  { table: 'sales', field: 'balance_paid_via_account_id', label: 'balance paid via, on a sale' },
+  { table: 'waitlist_entries', field: 'fee_paid_via_account_id', label: 'application fee paid via, on a waitlist family' },
+  { table: 'kennels', field: 'waitlist_fee_account_id', label: 'online application fee account of a kennel' }
 ];
 
 // --- Document: a leaf entity — nothing points at a Document. Its own FK

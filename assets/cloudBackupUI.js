@@ -1583,6 +1583,11 @@ export async function bootCloud() {
   if (isWaitlistOnlineOffered() && editionFlags.waitlist) {
     import('../data/cloud/cloudWaitlist.js').then((m) => m.startWaitlistScheduler()).catch(() => {});
   }
+  // Vendor integrations (Integrations plan §0): Pro; asks nothing until the
+  // account has a connection.
+  if (editionFlags.accounts) {
+    import('../data/cloud/cloudIntegrations.js').then((m) => m.startIntegrationsScheduler()).catch(() => {});
+  }
   renderServiceNotices().catch(() => {});
   try { renderPrivateGapHint(); } catch { /* a hint only */ }
 }

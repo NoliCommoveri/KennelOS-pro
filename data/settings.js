@@ -661,6 +661,21 @@ export function clearWaitlistOnlineState() {
   localStorage.removeItem(WAITLIST_ONLINE_STATE_KEY);
 }
 
+// Vendor integrations on this device (data/cloud/cloudIntegrations.js, Integrations
+// plan §0): how many connections the account has (0 = never ask for events), the
+// events cursor, and the last error. Outside KEYS like the rest of the cloud state.
+const INTEGRATIONS_STATE_KEY = 'kennelOS.integrations';
+
+export function getIntegrationsState() {
+  return { connections: 0, eventsCursor: 0, lastError: null, lastAttemptAt: null, ...(readJsonKey(INTEGRATIONS_STATE_KEY) || {}) };
+}
+
+export function updateIntegrationsState(patch) {
+  const next = { ...getIntegrationsState(), ...patch };
+  localStorage.setItem(INTEGRATIONS_STATE_KEY, JSON.stringify(next));
+  return next;
+}
+
 export function getCloudDeviceId() {
   let id = localStorage.getItem(CLOUD_DEVICE_ID_KEY);
   if (!id) {

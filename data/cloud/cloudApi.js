@@ -280,6 +280,14 @@ export const unpublishWaitlist = (token, publicId) =>
 export const sendWaitlistEmail = (token, { id, publicId, entryId, kind, subject, body }) =>
   getJson('/waitlist/messages', { method: 'POST', token, json: { id, public_id: publicId, entry_id: entryId, kind, subject, body } });
 
+// --- Integrations (Integrations plan §0, step 5) -----------------------------------------
+// → { connections: [{ id, provider, accountRef, scopes, connectedAt }] } (never a token)
+export const listIntegrations = (token) => getJson('/integrations/connections', { token });
+export const disconnectIntegration = (token, id) =>
+  getJson(`/integrations/connections/${encodeURIComponent(id)}`, { method: 'DELETE', token });
+// → { events: [{ seq, provider, kind, recordType, recordId, payload, createdAt }], last, more }
+export const readIntegrationEvents = (token, since = 0) => getJson(`/integrations/events?since=${encodeURIComponent(since)}`, { token });
+
 export const getNotices = () => getJson('/notice').then((b) => b.notices || []);
 
 // --- Changing the account's email (Phase 1 plan §2.6) ---------------------------

@@ -1,10 +1,11 @@
 // paymentLinks.js — her own payment link (Integrations plan §4, Level 0): a
 // Stripe / Square / PayPal / Venmo link, or plain instructions (Zelle…), kept on
-// the Account she takes payments through (`payment_link`, `payment_instructions`).
-// "Send payment link" on a Sale or its Invoice starts from the sale's own
-// Sold / paid through account (`sales_channel_account_id`), so the link she sends
-// and the fee the sale carries name the same account; with none set, she picks
-// one and it fills the empty channel. Nothing goes to a server and nothing about
+// a Payment service Account (`payment_link`, `payment_instructions`; that type
+// only, revised 2026-10-12). A sale's deposit and balance may each be paid via a
+// different one (`deposit_paid_via_account_id`, `balance_paid_via_account_id`), so
+// "Send payment link" starts from the account that part is paid via, and the fee
+// each payment keeps follows its own account (processingFees.saleFeeEstimate).
+// Picking an account for a part with none fills it in. Nothing goes to a server and nothing about
 // the sale is sent anywhere but in the message she sends herself; she still
 // records the payment (Deposit received…) as today. Pure.
 import { formLink } from './contractForms.js';
@@ -16,8 +17,10 @@ const cents = (n) => Math.round(n * 100) / 100;
 // A payment link as stored: a web address, else '' (same check as a contract form's link).
 export const paymentLink = (raw) => formLink(raw);
 
-// Whether an account can take a payment: a link or instructions.
-export const takesPayments = (a) => !!a && (!!paymentLink(a.payment_link) || !!text(a.payment_instructions));
+// Whether an account can take a payment: a Payment service with a link or
+// instructions. A link saved on another type stays stored but isn't offered.
+export const takesPayments = (a) => !!a && a.account_type === 'payment_service'
+  && (!!paymentLink(a.payment_link) || !!text(a.payment_instructions));
 
 // The accounts she can send a payment link for: not archived, with a link or
 // instructions, by name.
@@ -27,12 +30,25 @@ export function paymentAccounts(accounts = []) {
     .sort((a, b) => text(a.name).localeCompare(text(b.name)));
 }
 
-// The account a sale's payment link comes from first: its Sold / paid through
-// account when that one takes payments (archived or not: it's the sale's own),
-// else null and she picks.
-export function saleChannelPayAccount(sale, accounts = []) {
-  const id = sale?.sales_channel_account_id;
-  const a = id ? accounts.find((x) => x && x.id === id) : null;
+// Which paid-via field holds a payment part ('all' is paid as the balance).
+export const paidViaField = (part) => (part === 'deposit' ? 'deposit_paid_via_account_id' : 'balance_paid_via_account_id');
+
+// The account a sale's payment for `part` ('deposit' | 'balance' | 'all') is paid
+// via, archived or not (it's the sale's own); for the balance or 'all' with none
+// set, the deposit's. Null when none is set. `accounts` is every account.
+export function salePaidVia(sale, accounts = [], part = 'deposit') {
+  const ids = part === 'deposit' ? [sale?.deposit_paid_via_account_id]
+    : [sale?.balance_paid_via_account_id, sale?.deposit_paid_via_account_id];
+  for (const id of ids) {
+    const a = id ? accounts.find((x) => x && x.id === id) : null;
+    if (a) return a;
+  }
+  return null;
+}
+
+// The same, only when it takes payments (a link or instructions to send).
+export function salePayAccount(sale, accounts = [], part = 'deposit') {
+  const a = salePaidVia(sale, accounts, part);
   return takesPayments(a) ? a : null;
 }
 

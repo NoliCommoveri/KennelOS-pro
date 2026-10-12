@@ -164,6 +164,20 @@ db.version(3).stores({
   sales: 'id, kennel_id, dog_id, buyer_contact_id, referred_by_contact_id, status, registration_type, sales_channel_account_id, is_archived'
 });
 
+// version(4) — how each payment was taken (Integrations plan §4–§5, 2026-10-12):
+// a sale's deposit and balance may each go through a Payment service Account
+// (`deposit_paid_via_account_id`, `balance_paid_via_account_id`), a waitlist
+// family's application fee too (`waitlist_entries.fee_paid_via_account_id`), and
+// a kennel names the account its online application fee is paid through
+// (`kennels.waitlist_fee_account_id`). All four are indexed for the
+// ACCOUNT_REFERENCES delete guard. Re-lists each table's index string with the
+// new index added.
+db.version(4).stores({
+  sales: 'id, kennel_id, dog_id, buyer_contact_id, referred_by_contact_id, status, registration_type, sales_channel_account_id, deposit_paid_via_account_id, balance_paid_via_account_id, is_archived',
+  waitlist_entries: 'id, kennel_id, contact_id, status, waitlist_program_id, *listen_sire_ids, *listen_dam_ids, placed_sale_id, fee_paid_via_account_id, is_archived',
+  kennels: 'id, public_id, waitlist_fee_account_id, is_archived'
+});
+
 // --- Device-only tables ---------------------------------------------------
 // `device_secrets` holds this device's unlocked private-vault key as a
 // CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js reads and

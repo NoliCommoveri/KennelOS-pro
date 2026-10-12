@@ -192,6 +192,14 @@ function statusLines(e) {
   if (e.carried_payment) {
     lines.push(`Carrying <strong>${esc(fmtMoney(e.carried_payment.amount))}</strong> they paid on a pup they lost (${esc(fmtDate(e.carried_payment.date))}); it becomes the deposit on their next pick.`);
   }
+  // Paid online (Integrations plan §4): before approval it waits on the entry;
+  // after, what they paid and what the payment service kept.
+  if (e.fee_paid_online && !e.fee_received_date) {
+    const p = e.fee_paid_online;
+    lines.push(`<span class="badge badge-green">Fee paid online</span> ${esc(fmtDate(p.date))}${p.amount != null ? `, ${esc(fmtMoney(p.amount))}` : ''}${p.fee != null ? ` (the payment service kept ${esc(fmtMoney(p.fee))})` : ''}. ${e.status === 'applied' ? 'Approving puts them on the list from that day.' : 'They aren\'t on the list: refund it in your payment service if it\'s owed.'}`);
+  } else if (e.fee_received_date && e.fee_processing_amount != null) {
+    lines.push(`<span class="faint">Fee paid online${e.fee_paid_amount != null ? `: ${esc(fmtMoney(e.fee_paid_amount))}` : ''}; the payment service kept ${esc(fmtMoney(e.fee_processing_amount))}.</span>`);
+  }
   if (e.status === 'applied') {
     lines.push(`Applied ${e.applied_date ? esc(fmtDate(e.applied_date)) : ''}${e.source === 'online_form' ? ' through your online form' : ''}. Waiting for your review.`);
   } else if (e.status === 'approved') {

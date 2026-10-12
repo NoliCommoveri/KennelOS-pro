@@ -22,7 +22,8 @@
 // second-pass removal — each a one-tap suggestion, never an automatic write;
 // and, from W2 step 5, what families asked for or said on their status page (a
 // pause, a listen-only narrowing, an answer change: Approve / Decline; messages
-// and activity: Mark read).
+// and activity: Mark read). And (Pro) what a connected vendor reported that her
+// device didn't apply by itself (Integrations plan §0): Done.
 //   { key, title, detail, subjectHref, actions: [{ label, run: async () => {} }] }
 // `run` may resolve to { title, message }, which Today shows once it's done.
 import { studServiceRepo } from './studServiceRepo.js';
@@ -54,6 +55,8 @@ import {
   markCompanionLinkSent, declineCompanionRequest
 } from './waitlistActions.js';
 import { offerSpecs } from './waitlistOutbox.js';
+import { contractRepo } from './contractRepo.js';
+import { reviewTitle } from './integrationEvents.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
@@ -358,6 +361,7 @@ export async function computeNudges() {
 
   if (editionFlags.waitlist) nudges.push(...(await waitlistNudges(today, litters, dogsById, { dogs, sales })));
   if (editionFlags.accounts) nudges.push(...(await followUpNudges(today, inScopeOnly(sales), events, dogsById, kennelsById)));
+  if (editionFlags.accounts) nudges.push(...(await integrationReviewNudges(inScopeOnly(sales))));
 
   return nudges;
 }
@@ -369,6 +373,35 @@ export async function computeNudges() {
 // a how-is-it-going and thank-you, with the products she shares with families.
 // The note opens in the composer (Today reads `compose`); she sends it herself.
 // Key per sale, so Dismiss (or sending it) retires it for good.
+// What a connected vendor reported that her device didn't apply by itself
+// (Integrations plan §0; data/integrationEvents.js): one nudge per review, on the
+// sale or contract it's about. "Done" removes it from the record.
+async function integrationReviewNudges(sales) {
+  const contracts = inScopeOnly(await contractRepo.getAll());
+  const out = [];
+  const add = (record, repo, href, label) => {
+    for (const r of Array.isArray(record.integration_reviews) ? record.integration_reviews : []) {
+      if (!r || !r.id) continue;
+      out.push({
+        key: `int-review:${record.id}:${r.id}`,
+        title: `${reviewTitle(r)}: ${label}`,
+        detail: `${r.reason}${r.payload?.date ? ` (${r.payload.date})` : ''} Check it, then tap Done.`,
+        subjectHref: href,
+        actions: [{
+          label: 'Done',
+          run: async () => {
+            const fresh = await repo.getById(record.id);
+            await repo.update(record.id, { integration_reviews: (fresh?.integration_reviews || []).filter((x) => x && x.id !== r.id) });
+          }
+        }]
+      });
+    }
+  };
+  for (const s of sales) add(s, saleRepo, `sale.html?id=${encodeURIComponent(s.id)}`, 'a sale');
+  for (const c of contracts) add(c, contractRepo, `contract.html?id=${encodeURIComponent(c.id)}`, c.title || 'a contract');
+  return out;
+}
+
 async function followUpNudges(today, sales, events, dogsById, kennelsById) {
   const delivered = sales.filter((s) => s.status === 'delivered' && s.buyer_contact_id);
   if (!delivered.length) return [];

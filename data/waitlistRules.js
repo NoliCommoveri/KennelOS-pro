@@ -22,6 +22,11 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   fee_credit_policy: 'credited_to_purchase',
   fee_due_days: null,
   payment_instructions: '',
+  // The fee paid online (Integrations plan §4): ask for it at the end of the
+  // online application ('apply') or once approved ('approved'), through the
+  // kennel's waitlist_fee_account_id; fee_links are the Stripe links made for it.
+  fee_link_when: 'apply',
+  fee_links: null,
   max_passes: 2,
   respond_days: 3, // days to accept AND send the deposit (§6.5)
   online: false, // her list is published online (W2 Plan §5; only where isWaitlistOnlineOffered)

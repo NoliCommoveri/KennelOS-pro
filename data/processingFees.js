@@ -60,3 +60,33 @@ export function rateLabel(rate) {
   const fixed = rate.fixed ? `$${rate.fixed.toFixed(2)}` : '';
   return [pct, fixed].filter(Boolean).join(' + ');
 }
+
+// The fee a sale should carry when its payments go different ways (Integrations
+// plan §4–§5): the deposit through one account (Stripe), the rest of the price
+// through another (Zelle, free), each payment keeping its own account's rate,
+// percentage and fixed part. An account it was paid via wins over Sold through
+// for that payment; with neither paid-via account set, the Sold through account's
+// rate on the whole price (the single-channel rule). Transport and boarding aren't
+// in the base, as before.
+//   accountsById: Map id → Account
+// → { total, parts: { deposit, balance } } (a part is null when its account has no
+// rate), or null when no account involved has a rate.
+export function saleFeeEstimate(sale, accountsById) {
+  const get = (id) => (id ? accountsById.get(id) || null : null);
+  const price = num(sale?.price);
+  if (!(price > 0)) return null;
+  const deposit = Math.min(num(sale.deposit_amount), price);
+  const rest = cents(price - deposit);
+  const channel = feeRate(get(sale.sales_channel_account_id));
+  if (!sale.deposit_paid_via_account_id && !sale.balance_paid_via_account_id) {
+    const whole = channel ? processingFee(price, channel) : null;
+    if (whole == null) return null;
+    const share = deposit > 0 ? cents(whole * deposit / price) : 0;
+    return { total: whole, parts: { deposit: deposit > 0 ? share : null, balance: cents(whole - share) } };
+  }
+  const rateFor = (id) => feeRate(get(id)) || (id ? null : channel);
+  const dep = deposit > 0 ? processingFee(deposit, rateFor(sale.deposit_paid_via_account_id)) : null;
+  const bal = rest > 0 ? processingFee(rest, rateFor(sale.balance_paid_via_account_id)) : null;
+  if (dep == null && bal == null) return null;
+  return { total: cents((dep || 0) + (bal || 0)), parts: { deposit: dep, balance: bal } };
+}

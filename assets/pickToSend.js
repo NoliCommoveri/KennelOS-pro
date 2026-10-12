@@ -15,7 +15,7 @@
 // Pro-only (proPages.PRO_ONLY_STANDALONE): only the waitlist family page opens it.
 import { saleRepo } from '../data/saleRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
-import { feeRate, rateLabel, processingFee, priceToNet, netOf } from '../data/processingFees.js';
+import { feeRate, rateLabel, processingFee, priceToNet, netOf, saleFeeEstimate } from '../data/processingFees.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { contractRepo } from '../data/contractRepo.js';
@@ -25,7 +25,8 @@ import { askRegistrationPrice } from './salePrompts.js';
 import { rankForms, splitName } from '../data/contractForms.js';
 import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, balanceDueOn } from '../data/contractSend.js';
 import { depositRequestMessage } from '../data/depositRequest.js';
-import { saleChannelPayAccount } from '../data/paymentLinks.js';
+import { salePayAccount, salePaidVia } from '../data/paymentLinks.js';
+import { stripeConnection, makeSaleLink } from '../data/stripeLinks.js';
 import { logOwnMessage } from '../data/waitlistOutbox.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney } from './ui.js';
@@ -104,7 +105,10 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           ${field('Price', `<input id="ps-price" type="number" min="0" step="0.01" value="${esc(s.price ?? '')}">`)}
           ${field('Deposit', `<input id="ps-deposit" type="number" min="0" step="0.01" value="${esc(s.deposit_amount ?? '')}">`, offer.respond_by_date ? `Due by ${fmtDate(offer.respond_by_date)}, the end of their turn.` : '')}
           ${field('Transport fee', `<input id="ps-transport" type="number" min="0" step="0.01" value="${esc(s.transport_fee ?? '')}">`)}
-          ${field('Sold / paid through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace or payment service that keeps a fee (Good Dog, Stripe…). Set its fee, and the payment link the message sends, on the Accounts page.')}
+          ${field('Sold through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.')}
+          ${field('Deposit paid via', `<select id="ps-deposit-via"><option value="">— not set —</option>${accounts
+            .filter((a) => a.account_type === 'payment_service' && (!a.is_archived || a.id === s.deposit_paid_via_account_id))
+            .map((a) => { const r = feeRate(a); return `<option value="${esc(a.id)}"${a.id === s.deposit_paid_via_account_id ? ' selected' : ''}>${esc(a.name)}${r ? ` (${esc(rateLabel(r))})` : ''}</option>`; }).join('')}</select>`, 'The Payment service the deposit is paid through (Stripe, Zelle…): its link goes in the message, and its fee is estimated on the deposit.')}
           ${field('Processing fee', `<input id="ps-fee" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount ?? '')}">`, rate ? `Suggested from ${rateLabel(rate)} of the price. Change it to what was actually charged.` : 'What the marketplace or payment service keeps of this sale.')}
           <div class="field field-wide">
             <label class="check-inline"><input id="ps-passed" type="checkbox"${s.fee_passed_to_buyer ? ' checked' : ''}> The fee is passed to the buyer in the price</label>
@@ -125,10 +129,11 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         $('#ps-net').textContent = priceEl.value !== '' && feeEl.value !== '' && Number(feeEl.value) > 0
           ? `You net ${fmtMoney(netOf(priceEl.value, feeEl.value))} of the ${fmtMoney(priceEl.value)} price.` : '';
       };
+      // The estimate from every account involved: the deposit's paid-via account
+      // on the deposit, the rest at Sold through's rate (processingFees.saleFeeEstimate).
       const suggest = () => {
-        const r = rateOf($('#ps-channel').value);
         if (feeEl.value !== '' && Number(feeEl.value) !== suggestedFee) return;
-        const next = r ? processingFee(priceEl.value, r) : null;
+        const next = saleFeeEstimate(snapshot(), accountsById)?.total ?? null;
         feeEl.value = next ?? '';
         suggestedFee = next;
       };
@@ -140,6 +145,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         deposit_amount: numOrNull($('#ps-deposit').value),
         transport_fee: numOrNull($('#ps-transport').value),
         sales_channel_account_id: $('#ps-channel').value || null,
+        deposit_paid_via_account_id: $('#ps-deposit-via').value || null,
         processing_fee_amount: numOrNull(feeEl.value),
         fee_passed_to_buyer: $('#ps-passed').checked,
         balance_due_date: $('#ps-balance-due').value || null,
@@ -156,6 +162,8 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         if (price != null) { priceEl.value = price; suggest(); netLine(); }
       });
       priceEl.addEventListener('input', () => { suggest(); netLine(); });
+      $('#ps-deposit').addEventListener('input', () => { suggest(); netLine(); });
+      $('#ps-deposit-via').addEventListener('change', () => { suggest(); netLine(); });
       feeEl.addEventListener('input', netLine);
       $('#ps-channel').addEventListener('change', (e) => {
         const account = accountsById.get(e.target.value);
@@ -183,6 +191,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           sale = await saleRepo.update(sale.id, {
             registration_type: d.registration_type, price: d.price, deposit_amount: d.deposit_amount,
             transport_fee: d.transport_fee, sales_channel_account_id: d.sales_channel_account_id,
+            deposit_paid_via_account_id: d.deposit_paid_via_account_id,
             processing_fee_amount: d.processing_fee_amount, fee_passed_to_buyer: d.fee_passed_to_buyer,
             balance_due_date: d.balance_due_date, notes: d.notes
           });
@@ -246,15 +255,37 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       return pdfFile;
     }
 
+    // The payment part of the message: the step-1 channel's link and instructions,
+    // or, with her Stripe key for that account on this device, a one-time link for
+    // exactly the deposit (plan §4, step 6), kept on the sale and reused while open.
+    let payAccount = null;
+    let stripeNote = '';
+    async function paymentAccount() {
+      const via = salePaidVia(sale, accounts, 'deposit');
+      const deposit = Number(sale.deposit_amount) || 0;
+      if (via && deposit > 0 && await stripeConnection(via.id)) {
+        try {
+          const open = sale.payment_link_ref && sale.payment_link_component === 'deposit' && Number(sale.payment_link_amount) === deposit;
+          if (!open) { sale = await makeSaleLink({ sale, account: via, component: 'deposit', amount: deposit, pupName: dog?.call_name || '' }); changed = true; }
+          stripeNote = 'The deposit link is a one-time Stripe link for exactly the deposit. When they pay, Today tells you; then tap Deposit received on this page.';
+          return { ...via, payment_link: sale.payment_link_url };
+        } catch (err) {
+          stripeNote = `No Stripe link: ${err.message}`;
+        }
+      }
+      return salePayAccount(sale, accounts, 'deposit');
+    }
+
     async function drawSend() {
       if (!message) {
+        payAccount = await paymentAccount();
         const balance = await balanceDueOn(sale);
         const rest = Math.max(0, balance - (Number(sale.deposit_amount) || 0));
         message = depositRequestMessage({
           who, pupName: dog?.call_name || '', litterLabel,
           deposit: sale.deposit_amount != null ? fmtMoney(sale.deposit_amount) : '',
           depositDue: offer.respond_by_date ? fmtDate(offer.respond_by_date) : '',
-          payAccount: saleChannelPayAccount(sale, accounts), paymentText,
+          payAccount, paymentText,
           contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '',
           invoice: true,
           balance: rest > 0 ? fmtMoney(rest) : '', balanceDue: sale.balance_due_date ? fmtDate(sale.balance_due_date) : '',
@@ -267,7 +298,8 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       const sentLine = offer.deposit_request_sent_date ? `<p class="field-hint">You sent them a deposit request on ${esc(fmtDate(offer.deposit_request_sent_date))}.</p>` : '';
       shell(`<p class="field-hint" style="margin-top:0;">To ${esc(contact?.name || 'them')}${email ? ` · ${esc(email)}` : ' (no email on their contact)'}. Edit anything before it goes.</p>
         ${sentLine}
-        ${saleChannelPayAccount(sale, accounts) ? '' : '<p class="field-hint">To put a payment link in the message, set <strong>Sold / paid through</strong> in step 1 (Back) to an account with a payment link (Accounts page).</p>'}
+        ${stripeNote ? `<p class="field-hint">${esc(stripeNote)}</p>` : ''}
+        ${payAccount ? '' : '<p class="field-hint">To put a payment link in the message, set <strong>Deposit paid via</strong> in step 1 (Back) to a Payment service account with a link (Accounts page).</p>'}
         <div class="field"><label for="ps-subject">Subject</label><input id="ps-subject" type="text" value="${esc(message.subject)}"></div>
         <div class="field"><label for="ps-body">Message</label><textarea id="ps-body" rows="14" style="width:100%; font-family:inherit;">${esc(message.body)}</textarea></div>
         <p class="field-hint">${share

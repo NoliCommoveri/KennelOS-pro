@@ -15,6 +15,7 @@ import { isDemo, withSeedAllowed } from './data/demoMode.js';
 import { seedSampleData } from './data/editionTour.js';
 import { isLicenseGated, ensureLicensed } from './assets/licenseGate.js';
 import { isCloudAvailable, isUsingTestServer } from './data/cloud/cloudConfig.js';
+import { editionFlags } from './data/editionConfig.js';
 
 async function firstRunPersistence() {
   if (wasPersistRequested()) return;
@@ -142,6 +143,11 @@ async function boot() {
   // notices, and the one-time post-setup offer. After the first-run flow, so the
   // offer never lands on top of it. Only with a server, and only then is any
   // cloud UI loaded (an edition with cloudUrl null never imports it).
+  // Her own Stripe links (Integrations plan §4): her device asks Stripe whether an
+  // open one-use link was paid, at most every 15 minutes. Pro (Accounts) only.
+  if (editionFlags.accounts) {
+    import('./data/stripeLinks.js').then((m) => m.bootStripeCheck()).catch(() => {});
+  }
   firstRunFlow().finally(() => {
     if (!isCloudAvailable()) return;
     import('./assets/cloudBackupUI.js').then((m) => m.bootCloud()).catch((e) => console.warn('KennelOS: cloud backup', e));

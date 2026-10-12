@@ -127,6 +127,10 @@ export const ACCOUNT_TYPE = [
   // Jotform and the like: the only type that holds contract forms (contract_forms,
   // Integrations plan §2.1a), so it's the only one whose form shows that section.
   { value: 'form_service', label: 'Form service',       badge: 'badge-blue' },
+  // Stripe, Square, PayPal, Venmo…: the only type that holds a payment link and a
+  // Stripe key (Integrations plan §4), and the only one offered as "paid via" for
+  // a sale's deposit or balance, or a waitlist application fee.
+  { value: 'payment_service', label: 'Payment service', badge: 'badge-green' },
   { value: 'other',       label: 'Other',               badge: 'badge-gray' }
 ];
 

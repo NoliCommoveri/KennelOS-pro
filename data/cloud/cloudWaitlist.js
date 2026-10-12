@@ -434,8 +434,16 @@ async function syncNow({ force }) {
       unpublished.push(kennelId);
     }
     for (const listed of wanted) {
-      const kennel = await ensureFormKey(listed);
+      let kennel = await ensureFormKey(listed);
       await ensureStatusTokens(kennel);
+      // Her Stripe link for the application fee (Integrations plan §4), made here
+      // when this device holds the key; a failure leaves the fee without one.
+      if (editionFlags.accounts) {
+        try {
+          const { ensureFeeLinks } = await import('../waitlistFeeLinks.js');
+          kennel = await ensureFeeLinks(kennel);
+        } catch { /* the page shows her payment instructions instead */ }
+      }
       let projection = await projectionFor(kennel);
       let hash = await sha256(JSON.stringify(projection));
       const prev = getWaitlistOnlineState().kennels[kennel.id];

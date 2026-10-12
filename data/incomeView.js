@@ -302,7 +302,14 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
   // carries the kennel scope like every waitlist row.
   for (const e of scopeTo(entries)) {
     if (!feeReceived(e)) continue;
-    const components = [{ component: 'application_fee', amount: num(e.fee_amount), state: 'earned', when: e.fee_received_date }];
+    // Paid online (Integrations plan §4): what the family paid (her fee plus a card
+    // fee she passed on, `fee_paid_amount`), less what the payment service kept
+    // (`fee_processing_amount`), as a negative line like a sale's processing fee.
+    const paid = e.fee_paid_amount != null && e.fee_paid_amount !== '' ? num(e.fee_paid_amount) : num(e.fee_amount);
+    const components = [{ component: 'application_fee', amount: paid, state: 'earned', when: e.fee_received_date }];
+    if (num(e.fee_processing_amount) > 0) {
+      components.push({ component: 'processing_fee', amount: -num(e.fee_processing_amount), state: 'earned', when: e.fee_received_date, due: '' });
+    }
     // A credited fee on a placed family is part of THAT pup's price, so it rolls up
     // to the pup's litter (the Sale's balance was netted by it above — without
     // this the litter P&L would lose the credit). Any other fee isn't litter money.
@@ -320,7 +327,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
       status: e.status,
       date: e.fee_received_date,
       components,
-      earned: num(e.fee_amount),
+      earned: Math.round(components.reduce((t, c) => t + c.amount, 0) * 100) / 100,
       anticipated: 0,
       pick: 0
     });
