@@ -270,6 +270,10 @@ export const publishWaitlist = (token, publicId, projection) =>
 export const readWaitlistInbox = (token, { all = false, after = null } = {}) =>
   getJson(`/waitlist/inbox${all || after ? `?${new URLSearchParams({ ...(all ? { all: '1' } : {}), ...(after ? { after } : {}) })}` : ''}`, { token });
 export const ackWaitlistInbox = (token, ids) => getJson('/waitlist/inbox/ack', { method: 'POST', token, json: { ids } });
+// The server work's lease on a syncing program (Cloud Phase 2 plan §7; serverWork.js):
+// → { mode: 'lease', until } | { mode: 'backing' }; 409 'lease_held' { holder }.
+export const takeWaitlistLease = (token) => getJson('/waitlist/lease', { method: 'POST', token, json: {} });
+export const releaseWaitlistLease = (token) => getJson('/waitlist/lease', { method: 'DELETE', token });
 // → { events: [{ seq, publicId, entryId, kind, payload, basedOnVersion, madeBy, createdAt }], last, more }
 export const readWaitlistEvents = (token, since = 0) => getJson(`/waitlist/events?since=${encodeURIComponent(since)}`, { token });
 export const readWaitlistProjection = (token, publicId) =>

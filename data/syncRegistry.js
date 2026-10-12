@@ -100,7 +100,7 @@ export const SYNC_REGISTRY = Object.freeze({
   contacts: {
     rows: ALL,
     cloud: ['name', 'contact_type', 'kennel_id', 'waitlist_status'],
-    private: ['email', 'phone', 'address', 'notes', 'companion_note', 'first_contact_source'],
+    private: ['email', 'phone', 'facebook_profile', 'address', 'notes', 'companion_note', 'first_contact_source'],
     pending: []
   },
 

@@ -59,12 +59,20 @@ const order = (tbl) => { const i = APPLY_ORDER.indexOf(tbl); return i === -1 ? A
 // Applies one pulled page. `vault` is this device's { key, keyId }; `fetchFile`
 // (sha256) → Blob is cloudApi.getFile with the token. Returns
 //   { applied, skipped, keptTheirs: [{ tbl, id, by }], archivedInstead: [{ tbl, id }],
-//     missingFiles: [{ tbl, id }] }.
+//     missingFiles: [{ tbl, id }], keptOurs }.
+//
+// `merge: true` is a device joining (plan §5.5, §2.1): nothing is deleted on
+// either side, and a row this device has keeps whichever version has the newer
+// `updated_at` (the rule a vault merge uses). A local row kept that way gets the
+// record's seq with the SERVER version's hash, so the next scan sees it differ
+// and pushes it as a newer version; a tombstone leaves the local row alone with
+// no meta, so it's pushed as a new record. Files always take the server's
+// version (they're written once). After the join, server order decides again.
 // Throws VaultLockedError when a record is sealed under another key; nothing of
 // the page is written then, so the cursor stays and the page is retried.
-export async function applyPulledRecords(records, { vault, fetchFile, now = new Date() } = {}) {
+export async function applyPulledRecords(records, { vault, fetchFile, now = new Date(), merge = false } = {}) {
   const meta = await readSyncMeta();
-  const out = { applied: 0, skipped: 0, keptTheirs: [], archivedInstead: [], missingFiles: [] };
+  const out = { applied: 0, skipped: 0, keptTheirs: [], archivedInstead: [], missingFiles: [], keptOurs: 0 };
 
   // 1. Decide every record, outside any transaction.
   const plans = [];
@@ -74,6 +82,7 @@ export async function applyPulledRecords(records, { vault, fetchFile, now = new 
     if (m && m.seq >= r.seq) { out.skipped++; continue; } // its own echo, or older than what's here
     const local = await db.table(r.tbl).get(r.id);
     if (r.op === 'delete') {
+      if (merge && local) { out.skipped++; continue; } // nothing is deleted by a join
       if (!local) { plans.push({ kind: 'forget', r }); continue; }
       if (await stillReferenced(r.tbl, r.id)) {
         plans.push({ kind: 'archive', r, row: { ...local, is_archived: true, updated_at: now.toISOString() } });
@@ -85,6 +94,11 @@ export async function applyPulledRecords(records, { vault, fetchFile, now = new 
     }
     const rec = await readRecord(r, vault);
     let row = rec.row;
+    if (merge && local && r.tbl !== 'files' && String(local.updated_at || '') > String(row.updated_at || '')) {
+      plans.push({ kind: 'keep', r, row });
+      out.keptOurs++;
+      continue;
+    }
     let plainSha256 = null;
     if (rec.fileRef) {
       try {
@@ -99,7 +113,7 @@ export async function applyPulledRecords(records, { vault, fetchFile, now = new 
       }
     }
     // A local edit not pushed yet loses to the server's version (§2.3), and is noted.
-    if (local && m) {
+    if (local && m && !merge) {
       const docs = await db.documents.toArray();
       const localHash = (await syncRowFor(r.tbl, local, cloudFileIds(docs))).hash;
       if (localHash !== m.hash) out.keptTheirs.push({ tbl: r.tbl, id: r.id, by: r.device_id ?? null });
@@ -112,13 +126,15 @@ export async function applyPulledRecords(records, { vault, fetchFile, now = new 
   const docsById = new Map((await db.documents.toArray()).map((d) => [d.id, d]));
   for (const p of plans) {
     if (p.r.tbl !== 'documents') continue;
+    if (p.kind === 'keep') continue;
     if (p.kind === 'put' || p.kind === 'archive') docsById.set(p.r.id, p.row); else docsById.delete(p.r.id);
   }
   const keptFileIds = cloudFileIds([...docsById.values()]);
   const metaPuts = [];
   const metaDrops = [];
   for (const p of plans) {
-    if (p.kind === 'put') {
+    if (p.kind === 'put' || p.kind === 'keep') {
+      // A kept local row is remembered as the server's version, so it's pushed.
       const { hash } = await syncRowFor(p.r.tbl, p.row, keptFileIds, { plainSha256: p.row.blob ? p.plainSha256 : null });
       metaPuts.push({ tbl: p.r.tbl, row_id: p.r.id, seq: p.r.seq, hash });
     } else {
@@ -138,12 +154,12 @@ export async function applyPulledRecords(records, { vault, fetchFile, now = new 
     await writeSyncMeta(metaPuts);
     await removeSyncMeta(metaDrops);
   });
-  out.applied = plans.length;
+  out.applied = plans.filter((p) => p.kind !== 'keep').length;
 
   // 3. Tell the pages; an archive-instead is a local change to push.
   if (out.archivedInstead.length) markDataChanged();
   const touched = {};
-  for (const p of plans) (touched[p.r.tbl] ||= []).push(p.r.id);
+  for (const p of plans) if (p.kind !== 'keep') (touched[p.r.tbl] ||= []).push(p.r.id);
   try {
     globalThis.dispatchEvent?.(new CustomEvent(SYNC_APPLIED_EVENT, { detail: { tables: touched } }));
   } catch { /* no window (tests): nothing listens */ }

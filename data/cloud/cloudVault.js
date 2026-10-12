@@ -38,7 +38,8 @@ import {
 import { createPasskey, getPrfOutput, forgetPasskey, passkeySupported } from './vaultPasskey.js';
 import { pushIfDirty, restoreSnapshotVault } from './cloudBackup.js';
 import { saveRecoveryCheck } from './cloudDevices.js';
-import { getCloudBackupState, updateCloudBackupState, setCloudRestoredAt } from '../settings.js';
+import { getCloudBackupState, updateCloudBackupState, setCloudRestoredAt, getCloudSyncState, updateCloudSyncState } from '../settings.js';
+import { clearSyncMeta } from './syncState.js';
 
 export class VaultSetupError extends Error {
   constructor(code, message) {
@@ -471,6 +472,12 @@ export async function disableVault({ reauth = {} } = {}) {
   await clearVaultKey();
   await clearUnsavedRecoveryCode();
   recordVaultState('off');
+  // Live sync needs the vault, and the server turned it off for every device
+  // with it (Cloud Phase 2 plan §4.3): this device stops too, keeping its records.
+  if (getCloudSyncState().enabled) {
+    updateCloudSyncState({ enabled: false, joining: false, cursor: 0, rejected: {}, lastError: null });
+    await clearSyncMeta();
+  }
 }
 
 // --- Recovering the account with no signed-in device (Cloud Phase 1 plan §2.7) ----

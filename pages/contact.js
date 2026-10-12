@@ -24,7 +24,7 @@ const els = {
 };
 
 const blank = () => ({
-  name: '', kennel_id: '', contact_type: [], phone: '', email: '', address: '',
+  name: '', kennel_id: '', contact_type: [], phone: '', email: '', facebook_profile: '', address: '',
   waitlist_status: '', first_contact_source: '', notes: '', companion_note: ''
 });
 
@@ -100,6 +100,14 @@ function clearError() { els.error.innerHTML = ''; }
 // Hides the field entirely until it has a value (matches dog.js's Profile card).
 function row(label, valueHtml) { return valueHtml ? `<dt>${esc(label)}</dt><dd>${valueHtml}</dd>` : ''; }
 
+// Facebook profile as a link when it's a web address (a bare
+// "facebook.com/…" gets https://); anything else, e.g. a name, shows as text.
+function facebookHtml(v) {
+  if (!v) return '';
+  const href = /^https?:\/\//i.test(v) ? v : (/^(www\.|m\.)?(facebook\.com|fb\.com)\//i.test(v) ? `https://${v}` : '');
+  return href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>` : esc(v);
+}
+
 function renderView() {
   const c = ctx.original;
   els.body.innerHTML = `
@@ -111,6 +119,7 @@ function renderView() {
       ${row('Kennel', esc(kennelName(c.kennel_id)))}
       ${row('Phone', esc(c.phone))}
       ${row('Email', esc(c.email))}
+      ${row('FB Profile', facebookHtml(c.facebook_profile))}
       ${row('Address', c.address ? esc(c.address).replace(/\n/g, '<br>') : '')}
       ${row('Notes', c.notes ? esc(c.notes).replace(/\n/g, '<br>') : '')}
       ${row('Companion note', c.companion_note ? esc(c.companion_note).replace(/\n/g, '<br>') : '')}
@@ -146,6 +155,7 @@ function renderEdit() {
       </div>
       <div class="field"><label>Phone</label><input id="f-phone" type="text" value="${esc(c.phone)}"></div>
       <div class="field"><label>Email</label><input id="f-email" type="email" value="${esc(c.email)}"></div>
+      <div class="field"><label>FB Profile</label><input id="f-facebook_profile" type="text" value="${esc(c.facebook_profile || '')}" placeholder="https://facebook.com/…"></div>
       ${ctx.waitlistEntries.length
         ? `<div class="field"><label>Waitlist</label><div>${c.waitlist_status && c.waitlist_status !== 'none' ? badge(WAITLIST_STATUS, c.waitlist_status) : '<span class="faint">None</span>'}</div><span class="field-hint">Kept up to date from their waitlist entries.</span></div>`
         : `<div class="field"><label>Waitlist</label><select id="f-waitlist_status">${waitlistOpts}</select></div>`}
@@ -169,6 +179,7 @@ function readForm() {
     contact_type: types,
     phone: val('f-phone').trim(),
     email: val('f-email').trim(),
+    facebook_profile: val('f-facebook_profile').trim(),
     // Absent when entries drive it (read-only) — keep the stored value then.
     waitlist_status: document.getElementById('f-waitlist_status') ? (val('f-waitlist_status') || 'none') : ctx.draft.waitlist_status,
     first_contact_source: val('f-first_contact_source').trim(),

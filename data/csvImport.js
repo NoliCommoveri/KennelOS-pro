@@ -346,7 +346,7 @@ function buildDogChanges(record) {
 const CONTACT_MAPPING = {
   entity: 'contact',
   label: 'Contacts',
-  templateHeaders: ['name', 'contact_type', 'email', 'phone', 'address', 'kennel_name', 'notes'],
+  templateHeaders: ['name', 'contact_type', 'email', 'phone', 'facebook_profile', 'address', 'kennel_name', 'notes'],
   requiredForCreate: ['name'],
 
   async loadExisting() {
@@ -382,7 +382,7 @@ const CONTACT_MAPPING = {
       }
       if (types.length) record.contact_type = types;
     }
-    for (const [key, ...aliases] of [['email'], ['phone', 'telephone'], ['address'], ['notes']]) {
+    for (const [key, ...aliases] of [['email'], ['phone', 'telephone'], ['facebook_profile', 'facebook', 'fb_profile'], ['address'], ['notes']]) {
       const v = col(row, key, ...aliases);
       if (v) record[key] = v;
     }

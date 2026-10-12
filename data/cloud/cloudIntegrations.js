@@ -4,8 +4,9 @@
 // data/integrationEvents.js (apply while the record is where the vendor's link
 // left it, else a review for Today).
 //
-// Only the BACKING device applies (Phase 1 §3.4), checked before the first write,
-// like the waitlist's family events, so two devices never apply one event twice;
+// Only the device doing the program's server work applies (serverWork.js: the
+// BACKING device, or on a syncing program the lease holder), checked before the
+// first write, like the waitlist's family events, so two devices never apply one event twice;
 // the cursor lives on this device (settings, outside KEYS). Nothing is asked of the
 // server until the account has a connection (`connections` in the state, set by a
 // vendor's connect flow, steps 6 and 8, or by refreshConnections): an account with
@@ -14,6 +15,7 @@
 import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
 import { sessionToken } from './cloudAuth.js';
+import { claimServerWork } from './serverWork.js';
 import { getIntegrationsState, updateIntegrationsState } from '../settings.js';
 import { editionFlags } from '../editionConfig.js';
 import { applyIntegrationEvent } from '../integrationApply.js';
@@ -26,6 +28,8 @@ function errorCode(err) {
   if (err instanceof api.CloudOfflineError) return 'offline';
   if (err instanceof api.CloudAuthError) return 'signed-out';
   if (err?.code === 'not_backing_device') return 'not-backing';
+  if (err?.code === 'lease_held') return 'lease-held';
+  if (err?.code === 'not_syncing_here') return 'not-syncing';
   if (err?.code === 'pro_required') return 'pro-required';
   return 'failed';
 }
@@ -70,10 +74,7 @@ async function run(force) {
       const page = await api.readIntegrationEvents(token, cursor);
       if (!page.events.length) break;
       if (!backingChecked) {
-        const program = await api.getProgram(token);
-        if (!program.backingDevice || program.backingDevice.id !== program.thisDeviceId) {
-          throw Object.assign(new Error('Only the backing device applies what connected services report.'), { code: 'not_backing_device' });
-        }
+        await claimServerWork(token);
         backingChecked = true;
       }
       for (const event of page.events) {

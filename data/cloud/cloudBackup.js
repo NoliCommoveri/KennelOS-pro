@@ -22,8 +22,9 @@ import { exportAll, restoreBackup, planCloudMerge, VAULT_PAYLOAD_FORMAT } from '
 import {
   getSampleDataManifest, getCloudDirtyAt, getCloudDirtySince, clearCloudDirty,
   getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT,
-  getMyKennelId, setMyKennelId, markSampleDataCleared, setCloudRestoredAt
+  getMyKennelId, setMyKennelId, markSampleDataCleared, setCloudRestoredAt, getCloudSyncState
 } from '../settings.js';
+import { scanLocalChanges } from './syncState.js';
 import { edition } from '../editionConfig.js';
 import { isCloudAvailable } from './cloudConfig.js';
 import * as api from './cloudApi.js';
@@ -287,6 +288,19 @@ async function contentHash(collections, vaultEnvelope = null) {
   return sha256Hex(new Blob([JSON.stringify(subject)]));
 }
 
+// Live sync (Cloud Phase 2 plan §6.4): a syncing program's snapshot comes from
+// any device that is caught up, stating the seq it has applied. → { seq } to send
+// (null: not syncing here, or the license lapsed, so the Phase 1 rule applies,
+// plan §12 decision 6) or { behind: true } (wait: changes to push or pull, a
+// join under way, or sync paused for another reason).
+export async function snapshotSyncSeq(state = getCloudSyncState()) {
+  if (!state.enabled || state.lastError?.code === 'pro_required') return { seq: null };
+  if (state.joining || (state.lastError && state.lastError.code !== 'offline')) return { behind: true };
+  const scan = await scanLocalChanges();
+  if (scan.puts.length || scan.deletes.length) return { behind: true };
+  return { seq: state.cursor || 0 };
+}
+
 function fail(status, error, extra = {}) {
   updateCloudBackupState({ lastError: { code: status, at: new Date().toISOString(), detail: error?.code || null, ...extra } });
   return { status, ...extra };
@@ -324,6 +338,8 @@ async function pushNow({ force, allowShrink, onProgress, retried = false }) {
   if (!force && isBackupBlocked(state)) return { status: 'skipped', reason: 'paused' };
 
   const account = currentAccount();
+  const sync = await snapshotSyncSeq();
+  if (sync.behind) return { status: 'skipped', reason: 'sync_behind' }; // stays dirty: the next run tries again
   updateCloudBackupState({ lastAttemptAt: new Date().toISOString() });
   try {
     const backup = await exportAll({ encodeBlobs: false });
@@ -361,6 +377,7 @@ async function pushNow({ force, allowShrink, onProgress, retried = false }) {
       counts: envelope.counts,
       files: fileIds,
       edition, // named in a 409 to other devices, so Lite can recognise an upgrade to Pro
+      ...(sync.seq !== null ? { sync_seq: sync.seq } : {}),
       ...(sealed ? { vault: { size: sealed.bytes.length, keyId: vault.keyId } } : {})
     };
     let created;
@@ -438,6 +455,9 @@ function failFromError(err) {
     markSessionExpired();
     return fail('auth', err);
   }
+  // A syncing device that fell behind between the check and the commit: not a
+  // conflict, just too soon. The next run, after a pull, tries again.
+  if (err instanceof api.CloudConflictError && err.code === 'not_caught_up') return { status: 'skipped', reason: 'sync_behind' };
   if (err instanceof api.CloudConflictError) {
     const own = err.backingDevice && err.backingDevice.id === currentAccount()?.deviceId;
     return fail('conflict', err, {

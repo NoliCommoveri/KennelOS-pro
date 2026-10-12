@@ -4,7 +4,10 @@
 // Imports here resolve relative to THIS module's URL (the app root), so they are
 // correct no matter which page (root or /pages/) pulls app.js in.
 import { renderNav } from './nav.js';
-import { db, requestPersistentStorage } from './data/db.js';
+import {
+  db, requestPersistentStorage, isDbUpgradeBlocked,
+  DB_BLOCKED_EVENT, DB_READY_EVENT, DB_VERSIONCHANGE_EVENT
+} from './data/db.js';
 import { wasPersistRequested, markPersistRequested } from './data/settings.js';
 import { expenseRepo } from './data/expenseRepo.js';
 import { renderSampleBanner } from './assets/sampleDataUI.js';
@@ -86,6 +89,32 @@ function renderCloudTestBanner() {
   document.body.insertBefore(bar, document.body.firstChild);
 }
 
+// Database upgrade hand-off (data/db.js): while another open copy of KennelOS
+// holds the older database, this page's records can't load, so say why and what
+// to do instead of leaving "Loading…". It clears itself once the upgrade goes
+// through. And a copy closed by another's upgrade asks for a reload. Wired at
+// module load, not in boot(), so the license gate's wait can't hide it.
+function renderDbNotice(id, html) {
+  if (document.getElementById(id)) return;
+  const bar = document.createElement('div');
+  bar.id = id;
+  bar.className = 'cloud-notice cloud-notice-warning';
+  bar.setAttribute('role', 'alert');
+  bar.innerHTML = html;
+  document.body.insertBefore(bar, document.body.firstChild);
+}
+
+function showDbBlockedNotice() {
+  renderDbNotice('db-blocked-notice', '<strong>KennelOS is updating its storage.</strong> Close every other KennelOS tab or window on this device, including the installed app in your recent apps; this page carries on by itself once they are closed.');
+}
+
+window.addEventListener(DB_BLOCKED_EVENT, showDbBlockedNotice);
+if (isDbUpgradeBlocked()) showDbBlockedNotice();
+window.addEventListener(DB_READY_EVENT, () => document.getElementById('db-blocked-notice')?.remove());
+window.addEventListener(DB_VERSIONCHANGE_EVENT, () => {
+  renderDbNotice('db-closed-notice', '<strong>KennelOS was updated in another tab.</strong> <a href="">Reload this page</a> to keep working; anything not yet saved on this page can no longer be saved.');
+});
+
 async function boot() {
   // Lost device (Cloud Phase 1 plan §2.5): a signed-in device checks in so an
   // erase its owner sent from another device reaches it. First, and not
@@ -147,6 +176,9 @@ async function boot() {
   // open one-use link was paid, at most every 15 minutes. Pro (Accounts) only.
   if (editionFlags.accounts) {
     import('./data/stripeLinks.js').then((m) => m.bootStripeCheck()).catch(() => {});
+    // Contracts sent through her Jotform forms that came back signed (step 7):
+    // her device reads the forms' submissions with the key it holds.
+    import('./data/jotformSigned.js').then((m) => m.bootJotformCheck()).catch(() => {});
   }
   firstRunFlow().finally(() => {
     if (!isCloudAvailable()) return;

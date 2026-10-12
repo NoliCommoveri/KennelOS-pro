@@ -611,6 +611,8 @@ export function clearCloudBackupState() {
 
 // Live sync on this device (Cloud Phase 2 plan §3.4; data/cloud/cloudSync.js):
 //   enabled     this device keeps in step
+//   joining     a join is under way (cloudSync.joinSync): until it finishes,
+//               any sync run resumes the join instead of a plain pull
 //   cursor      the highest server seq this device has applied
 //   lastPushAt / lastPullAt / lastCursorSentAt   ISO times
 //   lastError   { code, at, detail } | null: what paused it (vault_locked,

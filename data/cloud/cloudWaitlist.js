@@ -3,8 +3,9 @@
 // For each own kennel whose list she put online (waitlist_config.online), this
 // device builds the allow-listed projection (data/waitlistProjection.js) and
 // publishes it whenever it changes; a kennel she takes offline is unpublished.
-// The server accepts writes only from the BACKING device (Phase 1 §3.4), so on
-// any other device this records "not the backing device" and does nothing else.
+// The server accepts writes only from the device doing the program's server work
+// (serverWork.js: the BACKING device, or on a syncing program the lease holder),
+// so on any other device this records who does it and does nothing else.
 //
 // Every entry point checks isWaitlistOnlineOffered() (cloud available + the
 // release switch) and the session first, so `cloudUrl: null` makes no request.
@@ -13,6 +14,7 @@
 import * as api from './cloudApi.js';
 import { isWaitlistOnlineOffered } from './cloudConfig.js';
 import { sessionToken } from './cloudAuth.js';
+import { claimServerWork, inBackground, releaseServerWork } from './serverWork.js';
 import {
   getCloudBackupState, getWaitlistOnlineState, updateWaitlistOnlineState, CLOUD_DATA_CHANGED_EVENT
 } from '../settings.js';
@@ -45,12 +47,39 @@ export const PUBLISH_DELAY_MS = 20 * 1000;
 export const INBOX_POLL_MS = 5 * 60 * 1000;
 const LOCK_NAME = 'kennelos-waitlist-publish';
 
+// The server work, claimed once per run and only right before the first write
+// (serverWork.js), so an idle poll asks nothing more than it reads. A device that
+// takes the lease from another one first catches up: a sync pull (what the other
+// device did must be here before this one acts on it) and its events cursor
+// restarted from where the last publisher got to (events_through), as a new
+// backing device does, so no family event is applied twice.
+function serverWorkClaim(token) {
+  let claimed = null;
+  return () => {
+    claimed ??= (async () => {
+      const before = getWaitlistOnlineState().leaseUntil;
+      const work = await claimServerWork(token);
+      const fresh = work.mode === 'lease' && !(before && Date.parse(before) > Date.now());
+      updateWaitlistOnlineState({ leaseUntil: work.mode === 'lease' ? work.until : null, ...(fresh ? { eventsCursor: null } : {}) });
+      if (fresh) {
+        const { pullIfBehind } = await import('./cloudSync.js');
+        await pullIfBehind();
+      }
+      return work;
+    })();
+    return claimed;
+  };
+}
+
 // Why publishing isn't happening, for the settings card. null = fine.
-//   'signed-out' | 'backup-off' | 'not-backing' | 'pro-required' | 'kennel-taken' | 'offline' | 'failed'
+//   'signed-out' | 'backup-off' | 'not-backing' | 'lease-held' (lastError.holder:
+//   { label, until }) | 'not-syncing' | 'pro-required' | 'kennel-taken' | 'offline' | 'failed'
 function errorCode(err) {
   if (err instanceof api.CloudOfflineError) return 'offline';
   if (err instanceof api.CloudAuthError) return 'signed-out';
   if (err?.code === 'not_backing_device') return 'not-backing';
+  if (err?.code === 'lease_held') return 'lease-held';
+  if (err?.code === 'not_syncing_here') return 'not-syncing';
   if (err?.code === 'pro_required') return 'pro-required';
   if (err?.code === 'kennel_taken') return 'kennel-taken';
   return 'failed';
@@ -110,7 +139,7 @@ export async function rotateFormKey(kennelId) {
 // and fills in answers a restore without private backup left out. One that
 // can't be opened (a form key this device doesn't have) stays in the inbox.
 // → { taken, filled, unopened }
-export async function takeInApplications(token, kennels) {
+export async function takeInApplications(token, kennels, { claim = serverWorkClaim(token) } = {}) {
   const byPublicId = new Map(kennels.filter((k) => k.public_id).map((k) => [k.public_id, k]));
   const state = getWaitlistOnlineState();
   const all = !state.inboxFetchedAll;
@@ -123,6 +152,7 @@ export async function takeInApplications(token, kennels) {
   let dogs = null;
   do {
     const page = await api.readWaitlistInbox(token, { all, after });
+    if (page.items.length) await claim(); // before anything is written here
     for (const item of page.items) {
       const kennel = byPublicId.get(item.publicId);
       if (!kennel) continue;
@@ -226,7 +256,7 @@ async function eventContext(event, kennel, cache) {
 // pick: this checks before it writes anything. The next publish carries the
 // cursor as `events_through`, which lets the server drop the holds it kept for
 // picks applied here. → { applied, noted, skipped }
-export async function applyFamilyEvents(token, kennels) {
+export async function applyFamilyEvents(token, kennels, { claim = serverWorkClaim(token) } = {}) {
   const online = kennels.filter(isOnline);
   const byPublicId = new Map(kennels.filter((k) => k.public_id).map((k) => [k.public_id, k]));
   let cursor = getWaitlistOnlineState().eventsCursor;
@@ -236,16 +266,16 @@ export async function applyFamilyEvents(token, kennels) {
   }
   const counts = { applied: 0, noted: 0, skipped: 0 };
   const cache = {};
-  let backingChecked = false;
   for (;;) {
     const page = await api.readWaitlistEvents(token, cursor);
     if (!page.events.length) break;
-    if (!backingChecked) {
-      const program = await api.getProgram(token);
-      if (!program.backingDevice || program.backingDevice.id !== program.thisDeviceId) {
-        throw Object.assign(new Error('Only the backing device applies family actions.'), { code: 'not_backing_device' });
-      }
-      backingChecked = true;
+    await claim();
+    // This device just took the work over (serverWorkClaim reset the cursor):
+    // read again from where the last publisher got to.
+    if (!Number.isInteger(getWaitlistOnlineState().eventsCursor)) {
+      cursor = await startingCursor(token, online);
+      updateWaitlistOnlineState({ eventsCursor: cursor });
+      continue;
     }
     // Where the server already moved the turn on after an event (a family's pass or
     // leave, or its own deadline close), her device doesn't move it on again.
@@ -290,7 +320,7 @@ export async function applyFamilyEvents(token, kennels) {
 // every other move made for her online. A kennel online from before the ready check
 // existed gets today as its online_since, so only holds ending from now are asked.
 // → [entryId removed]
-export async function sweepReadyChecks(token, kennels, { today = todayYMD() } = {}) {
+export async function sweepReadyChecks(token, kennels, { today = todayYMD(), claim = serverWorkClaim(token) } = {}) {
   const removed = [];
   let backing = null;
   for (const k of kennels.filter(isOnline)) {
@@ -301,8 +331,10 @@ export async function sweepReadyChecks(token, kennels, { today = todayYMD() } = 
     }
     for (const e of (await waitlistEntryRepo.getByKennel(k.id)).filter((x) => readyCheckLapsed(x, today, config))) {
       if (backing === null) {
-        const program = await api.getProgram(token);
-        backing = Boolean(program.backingDevice && program.backingDevice.id === program.thisDeviceId);
+        backing = await claim().then(() => true, (err) => {
+          if (err?.name === 'ServerWorkError') return false;
+          throw err;
+        });
       }
       if (!backing) return removed;
       await removeForNoReadyAnswer(e.id, { date: today });
@@ -317,11 +349,12 @@ export async function sweepReadyChecks(token, kennels, { today = todayYMD() } = 
 // their email is about. Offline or rate-limited: they stay queued for the next
 // sync. A refusal about one email (that family isn't published, has no address)
 // marks it failed with the reason; she can retry it. → { sent, failed }
-export async function sendQueuedEmails(token, kennels) {
+export async function sendQueuedEmails(token, kennels, { claim = serverWorkClaim(token) } = {}) {
   const counts = { sent: 0, failed: 0 };
   for (const kennel of kennels.filter(isOnline)) {
     for (const { entry, message } of queuedEmails(await waitlistEntryRepo.getByKennel(kennel.id))) {
       let res;
+      await claim();
       try {
         res = await api.sendWaitlistEmail(token, {
           id: message.id, publicId: kennel.public_id, entryId: entry.id, kind: message.email_kind, subject: message.subject, body: message.body
@@ -413,6 +446,8 @@ async function syncNow({ force }) {
   };
   if (!token) return stop('signed-out');
   if (!getCloudBackupState().enabled) return stop('backup-off');
+  // A syncing device in a background tab leaves it to the one in front (§7).
+  if (inBackground()) return { status: 'skipped', reason: 'background' };
 
   const published = [];
   const unpublished = [];
@@ -421,12 +456,15 @@ async function syncNow({ force }) {
   let emails = null;
   updateWaitlistOnlineState({ lastAttemptAt: new Date().toISOString() });
   try {
+    // Who does the server work (serverWork.js), asked before the first write.
+    const claim = serverWorkClaim(token);
     // New applications and messages first, then what families did on their
     // pages, so the projection that follows includes all of it.
-    if (wanted.length) inbox = await takeInApplications(token, wanted);
-    if (wanted.length) events = await applyFamilyEvents(token, kennels);
-    if (wanted.length) await sweepReadyChecks(token, kennels);
+    if (wanted.length) inbox = await takeInApplications(token, wanted, { claim });
+    if (wanted.length) events = await applyFamilyEvents(token, kennels, { claim });
+    if (wanted.length) await sweepReadyChecks(token, kennels, { claim });
     for (const [kennelId, s] of stale) {
+      await claim();
       await api.unpublishWaitlist(token, s.publicId);
       const kennelsState = { ...getWaitlistOnlineState().kennels };
       delete kennelsState[kennelId];
@@ -448,6 +486,7 @@ async function syncNow({ force }) {
       let hash = await sha256(JSON.stringify(projection));
       const prev = getWaitlistOnlineState().kennels[kennel.id];
       if (!force && prev && prev.hash === hash && prev.publicId === kennel.public_id) continue;
+      await claim();
       let res;
       try {
         res = await api.publishWaitlist(token, kennel.public_id, projection);
@@ -455,7 +494,7 @@ async function syncNow({ force }) {
         // The server moved on while this device was away (W2 step 7): apply its
         // moves first, then publish what that makes.
         if (err?.code !== 'events_pending') throw err;
-        events = await applyFamilyEvents(token, kennels);
+        events = await applyFamilyEvents(token, kennels, { claim });
         projection = await projectionFor(kennel);
         hash = await sha256(JSON.stringify(projection));
         res = await api.publishWaitlist(token, kennel.public_id, projection);
@@ -465,10 +504,13 @@ async function syncNow({ force }) {
       });
       published.push(kennel.id);
     }
-    if (wanted.length) emails = await sendQueuedEmails(token, wanted);
+    if (wanted.length) emails = await sendQueuedEmails(token, wanted, { claim });
   } catch (err) {
     const code = errorCode(err);
-    updateWaitlistOnlineState({ lastError: { code, at: new Date().toISOString() } });
+    updateWaitlistOnlineState({
+      lastError: { code, at: new Date().toISOString(), ...(err?.holder ? { holder: err.holder } : {}) },
+      ...(code === 'lease-held' || code === 'not-syncing' ? { leaseUntil: null } : {})
+    });
     return { status: 'error', reason: code, published, unpublished, inbox, events, emails };
   }
   updateWaitlistOnlineState({ lastError: null });
@@ -486,7 +528,9 @@ export function waitlistOnlineStatus(kennel) {
     signedIn: Boolean(sessionToken()),
     formOpen: isOnline(kennel) && waitlistConfig(kennel).online_form,
     inboxUnopened: state.inboxUnopened || 0,
-    backupOn: getCloudBackupState().enabled
+    backupOn: getCloudBackupState().enabled,
+    // A syncing program (Cloud Phase 2 plan §7): this device holds the lease until then.
+    leaseUntil: state.leaseUntil && Date.parse(state.leaseUntil) > Date.now() ? state.leaseUntil : null
   };
 }
 
@@ -512,8 +556,17 @@ export function startWaitlistScheduler({ win = globalThis } = {}) {
   win.addEventListener?.(CLOUD_DATA_CHANGED_EVENT, onChange);
   win.addEventListener?.('online', onOnline);
   win.document?.addEventListener?.('visibilitychange', onVisible);
+  // Closing: let another of her devices take the work at once (serverWork.js).
+  const onHide = () => {
+    if (getWaitlistOnlineState().leaseUntil) {
+      updateWaitlistOnlineState({ leaseUntil: null });
+      releaseServerWork(sessionToken());
+    }
+  };
+  win.addEventListener?.('pagehide', onHide);
   schedule(2000);
   return () => {
+    win.removeEventListener?.('pagehide', onHide);
     if (timer) clearTimeout(timer);
     if (poll) win.clearInterval?.(poll);
     win.removeEventListener?.(CLOUD_DATA_CHANGED_EVENT, onChange);

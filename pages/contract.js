@@ -134,7 +134,7 @@ function renderView() {
       ${c.contract_type !== 'lease' ? row('Related stud service', ss ? `<a href="stud-service.html?id=${encodeURIComponent(ss.id)}">${esc(studServiceLabel(ss))}</a>` : '') : ''}
       ${row('Document link', c.document_url ? `<a href="${esc(c.document_url)}" target="_blank" rel="noopener noreferrer">${esc(c.document_url)}</a>` : '')}
       ${c.esign_url ? row('Sent for signature', `${esc(c.esign_form_label || 'Contract form')}${c.esign_sent_date ? ` · ${esc(fmtDate(c.esign_sent_date))}` : ''}
-        <button class="btn btn-sm" id="btn-copy-esign" style="margin-left:6px;">Copy link again</button>`) : ''}
+        <button class="btn btn-sm" id="btn-copy-esign" style="margin-left:6px;">Copy link again</button>${canCheckJotform(c) ? '<button class="btn btn-sm" id="btn-check-esign" style="margin-left:6px;">Check for signature</button>' : ''}`) : ''}
       ${row('Terms summary', c.terms_summary ? esc(c.terms_summary).replace(/\n/g, '<br>') : '')}
       ${row('Notes', c.notes ? esc(c.notes).replace(/\n/g, '<br>') : '')}
     </dl>
@@ -147,7 +147,42 @@ function renderView() {
       setTimeout(() => { copyBtn.textContent = 'Copy link again'; }, 1500);
     } catch { showError(`Couldn't copy. The link is: ${c.esign_url}`); }
   };
+  const checkBtn = document.getElementById('btn-check-esign');
+  if (checkBtn) checkBtn.onclick = () => checkSignature(c, checkBtn);
   renderContractDocs();
+}
+
+// Integrations step 7: a contract sent on a Jotform form, still Sent, can be
+// checked against the form's submissions now (app.js also checks on open).
+const canCheckJotform = (c) => editionFlags.accounts && !c.is_archived && c.status === 'sent' && c.esign_provider === 'jotform';
+
+async function checkSignature(c, btn) {
+  clearError();
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try {
+    const { checkJotformSignatures } = await import('../data/jotformSigned.js');
+    const r = await checkJotformSignatures({ force: true, contractIds: [c.id] });
+    const fresh = await contractRepo.getById(c.id);
+    if (r.signed) {
+      ctx.original = fresh;
+      renderAll();
+      await alertModal({ title: 'Signed', message: `Jotform has the signed form, so the contract is marked Signed${fresh?.signed_date ? ` on ${fmtDate(fresh.signed_date)}` : ''}.` });
+    } else if (r.review) {
+      await alertModal({ title: 'Check it on Today', message: 'Jotform has a signed form for this contract, but the contract changed since it was sent: Today shows what Jotform said.' });
+    } else if (r.notConnected) {
+      await alertModal({ title: 'Jotform isn\'t connected here', message: 'Connect Jotform on this device (Accounts, on the form\'s account) and KennelOS checks for the signed form by itself. Or mark it Signed yourself.' });
+    } else if (r.checked) {
+      await alertModal({ title: 'Not signed yet', message: 'Jotform has no submission of this form for this contract yet.' });
+    } else {
+      await alertModal({ title: 'Can\'t check this one', message: 'KennelOS can only find a signed form when the form has a contract reference field (a hidden field named contractRef, or one matched to it in Connect Jotform) and is still on your Accounts page. Mark it Signed yourself.' });
+    }
+  } catch (e) {
+    showError(e.message || String(e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Check for signature';
+  }
 }
 
 // --- Signed-document attachment (§26.1) ------------------------------------
@@ -496,7 +531,7 @@ async function sendForSignature(c) {
       title: `Send ${choice.form.label}`,
       name: signer?.name || '', email: signer?.email || '', phone: signer?.phone || '',
       subject: msg.subject, body: msg.body,
-      hint: 'Once you\'ve sent it, the contract is marked Sent. Mark it Signed when it comes back.'
+      hint: 'Once you\'ve sent it, the contract is marked Sent. When it comes back signed, KennelOS marks it Signed if this device has Jotform connected and the form has a contract reference field; otherwise mark it Signed yourself.'
     });
     if (!used) return;
     ctx.original = await markContractSent(c, choice.form, choice.url);

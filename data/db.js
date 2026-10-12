@@ -178,6 +178,36 @@ db.version(4).stores({
   kennels: 'id, public_id, waitlist_fee_account_id, is_archived'
 });
 
+// --- Schema upgrade hand-off between open copies ---------------------------
+// A new version(N) can only install once every other open copy of the app on
+// this device lets go of the older database. A live copy does that by itself
+// (Dexie closes on `versionchange`), but one the phone has frozen in the
+// background (an old tab, the installed app in Recents) can't, and the upgrade
+// then waits with no error: every read hangs, so pages show "Loading…" or no
+// table at all (seen 2026-10-12 on the version(4) rollout). So the data layer
+// announces both sides and app.js shows them:
+//   DB_BLOCKED_EVENT — this copy is waiting on another one to close (and
+//     DB_READY_EVENT once it got through); isDbUpgradeBlocked() for a late reader.
+//   DB_VERSIONCHANGE_EVENT — another copy has upgraded, so this one was closed
+//     and must reload to keep working.
+export const DB_BLOCKED_EVENT = 'kennelos:dbblocked';
+export const DB_READY_EVENT = 'kennelos:dbready';
+export const DB_VERSIONCHANGE_EVENT = 'kennelos:dbversionchange';
+
+let upgradeBlocked = false;
+export function isDbUpgradeBlocked() { return upgradeBlocked; }
+
+const announce = (name) => globalThis.dispatchEvent?.(new Event(name));
+db.on('blocked', () => { upgradeBlocked = true; announce(DB_BLOCKED_EVENT); });
+db.on('ready', () => {
+  if (!upgradeBlocked) return;
+  upgradeBlocked = false;
+  announce(DB_READY_EVENT);
+});
+// Not returning false keeps Dexie's default: close, so the other copy's upgrade
+// goes through.
+db.on('versionchange', () => { announce(DB_VERSIONCHANGE_EVENT); });
+
 // --- Device-only tables ---------------------------------------------------
 // `device_secrets` holds this device's unlocked private-vault key as a
 // CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js reads and

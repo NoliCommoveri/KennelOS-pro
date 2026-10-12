@@ -5,7 +5,8 @@
 // The key goes as the `apiKey` query parameter, not a header, so each call is a
 // plain GET with no CORS preflight: the best chance of Jotform answering a
 // browser (D16's open question, tested in a real flow). Calls send no cookies
-// and no referrer. Only reads: who the key belongs to, her forms, a form's fields.
+// and no referrer. Only reads: who the key belongs to, her forms, a form's fields,
+// and a form's submissions (to find signed contracts, jotformSigned.js).
 // *Unverified from the build environment, which can't reach jotform.com:* the
 // paths, the `{ responseCode, message, content }` envelope and the EU / HIPAA
 // hosts are from Jotform's API docs; check them against a real account.
@@ -66,4 +67,15 @@ export async function jotformForms(conn) {
 // One form's fields, as the API gives them (jotformMatch.formFields reads them).
 export async function jotformQuestions(conn, formId) {
   return call(conn, `/form/${encodeURIComponent(formId)}/questions`);
+}
+
+// A form's submissions made since `sinceYMD` (Integrations plan step 7: her
+// device looks for signed contracts), newest first, deleted ones left out. The
+// `filter` narrows it on Jotform's side; jotformSigned.js checks the date again.
+// → [{ id, created_at, status, answers }] as the API gives them.
+export async function jotformSubmissions(conn, formId, sinceYMD) {
+  const params = { limit: '1000', orderby: 'created_at' };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(sinceYMD || '')) params.filter = JSON.stringify({ 'created_at:gt': `${sinceYMD} 00:00:00` });
+  const c = await call(conn, `/form/${encodeURIComponent(formId)}/submissions`, params);
+  return (Array.isArray(c) ? c : []).filter((s) => s && s.id && s.status !== 'DELETED');
 }

@@ -28,6 +28,7 @@ import {
 } from '../data/cloud/cloudVault.js';
 import { passkeySupported } from '../data/cloud/vaultPasskey.js';
 import { getBackupStatus } from '../data/cloud/cloudBackup.js';
+import { syncStatus } from '../data/cloud/cloudSync.js';
 import { currentAccount } from '../data/cloud/cloudAuth.js';
 import { getMyKennelName } from '../data/kennelSetup.js';
 
@@ -641,7 +642,10 @@ export async function turnOffVaultFlow() {
   const ok = await typedConfirm({
     title: 'Turn off sensitive records backup?',
     message: `Nobody will be able to unlock the sensitive records backup of ${kennel} again, from any device, and sensitive records stop being backed up. `
-      + 'Old encrypted backups are deleted within 30 days.\n\nYour records on this device are untouched. Kennel records keep backing up as before.',
+      + 'Old encrypted backups are deleted within 30 days.'
+      // Live sync needs it (Cloud Phase 2 plan §4.3): turning it off ends sync too.
+      + (syncStatus().enabled ? '\n\nYour devices also stop keeping in step, all of them: each keeps the records it has.' : '')
+      + '\n\nYour records on this device are untouched. Kennel records keep backing up as before.',
     phrase: 'TURN OFF',
     confirmLabel: 'Turn off sensitive records backup'
   });

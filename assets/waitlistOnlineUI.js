@@ -37,16 +37,29 @@ const PROBLEM = {
   'signed-out': 'Sign in to cloud backup on this device (Import / Export) to publish it.',
   'backup-off': 'Turn on cloud backup on this device (Import / Export) to publish it.',
   'not-backing': 'Your other device that backs up publishes the list. Open the app there, or make this the backup device in Import / Export.',
+  // A syncing program (Cloud Phase 2 plan §7): one device at a time, by lease.
+  'not-syncing': 'Your devices keep in step, and this one doesn\'t yet. Turn on "Keep this device in step" in Import / Export to handle your online list here.',
   'pro-required': 'Your cloud account isn\'t linked to a Pro purchase yet. Use "Link a Pro purchase email…" in the cloud backup card (Import / Export).',
   'kennel-taken': 'Another account has already published this kennel. Contact support.',
   offline: 'Couldn\'t reach the server. It will try again.',
   failed: 'Publishing didn\'t work. It will try again.'
 };
 
+// Who handles the list on a syncing program: another device's lease (open now,
+// while it lasts), or this one's.
+function leaseHolder(st) {
+  const h = st.lastError?.code === 'lease-held' ? st.lastError.holder : null;
+  if (!h) return null;
+  const open = h.until && Date.parse(h.until) > Date.now();
+  return `Handled by ${h.label ? esc(h.label) : 'another of your devices'}${open ? ' (open now)' : ''}. It takes this one over once that device is closed for two minutes.`;
+}
+
 function statusLine(st) {
   if (!st.online) return 'Not online.';
+  const held = leaseHolder(st);
+  if (held) return `<span class="badge badge-blue">Online</span> ${held}`;
   if (st.lastError && PROBLEM[st.lastError.code]) return `<span class="badge badge-amber">Not published</span> ${esc(PROBLEM[st.lastError.code])}`;
-  if (st.published) return `<span class="badge badge-green">Online</span> Last published ${esc(ago(st.published.publishedAt))}.`;
+  if (st.published) return `<span class="badge badge-green">Online</span> Last published ${esc(ago(st.published.publishedAt))}.${st.leaseUntil ? ' This device is handling your online list.' : ''}`;
   return 'Publishing…';
 }
 
