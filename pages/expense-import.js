@@ -18,6 +18,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES } from '../data/vocab.js';
 import { esc, badge, fmtDate, fmtMoney } from '../assets/ui.js';
+import { importHelpHtml, wireImportHelp } from '../assets/importHelp.js';
 
 const mount = document.getElementById('import-root');
 let plan = null;          // classified rows from buildPlan
@@ -168,9 +169,8 @@ async function commit() {
 mount.innerHTML = `
   <section class="card">
     <h2 style="margin-top:0;">1 · Choose a CSV file</h2>
-    <p class="muted">Recognized columns (extra columns ignored, missing ones fine):</p>
-    <p class="mono" style="font-size:12px; background:var(--surface-2); padding:8px 10px; border-radius:var(--radius-sm); overflow-x:auto;">subject_type, subject_name, expense_date, amount, category, vendor, miles, mileage_rate, receipt_number, notes</p>
     <input type="file" id="imp-file" accept=".csv,text/csv">
+    ${importHelpHtml('expense')}
   </section>
   <div id="imp-msg"></div>
   <section class="card" id="imp-preview-card" style="display:none; margin-top:16px;">
@@ -189,6 +189,8 @@ mount.innerHTML = `
     <h2 style="margin-top:0;">Import complete</h2>
     <div id="imp-result"></div>
   </section>`;
+
+wireImportHelp(mount, 'expense');
 
 mount.querySelector('#imp-file').addEventListener('change', async (ev) => {
   mount.querySelector('#imp-msg').innerHTML = '';

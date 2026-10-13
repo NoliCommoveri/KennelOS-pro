@@ -11,6 +11,7 @@ import { isDropboxConnected } from '../data/dropbox.js';
 import { mountDropboxConnect } from '../assets/dropboxConnectUI.js';
 import { pushToDropbox, fetchDropboxBackup } from '../data/assistantSync.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { downloadImportTemplate } from '../assets/importHelp.js';
 
 // Cloud backup UI, loaded only when this edition has a server (`cloudUrl` set),
 // so an edition without one never even loads the cloud modules (plan §7).
@@ -266,6 +267,35 @@ if (edition === 'lite') {
 }
 csvSelect.addEventListener('change', () => {
   if (csvSelect.value) location.href = csvSelect.value;
+});
+
+// A template for each import the select above still offers (so Lite lists only
+// its own). Kennel tests import a breed/test seed file, so theirs is the bundled sample.
+const TEMPLATE_ENTITY = {
+  'dog-import.html': 'dog', 'contact-import.html': 'contact', 'pairing-import.html': 'pairing',
+  'litter-import.html': 'litter', 'sale-import.html': 'sale', 'event-import.html': 'event',
+  'stud-service-import.html': 'stud_service', 'expense-import.html': 'expense', 'waitlist-import.html': 'waitlist'
+};
+const KENNEL_TESTS_SAMPLE = '../resources/common_tests_by_breed_seed.csv';
+const templateSelect = document.getElementById('csv-template-select');
+for (const o of [...csvSelect.options].filter((x) => x.value)) {
+  const value = o.value === 'kennel-tests-import.html' ? 'sample' : TEMPLATE_ENTITY[o.value];
+  if (!value) continue;
+  templateSelect.add(new Option(value === 'sample' ? `${o.textContent} (sample file)` : o.textContent, value));
+}
+templateSelect.addEventListener('change', () => {
+  const v = templateSelect.value;
+  if (v === 'sample') {
+    const a = document.createElement('a');
+    a.href = KENNEL_TESTS_SAMPLE;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } else if (v) {
+    downloadImportTemplate(v);
+  }
+  templateSelect.value = '';
 });
 
 async function renderResetAppStatus() {

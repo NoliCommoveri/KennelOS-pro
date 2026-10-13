@@ -526,6 +526,7 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 .license-wall { max-width: 460px; }
 .license-title { margin: 0 0 6px; }
 .license-lead { margin: 0 0 16px; color: var(--text-muted); }
+.license-lead-note { color: var(--text); }
 .license-label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 5px; }
 .license-input {
   width: 100%;

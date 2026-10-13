@@ -8,6 +8,7 @@
 // row at an existing one, exactly as the spec requires.
 import { parseCsv, buildPlan, commitPlan, getMapping } from '../data/csvImport.js';
 import { esc } from './ui.js';
+import { importHelpHtml, wireImportHelp } from './importHelp.js';
 
 const STATUS_BADGE = {
   create: 'badge-green',
@@ -23,9 +24,8 @@ export function createImportView({ mount, entity, listHref, listLabel }) {
   mount.innerHTML = `
     <section class="card">
       <h2 style="margin-top:0;">1 · Choose a CSV file</h2>
-      <p class="muted">Recognized columns (extra columns are ignored, missing ones are fine):</p>
-      <p class="mono" style="font-size:12px; background:var(--surface-2); padding:8px 10px; border-radius:var(--radius-sm); overflow-x:auto;">${esc(mapping.templateHeaders.join(', '))}</p>
       <input type="file" id="imp-file" accept=".csv,text/csv">
+      ${importHelpHtml(entity)}
     </section>
     <div id="imp-msg"></div>
     <section class="card" id="imp-preview-card" style="display:none; margin-top:16px;">
@@ -45,6 +45,7 @@ export function createImportView({ mount, entity, listHref, listLabel }) {
       <div id="imp-result"></div>
     </section>`;
 
+  wireImportHelp(mount, entity);
   const fileInput = mount.querySelector('#imp-file');
   const msg = mount.querySelector('#imp-msg');
   const previewCard = mount.querySelector('#imp-preview-card');

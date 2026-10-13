@@ -181,6 +181,9 @@ function nk(name, dob) {
 // Natural key: registered_name + date_of_birth, falling back to
 // call_name + date_of_birth (Data Model §8). A row with no DOB, or with no
 // name at all, cannot form a key → needs review.
+// Mirrors dogRepo's OWNER_REQUIRED_TYPES: these ownerships need owner_contact_id.
+const DOG_OWNER_REQUIRED = ['external', 'leased_in'];
+
 const DOG_MAPPING = {
   entity: 'dog',
   label: 'Dogs',
@@ -188,19 +191,22 @@ const DOG_MAPPING = {
   templateHeaders: [
     'call_name', 'registered_name', 'sex', 'date_of_birth', 'breed',
     'sire_registered_name', 'dam_registered_name', 'ownership_type', 'status',
-    'kennel_name', 'color_markings', 'registry', 'registration_number', 'microchip_id',
+    'owner_name', 'kennel_name', 'color_markings', 'registry', 'registration_number', 'microchip_id',
     'coi_value', 'coi_method', 'coi_source', 'coi_as_of', 'notes'
   ],
   requiredForCreate: ['call_name', 'sex', 'breed', 'ownership_type', 'status'],
 
   async loadExisting() {
-    const [dogs, kennels] = await Promise.all([
+    const [dogs, kennels, contacts] = await Promise.all([
       // Pedigree-only ancestors too: a row naming one matches it rather than
       // duplicating it, and sire/dam names resolve onto it.
       dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
-      kennelRepo.getAll({ includeArchived: true })
+      kennelRepo.getAll({ includeArchived: true }),
+      contactRepo.getAll({ includeArchived: true })
     ]);
     this._kennels = buildKennelNameIndex(kennels);
+    this._contactByName = new Map();
+    for (const c of contacts) if (c.name) this._contactByName.set(c.name.trim().toLowerCase(), c);
     return dogs;
   },
 
@@ -215,7 +221,7 @@ const DOG_MAPPING = {
       const ck = d.call_name?.trim().toLowerCase();
       if (ck && !byName.has(ck)) byName.set(ck, d);
     }
-    return { byReg, byCall, byName, kennels: this._kennels };
+    return { byReg, byCall, byName, kennels: this._kennels, contactByName: this._contactByName || new Map() };
   },
 
   classify(row, index, i) {
@@ -253,6 +259,16 @@ const DOG_MAPPING = {
     ]) {
       const v = col(row, key, ...aliases);
       if (v) record[key] = v;
+    }
+
+    // Owner (dogRepo: an external or leased-in dog needs owner_contact_id). By
+    // contact name against EXISTING contacts only; an unknown name is flagged.
+    const ownerName = col(row, 'owner_name', 'owner', 'owner_contact_name');
+    let ownerUnresolved = false;
+    if (ownerName) {
+      const hit = index.contactByName.get(ownerName.toLowerCase());
+      if (hit) record.owner_contact_id = hit.id;
+      else { ownerUnresolved = true; reasons.push(`Owner "${ownerName}" not found — add the contact first.`); }
     }
 
     // Recorded COI (Stage 5, Build Brief §2.3). Gated on a numeric coi_value:
@@ -313,7 +329,14 @@ const DOG_MAPPING = {
     }
     // Unresolved parents push a create/update row to review (fixable, or apply anyway).
     if (unresolved.length) { if (status_ !== 'review') status_ = 'review'; reasons.push(unresolved.join('; ') + '.'); }
-    if (kennelUnresolved) status_ = 'review';
+    if (kennelUnresolved || ownerUnresolved) status_ = 'review';
+    // The dog as it would be saved (an update merges onto the match): an
+    // external or leased-in dog with no owner would fail at commit, so say so now.
+    const saved = { ...(match || {}), ...record };
+    if (!saved.pedigree_only && DOG_OWNER_REQUIRED.includes(saved.ownership_type) && !saved.owner_contact_id && !ownerUnresolved) {
+      status_ = 'review';
+      reasons.push(`${saved.ownership_type === 'external' ? 'An external' : 'A leased-in'} dog needs its owner: add an owner_name column naming one of your contacts.`);
+    }
 
     const display = reg || call || `(row ${i + 2})`;
     return {
@@ -1591,6 +1614,7 @@ export async function buildPlan(entity, rows) {
   const existing = await mapping.loadExisting();
   const index = mapping.buildIndex(existing);
   const plan = rows.map((row, i) => mapping.classify(row, index, i));
+  if (needsKennelScope(entity)) flagMissingKennel(entity, plan, await resolveKennelIdForWrite());
   return { rows: plan, summary: summarize(plan), existing };
 }
 
@@ -1610,6 +1634,24 @@ export function summarize(plan) {
 // owns them — an external dog's kennel is somebody else's and stays whatever
 // the CSV said, including nothing.
 const KENNEL_SCOPED_IMPORTS = new Set(['pairing', 'litter', 'sale', 'stud_service']);
+
+const needsKennelScope = (entity) => entity === 'dog' || KENNEL_SCOPED_IMPORTS.has(entity);
+
+// A new record that must carry a kennel but has none (no kennel_name, and no
+// active/sole kennel for stampKennelScope to fall back to: two or more own
+// kennels with "All kennels" showing) would fail at commit, so the preview sends
+// it to review instead. Only creates: an update keeps the matched record's kennel.
+export function flagMissingKennel(entity, plan, defaultKennelId) {
+  if (defaultKennelId) return plan;
+  for (const r of plan) {
+    if (r.status !== 'create' || r.record.kennel_id) continue;
+    if (entity === 'dog' && !SCOPED_OWNERSHIP.has(r.record.ownership_type)) continue;
+    r.status = 'review';
+    r.decision = 'skip';
+    r.reasons.push('No kennel: add a kennel_name column naming one of your kennels, or switch the app to one kennel first.');
+  }
+  return plan;
+}
 
 async function stampKennelScope(entity, record) {
   if (record.kennel_id) return;

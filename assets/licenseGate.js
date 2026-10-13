@@ -53,7 +53,7 @@ function mountWall(innerHtml) {
 function renderActivationWall() {
   const card = mountWall(`
     <h2 class="license-title">Activate KennelOS&nbsp;Pro</h2>
-    <p class="license-lead">Enter the license key from your purchase confirmation to unlock Pro on this device.</p>
+    <p class="license-lead">Enter the license key from your Lemon Squeezy purchase confirmation email to unlock Pro on this device. <strong class="license-lead-note">NOTE: If you are already using KennelOS Pro on another device, you do NOT need to purchase another; simply enter the same key below.</strong></p>
     <form id="license-form" novalidate>
       <label class="license-label" for="license-key-input">License key</label>
       <input id="license-key-input" class="license-input" type="text" autocomplete="off"
