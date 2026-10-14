@@ -16,15 +16,27 @@ const STATUS_BADGE = {
   review: 'badge-amber'
 };
 
-export function createImportView({ mount, entity, listHref, listLabel }) {
+// The several-file import (pages/import-batch.js) passes `rows` already parsed
+// (with `fileName`) and `onNext(result | null)`: the file picker is replaced by
+// the file's name, Cancel becomes "Skip this file" (onNext(null)), and the
+// finished screen offers Next instead of the list link.
+export function createImportView({ mount, entity, listHref, listLabel, rows = null, fileName = '', onNext = null }) {
   const mapping = getMapping(entity);
   let plan = null;      // array of classified rows (decisions are mutated in place)
   let existing = [];    // existing records, for the "match to existing" picker
 
+  const fileCard = rows
+    ? `<h2 style="margin-top:0;">1 · ${esc(mapping.label)} from <span class="mono">${esc(fileName)}</span></h2>
+      <p class="muted">${rows.length} row${rows.length === 1 ? '' : 's'}.</p>`
+    : `<h2 style="margin-top:0;">1 · Choose a CSV file</h2>
+      <input type="file" id="imp-file" accept=".csv,text/csv">`;
+  const cancel = onNext
+    ? '<button class="btn" id="imp-skip-file">Skip this file</button>'
+    : `<a class="btn" href="${esc(listHref)}">Cancel</a>`;
+
   mount.innerHTML = `
     <section class="card">
-      <h2 style="margin-top:0;">1 · Choose a CSV file</h2>
-      <input type="file" id="imp-file" accept=".csv,text/csv">
+      ${fileCard}
       ${importHelpHtml(entity)}
     </section>
     <div id="imp-msg"></div>
@@ -37,7 +49,7 @@ export function createImportView({ mount, entity, listHref, listLabel }) {
       <div id="imp-table" style="overflow-x:auto;"></div>
       <div class="form-actions">
         <button class="btn btn-primary" id="imp-commit">Commit import</button>
-        <a class="btn" href="${esc(listHref)}">Cancel</a>
+        ${cancel}
       </div>
     </section>
     <section class="card" id="imp-result-card" style="display:none; margin-top:16px;">
@@ -60,24 +72,32 @@ export function createImportView({ mount, entity, listHref, listLabel }) {
   }
   function clearFlash() { msg.innerHTML = ''; }
 
-  fileInput.addEventListener('change', async () => {
-    clearFlash();
-    resultCard.style.display = 'none';
-    previewCard.style.display = 'none';
-    plan = null;
-    const file = fileInput.files?.[0];
-    if (!file) return;
-    try {
-      const parsed = await parseCsv(file);
-      if (!parsed.rows.length) { flash('That file has no data rows.', 'err'); return; }
-      const built = await buildPlan(entity, parsed.rows);
-      plan = built.rows;
-      existing = built.existing;
-      renderPreview(built.summary);
-    } catch (e) {
-      flash(e.message || String(e), 'err');
-    }
-  });
+  async function loadRows(dataRows) {
+    if (!dataRows.length) { flash('That file has no data rows.', 'err'); return; }
+    const built = await buildPlan(entity, dataRows);
+    plan = built.rows;
+    existing = built.existing;
+    renderPreview(built.summary);
+  }
+
+  if (rows) {
+    loadRows(rows).catch((e) => flash(e.message || String(e), 'err'));
+    mount.querySelector('#imp-skip-file')?.addEventListener('click', () => onNext(null));
+  } else {
+    fileInput.addEventListener('change', async () => {
+      clearFlash();
+      resultCard.style.display = 'none';
+      previewCard.style.display = 'none';
+      plan = null;
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      try {
+        await loadRows((await parseCsv(file)).rows);
+      } catch (e) {
+        flash(e.message || String(e), 'err');
+      }
+    });
+  }
 
   function renderSummary() {
     const s = { create: 0, update: 0, skip: 0 };
@@ -190,10 +210,17 @@ export function createImportView({ mount, entity, listHref, listLabel }) {
       const failed = res.failed.length
         ? `<div class="inline-error" style="margin-top:10px;"><strong>${res.failed.length} row(s) failed:</strong><br>${res.failed.map((f) => `Row ${f.index + 2} (${esc(f.display)}): ${esc(f.message)}`).join('<br>')}</div>`
         : '';
+      const notes = res.notes?.length
+        ? `<div class="muted" style="margin-top:10px;"><strong>${res.notes.length} note(s):</strong><br>${res.notes.map((f) => `Row ${f.index + 2} (${esc(f.display)}): ${esc(f.message)}`).join('<br>')}</div>`
+        : '';
       resultEl.innerHTML = `
         <p><strong>${res.created}</strong> created · <strong>${res.updated}</strong> updated · <strong>${res.skipped}</strong> skipped.</p>
         ${failed}
-        <div class="form-actions"><a class="btn btn-primary" href="${esc(listHref)}">Go to ${esc(listLabel)}</a></div>`;
+        ${notes}
+        <div class="form-actions">${onNext
+          ? '<button class="btn btn-primary" id="imp-next">Next →</button>'
+          : `<a class="btn btn-primary" href="${esc(listHref)}">Go to ${esc(listLabel)}</a>`}</div>`;
+      if (onNext) resultEl.querySelector('#imp-next').addEventListener('click', () => onNext(res));
       resultCard.style.display = '';
       resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) {

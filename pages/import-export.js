@@ -272,7 +272,7 @@ csvSelect.addEventListener('change', () => {
 // A template for each import the select above still offers (so Lite lists only
 // its own). Kennel tests import a breed/test seed file, so theirs is the bundled sample.
 const TEMPLATE_ENTITY = {
-  'dog-import.html': 'dog', 'contact-import.html': 'contact', 'pairing-import.html': 'pairing',
+  'kennel-import.html': 'kennel', 'dog-import.html': 'dog', 'contact-import.html': 'contact', 'pairing-import.html': 'pairing',
   'litter-import.html': 'litter', 'sale-import.html': 'sale', 'event-import.html': 'event',
   'stud-service-import.html': 'stud_service', 'expense-import.html': 'expense', 'waitlist-import.html': 'waitlist'
 };

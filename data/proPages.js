@@ -13,7 +13,7 @@ export const PRO_ONLY_PAGES = [
   // People / Contacts
   'contacts.html', 'contact.html', 'contact-import.html',
   // Kennel management (full) — Lite keeps only first-run kennel setup
-  'kennels.html', 'kennel.html', 'kennel-tests-import.html',
+  'kennels.html', 'kennel.html', 'kennel-import.html', 'kennel-tests-import.html',
   // Stud services
   'stud-services.html', 'stud-service.html', 'stud-service-import.html',
   // Contracts

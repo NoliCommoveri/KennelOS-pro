@@ -46,32 +46,43 @@ const KENNEL_NAME = {
   text: 'Which of your own kennels this belongs to, by kennel name. Leave blank to use the kennel you\'re working in.'
 };
 const NOTES = { need: 'optional', text: 'Free-text notes.' };
-const DOG_REF = (who) => `The ${who}'s registered name or call name, exactly as it's saved on the dog's record. The dog must already exist in KennelOS.`;
+const DOG_REF = (who) => `The ${who}'s registered name or call name, exactly as it's saved on the dog's record. It can be a dog already in KennelOS or another row of this same file (linked after every row is imported).`;
 
 const HELP = {
   dog: {
-    match: 'Each row is matched to an existing dog by registered name + date of birth, or call name + date of birth. A match updates that dog; no match creates a new one.',
+    match: 'Each row is matched to an existing dog by registered name + date of birth, call name + date of birth, or registration number. A match updates that dog; no match creates a new one. Parents can go in the same file as their pups.',
     columns: {
-      call_name: { need: 'new', aliases: ['name'], text: 'The name you use day to day. A new dog needs it; an existing dog can be matched by registered name instead.' },
+      call_name: { need: 'new', aliases: ['name'], text: 'The name you use day to day. A new dog needs it, except a pedigree-only dog with a registered name; an existing dog can be matched by registered name instead.' },
       registered_name: { need: 'optional', aliases: ['reg_name'], text: 'Full registered name. Used first for matching, so include it when the dog has one.' },
       sex: { need: 'new', values: SEX, text: 'M and F also work.' },
-      date_of_birth: { need: 'required', aliases: ['dob', 'birthdate'], text: 'Used with the name to match the dog. A row without it always goes to review.' },
+      date_of_birth: { need: 'optional', aliases: ['dob', 'birthdate'], text: 'Used with the name to match the dog. A row needs either this or a registration number, or it goes to review.' },
       breed: { need: 'new', text: 'The breed, as you write it in KennelOS.' },
       sire_registered_name: { need: 'optional', aliases: ['sire_name'], text: DOG_REF('sire') },
       dam_registered_name: { need: 'optional', aliases: ['dam_name'], text: DOG_REF('dam') },
       ownership_type: { need: 'new', aliases: ['ownership'], values: OWNERSHIP_TYPE, text: 'How you hold this dog.' },
-      status: { need: 'new', values: DOG_STATUS, text: 'The dog\'s current life stage.' },
-      owner_name: { need: 'optional', aliases: ['owner', 'owner_contact_name'], text: 'Who owns the dog, by contact name. Required for an External or Leased in dog. The contact must already exist.' },
+      status: { need: 'new', values: DOG_STATUS, text: 'The dog\'s current life stage. Blank on a pedigree-only dog means External reference.' },
+      owner_name: { need: 'optional', aliases: ['owner', 'owner_contact_name'], text: 'Who owns the dog, by contact name. The contact must already exist. Required for a Leased in dog. A new External dog without one is saved pedigree-only: kept for lineage (a sire or dam from a pedigree), off the Dogs list.' },
       kennel_name: { need: 'optional', aliases: ['kennel'], text: 'The dog\'s kennel, by name. For a dog you own or co-own it must be one of your own kennels (blank = the kennel you\'re working in); an outside dog can name any kennel you have on file.' },
+      breeder_kennel_name: { need: 'optional', aliases: ['breeder_kennel'], text: 'The kennel that bred the dog, by name: your own, or an outside kennel on file (import kennels first). An unknown name is flagged for review.' },
       color_markings: { need: 'optional', aliases: ['color', 'markings'], text: 'Color and markings.' },
       registry: { need: 'optional', text: 'The registry, e.g. AKC or UKC.' },
-      registration_number: { need: 'optional', aliases: ['reg_number'], text: 'Registration number.' },
+      registration_number: { need: 'optional', aliases: ['reg_number'], text: 'Registration number. Also matches the dog on its own, written any way ("NP888072/07 03-25" and "np88807207" are the same), so a dog from a pedigree needs no date of birth.' },
       microchip_id: { need: 'optional', aliases: ['microchip'], text: 'Microchip number.' },
       coi_value: { need: 'optional', aliases: ['coi'], text: 'A recorded inbreeding coefficient (COI) as a number, e.g. 6.25. The three COI columns below are saved only when this is filled in.' },
       coi_method: { need: 'optional', text: 'How the COI was worked out, e.g. "10 generations".' },
       coi_source: { need: 'optional', text: 'Where the COI came from, e.g. a registry or database name.' },
       coi_as_of: { need: 'optional', aliases: ['coi_as_of_date'], text: 'The date the COI was calculated.' },
       notes: NOTES
+    }
+  },
+
+  kennel: {
+    match: 'Each row is matched to an existing kennel by name (capitals and extra spaces ignored). A match fills in that kennel; no match adds it as an outside kennel. Import kennels before contacts and dogs, so their kennel columns can find them.',
+    columns: {
+      kennel_name: { need: 'required', aliases: ['kennel', 'name'], text: 'The kennel\'s name. Type it the way its owner does: a kennel card from them is offered as a link only when the names match.' },
+      prefix: { need: 'optional', text: 'The prefix its dogs\' registered names start with.' },
+      location: { need: 'optional', text: 'Where the kennel is, e.g. a town and state.' },
+      website: { need: 'optional', aliases: ['url'], text: 'A web address for the kennel.' }
     }
   },
 
@@ -84,7 +95,7 @@ const HELP = {
       phone: { need: 'optional', aliases: ['telephone'], text: 'Phone number.' },
       facebook_profile: { need: 'optional', aliases: ['facebook', 'fb_profile'], text: 'Link to their Facebook profile.' },
       address: { need: 'optional', text: 'Mailing address.' },
-      kennel_name: { need: 'optional', aliases: ['kennel'], text: 'Their kennel, by name. It must already be a kennel on file; an unknown name is left blank and flagged.' },
+      kennel_name: { need: 'optional', aliases: ['kennel'], text: 'Their kennel, by name. It must already be a kennel on file (import kennels first); an unknown name is left blank and flagged.' },
       notes: NOTES
     }
   },
