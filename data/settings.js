@@ -23,7 +23,8 @@ const KEYS = {
   cloudDirtyAt: 'kennelOS.cloudDirtyAt',
   cloudDirtySince: 'kennelOS.cloudDirtySince',
   cloudOfferPending: 'kennelOS.cloudOfferPending',
-  cloudRestoredAt: 'kennelOS.cloudRestoredAt'
+  cloudRestoredAt: 'kennelOS.cloudRestoredAt',
+  guidedLitterDraft: 'kennelOS.guidedLitterDraft'
 };
 
 export function getLastBackupDate() {
@@ -433,6 +434,30 @@ export function getAssistantFeedPushedAt() {
 export function setAssistantFeedPushedAt(iso = new Date().toISOString()) {
   localStorage.setItem(KEYS.assistantFeedPushedAt, iso);
   return iso;
+}
+
+// --- Guided "Record a new litter" draft (assets/guidedLitterUI.js) ----------
+// The answers given so far, saved after every step so closing the window loses
+// nothing and Today can offer "Finish recording …". One draft at a time; null
+// when none. In KEYS, so Reset App clears it. Device-only: it is not program
+// data until she approves the review and it's saved through the repos.
+export function getGuidedLitterDraft() {
+  const raw = localStorage.getItem(KEYS.guidedLitterDraft);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function setGuidedLitterDraft(draft) {
+  localStorage.setItem(KEYS.guidedLitterDraft, JSON.stringify(draft));
+  return draft;
+}
+
+export function clearGuidedLitterDraft() {
+  localStorage.removeItem(KEYS.guidedLitterDraft);
 }
 
 // --- Cloud backup dirty signal (Cloud Phase 1 plan §3.2) ---------------------

@@ -80,6 +80,11 @@ export const PRO_ONLY_STANDALONE = [
   'assets/waitlistEmailUI.js',
   // "Review sale & send" on the waitlist family page (Integrations plan §2.6).
   'assets/pickToSend.js',
+  // The Companion link builder (shared by the Companion console and the guided
+  // litter flow's share step) and that share step itself: guidedLitterUI.js
+  // imports guidedShareUI.js dynamically only when editionFlags.waitlist or
+  // editionFlags.companion is on, so Lite never requests either.
+  'assets/companionLink.js', 'assets/guidedShareUI.js',
   // "Send payment link" (Integrations plan §4): the Sale page imports it only when
   // editionFlags.accounts is on, and the Invoice page is Pro.
   'assets/paymentRequestUI.js',

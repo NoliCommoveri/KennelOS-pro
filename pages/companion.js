@@ -25,19 +25,11 @@ import {
   getCompanionSettings, setCompanionSettings, COMPANION_TYPES, companionTypeLabel,
   companionIncludeKeys
 } from '../data/settings.js';
-import { buildBundle } from '../data/companionExport.js';
-import { compressToEncodedURIComponent } from '../vendor/lz-string.min.mjs';
+import { MAX_SMS_HASH_LEN, buildLinkArtifacts, sendHrefs } from '../assets/companionLink.js';
 import { esc, param, todayYMD } from '../assets/ui.js';
 
-// Payload ceilings for the data-in-hash transport (brief §6.1). SMS is the weak
-// link — long URLs get truncated/split by some gateways; mail clients tolerate
-// far longer. Conservative starting values; tune on real devices.
-const MAX_SMS_HASH_LEN = 1800;
-const MAX_EMAIL_HASH_LEN = 12000;
-
-// The recipient-facing shell lives at the app root and is maintained by the
-// owner (same static host). Absolute so it survives being pasted into SMS/email.
-const SHELL_URL = new URL('../companion-view.html', import.meta.url).href;
+// The link, its payload ceilings and the send anchors live in
+// assets/companionLink.js, shared with the guided litter flow's share step.
 
 const els = {
   error: document.getElementById('page-error'),
@@ -330,10 +322,6 @@ async function saveNote(row, contact) {
   }
 }
 
-function channelBody(kennelName, url) {
-  const opener = kennelName ? `Here's your update from ${kennelName}:` : `Here's your update:`;
-  return `${opener}\n\n${url}`;
-}
 
 // Persist any unsaved note, build the point-in-time bundle for the active tab,
 // and derive the shared send artifacts: the compressed hash, the recipient URL,
@@ -351,11 +339,7 @@ async function buildSendArtifacts(row, contact) {
     if (tag) tag.innerHTML = (saved.companion_note || '').trim() ? ' <span class="badge badge-blue">note</span>' : '';
   }
 
-  const bundle = await buildBundle(type, contact);
-  const hash = compressToEncodedURIComponent(JSON.stringify(bundle));
-  const url = `${SHELL_URL}#${hash}`;
-  const bodyText = channelBody(bundle.kennelName, url);
-  return { bundle, hash, url, bodyText };
+  return buildLinkArtifacts(type, contact);
 }
 
 // Preview modal: the exact message this recipient will receive — the SMS/email
@@ -408,15 +392,9 @@ async function prepareLink(row, contact) {
   const linkBox = row.querySelector('.r-link');
   linkBox.innerHTML = `<span class="muted">Building…</span>`;
   try {
-    const { bundle, hash, url, bodyText } = await buildSendArtifacts(row, contact);
-
-    const overSms = hash.length > MAX_SMS_HASH_LEN;
-    const overEmail = hash.length > MAX_EMAIL_HASH_LEN;
-
-    const subject = encodeURIComponent(bundle.kennelName ? `Update from ${bundle.kennelName}` : 'Your update');
-    const body = encodeURIComponent(bodyText);
-    const mailto = `mailto:${encodeURIComponent(contact.email || '')}?subject=${subject}&body=${body}`;
-    const sms = `sms:${encodeURIComponent(contact.phone || '')}?body=${body}`;
+    const artifacts = await buildSendArtifacts(row, contact);
+    const { bundle, hash, url } = artifacts;
+    const { mailto, sms, overSms, overEmail } = sendHrefs(artifacts, contact);
 
     // Email is the default channel (larger bundles ride it comfortably); SMS is
     // offered only when the payload is under the SMS ceiling.

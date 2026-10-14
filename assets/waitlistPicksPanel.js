@@ -70,6 +70,27 @@ async function loadData(litter) {
 
 const pupLabel = (d) => `${d.call_name}${d.sex ? ` (${SEX.find((s) => s.value === d.sex)?.label || d.sex})` : ''}`;
 
+// The "It's almost your turn" / "a litter you match was born" dialog for this
+// litter, from the panel's own data.
+function openNotice(d, litter, soon, opts) {
+  openSoonNotice({
+    kennel: d.kennel, config: d.config, rows: soon, contactsById: d.contactsById,
+    litterLabelOf: (r) => `#${r.soonPosition} in line · pups for them: ${r.eligibleDogs.map(pupLabel).join(', ')}`,
+    litterIdsOf: () => [litter.id],
+    whelp: whelpNotes(d.entries, litter, d.pups, d.sales, opts).filter((w) => w.kind === 'review' || !midTurn(d.kennelOffers, w.entry.id)).map((w) => ({ ...w, litterIds: [litter.id] }))
+  });
+}
+
+// The same dialog opened from outside the panel: the guided "Record a new litter"
+// flow's "Tell my waitlist" step (assets/guidedShareUI.js), right after the birth
+// is saved. It only drafts the notice; she reviews it and sends it herself.
+export async function openLitterWaitlistNotice(litter) {
+  const d = await loadData(litter);
+  const opts = { today: todayYMD(), config: d.config, programsById: d.programsById };
+  const soon = soonFamiliesForLitter(d.entries, d.kennelOffers, litter, d.pups, d.sales, opts);
+  openNotice(d, litter, soon, opts);
+}
+
 // Render the panel into `mount` for `litter`. `onChange` lets the litter page
 // refresh its own state (the litter record and roster) after a write.
 export async function renderWaitlistPicksPanel({ mount, litter, onChange = async () => {} }) {
@@ -215,14 +236,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     if (turn && !turn.none) await offerEmails(offerSpecs({ next: turn }));
   });
   // Not wrapped in run(): the dialog writes nothing, so there's nothing to re-render.
-  mount.querySelector('[data-pk="soon"]')?.addEventListener('click', () => {
-    openSoonNotice({
-      kennel: d.kennel, config: d.config, rows: soon, contactsById: d.contactsById,
-      litterLabelOf: (r) => `#${r.soonPosition} in line · pups for them: ${r.eligibleDogs.map(pupLabel).join(', ')}`,
-      litterIdsOf: () => [litter.id],
-      whelp: whelpNotes(d.entries, litter, d.pups, d.sales, opts).filter((w) => w.kind === 'review' || !midTurn(d.kennelOffers, w.entry.id)).map((w) => ({ ...w, litterIds: [litter.id] }))
-    });
-  });
+  mount.querySelector('[data-pk="soon"]')?.addEventListener('click', () => openNotice(d, litter, soon, opts));
   on('close', async () => {
     if (!(await confirmModal({ title: 'Close picks?', message: 'No new offers will be made on this litter. An open offer stays open until you record how it ended.', confirmLabel: 'Close picks' }))) return;
     await actions.closePicks(litter.id);
