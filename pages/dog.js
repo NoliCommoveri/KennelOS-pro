@@ -737,6 +737,8 @@ async function doSave() {
       }
     }
     const prevRegistration = ctx.original.intended_registration || null;
+    const prevStatus = ctx.original.status;
+    const becameDeceased = prevStatus !== 'deceased' && candidate.status === 'deceased';
     saved = await dogRepo.update(ctx.original.id, candidate);
     if (saved.status === 'puppy' && saved.intended_registration && saved.intended_registration !== prevRegistration) {
       await promptSaleRegistration(saved);
@@ -747,6 +749,12 @@ async function doSave() {
     await loadRefs(); // names/breeds may have changed
     ctx.original = await dogRepo.getById(saved.id);
     renderAll();
+    if (becameDeceased && await promptDeceasedFollowUps(ctx.original, { wasPuppy: prevStatus === 'puppy' })) {
+      ctx.original = await dogRepo.getById(saved.id);
+      // Lite's departure leaves the page, as "Remove from program" does.
+      if (ctx.original.is_archived && !editionFlags.manualDogArchive) { location.href = 'dogs.html'; return; }
+      renderAll();
+    }
   } catch (e) {
     // The Lite cap throws CapExceededError (a repo can't prompt); show the
     // upgrade nudge, not a raw error. mode is still 'new' on a blocked create
@@ -758,6 +766,68 @@ async function doSave() {
       showError(e.message || String(e));
     }
   }
+}
+
+// The dog was just marked Deceased: list what it leaves open (open sales,
+// unfinished pairings — nudges.deceasedDogNudges, the same list Today shows as
+// the backstop) with each one's action, and for a dog that was a Puppy until now,
+// archiving it (Lite: removing it from the program, which asks first). Each is optional; Done closes. Imported
+// on demand so the dog page doesn't load the nudge engine on every visit.
+// Resolves true when an action ran (the page's linked panels need a re-render).
+async function promptDeceasedFollowUps(dog, { wasPuppy = false } = {}) {
+  const [{ deceasedDogNudges }, pairings, sales, dogs] = await Promise.all([
+    import('../data/nudges.js'),
+    pairingRepo.getAll(),
+    saleRepo.getByDog(dog.id),
+    dogRepo.getAll({ includeArchived: true })
+  ]);
+  const items = deceasedDogNudges([dog], { pairings, sales, dogsById: new Map(dogs.map((d) => [d.id, d])), wasPuppy });
+  if (!items.length) return false;
+
+  let acted = false;
+  await new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h2 style="margin-top:0;">${esc(nameOf(dog))} is marked Deceased</h2>
+      <p class="muted">Tidy up what no longer applies, or leave any of it for later.</p>
+      <ul class="linked-list" style="margin:6px 0 0; padding:0; list-style:none;">
+        ${items.map((n, i) => `
+          <li class="row-between" style="padding:10px 0; border-top:1px solid var(--border); align-items:flex-start;">
+            <div>
+              <div><strong>${esc(n.title)}</strong></div>
+              ${n.detail ? `<div class="muted" style="font-size:13px;">${esc(n.detail)}</div>` : ''}
+            </div>
+            <div class="pill-row" data-item="${i}">
+              ${n.actions.map((a, j) => `<button class="btn btn-sm" data-action="${j}">${esc(a.label)}</button>`).join('')}
+            </div>
+          </li>`).join('')}
+      </ul>
+      <div id="df-error"></div>
+      <div class="form-actions"><button class="btn btn-primary" id="df-done">Done</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const close = () => { overlay.remove(); resolve(); };
+    overlay.querySelector('#df-done').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelectorAll('[data-item]').forEach((holder) => {
+      const item = items[Number(holder.dataset.item)];
+      holder.querySelectorAll('[data-action]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            const action = item.actions[Number(btn.dataset.action)];
+            if (action.confirm && !(await confirmModal(action.ask))) return;
+            await action.run();
+            acted = true;
+            holder.innerHTML = '<span class="muted">Done</span>';
+          } catch (e) {
+            overlay.querySelector('#df-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
+          }
+        });
+      });
+    });
+  });
+  return acted;
 }
 
 // A puppy's intended registration changed while it has an open sale (decided

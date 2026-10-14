@@ -115,6 +115,11 @@ export const LITTER_STATUS = [
   { value: 'closed',   label: 'Closed',   badge: 'badge-gray' }
 ];
 
+// Pairing statuses that mean no litter is coming, and the litter statuses at or
+// past whelping — the pairing ↔ litter prompts and nudges both read these.
+export const PAIRING_ENDED_STATUSES = ['not_pregnant', 'failed', 'cancelled'];
+export const WHELPED_OR_LATER = ['whelped', 'weaning', 'ready', 'sold', 'closed'];
+
 // Account (accounts table) — what kind of business account it is. Badge + filter
 // only; nothing branches on it.
 export const ACCOUNT_TYPE = [

@@ -1,5 +1,10 @@
-// sales.js — Sales hub: breeding-style cards, each carrying its linked
-// Contract(s) inline (Buckets & Direct Contract Linking Plan v1, Work Area 1A).
+// sales.js — Sales hub: one collapsible card per litter (closed on load, the
+// header summing up its sales), opening onto that litter's sales, each carrying
+// its linked Contract(s) inline (Buckets & Direct Contract Linking Plan v1, Work
+// Area 1A). Ended sales (Returned / Cancelled / Voided) fold away under their own
+// "N ended sales" toggle inside the litter. Only the PAGE_SIZE newest litters show;
+// the rest are behind a "Show more" toggle, like the Breeding hub's pairings.
+// External Acquisitions always shows, last.
 // Contract owns the link (`related_sale_id`) — linking/unlinking here is always
 // one write to the contract via contractRepo.update, never a field on Sale.
 import { saleRepo } from '../data/saleRepo.js';
@@ -8,10 +13,11 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { inScopeOnly } from '../data/kennelScope.js';
-import { REGISTRATION_TYPE, SALE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate } from '../assets/ui.js';
+import { REGISTRATION_TYPE, SALE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, RELEASED_SALE_STATUSES, descriptor } from '../data/vocab.js';
+import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
 import { editionFlags } from '../data/editionConfig.js';
 
+const PAGE_SIZE = 5; // most recent litters shown before "Show more" (as breeding.js)
 const body = document.getElementById('sale-list');
 const errorBox = document.getElementById('page-error');
 
@@ -58,7 +64,7 @@ function saleCard(s, dogsById, contactsById, contractsBySale, linkableContracts)
   const dog = dogsById.get(s.dog_id);
   const buyer = contactsById.get(s.buyer_contact_id);
   const linked = contractsBySale.get(s.id) || [];
-  return `<section class="card" style="margin-top:14px;">
+  return `<div style="padding:12px 0; border-top:1px solid var(--border);">
       <div class="row-between">
         <div>
           <a href="sale.html?id=${encodeURIComponent(s.id)}"><strong>${esc(dog?.call_name || '—')} → ${esc(buyer?.name || '—')}</strong></a>
@@ -70,7 +76,7 @@ function saleCard(s, dogsById, contactsById, contractsBySale, linkableContracts)
         <a class="btn btn-sm" href="sale.html?id=${encodeURIComponent(s.id)}">Open sale</a>
       </div>
       ${editionFlags.contracts ? contractBlockHtml(s.id, linked, linkableContracts) : ''}
-    </section>`;
+    </div>`;
 }
 
 // A litter's group header label: "Dam × Sire — whelp date" (dog.js litterLabel convention).
@@ -82,14 +88,41 @@ function litterHeaderLabel(litter, dogsById) {
 
 // Sales within a group (litter or External Acquisitions), ordered by dog
 // name, each dog's own sales newest first.
-function dogEntriesHtml(byDog, dogsById, cardHtml) {
-  const entries = [...byDog.entries()]
+function orderedSales(byDog, dogsById) {
+  return [...byDog.entries()]
     .map(([dogId, list]) => ({
       dog: dogsById.get(dogId),
       sales: list.slice().sort((a, b) => recencyKey(b).localeCompare(recencyKey(a)))
     }))
-    .sort((a, b) => (a.dog?.call_name || '').localeCompare(b.dog?.call_name || ''));
-  return entries.flatMap((e) => e.sales).map(cardHtml).join('');
+    .sort((a, b) => (a.dog?.call_name || '').localeCompare(b.dog?.call_name || ''))
+    .flatMap((e) => e.sales);
+}
+
+const isEnded = (s) => RELEASED_SALE_STATUSES.includes(s.status);
+
+// The closed header's summary: "5 sales: 2 deposit paid, 1 delivered, 2 ended"
+// (live statuses in vocabulary order, the ended ones lumped together).
+function groupSummary(sales) {
+  const parts = SALE_STATUS
+    .filter((o) => !RELEASED_SALE_STATUSES.includes(o.value))
+    .map((o) => [o.label.toLowerCase(), sales.filter((s) => s.status === o.value).length])
+    .filter(([, n]) => n)
+    .map(([label, n]) => `${n} ${label}`);
+  const ended = sales.filter(isEnded).length;
+  if (ended) parts.push(`${ended} ended`);
+  return `${sales.length} sale${sales.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}`;
+}
+
+// One litter (or External Acquisitions) as a collapsible card, closed on load.
+function groupCardHtml(key, label, linkHtml, sales, cardHtml) {
+  const live = sales.filter((s) => !isEnded(s));
+  const ended = sales.filter(isEnded);
+  const title = `${esc(label)}<div class="muted" style="font-size:13px; font-weight:400; margin-top:2px;">${esc(groupSummary(sales))}</div>`;
+  const endedHtml = ended.length
+    ? `<details style="margin-top:8px;"><summary class="muted">${ended.length} ended sale${ended.length === 1 ? '' : 's'} (returned, cancelled or voided)</summary>${ended.map(cardHtml).join('')}</details>`
+    : '';
+  const body = `${linkHtml}${live.map(cardHtml).join('')}${endedHtml}`;
+  return cardShell(title, body, { key, isEmpty: true, headToggles: true, marginTop: true });
 }
 
 async function main() {
@@ -163,16 +196,48 @@ async function main() {
     .map((id) => littersById.get(id))
     .sort((a, b) => (b.whelp_date || '').localeCompare(a.whelp_date || ''));
 
-  const sections = orderedLitters.map((litter, idx) => {
-    const byDog = litterGroups.get(litter.id);
-    return `<h2 style="margin-top:${idx === 0 ? '0' : '26px'};"><a href="litter.html?id=${encodeURIComponent(litter.id)}">${esc(litterHeaderLabel(litter, dogsById))}</a></h2>${dogEntriesHtml(byDog, dogsById, cardHtml)}`;
-  });
+  const sections = orderedLitters.map((litter) => groupCardHtml(
+    `sales-litter:${litter.id}`,
+    litterHeaderLabel(litter, dogsById),
+    `<div style="margin:8px 0 4px;"><a class="btn btn-sm" href="litter.html?id=${encodeURIComponent(litter.id)}">Open litter</a></div>`,
+    orderedSales(litterGroups.get(litter.id), dogsById),
+    cardHtml
+  ));
 
-  if (externalByDog.size) {
-    sections.push(`<h2 style="margin-top:${sections.length ? '26px' : '0'};">External Acquisitions</h2>${dogEntriesHtml(externalByDog, dogsById, cardHtml)}`);
+  const shownHtml = sections.slice(0, PAGE_SIZE).join('');
+  const rest = sections.slice(PAGE_SIZE);
+  const restHtml = rest.length
+    ? `<div id="sales-more" hidden>${rest.join('')}</div>
+       <div style="margin-top:14px;"><button class="btn" id="show-more-btn">Show ${rest.length} more litter${rest.length === 1 ? '' : 's'} ▾</button></div>`
+    : '';
+  const externalHtml = externalByDog.size
+    ? groupCardHtml('sales-external', 'External Acquisitions', '', orderedSales(externalByDog, dogsById), cardHtml)
+    : '';
+
+  // A re-render (after linking or unlinking a contract) keeps what she had open:
+  // the litter cards, their ended-sales lists, and the "Show more" litters.
+  const openCards = new Set([...body.querySelectorAll('.card-collapsible')]
+    .filter((c) => !c.querySelector('.card-body')?.hidden).map((c) => c.dataset.card));
+  const openEnded = new Set([...body.querySelectorAll('.card-collapsible details[open]')]
+    .map((d) => d.closest('.card-collapsible').dataset.card));
+  const moreShown = body.querySelector('#sales-more') && !body.querySelector('#sales-more').hidden;
+
+  body.innerHTML = shownHtml + restHtml + externalHtml;
+  for (const card of body.querySelectorAll('.card-collapsible')) {
+    if (openCards.has(card.dataset.card)) {
+      card.querySelector('.card-body').hidden = false;
+      const toggle = card.querySelector('.card-toggle-btn');
+      toggle.setAttribute('aria-expanded', 'true');
+      toggle.setAttribute('aria-label', 'Collapse card');
+    }
+    if (openEnded.has(card.dataset.card)) card.querySelector('details')?.setAttribute('open', '');
   }
-
-  body.innerHTML = sections.join('');
+  const btn = document.getElementById('show-more-btn');
+  const showMore = () => { document.getElementById('sales-more').hidden = false; btn.remove(); };
+  if (btn) {
+    if (moreShown) showMore();
+    else btn.addEventListener('click', showMore);
+  }
 }
 
 // Delegated on the container (not per-card) so re-renders never leak listeners.

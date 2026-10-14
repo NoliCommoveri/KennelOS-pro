@@ -26,7 +26,7 @@ export async function promptDisposition(sale, { title, message, defaultValue }) 
 }
 
 // The pup of a sale that just ended without it staying placed. Pup died → offer to
-// record the death (status Deceased + date). A health reason → disposition prompt
+// record the death (status Deceased + date), then to archive the pup. A health reason → disposition prompt
 // defaulting to Health hold (not for sale, never offered). Anything else → back to
 // Available, as before. `onError(message)` shows a dog update that failed (the
 // sale itself is already saved).
@@ -41,10 +41,21 @@ export async function promptReleasedPup(sale, { onError = () => {} } = {}) {
       label: 'Date of death', type: 'date', defaultValue: todayYMD(), confirmLabel: 'Record', cancelLabel: 'Skip'
     });
     if (date == null) return;
+    let dead;
     try {
-      await dogRepo.update(dog.id, { status: 'deceased', date_of_death: date });
+      dead = await dogRepo.update(dog.id, { status: 'deceased', date_of_death: date });
     } catch (e) {
       onError(`${dog.call_name}'s death wasn't recorded: ${e.message || e} Record it on the dog's page.`);
+      return;
+    }
+    // A pup that died comes off the Dogs list (archived; Lite: removed from the
+    // program) — offered, never automatic. Loaded on demand: a rare path.
+    if (dog.status === 'puppy') {
+      const { deceasedArchiveAction } = await import('../data/nudges.js');
+      const action = deceasedArchiveAction(dead);
+      if (await confirmModal(action.ask)) {
+        try { await action.run(); } catch (e) { onError(`${dog.call_name} wasn't archived: ${e.message || e}`); }
+      }
     }
     return;
   }

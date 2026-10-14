@@ -10,7 +10,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, descriptor } from '../data/vocab.js';
+import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
@@ -21,9 +21,6 @@ import { openAddPuppyForm, openAddPuppiesForm } from '../assets/puppyForm.js';
 import { openEventForm, openEventFromQuery } from '../assets/eventForm.js';
 import { resolveKennelIdForWrite, dogInScope, inScope, isScoped } from '../data/kennelScope.js';
 import { renderScopeNotice } from '../assets/kennelScopeUI.js';
-
-// Statuses at/after whelping — used to decide whether a future whelp_date warns.
-const WHELPED_OR_LATER = ['whelped', 'weaning', 'ready', 'sold', 'closed'];
 
 // Estimated ready date defaults to 8 weeks (56 days) after whelping.
 const READY_DAYS_AFTER_WHELP = 56;
@@ -369,11 +366,15 @@ function renderEdit() {
     ctx.draft = readForm();
     renderEdit();
   });
-  // Whelp date prefills estimated ready date (8 weeks later) — only while that
-  // field is still empty, so it never clobbers a deliberate edit.
+  // Whelp date prefills estimated ready date (8 weeks later) — while that field
+  // is empty, or still exactly 8 weeks after the old whelp date (the prefill,
+  // e.g. from a new litter's suggested date), so it never clobbers a deliberate edit.
   document.getElementById('f-whelp_date').addEventListener('change', (e) => {
+    const prevWhelp = ctx.draft.whelp_date;
     ctx.draft = readForm();
-    if (e.target.value && !ctx.draft.estimated_ready_date) {
+    const readyWasPrefill = !ctx.draft.estimated_ready_date
+      || (prevWhelp && ctx.draft.estimated_ready_date === addDaysToYMD(prevWhelp, READY_DAYS_AFTER_WHELP));
+    if (e.target.value && readyWasPrefill) {
       ctx.draft.estimated_ready_date = addDaysToYMD(e.target.value, READY_DAYS_AFTER_WHELP);
     }
     renderEdit();
@@ -540,8 +541,8 @@ function normalizeCounts(candidate) {
   return candidate;
 }
 
-// Soft-suggestion prompt: the first time a litter crosses into a whelped-or-
-// later status, offer to sync its linked pairing's status to match (prefilled
+// Soft-suggestion prompt: when a litter is created whelped-or-later, or first
+// crosses into that band, offer to sync its linked pairing's status to match (prefilled
 // "Whelped", but editable — the pairing's real state might be something else
 // entirely by then). Skipped silently when there's no linked pairing, or the
 // pairing is already "Whelped".
@@ -611,6 +612,8 @@ async function doSave() {
         inheritFrom: [ctx.dogsById.get(candidate.dam_id), ctx.dogsById.get(candidate.sire_id)]
       });
       const saved = await litterRepo.create(candidate);
+      // A litter recorded after the fact is often created already whelped.
+      if (WHELPED_OR_LATER.includes(saved.status)) await maybePromptPairingWhelped(saved);
       location.href = `litter.html?id=${encodeURIComponent(saved.id)}`;
       return;
     }
@@ -871,6 +874,10 @@ async function main() {
   if (isNew) {
     ctx.mode = 'new';
     ctx.draft = blankLitter();
+    // Suggest the day it's being created as the whelp date (most litters are
+    // recorded as they arrive), and the ready date 8 weeks on. Both editable.
+    ctx.draft.whelp_date = todayYMD();
+    ctx.draft.estimated_ready_date = addDaysToYMD(ctx.draft.whelp_date, READY_DAYS_AFTER_WHELP);
     // Pre-fill from a pairing when arriving via "Create Litter from this Pairing".
     const pairingId = param('pairing');
     if (pairingId && ctx.pairingsById.has(pairingId)) {

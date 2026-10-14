@@ -208,10 +208,12 @@ export function viewPdfModal({ title = 'Document', blob, filename = 'document.pd
 // (may already include a trailing count span); `bodyHtml` is everything
 // below the header. `isEmpty` starts the card collapsed — the caller
 // decides what "empty" means for that card. `headerExtra` renders inline
-// actions (e.g. a link/button) next to the toggle, before it.
-export function cardShell(title, bodyHtml, { key = '', isEmpty = false, headerExtra = '', marginTop = false } = {}) {
+// actions (e.g. a link/button) next to the toggle, before it. `headToggles`
+// makes the whole header a toggle (a tap anywhere on it but a link, button or
+// field) — for the hub lists, whose cards start collapsed and are opened often.
+export function cardShell(title, bodyHtml, { key = '', isEmpty = false, headerExtra = '', marginTop = false, headToggles = false } = {}) {
   return `<section class="card card-collapsible"${marginTop ? ' style="margin-top:16px;"' : ''} data-card="${esc(key)}">
-      <div class="card-head">
+      <div class="card-head"${headToggles ? ' data-head-toggles style="cursor:pointer;"' : ''}>
         <h2 style="margin:0;">${title}</h2>
         <div class="card-head-actions">
           ${headerExtra}
@@ -225,8 +227,13 @@ export function cardShell(title, bodyHtml, { key = '', isEmpty = false, headerEx
 // Delegated once for every page that renders a cardShell — toggles the
 // nearest card body and flips the button's expanded state/label.
 document.addEventListener('click', (e) => {
-  const btn = e.target.closest('.card-toggle-btn');
-  if (!btn) return;
+  let btn = e.target.closest('.card-toggle-btn');
+  if (!btn) {
+    const head = e.target.closest('.card-head[data-head-toggles]');
+    if (!head || e.target.closest('a, button, select, input, label')) return;
+    btn = head.querySelector('.card-toggle-btn');
+    if (!btn) return;
+  }
   const body = btn.closest('.card-collapsible')?.querySelector('.card-body');
   if (!body) return;
   const wasOpen = !body.hidden;

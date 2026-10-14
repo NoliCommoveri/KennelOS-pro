@@ -7,7 +7,7 @@ import { pairingRepo, ReferenceBlockedError } from '../data/pairingRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
-import { PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS, LITTER_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS } from '../data/vocab.js';
+import { PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS, LITTER_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS, PAIRING_ENDED_STATUSES, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -320,18 +320,55 @@ async function doSave() {
       if (sourceStudServiceId) {
         await studServiceRepo.update(sourceStudServiceId, { pairing_id: saved.id });
       }
+      if (await promptLinkedLitter(saved, null)) return;
       location.href = `pairing.html?id=${encodeURIComponent(saved.id)}`;
       return;
     }
+    const prevStatus = ctx.original.status;
     const saved = await pairingRepo.update(ctx.original.id, candidate);
     ctx.original = saved;
     ctx.mode = 'view';
     await loadRefs();
     ctx.original = await pairingRepo.getById(saved.id);
     renderAll();
+    if (await promptLinkedLitter(saved, prevStatus)) return;
+    renderLitterSection();
   } catch (e) {
     showError(e.message || String(e));
   }
+}
+
+// Soft-suggestion prompts on the transition INTO a status (re-saving doesn't
+// re-nag; Today's nudges are the backstop for every other route):
+//   - Whelped, with no litter recorded → offer to create it (prefilled from here).
+//   - Not pregnant / Failed / Cancelled, with a litter still "Expected" → offer
+//     to archive that litter (it never happened).
+// Resolves true when it navigated away.
+async function promptLinkedLitter(pairing, prevStatus) {
+  if (pairing.status === prevStatus) return false;
+  const litters = await litterRepo.getAllForPairing(pairing.id);
+  if (pairing.status === 'whelped' && !litters.length) {
+    const ok = await confirmModal({
+      title: 'Record the litter now?',
+      message: 'This pairing is marked Whelped but has no litter yet.',
+      confirmLabel: 'Create litter', cancelLabel: 'Later'
+    });
+    if (ok) { location.href = `litter.html?new=1&pairing=${encodeURIComponent(pairing.id)}`; return true; }
+    return false;
+  }
+  if (PAIRING_ENDED_STATUSES.includes(pairing.status)) {
+    for (const l of litters.filter((x) => !x.is_archived && x.status === 'expected')) {
+      const ok = await confirmModal({
+        title: 'Archive the expected litter?',
+        message: `This pairing is now "${descriptor(PAIRING_STATUS, pairing.status).label}", but its litter is still marked Expected.`,
+        confirmLabel: 'Archive litter', cancelLabel: 'Keep it'
+      });
+      if (ok) {
+        try { await litterRepo.archive(l.id); } catch (e) { showError(e.message || String(e)); }
+      }
+    }
+  }
+  return false;
 }
 
 async function toggleArchive() {

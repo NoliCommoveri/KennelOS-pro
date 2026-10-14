@@ -5,15 +5,17 @@
 // link is a derived query, exactly as the data model requires.
 //
 // Ordered most-recent-first; only the first PAGE_SIZE pairings show, the rest are
-// behind a "Show more" toggle. Litters with no recorded pairing are listed on
+// behind a "Show more" toggle. Each pairing (and each orphan litter) is a
+// collapsible card, closed on load: its header names the pairing with its
+// status and either its litter's status and pup count or its due date. Litters with no recorded pairing are listed on
 // their own at the end so nothing is hidden. Editing a single pairing or litter
 // happens on its detail page — reached by clicking into the card.
 import { pairingRepo } from '../data/pairingRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { inScopeOnly, dogsInScope } from '../data/kennelScope.js';
-import { PAIRING_STATUS, PAIRING_TYPE, LITTER_STATUS } from '../data/vocab.js';
-import { esc, badge, fmtDate } from '../assets/ui.js';
+import { PAIRING_STATUS, PAIRING_TYPE, LITTER_STATUS, descriptor } from '../data/vocab.js';
+import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
 
 const PAGE_SIZE = 5; // recent pairings shown before "Show more"
@@ -49,10 +51,12 @@ function litterHtml(litter, puppies) {
   if (!litter) {
     return `<div class="muted" style="margin-top:8px; font-size:13px;">No litter recorded for this pairing yet.</div>`;
   }
+  // The litter's birth counts (puppies_born_*; blank = not recorded).
+  const has = (v) => v != null && v !== '';
   const counts = [];
-  if (litter.born_total != null) counts.push(`${esc(litter.born_total)} born`);
-  if (litter.born_alive != null) counts.push(`${esc(litter.born_alive)} alive`);
-  if (litter.born_deceased != null) counts.push(`${esc(litter.born_deceased)} deceased`);
+  if (has(litter.puppies_born_total)) counts.push(`${esc(litter.puppies_born_total)} born`);
+  if (has(litter.puppies_born_alive)) counts.push(`${esc(litter.puppies_born_alive)} alive`);
+  if (has(litter.puppies_born_deceased)) counts.push(`${esc(litter.puppies_born_deceased)} deceased`);
   return `<div class="sub-block" style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border);">
       <div class="row-between">
         <div>
@@ -67,23 +71,33 @@ function litterHtml(litter, puppies) {
     </div>`;
 }
 
+// The closed header's second line: the litter's status and pup count once there
+// is one, else the due date (or planned date).
+function pairingSummary(p, litter, puppies) {
+  if (litter) {
+    const pups = puppies.filter((d) => !d.is_archived).length;
+    return `Litter ${descriptor(LITTER_STATUS, litter.status).label.toLowerCase()}${litter.whelp_date ? ` · whelped ${fmtDate(litter.whelp_date)}` : ''}${pups ? ` · ${pups} pup${pups === 1 ? '' : 's'}` : ''}`;
+  }
+  if (p.expected_due_date) return `Due ${fmtDate(p.expected_due_date)}`;
+  if (p.planned_date) return `Planned ${fmtDate(p.planned_date)}`;
+  return 'No dates yet';
+}
+
 function pairingCard(p, dogsById, litter, puppies) {
   const sire = dogsById.get(p.sire_id)?.call_name || '—';
   const dam = dogsById.get(p.dam_id)?.call_name || '—';
-  return `<section class="card breeding-card" style="margin-top:14px;">
-      <div class="row-between">
-        <div>
-          <a href="pairing.html?id=${encodeURIComponent(p.id)}"><strong>${esc(sire)} × ${esc(dam)}</strong></a>
-          ${badge(PAIRING_TYPE, p.pairing_type)} ${badge(PAIRING_STATUS, p.status)}
-          <div class="muted" style="font-size:13px; margin-top:2px;">
-            ${dateLine('Planned', p.planned_date) || '<span class="faint">No planned date</span>'}
-            ${p.expected_due_date ? ` · ${dateLine('due', p.expected_due_date)}` : ''}
-          </div>
+  const title = `${esc(sire)} × ${esc(dam)} ${badge(PAIRING_STATUS, p.status)}
+      <div class="muted" style="font-size:13px; font-weight:400; margin-top:2px;">${esc(pairingSummary(p, litter, puppies))}</div>`;
+  const body = `<div class="row-between" style="margin-top:8px;">
+        <div class="muted" style="font-size:13px;">
+          ${badge(PAIRING_TYPE, p.pairing_type)}
+          ${dateLine('Planned', p.planned_date) || '<span class="faint">No planned date</span>'}
+          ${p.expected_due_date ? ` · ${dateLine('due', p.expected_due_date)}` : ''}
         </div>
         <a class="btn btn-sm" href="pairing.html?id=${encodeURIComponent(p.id)}">Open pairing</a>
       </div>
-      ${litterHtml(litter, puppies)}
-    </section>`;
+      ${litterHtml(litter, puppies)}`;
+  return cardShell(title, body, { key: `breeding-pairing:${p.id}`, isEmpty: true, headToggles: true, marginTop: true });
 }
 
 // "Log heat cycle" (Data Integrity Brief §4.4) — the hub is organized by
@@ -197,7 +211,10 @@ async function main() {
     orphanLitters.sort((a, b) => (b.whelp_date || '').localeCompare(a.whelp_date || ''));
     const cards = orphanLitters.map((l) => {
       const puppies = puppiesByLitter.get(l.id) || [];
-      return `<section class="card" style="margin-top:14px;">${litterHtml(l, puppies)}</section>`;
+      const live = puppies.filter((d) => !d.is_archived).length;
+      const title = `${esc(dogsById.get(l.dam_id)?.call_name || '—')} × ${esc(dogsById.get(l.sire_id)?.call_name || '—')} ${badge(LITTER_STATUS, l.status)}
+        <div class="muted" style="font-size:13px; font-weight:400; margin-top:2px;">${l.whelp_date ? `Whelped ${esc(fmtDate(l.whelp_date))}` : 'No whelp date'}${live ? ` · ${live} pup${live === 1 ? '' : 's'}` : ''}</div>`;
+      return cardShell(title, litterHtml(l, puppies), { key: `breeding-litter:${l.id}`, isEmpty: true, headToggles: true, marginTop: true });
     });
     orphanHtml = `<h2 style="margin-top:26px;">Litters without a recorded pairing <span class="muted" style="font-size:14px;">(${orphanLitters.length})</span></h2>${cards.join('')}`;
   }

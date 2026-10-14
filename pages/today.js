@@ -23,7 +23,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
 import { EVENT_TYPES, DOG_STATUS, DISPOSITION, SHOW_ENTRY_STATUS } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { esc, badge, fmtDate, cardShell, alertModal } from '../assets/ui.js';
+import { esc, badge, fmtDate, cardShell, alertModal, confirmModal } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/editionLinks.js';
 import { CapExceededError } from '../data/repoBase.js';
@@ -193,7 +193,10 @@ async function renderNudges() {
         try {
           // An action may return { title, message } to report what it did (the
           // waitlist's turn moving on to another family, say).
-          const report = await nudge.actions[Number(btn.dataset.nudgeAction)].run();
+          const action = nudge.actions[Number(btn.dataset.nudgeAction)];
+          // An action that can't be undone asks first (Lite's permanent departure).
+          if (action.confirm && !(await confirmModal(action.ask))) return;
+          const report = await action.run();
           renderNudges();
           if (report && report.message) await alertModal(report);
           // ...or `compose`: a note for her to send herself (the follow-up a week after

@@ -11,9 +11,11 @@
 // Nothing here mutates a record on its own; every action is a user-confirmed
 // button click.
 //
-// Nine rules (End-State guide §19), each producing zero or more nudges:
+// Fourteen rules (End-State guide §19), each producing zero or more nudges:
 // stud-service status (§4.2), promote-lifecycle (§4.3), heat→pairing (§4.5),
-// stud→pairing (§4.7), the overdue-pairing rule, three litter-lifecycle
+// stud→pairing (§4.7), due-soon and overdue pairing rules, four linked-status rules
+// (litter whelped → pairing, pairing ended → expected litter, pairing whelped →
+// no litter, a Deceased dog's open sales and pairings), three litter-lifecycle
 // rules (litter→sold / reopen / close) grouped over each litter's roster below,
 // and the Pro-only show-track-complete → "log the title?" rule (Show Tracking
 // Spec §5.4, gated on editionFlags.shows). Plus the Pro-only waitlist rules
@@ -24,7 +26,9 @@
 // pause, a listen-only narrowing, an answer change: Approve / Decline; messages
 // and activity: Mark read). And (Pro) what a connected vendor reported that her
 // device didn't apply by itself (Integrations plan §0): Done.
-//   { key, title, detail, subjectHref, actions: [{ label, run: async () => {} }] }
+//   { key, title, detail, subjectHref, actions: [{ label, run: async () => {}, confirm?, ask? }] }
+// An action with `confirm: true` must be confirmed first — the renderer shows
+// `ask` (confirmModal options) and runs it only on yes (Lite's permanent departure).
 // `run` may resolve to { title, message }, which Today shows once it's done.
 import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
@@ -35,7 +39,7 @@ import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from './kennelScope.js';
 import { todayYMD, monthsBetween, addDaysToYMD } from './dateUtils.js';
-import { descriptor, PAIRING_STATUS, LITTER_STATUS } from './vocab.js';
+import { descriptor, PAIRING_STATUS, LITTER_STATUS, SALE_STATUS, isOpenSale, PAIRING_ENDED_STATUSES, WHELPED_OR_LATER } from './vocab.js';
 import { editionFlags } from './editionConfig.js';
 import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
@@ -62,6 +66,13 @@ const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
 // Pre-whelp: still expecting a litter, not yet resolved one way or the other.
 const PRE_WHELP_STATUSES = ['planned', 'bred', 'confirmed_pregnant'];
+
+// How many days before a pairing's expected due date the "due soon — create the
+// litter?" nudge starts.
+const DUE_SOON_DAYS = 3;
+
+// How far back the "pairing whelped, no litter" rule looks (see that rule).
+const LITTER_RECORD_WINDOW_DAYS = 180;
 
 // Shared dedup (§4.5/§4.7): is there already a live pairing for this dam,
 // opened on/after `sinceYMD`? "Opened" prefers planned_date, falling back to
@@ -115,6 +126,113 @@ function studInProgressNudge(s, dogsById) {
       { label: 'Mark in progress', run: async () => { await studServiceRepo.update(s.id, { status: 'in_progress' }); } }
     ]
   };
+}
+
+// A puppy that died is archived, so it leaves the Dogs list but stays on its
+// litter's roster with its history (archive is a soft delete). Pro archives it
+// outright; Lite has no free Archive, only the permanent "remove from program"
+// departure (cap spec §5), so there the action carries `confirm: true` and the
+// caller asks `ask` first. `ask` is also the question for a caller that offers it
+// on its own (salePrompts, when a sale ends because the pup died).
+export function deceasedArchiveAction(dog) {
+  const name = dog.call_name || dog.registered_name || 'this dog';
+  const run = async () => { await dogRepo.archive(dog.id); };
+  if (editionFlags.manualDogArchive) {
+    return {
+      label: 'Archive', run,
+      ask: {
+        title: `Archive ${name} too?`,
+        message: `${name} leaves your Dogs list but stays on the litter, with all its history.`,
+        confirmLabel: 'Archive', cancelLabel: 'Keep on list'
+      }
+    };
+  }
+  return {
+    label: 'Remove from program', run, confirm: true,
+    ask: {
+      title: `Remove “${name}” from your program?`,
+      message: `This can't be undone here — ${name} leaves your roster and you won't be able to edit it or bring it back. It stays in your dogs' pedigrees for lineage.`,
+      confirmLabel: 'Remove permanently', cancelLabel: 'Keep on roster', danger: true
+    }
+  };
+}
+
+// Today offers the archive for a dog that died young (before its first
+// birthday, by date of birth, else its litter's whelp date) in the last
+// DECEASED_ARCHIVE_WINDOW_DAYS — a pup, not a breeding dog that died (those stay
+// listed under Not breeding → Deceased unless she archives them herself), and
+// not every pup that died years ago.
+const DECEASED_ARCHIVE_WINDOW_DAYS = 90;
+const PUPPY_MAX_MONTHS = 12;
+function diedAsPuppyRecently(d, littersById, today) {
+  const died = d.date_of_death || d.status_date;
+  if (!died || died < addDaysToYMD(today, -DECEASED_ARCHIVE_WINDOW_DAYS)) return false;
+  const born = d.date_of_birth || littersById?.get(d.litter_id)?.whelp_date;
+  return !!born && born <= died && monthsBetween(born, died) < PUPPY_MAX_MONTHS;
+}
+
+// What a Deceased dog leaves open: its open sales (End the sale on the sale's own
+// page, which settles the family — a waitlist family gets offered back into line)
+// and its unfinished pairings — as the dam, any still expecting a litter (Planned
+// → Cancel, Bred / Confirmed pregnant → Failed); as the sire, a Planned one only
+// (a bred pairing stands without him), and never a frozen-semen AI. Shared by
+// computeNudges (the Today backstop) and the dog page's prompt when she marks a
+// dog Deceased, so the two always list the same things.
+//
+// Last, for a puppy, archiving it (deceasedArchiveAction): on Today when it died
+// young and recently (diedAsPuppyRecently); on the dog page whenever she has just
+// moved it from Puppy to Deceased (`wasPuppy`).
+export function deceasedDogNudges(dogs, { pairings, sales, dogsById, littersById = null, wasPuppy = false, today = todayYMD() }) {
+  const out = [];
+  for (const d of dogs) {
+    // An archived one still counts for its sales and pairings: archiving a pup
+    // that died doesn't end its sale.
+    if (d.status !== 'deceased') continue;
+    const name = d.call_name || d.registered_name || 'This dog';
+    for (const s of sales) {
+      if (s.dog_id !== d.id || s.is_archived || !isOpenSale(s)) continue;
+      out.push({
+        key: `deceased-sale:${s.id}`,
+        title: `${name} is marked Deceased but still has an open sale — end it?`,
+        detail: `The sale is "${descriptor(SALE_STATUS, s.status).label}".`,
+        subjectHref: `sale.html?id=${encodeURIComponent(s.id)}`,
+        actions: [
+          { label: 'Open the sale', run: async () => { location.href = `sale.html?id=${encodeURIComponent(s.id)}`; } }
+        ]
+      });
+    }
+    for (const p of pairings) {
+      if (p.is_archived || !PRE_WHELP_STATUSES.includes(p.status)) continue;
+      const asDam = p.dam_id === d.id;
+      const asSire = p.sire_id === d.id && p.status === 'planned' && p.method !== 'ai_frozen';
+      if (!asDam && !asSire) continue;
+      const next = p.status === 'planned' ? 'cancelled' : 'failed';
+      out.push({
+        key: `deceased-pairing:${p.id}:${d.id}`,
+        title: `${name} is marked Deceased — ${next === 'cancelled' ? 'cancel' : 'close out'} ${pairingLabel(p, dogsById)}?`,
+        detail: `The pairing is still "${descriptor(PAIRING_STATUS, p.status).label}".`,
+        subjectHref: `pairing.html?id=${encodeURIComponent(p.id)}`,
+        actions: [
+          { label: next === 'cancelled' ? 'Cancel pairing' : 'Mark failed', run: async () => { await pairingRepo.update(p.id, { status: next }); } }
+        ]
+      });
+    }
+    if (!d.is_archived && (wasPuppy || diedAsPuppyRecently(d, littersById, today))) {
+      const action = deceasedArchiveAction(d);
+      out.push({
+        key: `deceased-archive:${d.id}`,
+        title: editionFlags.manualDogArchive
+          ? `${name} is marked Deceased — archive ${name}?`
+          : `${name} is marked Deceased — remove ${name} from your program?`,
+        detail: editionFlags.manualDogArchive
+          ? 'Takes the record off your Dogs list. It stays on the litter, with its history.'
+          : 'Takes the record off your roster. It stays in your dogs\' pedigrees.',
+        subjectHref: `dog.html?id=${encodeURIComponent(d.id)}`,
+        actions: [action]
+      });
+    }
+  }
+  return out;
 }
 
 export async function computeNudges() {
@@ -229,6 +347,27 @@ export async function computeNudges() {
     });
   }
 
+  // Due soon — a bred or confirmed-pregnant pairing whose expected due date is
+  // today or within DUE_SOON_DAYS, with no litter yet: suggest creating the
+  // litter now (it starts as "Expected"), so it's ready when the pups arrive.
+  // Not for a pairing still "Planned" — nothing says the breeding happened. Its
+  // own key, so dismissing it early doesn't hide the overdue nudge below.
+  for (const p of scopedPairings) {
+    if (!['bred', 'confirmed_pregnant'].includes(p.status) || !p.expected_due_date) continue;
+    if (p.expected_due_date < today || p.expected_due_date > addDaysToYMD(today, DUE_SOON_DAYS)) continue;
+    if (pairingIdsWithLitter.has(p.id)) continue;
+    const days = daysBetween(today, p.expected_due_date);
+    nudges.push({
+      key: `pairingduesoon:${p.id}`,
+      title: `${pairingLabel(p, dogsById)} is due ${days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`} — create the litter?`,
+      detail: `Expected ${p.expected_due_date}. The litter starts as "Expected" until the pups arrive.`,
+      subjectHref: `pairing.html?id=${encodeURIComponent(p.id)}`,
+      actions: [
+        { label: 'Create litter', run: async () => { location.href = `litter.html?new=1&pairing=${encodeURIComponent(p.id)}`; } }
+      ]
+    });
+  }
+
   // Overdue pairing — still pre-whelp status past its own expected due date,
   // with no litter recorded against it yet. Suggests both fixes: sync the
   // status, or go record the litter (deep-links to the same
@@ -249,6 +388,84 @@ export async function computeNudges() {
     });
   }
 
+  // Litter ↔ pairing status (the backstop for the prompts on the litter and
+  // pairing pages, which only fire on an edit made there — not on an import, a
+  // sync, another device, or a Skip). Three rules over the pairing ↔ litter link.
+  const pairingsById = new Map(pairings.map((p) => [p.id, p]));
+  const liveLittersByPairing = new Map();
+  for (const l of litters) {
+    if (!l.pairing_id || l.is_archived) continue;
+    const arr = liveLittersByPairing.get(l.pairing_id);
+    if (arr) arr.push(l); else liveLittersByPairing.set(l.pairing_id, [l]);
+  }
+
+  // A litter that's whelped (or later) whose linked pairing still says otherwise
+  // → suggest marking the pairing whelped. Auto-dismisses once it is.
+  for (const l of scopedLitters) {
+    if (l.is_archived || !l.pairing_id || !WHELPED_OR_LATER.includes(l.status)) continue;
+    const p = pairingsById.get(l.pairing_id);
+    if (!p || p.status === 'whelped') continue;
+    nudges.push({
+      key: `litterpairing:${l.id}`,
+      title: `${litterLabel(l, dogsById)} has whelped — mark its pairing whelped?`,
+      detail: `The litter is "${descriptor(LITTER_STATUS, l.status).label}"; the pairing is still "${descriptor(PAIRING_STATUS, p.status).label}".`,
+      subjectHref: `pairing.html?id=${encodeURIComponent(p.id)}`,
+      actions: [
+        { label: 'Mark pairing whelped', run: async () => { await pairingRepo.update(p.id, { status: 'whelped' }); } }
+      ]
+    });
+  }
+
+  for (const p of scopedPairings) {
+    // A pairing that didn't take, with its litter still "Expected" → suggest
+    // archiving the litter (it never happened; archive, not delete, so nothing
+    // that points at it breaks).
+    if (PAIRING_ENDED_STATUSES.includes(p.status)) {
+      for (const l of liveLittersByPairing.get(p.id) || []) {
+        if (l.status !== 'expected') continue;
+        nudges.push({
+          key: `pairingended:${l.id}`,
+          title: `${pairingLabel(p, dogsById)} is "${descriptor(PAIRING_STATUS, p.status).label}" — archive its expected litter?`,
+          detail: 'The litter is still marked Expected.',
+          subjectHref: `litter.html?id=${encodeURIComponent(l.id)}`,
+          actions: [
+            { label: 'Archive litter', run: async () => { await litterRepo.archive(l.id); } }
+          ]
+        });
+      }
+    }
+
+    // A pairing marked whelped with no litter recorded against it (archived ones
+    // count — the litter exists) → suggest recording it. Skipped for an external
+    // dam (our stud's outside breeding: her litter is usually not ours to record),
+    // and for a pairing whose dates are more than LITTER_RECORD_WINDOW_DAYS old, so
+    // historical pairings entered without their litters don't flood Today.
+    if (p.status === 'whelped' && !pairingIdsWithLitter.has(p.id)) {
+      const dam = dogsById.get(p.dam_id);
+      if (dam && (dam.ownership_type === 'external' || dam.status === 'external_reference')) continue;
+      const refDate = p.expected_due_date || p.last_observed_date || p.planned_date || (p.created_at || '').slice(0, 10);
+      if (refDate && refDate < addDaysToYMD(today, -LITTER_RECORD_WINDOW_DAYS)) continue;
+      nudges.push({
+        key: `pairingnolitter:${p.id}`,
+        title: `${pairingLabel(p, dogsById)} whelped — record the litter?`,
+        detail: 'The pairing is marked Whelped but has no litter yet.',
+        subjectHref: `pairing.html?id=${encodeURIComponent(p.id)}`,
+        actions: [
+          { label: 'Create litter', run: async () => { location.href = `litter.html?new=1&pairing=${encodeURIComponent(p.id)}`; } }
+        ]
+      });
+    }
+  }
+
+  // A dog marked Deceased that's still on an open sale or an unfinished pairing
+  // (the backstop for the prompt on the dog page).
+  // Archived ones too (an archived pup can still have an open sale), so this one
+  // rule reads the dogs again with them.
+  const allDogs = await dogRepo.getAll({ includeArchived: true });
+  nudges.push(...deceasedDogNudges(dogsInScope(allDogs.filter((d) => d.status === 'deceased')), {
+    pairings, sales, dogsById: new Map(allDogs.map((d) => [d.id, d])), littersById: new Map(litters.map((l) => [l.id, l])), today
+  }));
+
   // Litter-lifecycle nudges — all three are aggregate facts over a litter's
   // puppy roster (and, for the close rule, its sales), so they're grouped once
   // here from data already loaded above rather than re-scanned per record on
@@ -267,8 +484,12 @@ export async function computeNudges() {
 
   for (const l of scopedLitters) {
     if (l.is_archived) continue;
-    const pups = pupsByLitter.get(l.id);
-    if (!pups || pups.length === 0) continue;
+    // A pup marked Deceased is out of the picture. dogRepo nulls its disposition
+    // (puppy-only), and a null disposition would otherwise hold up "mark sold" for
+    // its litter forever. Filtering on status rather than disposition also covers
+    // a row restored or synced from before that rule.
+    const pups = (pupsByLitter.get(l.id) || []).filter((p) => p.status !== 'deceased');
+    if (pups.length === 0) continue;
     const label = litterLabel(l, dogsById);
     const href = `litter.html?id=${encodeURIComponent(l.id)}`;
     const anyAvailable = pups.some((p) => p.disposition === 'available');
