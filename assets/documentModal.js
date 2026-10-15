@@ -48,6 +48,24 @@ function extraFieldsHtml(docType, existing) {
   }).join('');
 }
 
+// Store the picked file(s): a PDF as-is, photo(s) built into one small PDF.
+// `pending`: { kind: 'pdf' | 'photo', files: File[] }. → the stored file's id.
+export async function storeDocumentFile(pending, { title = '' } = {}) {
+  if (pending.kind === 'pdf') {
+    const f = pending.files[0];
+    return fileRepo.create(f, { filename: f.name, thumbnail: '' });
+  }
+  const built = await photosToPdf(pending.files, { title });
+  return fileRepo.create(built.blob, { filename: built.filename, thumbnail: built.thumbnail });
+}
+
+// File a new document. Kennel scope (Multi-Kennel Scope Spec §6): it files under
+// the kennel of the dog it belongs to. Also Kels's Add dogs (guidedDogsUI.js).
+export async function createDocument(payload) {
+  const kennel_id = await resolveKennelIdForWrite({ inheritFrom: await dogRepo.getById(payload.dog_id) });
+  return documentRepo.create({ ...payload, kennel_id });
+}
+
 // Open the add/edit document modal.
 //   existingId    — a document id to edit, or null to add a new one
 //   defaultDogId  — preselect this dog (used by the dog page / contract attach)
@@ -212,13 +230,7 @@ export function openDocumentModal({
 
         let fileId = existing?.file_id || null;
         if (pendingFiles) {
-          if (pendingFiles.kind === 'pdf') {
-            const f = pendingFiles.files[0];
-            fileId = await fileRepo.create(f, { filename: f.name, thumbnail: '' });
-          } else {
-            const built = await photosToPdf(pendingFiles.files, { title: title || docType });
-            fileId = await fileRepo.create(built.blob, { filename: built.filename, thumbnail: built.thumbnail });
-          }
+          fileId = await storeDocumentFile(pendingFiles, { title: title || docType });
           if (isEdit && existing.file_id && existing.file_id !== fileId) {
             await fileRepo.remove(existing.file_id);
           }
@@ -236,14 +248,7 @@ export function openDocumentModal({
 
         let doc;
         if (isEdit) doc = await documentRepo.update(existing.id, payload);
-        else {
-          // Kennel scope (Multi-Kennel Scope Spec §6): a document files under the
-          // kennel of the dog it belongs to.
-          payload.kennel_id = await resolveKennelIdForWrite({
-            inheritFrom: await dogRepo.getById(dogId)
-          });
-          doc = await documentRepo.create(payload);
-        }
+        else doc = await createDocument(payload);
 
         close();
         onSaved?.({ isEdit, doc });

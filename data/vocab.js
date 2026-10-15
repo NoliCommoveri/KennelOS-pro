@@ -584,6 +584,17 @@ export const AKC_SHOW_AWARDS = [
 // plain strings or { value, label } vocab objects (the form stores `value` and
 // shows `label`). A field may carry `default`, applied only when creating an
 // event whose draft has no value for that key (a prefill wins).
+// Kels's Add dogs asks each new dog's shots from this fixed checklist, each with
+// how long it's good for: `years` sets the vaccination's `next_due` (and, when
+// she wants a reminder, its `reminder_date`); lifetime has none.
+export const VACCINE_CHECKLIST = ['Rabies', 'DHPP', 'Bordetella', 'Leptospirosis'];
+export const VACCINE_GOOD_FOR = [
+  { value: '1', label: '1 year', years: 1 },
+  { value: '3', label: '3 years', years: 3 },
+  { value: '5', label: '5 years', years: 5 },
+  { value: 'lifetime', label: 'Lifetime', years: null }
+];
+
 export const EVENT_TYPES = [
   // Acquisition — an option for the first event on a newly-bought dog's
   // timeline, never auto-created. `source` is a plain free-text field (the

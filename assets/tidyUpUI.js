@@ -21,7 +21,7 @@ import { inScopeOnly, dogsInScope, resolveKennelIdForWrite } from '../data/kenne
 import { editionFlags } from '../data/editionConfig.js';
 import { DISPOSITION, OWNERSHIP_TYPE, DOG_STATUS, SALE_STATUS, PAIRING_STATUS, descriptor } from '../data/vocab.js';
 import { litterLabel } from '../data/litterCheckin.js';
-import { dogMatches } from '../data/guidedLitter.js';
+import { findDogMatches, matchReason, similarNamed } from '../data/dogSearch.js';
 import { baseFromLitter } from '../data/puppyDefaults.js';
 import { deliveredOwnershipChanges } from '../data/goHome.js';
 import { studParents, ourRole } from '../data/studRules.js';
@@ -32,6 +32,7 @@ import { esc, fmtDate, todayYMD } from './ui.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
 import { FindingsTask, plural } from './kelsFindings.js';
+import { field, kennelNameField, contactFields, readContactFields } from './kelsSteps.js';
 
 const ROLE = { sire: { field: 'sire_id', sex: 'male', word: 'sire' }, dam: { field: 'dam_id', sex: 'female', word: 'dam' } };
 const label = (vocab, v) => descriptor(vocab, v).label;
@@ -312,26 +313,35 @@ class Tidy extends FindingsTask {
       html: field(`${cap(R.word)}`, `<select id="td-parent">${options.map((d) => `<option value="${esc(d.id)}">${esc(dogName(d))}${d.registered_name && d.call_name ? ` (${esc(d.registered_name)})` : ''}${T.normName(d.breed) !== breed ? ` · ${esc(d.breed || '')}` : ''}</option>`).join('')}</select>`),
       submitLabel: 'Use this dog',
       cancelLabel: 'Skip',
-      submit: async (root) => root.querySelector('#td-parent').value || 'Pick a dog.',
-      reply: (id) => this.dog(id)
+      // form() shows a returned string as a problem, so the pick goes back as { id }.
+      submit: async (root) => { const id = root.querySelector('#td-parent').value; return id ? { id } : 'Pick a dog.'; },
+      reply: (r) => this.dog(r.id)
     });
-    return res.done ? res.result : null;
+    return res.done ? res.result.id : null;
   }
 
   async newParent(dog, R) {
     const statuses = ['active_breeding', 'retired_breeding', ...(editionFlags.fullDogStatuses ? ['pet_home'] : []), 'deceased'];
     const res = await this.chat.form({
-      title: `<strong>Tell me about the ${R.word}.</strong><span class="kels-lead">Is it your dog, or somebody else's? Somebody else's goes in just for the pedigree (no owner needed).</span>`,
-      html: `${field('Call name', '<input id="td-call" type="text" autocomplete="off">')}
-        ${field('Registered name (optional)', '<input id="td-reg" type="text" autocomplete="off">')}
-        ${field('Registration number (optional)', '<input id="td-num" type="text" autocomplete="off">')}
-        <div class="field gl-field"><label>Whose dog?</label>
+      title: `<strong>Tell me about the ${R.word}.</strong><span class="kels-lead">Is it your dog, or somebody else's? Somebody else's goes in just for the pedigree, by its registered name (no owner needed).</span>`,
+      html: `<div class="field gl-field"><label>Whose dog?</label>
           <label class="td-radio"><input type="radio" name="td-whose" value="mine" checked> Mine</label>
           <label class="td-radio"><input type="radio" name="td-whose" value="pedigree"> Somebody else's (just for the pedigree)</label>
         </div>
+        <div id="td-call-wrap">${field('Call name', '<input id="td-call" type="text" autocomplete="off">')}</div>
+        ${field('Registered name', '<input id="td-reg" type="text" autocomplete="off">', 'As it reads on the pedigree')}
+        ${field('Registration number (optional)', '<input id="td-num" type="text" autocomplete="off">')}
         <div id="td-status-wrap">${field('Status', `<select id="td-status">${statuses.map((s) => `<option value="${s}">${esc(label(DOG_STATUS, s))}</option>`).join('')}</select>`)}</div>`,
       wire: (root) => {
-        const sync = () => { root.querySelector('#td-status-wrap').hidden = root.querySelector('input[name="td-whose"]:checked').value !== 'mine'; };
+        // A pedigree names a dog by its registered name: that's what's asked for
+        // somebody else's dog; a call name only for hers.
+        const sync = () => {
+          const mine = root.querySelector('input[name="td-whose"]:checked').value === 'mine';
+          root.querySelector('#td-status-wrap').hidden = !mine;
+          root.querySelector('#td-call-wrap').hidden = !mine;
+          root.querySelector('#td-reg').closest('.field').querySelector('label').textContent = mine ? 'Registered name (optional)' : 'Registered name';
+        };
+        sync();
         root.querySelectorAll('input[name="td-whose"]').forEach((r) => r.addEventListener('change', sync));
       },
       submitLabel: 'Next',
@@ -343,19 +353,28 @@ class Tidy extends FindingsTask {
           mine: root.querySelector('input[name="td-whose"]:checked').value === 'mine',
           status: root.querySelector('#td-status').value
         };
-        if (!v.call && !(v.reg && !v.mine)) return v.mine ? 'What\'s the dog\'s call name?' : 'Type a call name or a registered name.';
+        if (!v.mine) v.call = '';
+        if (v.mine ? !v.call : !v.reg) return v.mine ? 'What\'s the dog\'s call name?' : 'What\'s the registered name? It\'s how a pedigree names the dog.';
         return v;
       },
       reply: (v) => v.call || v.reg
     });
     if (!res.done) return null;
     const v = res.result;
-    // Somebody already on file by that name? Offer them first, so nobody is entered twice.
-    const matches = dogMatches(this.allDogs, { name: v.call || v.reg, registeredName: v.reg, sex: R.sex }).filter((d) => d.id !== dog.id);
+    // Somebody already on file? dogSearch: both names, both ways, then the
+    // number, breed and sex. The same number is that dog (she says so and uses
+    // it); the rest are offered first, so nobody is entered twice.
+    const found = findDogMatches(this.allDogs, { callName: v.call, registeredName: v.reg, registrationNumber: v.num, breed: dog.breed, sex: R.sex }, { excludeIds: [dog.id] });
+    if (found[0]?.strength === 'certain') {
+      await this.chat.say(`That number is ${this.b(dogName(found[0].dog))}, already in KennelOS, so I'll use ${R.sex === 'female' ? 'her' : 'him'}.`);
+      return found[0].dog.id;
+    }
+    const matches = found.map((m) => m.dog);
+    const why = new Map(found.map((m) => [m.dog.id, matchReason(m)]));
     if (matches.length) {
-      await this.chat.say(`I already have ${matches.length === 1 ? 'a dog' : 'dogs'} by that name. Is it one of these?`);
+      await this.chat.say(`I already have ${matches.length === 1 ? 'a dog' : 'dogs'} like that. Is it one of these?`);
       const id = await this.chat.choose([
-        ...matches.slice(0, 6).map((d) => ({ label: dogName(d), sub: [d.registered_name, d.breed].filter(Boolean).join(' · '), value: d.id })),
+        ...matches.slice(0, 6).map((d) => ({ label: dogName(d), sub: [why.get(d.id), d.registered_name, d.breed].filter(Boolean).join(' · '), value: d.id })),
         { label: 'No, add a new dog', value: '' }
       ]);
       if (id) return id;
@@ -365,7 +384,7 @@ class Tidy extends FindingsTask {
       const made = v.mine
         ? await dogRepo.create({ ...base, ownership_type: 'owned', status: v.status,
           kennel_id: ['owned', 'co_owned'].includes(dog.ownership_type) ? dog.kennel_id : await resolveKennelIdForWrite() })
-        : await dogRepo.create({ ...base, ownership_type: 'external', status: 'external_reference', pedigree_only: true });
+        : await dogRepo.createPedigreeOnly(base);
       this.dogsById.set(made.id, made);
       return made.id;
     } catch (e) {
@@ -457,10 +476,10 @@ class Tidy extends FindingsTask {
         title: '',
         html: field('Kennel', `<select id="td-kennel">${opts.map((k) => `<option value="${esc(k.id)}">${esc(k.kennel_name)}${k.is_own_kennel ? ' (yours)' : ''}</option>`).join('')}</select>`),
         submitLabel: 'Link', cancelLabel: 'Skip',
-        submit: async (root) => root.querySelector('#td-kennel').value || 'Pick a kennel.',
-        reply: (id) => this.kennel(id)
+        submit: async (root) => { const id = root.querySelector('#td-kennel').value; return id ? { id } : 'Pick a kennel.'; },
+        reply: (r) => this.kennel(r.id)
       });
-      if (res.done) kennelId = res.result;
+      if (res.done) kennelId = res.result.id;
     } else if (pick === 'new') {
       kennelId = await this.newKennel();
     } else return pick;
@@ -470,20 +489,26 @@ class Tidy extends FindingsTask {
   }
 
   async newKennel() {
+    let asked = null; // a near name is asked about once; Add again keeps hers
     const res = await this.chat.form({
       title: '',
-      html: field('Kennel name', '<input id="td-kname" type="text" autocomplete="off">'),
+      html: kennelNameField('td-kname'),
       submitLabel: 'Add', cancelLabel: 'Skip',
       submit: async (root) => {
         const name = root.querySelector('#td-kname').value.trim();
         if (!name) return 'What\'s the kennel called?';
-        const k = await kennelRepo.create({ kennel_name: name, is_own_kennel: false });
+        const like = similarNamed(this.kennels.filter((k) => !k.is_own_kennel), name, (k) => k.kennel_name);
+        if (like && like.kennel_name.trim().toLowerCase() !== name.toLowerCase() && asked !== name) {
+          asked = name;
+          return `Is that ${like.kennel_name}, already in your kennels? Tap Skip and pick it instead, or Add again to add it as you typed it.`;
+        }
+        const { kennel: k } = await kennelRepo.findOrCreateOutside(name);
         this.kennelsById.set(k.id, k);
-        return k.id;
+        return { id: k.id };
       },
-      reply: (id) => this.kennel(id)
+      reply: (r) => this.kennel(r.id)
     });
-    return res.done ? res.result : null;
+    return res.done ? res.result.id : null;
   }
 
   async kennelContact(f) {
@@ -506,31 +531,35 @@ class Tidy extends FindingsTask {
         title: '',
         html: field('Contact', `<select id="td-contact">${opts.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${c.kennel_id ? ` (now with ${esc(this.kennel(c.kennel_id))})` : ''}</option>`).join('')}</select>`),
         submitLabel: 'Link', cancelLabel: 'Skip',
-        submit: async (root) => root.querySelector('#td-contact').value || 'Pick a contact.',
-        reply: (id) => this.contact(id)
+        submit: async (root) => { const id = root.querySelector('#td-contact').value; return id ? { id } : 'Pick a contact.'; },
+        reply: (r) => this.contact(r.id)
       });
       if (res.done) {
-        contactId = res.result;
+        contactId = res.result.id;
         await contactRepo.update(contactId, { kennel_id: k.id });
         await contactRepo.ensureType(contactId, 'breeder');
       }
     } else if (pick === 'new') {
+      let asked = null; // a near name is asked about once; Add again keeps hers
       const res = await this.chat.form({
         title: '',
-        html: `${field('Name', '<input id="td-cname" type="text" autocomplete="off">')}
-          ${field('Email (optional)', '<input id="td-cemail" type="email" autocomplete="off">')}
-          ${field('Phone (optional)', '<input id="td-cphone" type="tel" autocomplete="off">')}`,
+        html: contactFields('td-c'),
         submitLabel: 'Add', cancelLabel: 'Skip',
         submit: async (root) => {
-          const name = root.querySelector('#td-cname').value.trim();
+          const { name, email, phone } = readContactFields(root, 'td-c');
           if (!name) return 'What\'s their name?';
-          const c = await contactRepo.create({ name, email: root.querySelector('#td-cemail').value.trim(), phone: root.querySelector('#td-cphone').value.trim(), contact_type: ['breeder'], kennel_id: k.id });
+          const like = similarNamed(this.contacts, name, (x) => x.name);
+          if (like && asked !== name) {
+            asked = name;
+            return `Is that ${like.name}, already in your contacts? Tap Skip and pick them instead, or Add again to add them as you typed it.`;
+          }
+          const c = await contactRepo.create({ name, email, phone, contact_type: ['breeder'], kennel_id: k.id });
           this.contactsById.set(c.id, c);
-          return c.id;
+          return { id: c.id };
         },
-        reply: (id) => this.contact(id)
+        reply: (r) => this.contact(r.id)
       });
-      if (res.done) contactId = res.result;
+      if (res.done) contactId = res.result.id;
     } else return pick;
     if (!contactId) return null;
     return this.done(`Done. ${this.b(this.contact(contactId))} is with ${esc(k.kennel_name)}.`);
@@ -608,7 +637,4 @@ class Tidy extends FindingsTask {
 
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
-function field(labelText, inputHtml, hint = '') {
-  return `<div class="field gl-field"><label>${esc(labelText)}</label>${inputHtml}${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</div>`;
-}
 

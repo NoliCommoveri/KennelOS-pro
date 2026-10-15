@@ -125,6 +125,16 @@ export const expenseRepo = {
     return base.create(norm);
   },
 
+  // A cost captured from an event: one expense linked to it (expenses.event_id),
+  // on the event's subject and date. The event form's Cost field, and Kels's
+  // Add dogs purchase price.
+  createForEvent(ev, { amount, category }) {
+    return expenseRepo.create({
+      event_id: ev.id, subject_type: ev.subject_type, subject_id: ev.subject_id,
+      amount, category, expense_date: ev.event_date, vendor: '', notes: ''
+    });
+  },
+
   async update(id, changes) {
     const existing = await db.expenses.get(id);
     if (!existing) throw new Error(`expenses: no record with id ${id}`);

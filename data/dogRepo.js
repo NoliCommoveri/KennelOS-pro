@@ -133,6 +133,16 @@ export const dogRepo = {
     return includePedigreeOnly ? all : all.filter((d) => !d.pedigree_only);
   },
 
+  // An ancestor known only from a pedigree: named by its registered name (a call
+  // name only if she knows one), always somebody else's, never on a roster. The
+  // pedigree import, the tidy-up's "just for the pedigree" and Kels's Add dogs.
+  createPedigreeOnly(fields) {
+    return dogRepo.create({
+      call_name: '', ...fields,
+      ownership_type: 'external', status: 'external_reference', pedigree_only: true
+    });
+  },
+
   async create(data) {
     await validateDog(data);
     // Edition cap hook (§3/§4 of the cap spec). Default (Pro/shared) is a no-op;

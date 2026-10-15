@@ -13,6 +13,7 @@
 // the order she raises them in: TIDY_KINDS.
 import { RELEASED_SALE_STATUSES } from './vocab.js';
 import { studParents } from './studRules.js';
+import { normReg } from './dogSearch.js';
 
 export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
@@ -271,7 +272,7 @@ const orderPair = (a, b) => (String(a.created_at || '') <= String(b.created_at |
 // Never a pair: littermates (same litter) by name alone, a dog and its own parent
 // or child, or two dogs whose known sex differs.
 export const DOG_CONTRADICTIONS = [
-  ['registration number', (d) => normId(d.registration_number)],
+  ['registration number', (d) => normReg(d.registration_number)],
   ['birthday', (d) => d.date_of_birth || ''],
   ['microchip', (d) => normId(d.microchip_id)],
   ['sire', (d) => d.sire_id || ''],
@@ -283,8 +284,8 @@ export function compareDogs(a, b) {
   if (a.id === b.id) return null;
   if (a.sire_id === b.id || a.dam_id === b.id || b.sire_id === a.id || b.dam_id === a.id) return null;
   if (knownSex(a) && knownSex(b) && knownSex(a) !== knownSex(b)) return null;
-  const regA = normId(a.registration_number);
-  const sameReg = regA && regA === normId(b.registration_number);
+  const regA = normReg(a.registration_number);
+  const sameReg = regA && regA === normReg(b.registration_number);
   const rnA = normName(a.registered_name);
   const sameRegName = rnA && rnA === normName(b.registered_name);
   const cnA = normName(a.call_name);
@@ -308,7 +309,7 @@ export function duplicateDogFindings(dogs) {
   for (const d of live) {
     put(normName(d.call_name) && `c:${normName(d.call_name)}`, d);
     put(normName(d.registered_name) && `r:${normName(d.registered_name)}`, d);
-    put(normId(d.registration_number) && `n:${normId(d.registration_number)}`, d);
+    put(normReg(d.registration_number) && `n:${normReg(d.registration_number)}`, d);
   }
   const seen = new Set();
   const out = [];

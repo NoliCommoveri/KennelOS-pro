@@ -60,6 +60,18 @@ function validateKennel(candidate) {
 
 const testKey = (s) => String(s ?? '').trim().toLowerCase();
 
+// Which kennel's preferred_tests panel seeds a new dog's plan (Test Planning
+// Addendum §4): the dog's own kennel when it has one, else the sole own kennel
+// if there's exactly one; 0 or 2+ own kennels seed nothing (don't guess).
+// Owned / co-owned dogs only, never outside ones. Pure: `kennels` is every
+// kennel (the Dog page's new dog, and Kels's Add dogs).
+export function seedTestsKennel(candidate, kennels) {
+  if (!['owned', 'co_owned'].includes(candidate?.ownership_type)) return null;
+  if (candidate.kennel_id) return kennels.find((k) => k.id === candidate.kennel_id) || null;
+  const owned = kennels.filter((k) => k.is_own_kennel && !k.is_archived);
+  return owned.length === 1 ? owned[0] : null;
+}
+
 export const kennelRepo = {
   ...base,
 
@@ -134,6 +146,20 @@ export const kennelRepo = {
     if (!key) return [];
     const all = await kennelRepo.getAll({ includeArchived: true });
     return all.filter((k) => !k.public_id && !k.is_own_kennel && testKey(k.kennel_name) === key);
+  },
+
+  // An outside kennel by the name she typed: the one on file with that name (not
+  // archived, the same name match as above), else a new outside kennel. Kels's
+  // add-a-kennel everywhere (the tidy-up, an outside parent in the litter task,
+  // a breeder in Add dogs), so a name she types twice is one kennel.
+  // → { kennel, created }.
+  async findOrCreateOutside(name) {
+    const key = testKey(name);
+    if (!key) throw new Error('Kennel: "kennel_name" is required.');
+    const all = await kennelRepo.getAll({ includeArchived: false });
+    const found = all.find((k) => !k.is_own_kennel && testKey(k.kennel_name) === key);
+    if (found) return { kennel: found, created: false };
+    return { kennel: await kennelRepo.create({ kennel_name: String(name).trim(), is_own_kennel: false }), created: true };
   },
 
   // Contacts affiliated with this kennel — for the standalone kennel list screen.

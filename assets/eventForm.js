@@ -563,10 +563,7 @@ export async function openEventForm(opts) {
 
   // Create a fresh expense linked to a just-created event (cascade path).
   function writeLinkedExpense(ev, sType, sId, amount, d) {
-    return expenseRepo.create({
-      event_id: ev.id, subject_type: sType, subject_id: sId,
-      amount, category: d.expenseCategory, expense_date: d.event_date, vendor: '', notes: ''
-    });
+    return expenseRepo.createForEvent({ ...ev, subject_type: sType, subject_id: sId, event_date: d.event_date }, { amount, category: d.expenseCategory });
   }
 
   // Reconcile the single-subject event's linked expense with the Cost field:

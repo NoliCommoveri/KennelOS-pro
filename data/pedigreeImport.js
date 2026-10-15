@@ -27,17 +27,11 @@ import { documentRepo } from './documentRepo.js';
 import { fileRepo } from './fileRepo.js';
 import { resolveKennelIdForWrite } from './kennelScope.js';
 import { splitTitles } from './pedigreeParse.js';
+import { normReg } from './dogSearch.js';
 
-// A registration number's key: upper-cased, an "AKC" in front dropped, and only
-// letters and digits kept — "NP165114/01", "np 165114-01", "AKC NP16511401" are
-// one number however they were typed.
-// An AKC number is two letters and eight digits; the four digits printed after it
-// ("NP888072/07 03-25") are kept on the record but left out of the key, so the
-// number matches whether or not they were typed.
-export const normReg = (r) => {
-  const k = String(r || '').toUpperCase().replace(/^\s*AKC\b[\s#:.-]*/, '').replace(/[^A-Z0-9]/g, '');
-  return /^[A-Z]{2}\d{8}(\d{4})?$/.test(k) ? k.slice(0, 10) : k;
-};
+// normReg (a registration number's key) lives in dogSearch.js; kept exported here
+// for the importers that read it from this module.
+export { normReg };
 export const normName = (n) => String(n || '').replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"')
   .trim().replace(/\s+/g, ' ').toLowerCase();
 
@@ -272,9 +266,8 @@ export async function commitImport(plan, { storeFiles = [] } = {}) {
         if (Object.keys(changes).length) { await dogRepo.update(ex.id, changes); updated++; }
         idOf.set(r.key, ex.id);
       } else {
-        const d = await dogRepo.create({
-          call_name: '', registered_name: r.name, sex: r.sex || 'unknown', breed: r.breed,
-          ownership_type: 'external', status: 'external_reference', pedigree_only: true,
+        const d = await dogRepo.createPedigreeOnly({
+          registered_name: r.name, sex: r.sex || 'unknown', breed: r.breed,
           registration_number: r.registration_number, registry: r.registry, color_markings: r.color_markings,
           date_of_birth: r.date_of_birth || '', notes: r.notes.join('\n'), sire_id, dam_id
         });

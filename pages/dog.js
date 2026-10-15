@@ -8,7 +8,8 @@ import { CapExceededError } from '../data/repoBase.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
-import { kennelRepo } from '../data/kennelRepo.js';
+import { kennelRepo, seedTestsKennel } from '../data/kennelRepo.js';
+import { breedChoices } from '../data/dogSearch.js';
 import { eventRepo, testTokensOf } from '../data/eventRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
@@ -65,20 +66,6 @@ const blankDog = () => ({
   co_owner_contact_ids: [], litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_registration: '', notes: '',
   planned_tests: []
 });
-
-const SEED_TESTS_FOR = ['owned', 'co_owned'];
-
-// Which kennel's preferred_tests panel seeds a new dog's plan (Test Planning
-// Addendum §4) — resolved the same way kennel_id itself gets prefilled
-// (soleOwnKennelId): dog's kennel_id set wins outright; unset resolves to the
-// sole own-kennel if there's exactly one; 0 or 2+ own-kennels seed nothing
-// (don't guess). Owned/co-owned only — never external/leased-in.
-function resolveSeedKennel(candidate) {
-  if (!SEED_TESTS_FOR.includes(candidate.ownership_type)) return null;
-  if (candidate.kennel_id) return ctx.kennelsById.get(candidate.kennel_id) || null;
-  const owned = ctx.allKennels.filter((k) => k.is_own_kennel && !k.is_archived);
-  return owned.length === 1 ? owned[0] : null;
-}
 
 const ctx = {
   mode: 'view',        // 'new' | 'view' | 'edit'
@@ -148,14 +135,13 @@ function setupCollapsibleCard(sectionKey) {
 
 // --- Data loading --------------------------------------------------------
 async function loadRefs() {
-  const [dogs, contacts, litters, kennels, breeds, breedPool] = await Promise.all([
+  const [dogs, contacts, litters, kennels, breedPool] = await Promise.all([
     // Pedigree-only ancestors included: they name a sire/dam and fill the
     // Sire/Dam pickers (pedigree building). Nothing else on this page lists them.
     dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
     contactRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: true }),
     kennelRepo.getAll({ includeArchived: true }),
-    dogRepo.getBreeds(),
     kennelRepo.getBreedVocabulary()
   ]);
   ctx.allDogs = dogs;
@@ -164,9 +150,8 @@ async function loadRefs() {
   ctx.allKennels = kennels;
   // Breed autocomplete = breeds already on dogs UNION the kennel breed pool
   // (Test Planning Addendum §8) — the pool is what lets a seeded breed suggest
-  // before the first dog exists. Case-insensitive dedupe, dog-derived wins.
-  const breedSeen = new Set(breeds.map((b) => b.toLowerCase()));
-  ctx.breeds = [...breeds, ...breedPool.filter((b) => !breedSeen.has(b.toLowerCase()))].sort();
+  // before the first dog exists. dogSearch.breedChoices, Kels's breed picker too.
+  ctx.breeds = breedChoices({ dogs, pool: breedPool });
   ctx.dogsById = new Map(dogs.map((d) => [d.id, d]));
   ctx.contactsById = new Map(contacts.map((c) => [c.id, c]));
   ctx.littersById = new Map(litters.map((l) => [l.id, l]));
@@ -718,7 +703,7 @@ async function doSave() {
       // against the panel again after this. Scoped to this dog's own breed
       // (§8): a breed-tagged test only carries over for a matching breed; an
       // untagged/breed-agnostic test still carries over to every new dog.
-      const seedKennel = resolveSeedKennel(candidate);
+      const seedKennel = seedTestsKennel(candidate, ctx.allKennels);
       if (seedKennel) candidate.planned_tests = kennelRepo.testsForBreed(seedKennel, candidate.breed);
       // Kennel scope (Multi-Kennel Scope Spec §6). A dog the user owns needs one;
       // in a multi-kennel edition the required picker above supplied it, and in a

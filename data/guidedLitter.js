@@ -33,6 +33,7 @@ import { studServiceRepo } from './studServiceRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { baseFromLitter } from './puppyDefaults.js';
 import { addDaysToYMD, todayYMD } from './dateUtils.js';
+import { similarNamed } from './dogSearch.js';
 import {
   SEX, DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, descriptor
 } from './vocab.js';
@@ -131,21 +132,11 @@ export function newDogSpec(breed = '') {
   return {
     call_name: '', registered_name: '', breed, mine: true,
     ownerId: null, owner: { name: '', phone: '', email: '' }, kennelId: null, kennelName: '',
-    matchIds: [], matchesFor: null, matchDeclined: false
+    matchIds: [], matchesFor: null, matchDeclined: false,
+    // "Yes, that's her" on a pedigree-only dog: that dog is brought into use
+    // with these answers (the Dog page's bring-in) instead of a new one made.
+    bringInId: null
   };
-}
-
-// Dogs already on file that the typed name may mean: same sex (or unknown),
-// call or registered name equal, or one containing the other. Every dog that
-// isn't archived counts, outside and pedigree-only dogs included.
-export function dogMatches(dogs, { name, registeredName = '', sex }) {
-  const wanted = [norm(name), norm(registeredName)].filter((n) => n.length >= 2);
-  if (!wanted.length) return [];
-  const hit = (a, b) => a && b && (a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a))));
-  return dogs
-    .filter((d) => !d.is_archived && (d.sex === sex || d.sex === 'unknown' || !d.sex))
-    .filter((d) => wanted.some((w) => hit(norm(d.call_name), w) || hit(norm(d.registered_name), w)))
-    .sort((a, b) => (a.call_name || a.registered_name || '').localeCompare(b.call_name || b.registered_name || ''));
 }
 
 export function newPup(existingNames = []) {
@@ -288,7 +279,12 @@ export function stepsFor(draft, ctx = {}) {
   return steps;
 }
 
-// One plain-language problem with the step's answers, or null when it's fine.
+// A check she can tap past (kelsSteps): asked once per key.
+const check = (draft, key, message) => (draft.warned?.[key] ? null : { key, message });
+
+// One plain-language problem with the step's answers (a string stays until
+// fixed; a check() she can tap past), or null when it's fine. ctx also carries
+// `contacts` and `outsideKennels`, for "is that one you have?".
 export function stepProblem(step, draft, ctx = {}) {
   const today = todayYMD();
   const [role, part] = step.split('-');
@@ -305,15 +301,24 @@ export function stepProblem(step, draft, ctx = {}) {
     if (!spec) return null;
     if (part === 'new') {
       if (blank(spec?.call_name)) return `Type the ${r.word}'s name.`;
-      if (blank(spec?.breed)) return `Type ${r.possessive} breed.`;
+      if (blank(spec?.breed)) return `Pick ${r.possessive} breed, or type a new one.`;
+      // A breed she has, spelled a little differently, would make a second breed.
+      const like = similarNamed((ctx.breeds || []).filter((b) => norm(b) !== norm(spec.breed)), spec.breed, (b) => b);
+      if (like) return check(draft, `breed:${role}:${norm(spec.breed)}`, `Did you mean ${like}? That's how your other dogs have it.`);
       return null;
     }
     // "We found Nell. Is this the mom?": a found dog clears the new-dog answers;
     // "No, a different dog" sets matchDeclined.
-    if (part === 'match') return spec?.matchDeclined ? null : 'Tap one of the choices.';
+    if (part === 'match') return spec?.matchDeclined || spec?.bringInId ? null : 'Tap one of the choices.';
     if (part === 'owner') {
       if (!spec?.ownerId && blank(spec?.owner?.name)) return `Pick ${r.possessive} owner, or type the owner's name.`;
+      const like = spec?.ownerId ? null : similarNamed(ctx.contacts || [], spec.owner.name, (c) => c.name);
+      if (like) return check(draft, `owner:${role}:${norm(spec.owner.name)}`, `Is that ${like.name}, already in your contacts? Pick them from the list if so.`);
       return null;
+    }
+    if (part === 'kennel' && spec && !spec.kennelId && !blank(spec.kennelName)) {
+      const like = similarNamed(ctx.outsideKennels || [], spec.kennelName, (k) => k.kennel_name);
+      if (like) return check(draft, `kennel:${role}:${norm(spec.kennelName)}`, `Is that ${like.kennel_name}, already in your kennels? Pick it from the list if so.`);
     }
     return null; // -kennel is optional
   }
@@ -415,8 +420,9 @@ export function pupPriceText(pup, prices) {
 function newDogLines(spec, role, names) {
   const s = spec;
   const reg = blank(s.registered_name) ? '' : ` (${trimmed(s.registered_name)})`;
-  if (s.mine) return [`A new dog of yours: ${trimmed(s.call_name)}${reg}, ${trimmed(s.breed)}.`];
-  const lines = [`A new outside dog: ${trimmed(s.call_name)}${reg}, ${trimmed(s.breed)}, owned by ${names.owner || trimmed(s.owner?.name)}${names.kennel ? `, ${names.kennel}` : ''}.`];
+  const what = s.bringInId ? (s.mine ? 'Brought into your dogs from a pedigree' : 'Brought in from a pedigree as an outside dog') : (s.mine ? 'A new dog of yours' : 'A new outside dog');
+  if (s.mine) return [`${what}: ${trimmed(s.call_name)}${reg}, ${trimmed(s.breed)}.`];
+  const lines = [`${what}: ${trimmed(s.call_name)}${reg}, ${trimmed(s.breed)}, owned by ${names.owner || trimmed(s.owner?.name)}${names.kennel ? `, ${names.kennel}` : ''}.`];
   if (!s.ownerId) lines.push(`A new contact for ${trimmed(s.owner?.name)}.`);
   if (!s.kennelId && !blank(s.kennelName)) lines.push(`A new outside kennel, ${trimmed(s.kennelName)}.`);
   return lines;
@@ -538,15 +544,23 @@ async function createParent(spec, role, s, ownKennelId, step) {
     call_name: trimmed(spec.call_name), registered_name: trimmed(spec.registered_name), breed: trimmed(spec.breed),
     sex: r.sex, status: 'active_breeding'
   };
+  // A new dog, or a pedigree-only one brought into use: the names and breed the
+  // pedigree has stay; what she typed fills only what it left blank.
+  const write = async (fields) => {
+    if (!spec.bringInId) return (await dogRepo.create(fields)).id;
+    const on = await dogRepo.getById(spec.bringInId);
+    const keep = Object.fromEntries(['call_name', 'registered_name', 'breed'].filter((k) => !blank(on?.[k])).map((k) => [k, on[k]]));
+    await dogRepo.update(spec.bringInId, { ...fields, ...keep, pedigree_only: false });
+    return spec.bringInId;
+  };
   if (spec.mine) {
-    const dog = await dogRepo.create({ ...base, ownership_type: 'owned', kennel_id: ownKennelId });
-    made.dogId = dog.id;
+    made.dogId = await write({ ...base, ownership_type: 'owned', kennel_id: ownKennelId });
     await step();
-    return dog.id;
+    return made.dogId;
   }
   let kennelId = spec.kennelId || made.kennelId || null;
   if (!kennelId && !blank(spec.kennelName)) {
-    const k = await kennelRepo.create({ kennel_name: trimmed(spec.kennelName), is_own_kennel: false });
+    const { kennel: k } = await kennelRepo.findOrCreateOutside(spec.kennelName);
     kennelId = made.kennelId = k.id;
     await step();
   }
@@ -559,10 +573,9 @@ async function createParent(spec, role, s, ownKennelId, step) {
     ownerId = made.ownerId = c.id;
     await step();
   }
-  const dog = await dogRepo.create({ ...base, ownership_type: 'external', owner_contact_id: ownerId, kennel_id: kennelId });
-  made.dogId = dog.id;
+  made.dogId = await write({ ...base, ownership_type: 'external', owner_contact_id: ownerId, kennel_id: kennelId });
   await step();
-  return dog.id;
+  return made.dogId;
 }
 
 // Write everything the review listed. Where a refusal is possible (Lite's litter

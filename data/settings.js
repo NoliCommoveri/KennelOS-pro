@@ -25,6 +25,7 @@ const KEYS = {
   cloudOfferPending: 'kennelOS.cloudOfferPending',
   cloudRestoredAt: 'kennelOS.cloudRestoredAt',
   guidedLitterDraft: 'kennelOS.guidedLitterDraft',
+  guidedDogsDraft: 'kennelOS.guidedDogsDraft',
   prepChecks: 'kennelOS.prepChecks',
   studTripsMigrated: 'kennelOS.studTripsMigrated'
 };
@@ -470,6 +471,26 @@ export function setGuidedLitterDraft(draft) {
 
 export function clearGuidedLitterDraft() {
   localStorage.removeItem(KEYS.guidedLitterDraft);
+}
+
+// --- Kels's "Add dogs" draft (assets/guidedDogsUI.js) ------------------------
+// As the litter draft above: her answers so far, one draft at a time, null when
+// none. In KEYS, so Reset App clears it. Device-only until the save.
+export function getGuidedDogsDraft() {
+  try {
+    return JSON.parse(localStorage.getItem(KEYS.guidedDogsDraft) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+export function setGuidedDogsDraft(draft) {
+  localStorage.setItem(KEYS.guidedDogsDraft, JSON.stringify(draft));
+  return draft;
+}
+
+export function clearGuidedDogsDraft() {
+  localStorage.removeItem(KEYS.guidedDogsDraft);
 }
 
 // --- Kels's "Pups are going home": the optional checks she ticked last time ----

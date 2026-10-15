@@ -20,6 +20,7 @@ import { runCheckinTask, checkinState } from '../assets/litterCheckinUI.js';
 import { runTidyTask } from '../assets/tidyUpUI.js';
 import { runPrepTask, prepState } from '../assets/prepPupsUI.js';
 import { runHealthTask } from '../assets/accountHealthUI.js';
+import { runDogsTask, pendingDogsDraft, discardGuidedDogsDraft } from '../assets/guidedDogsUI.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { isLicenseGated } from '../data/license.js';
 import { param, esc } from '../assets/ui.js';
@@ -30,7 +31,7 @@ const laterBtn = document.getElementById('kels-later');
 document.getElementById('kels-name').textContent = KELS.title;
 document.getElementById('kels-avatar').innerHTML = kelsAvatar({ large: true });
 
-// Kels's tasks. `state`: { pendingLitter, litters: { open, withPups }, prep: { litters } }.
+// Kels's tasks. `state`: { pendingLitter, pendingDogs, litters: { open, withPups }, prep: { litters } }.
 const TASKS = [
   {
     id: 'resume-litter',
@@ -41,6 +42,16 @@ const TASKS = [
     priority: () => 100, // something half-done always comes first
     resumable: true,
     run: (opts) => runLitterTask(chat, { ...opts, resume: true })
+  },
+  {
+    id: 'resume-dogs',
+    label: (s) => `Finish adding ${s.pendingDogs?.label || 'your dogs'}`,
+    sub: 'Pick up where we left off',
+    keywords: ['continue', 'resume', 'unfinished', 'draft', 'add dogs', 'new dog'],
+    available: (s) => Boolean(s.pendingDogs),
+    priority: () => 99,
+    resumable: true,
+    run: (opts) => runDogsTask(chat, { ...opts, resume: true })
   },
   {
     id: 'checkin',
@@ -88,6 +99,32 @@ const TASKS = [
     run: (opts) => runPrepTask(chat, opts)
   },
   {
+    id: 'add-dogs',
+    label: () => 'Add dogs',
+    // Documents are Pro; Lite never mentions or searches them.
+    sub: editionFlags.documents ? 'One or several: their details, parents and papers' : 'One or several: their details and parents',
+    keywords: ['new dog', 'add dog', 'add a dog', 'bought a dog', 'new female', 'new male', 'stud', 'brood', 'girl', 'boy',
+      'parents', 'pedigree', 'registered name', 'registration',
+      ...(editionFlags.documents ? ['papers', 'registration papers', 'health records', 'documents', 'certificate'] : [])],
+    available: () => true,
+    priority: () => 35,
+    resumable: true,
+    // Starting while some dogs are unfinished: finish those first, or start fresh?
+    beforeStart: async () => {
+      const p = pendingDogsDraft();
+      if (!p) return null;
+      await chat.say(`You have dogs you didn't finish adding (${esc(p.label || 'started earlier')}). Want to finish those first?`);
+      const pick = await chat.choose([
+        { label: 'Finish those', value: 'resume', primary: true },
+        { label: 'Start fresh (throw them away)', value: 'fresh' }
+      ]);
+      if (pick === 'resume') return { taskId: 'resume-dogs' };
+      discardGuidedDogsDraft();
+      return null;
+    },
+    run: (opts) => runDogsTask(chat, opts)
+  },
+  {
     id: 'tidy-up',
     label: () => 'Tidy up my records',
     sub: 'Find records that don\'t agree, and duplicates, and fix them',
@@ -128,7 +165,7 @@ const taskById = (id) => TASKS.find((t) => t.id === id);
 
 async function state() {
   const [litters, prep] = await Promise.all([checkinState(), prepState()]);
-  return { pendingLitter: pendingLitterDraft(), litters, prep };
+  return { pendingLitter: pendingLitterDraft(), pendingDogs: pendingDogsDraft(), litters, prep };
 }
 
 function running(task) {

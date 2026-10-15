@@ -28,25 +28,28 @@ import {
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import * as G from '../data/guidedLitter.js';
+import { findDogMatches, matchReason, breedChoices } from '../data/dogSearch.js';
 import { esc, todayYMD } from './ui.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
-
-function pagesPrefix() {
-  return location.pathname.includes('/pages/') ? '' : 'pages/';
-}
+import { StepConversation, tile, field, input, options, stepper, val, plural, pagesPrefix, kennelNameField, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
 
 // --- The data the screens read --------------------------------------------------
 
 async function loadData() {
-  const [dogs, litters, pairings, kennels, contacts] = await Promise.all([
-    dogRepo.getAll({ includeArchived: false }),
+  const [dogs, litters, pairings, kennels, contacts, breedPool] = await Promise.all([
+    // Pedigree-only dogs too: a mom or dad typed in may be one (brought into
+    // use); they never show among the dogs to pick (damChoices / sireChoices).
+    dogRepo.getAll({ includeArchived: false, includePedigreeOnly: true }),
     litterRepo.getAll({ includeArchived: false }),
     pairingRepo.getAll({ includeArchived: false }),
     kennelRepo.getAll({ includeArchived: false }),
-    editionFlags.externalOwnership ? contactRepo.getAll({ includeArchived: false }) : Promise.resolve([])
+    editionFlags.externalOwnership ? contactRepo.getAll({ includeArchived: false }) : Promise.resolve([]),
+    kennelRepo.getBreedVocabulary()
   ]);
   return {
     dogs,
+    // Her breeds, as the Dog page offers them, for a new mom or dad's breed.
+    breeds: breedChoices({ dogs, pool: breedPool }),
     litters,
     pairings,
     kennels,
@@ -79,37 +82,15 @@ async function stepCtx(draft, data) {
     litter, pairing, linkedPairing, dam, sire, litterOptions, pairingOptions,
     needsKennel: !litter && !draft.autoKennelId,
     canOutsideDog: Boolean(editionFlags.externalOwnership),
+    contacts: data.contacts,
+    breeds: data.breeds,
+    outsideKennels: data.kennels.filter((k) => !k.is_own_kennel),
     canStudService: Boolean(editionFlags.studServices),
     sireIsOutside: G.isOutsideDog(sire),
     hasStudService: services.some((x) => !x.is_archived)
   };
 }
 
-// --- Little HTML helpers ------------------------------------------------------------
-
-const tile = (act, value, labelHtml, { selected = false, sub = '' } = {}) =>
-  `<button type="button" class="gl-tile${selected ? ' selected' : ''}" data-act="${esc(act)}" data-value="${esc(value)}">
-    <span class="gl-tile-label">${labelHtml}</span>${sub ? `<span class="gl-tile-sub">${esc(sub)}</span>` : ''}</button>`;
-
-const field = (labelText, inputHtml, hint = '') =>
-  `<div class="field gl-field"><label>${esc(labelText)}</label>${inputHtml}${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</div>`;
-
-const input = (id, value, { type = 'text', placeholder = '', min = null, step = null, inputmode = '' } = {}) =>
-  `<input id="${id}" type="${type}" value="${esc(value ?? '')}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ''}${min != null ? ` min="${min}"` : ''}${step != null ? ` step="${step}"` : ''}${inputmode ? ` inputmode="${inputmode}"` : ''}>`;
-
-const options = (vocab, current, blankLabel = null) =>
-  (blankLabel != null ? `<option value="">${esc(blankLabel)}</option>` : '') +
-  vocab.map((v) => `<option value="${esc(v.value)}"${v.value === current ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
-
-const stepper = (id, value, labelText) => `
-  <div class="gl-stepper">
-    <span class="gl-stepper-label">${esc(labelText)}</span>
-    <button type="button" class="btn gl-step-btn" data-step-for="${id}" data-delta="-1" aria-label="One fewer">−</button>
-    <input id="${id}" type="number" min="0" inputmode="numeric" value="${esc(value ?? '')}">
-    <button type="button" class="btn gl-step-btn" data-step-for="${id}" data-delta="1" aria-label="One more">+</button>
-  </div>`;
-
-const val = (root, id) => root.querySelector(`#${id}`)?.value.trim() ?? '';
 const dogLabel = (d) => `${esc(d.call_name)}${d.registered_name ? ` <span class="faint">${esc(d.registered_name)}</span>` : ''}`;
 
 // --- Screens --------------------------------------------------------------------------
@@ -172,7 +153,7 @@ function screens(draft, data, ctx) {
       title: `Tell me about the ${r.word}`,
       html: `<p class="gl-lead">Just the basics. You can add more on ${r.possessive} page later.</p>
         ${field(`${role === 'dam' ? 'Her' : 'His'} name`, input('gl-nd-name', spec.call_name, { placeholder: role === 'dam' ? 'e.g. Daisy' : 'e.g. Duke' }))}
-        ${field('Breed', input('gl-nd-breed', spec.breed))}
+        ${breedPicker('gl-nd-breed', spec.breed, data.breeds)}
         ${field('Registered name (if you know it)', input('gl-nd-reg', spec.registered_name))}
         ${ctx.canOutsideDog ? `<p class="gl-q">Whose dog is ${r.pronoun}?</p>
         <div class="gl-tiles gl-tiles-small">
@@ -180,19 +161,22 @@ function screens(draft, data, ctx) {
           ${tile('mine', 'no', 'Someone else\'s', { selected: !spec.mine })}
         </div>` : ''}`,
       onTile: (value) => { spec.mine = value === 'yes'; return 'redraw'; },
+      wire: (root) => wireBreedPicker(root, 'gl-nd-breed'),
       read: (root) => {
         spec.call_name = val(root, 'gl-nd-name');
-        spec.breed = val(root, 'gl-nd-breed');
+        spec.breed = readBreedPicker(root, 'gl-nd-breed');
         spec.registered_name = val(root, 'gl-nd-reg');
       },
-      // Look for dogs already on file by that name before making a new one.
+      // Look for the dog on file before making a new one (dogSearch: both names,
+      // both ways, then the breed).
       after: () => {
-        const asked = `${spec.call_name}|${spec.registered_name}`.toLowerCase();
+        const asked = `${spec.call_name}|${spec.registered_name}|${spec.breed}`.toLowerCase();
         if (spec.matchesFor === asked) return;
         spec.matchesFor = asked;
         spec.matchDeclined = false;
-        spec.matchIds = G.dogMatches(data.dogs, { name: spec.call_name, registeredName: spec.registered_name, sex: r.sex })
-          .filter((d) => d.id !== otherId(role)).map((d) => d.id);
+        spec.bringInId = null;
+        spec.matchIds = findDogMatches(data.dogs, { callName: spec.call_name, registeredName: spec.registered_name, breed: spec.breed, sex: r.sex },
+          { excludeIds: [otherId(role)] }).slice(0, 6).map((m) => m.dog.id);
       }
     };
   }
@@ -201,7 +185,10 @@ function screens(draft, data, ctx) {
     const r = G.ROLES[role];
     const spec = draft[r.newKey];
     const found = spec.matchIds.map((id) => data.dogsById.get(id)).filter(Boolean);
+    const reasons = new Map(findDogMatches(data.dogs, { callName: spec.call_name, registeredName: spec.registered_name, breed: spec.breed, sex: r.sex })
+      .map((m) => [m.dog.id, matchReason(m)]));
     const describe = (d) => [
+      reasons.get(d.id),
       d.breed,
       d.pedigree_only ? 'From a pedigree' : G.isOutsideDog(d) ? 'Outside dog' : 'Your dog',
       d.date_of_birth ? `born ${G.fmt(d.date_of_birth)}` : ''
@@ -211,11 +198,15 @@ function screens(draft, data, ctx) {
       title: one ? `We found ${esc(found[0].call_name || found[0].registered_name)}. Is this the ${r.word}?` : `We found dogs with that name. Is one of them the ${r.word}?`,
       html: `<p class="gl-lead">${one ? 'This dog is already in KennelOS.' : 'These dogs are already in KennelOS.'} Using ${one ? 'it' : 'one'} keeps ${r.possessive} records in one place.</p>
         <div class="gl-tiles">
-          ${found.map((d) => tile('match', d.id, `${one ? `Yes, that's ${r.pronoun === 'she' ? 'her' : 'him'}: ` : ''}${dogLabel(d)}`, { sub: describe(d) })).join('')}
+          ${found.map((d) => tile('match', d.id, `${one ? `Yes, that's ${r.pronoun === 'she' ? 'her' : 'him'}: ` : ''}${dogLabel(d)}`, { selected: spec.bringInId === d.id, sub: describe(d) })).join('')}
           ${tile('match', 'none', `No, ${r.pronoun}'s a different dog`, { selected: spec.matchDeclined, sub: `Add ${spec.call_name ? esc(spec.call_name) : `the ${r.word}`} as a new dog` })}
         </div>`,
       onTile: (value) => {
+        spec.bringInId = null;
         if (value === 'none') { spec.matchDeclined = true; return true; }
+        // A dog only on a pedigree: brought into use with her answers (and,
+        // someone else's, its owner), instead of a second one.
+        if (data.dogsById.get(value)?.pedigree_only) { spec.bringInId = value; spec.matchDeclined = false; return true; }
         draft[r.idKey] = value;
         draft[r.newKey] = null;
         resetMatches();
@@ -232,18 +223,14 @@ function screens(draft, data, ctx) {
       title: `Who owns ${esc(s.call_name || (r.pronoun === 'she' ? 'her' : 'him'))}?`,
       html: `${data.contacts.length ? field('Someone already in your contacts', `<select id="gl-so-pick"><option value="">Someone new…</option>${data.contacts.map((c) => `<option value="${esc(c.id)}"${s.ownerId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`) : ''}
         <div id="gl-so-new"${s.ownerId ? ' hidden' : ''}>
-          ${field('Owner\'s name', input('gl-so-name', owner.name, { placeholder: 'e.g. Pat Smith' }))}
-          ${field('Phone (optional)', input('gl-so-phone', owner.phone, { type: 'tel' }))}
-          ${field('Email (optional)', input('gl-so-email', owner.email, { type: 'email' }))}
+          ${contactFields('gl-so', owner, { nameLabel: 'Owner\'s name' })}
         </div>`,
       wire: (root) => {
         root.querySelector('#gl-so-pick')?.addEventListener('change', (e) => { root.querySelector('#gl-so-new').hidden = Boolean(e.target.value); });
       },
       read: (root) => {
         s.ownerId = val(root, 'gl-so-pick') || null;
-        owner.name = val(root, 'gl-so-name');
-        owner.phone = val(root, 'gl-so-phone');
-        owner.email = val(root, 'gl-so-email');
+        Object.assign(owner, readContactFields(root, 'gl-so'));
         // A picked owner with a kennel names the dog's kennel too.
         const picked = s.ownerId ? data.contactsById.get(s.ownerId) : null;
         if (picked?.kennel_id && !s.kennelId && !s.kennelName) s.kennelId = picked.kennel_id;
@@ -259,7 +246,7 @@ function screens(draft, data, ctx) {
       title: 'Does the owner have a kennel name?',
       html: `<p class="gl-lead">Optional. Tap Next to skip.</p>
         ${outside.length ? field('A kennel you already have', `<select id="gl-sk-pick"><option value="">None, or a new one…</option>${outside.map((k) => `<option value="${esc(k.id)}"${s.kennelId === k.id ? ' selected' : ''}>${esc(k.kennel_name)}</option>`).join('')}</select>`) : ''}
-        <div id="gl-sk-new"${s.kennelId ? ' hidden' : ''}>${field('Kennel name', input('gl-sk-name', s.kennelName, { placeholder: 'e.g. Elmwood Kennels' }))}</div>`,
+        <div id="gl-sk-new"${s.kennelId ? ' hidden' : ''}>${kennelNameField('gl-sk-name', s.kennelName)}</div>`,
       wire: (root) => {
         root.querySelector('#gl-sk-pick')?.addEventListener('change', (e) => { root.querySelector('#gl-sk-new').hidden = Boolean(e.target.value); });
       },
@@ -514,8 +501,6 @@ function previewItems(pups, prices) {
 
 // --- Her answers, as she'd have said them -------------------------------------------
 
-const yesNo = (b) => (b ? 'Yes' : 'No');
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // The reply bubble left in the chat once a step is answered: plain text.
 function answerFor(stepId, draft, data) {
@@ -527,7 +512,7 @@ function answerFor(stepId, draft, data) {
     if (!part) return spec ? 'A dog that isn\'t in KennelOS yet' : dogName(draft[r.idKey]);
     if (!spec) return part === 'match' ? `Yes, that's ${r.pronoun === 'she' ? 'her' : 'him'}: ${dogName(draft[r.idKey])}` : '';
     if (part === 'new') return [spec.call_name, spec.registered_name, spec.breed, spec.mine ? 'mine' : 'someone else\'s'].filter(Boolean).join(' · ');
-    if (part === 'match') return `No, ${r.pronoun}'s a different dog`;
+    if (part === 'match') return spec.bringInId ? `Yes, that's ${r.pronoun === 'she' ? 'her' : 'him'}: ${dogName(spec.bringInId)} (from a pedigree)` : `No, ${r.pronoun}'s a different dog`;
     if (part === 'owner') return spec.ownerId ? (data.contactsById.get(spec.ownerId)?.name || 'Someone in my contacts') : [spec.owner.name, spec.owner.phone, spec.owner.email].filter(Boolean).join(' · ');
     if (part === 'kennel') return spec.kennelId ? (data.kennelsById.get(spec.kennelId)?.kennel_name || '') : (spec.kennelName || 'Skip');
   }
@@ -601,19 +586,16 @@ export async function runLitterTask(chat, { litterId = null, resume = false, onE
   } else {
     draft.history = draft.history || [];
     await chat.say(`Welcome back! Here's what we have so far for ${esc(draft.label || 'your litter')}:`, { typing: 500 });
-    for (const h of draft.history) {
-      const b = await chat.say(esc(h.q), { typing: 0 });
-      b.classList.add('kels-past');
-      chat.you(h.a);
-    }
+    await StepConversation.replay(chat, draft.history);
     await chat.say('Let\'s pick up where we left off.', { typing: 500 });
   }
   return new LitterConversation(chat, draft, data, onExit, onSaved).start();
 }
 
-class LitterConversation {
+class LitterConversation extends StepConversation {
   constructor(chat, draft, data, onExit, onSaved) {
-    Object.assign(this, { chat, draft, data, onExit, onSaved, ctx: null, steps: [], current: null, panel: null, busy: false });
+    super(chat, draft);
+    Object.assign(this, { data, onExit, onSaved, ctx: null });
   }
 
   persist() {
@@ -632,9 +614,9 @@ class LitterConversation {
     this.draft.pups.forEach((p) => { p.saved = false; });
   }
 
-  async refreshSteps() {
+  async loadSteps() {
     this.ctx = await stepCtx(this.draft, this.data);
-    this.steps = G.stepsFor(this.draft, this.ctx);
+    return G.stepsFor(this.draft, this.ctx);
   }
 
   screenFor(stepId) {
@@ -643,165 +625,15 @@ class LitterConversation {
     return all[stepId]();
   }
 
-  async start() {
-    await this.refreshSteps();
-    const step = this.steps.includes(this.draft.step) ? this.draft.step : this.steps[0];
-    await this.ask(step);
-  }
+  problem(stepId) { return G.stepProblem(stepId, this.draft, this.ctx); }
+  answerText(stepId) { return answerFor(stepId, this.draft, this.data); }
 
-  // Kels asks `stepId`: her question, then the breeder's answer panel.
-  async ask(stepId, { typing = 650 } = {}) {
-    await this.refreshSteps();
-    if (!this.steps.includes(stepId)) stepId = this.steps[0];
-    this.draft.step = stepId;
-    this.persist();
-    this.current = this.screenFor(stepId);
-    const bubble = await this.chat.say(`<strong>${this.current.title}</strong>`, { typing });
-    this.panel = this.chat.panel('');
-    this.fillPanel(bubble);
-  }
-
-  // (Re)draw the answer panel for the current step. A lead line in the screen
-  // moves up into Kels's bubble, so she's the one saying it.
-  fillPanel(bubble = null) {
-    const isReview = Boolean(this.current.isReview);
-    const canBack = this.draft.history.length > 0;
-    this.panel.innerHTML = `<div class="gl-body">${this.current.html}</div>
-      <div class="gl-error" aria-live="assertive"></div>
-      <div class="kels-panel-foot">
-        ${canBack ? '<button type="button" class="btn gl-back" data-k="back">← Back</button>' : '<span></span>'}
-        ${this.draft.returnToReview && !isReview ? '<button type="button" class="btn" data-k="to-review">Back to the plan</button>' : ''}
-        ${isReview
-          ? '<button type="button" class="btn btn-primary gl-next" data-k="save">Yes, build it</button>'
-          : '<button type="button" class="btn btn-primary gl-next" data-k="next">Next →</button>'}
-      </div>`;
-    const lead = this.panel.querySelector('.gl-lead');
-    if (lead && bubble) { lead.classList.remove('gl-lead'); lead.classList.add('kels-lead'); bubble.appendChild(lead); }
-    else if (lead) lead.remove();
-    this.wire();
-    this.chat.scroll();
-  }
-
-  body() { return this.panel.querySelector('.gl-body'); }
-  showError(msg) { this.panel.querySelector('.gl-error').innerHTML = msg ? `<div class="inline-error gl-inline-error">${esc(msg)}</div>` : ''; this.chat.scroll(); }
-
-  async redraw() {
-    await this.refreshSteps();
-    this.current = this.screenFor(this.draft.step);
-    this.fillPanel();
-  }
-
-  wire() {
-    const body = this.body();
-    const cur = this.current;
-    body.querySelectorAll('.gl-tile').forEach((b) => b.addEventListener('click', async () => {
-      if (this.busy) return;
-      cur.read?.(body);
-      const result = cur.onTile?.(b.dataset.value, body);
-      this.answerChanged();
-      if (result === 'redraw') { this.persist(); await this.redraw(); return; }
-      if (result === true) await this.advance({ skipRead: true });
-    }));
-    body.querySelectorAll('[data-act]:not(.gl-tile)').forEach((b) => b.addEventListener('click', async () => {
-      const result = cur.onAct?.(b.dataset.act, body);
-      if (result === 'read-redraw' || result === 'redraw') {
-        cur.read?.(body);
-        if (result === 'read-redraw') this.answerChanged();
-        this.persist();
-        await this.redraw();
-      }
-    }));
-    body.querySelectorAll('[data-step-for]').forEach((b) => b.addEventListener('click', () => {
-      const el = body.querySelector(`#${b.dataset.stepFor}`);
-      el.value = String(Math.max(0, (Number(el.value) || 0) + Number(b.dataset.delta)));
-    }));
-    body.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => this.change(b.dataset.goto)));
-    body.querySelectorAll('input').forEach((el) => el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); this.advance(); }
-    }));
-    cur.wire?.(body);
-    const on = (k, fn) => this.panel.querySelector(`[data-k="${k}"]`)?.addEventListener('click', fn);
-    on('back', () => this.back());
-    on('next', () => this.advance());
-    on('to-review', () => this.advance({ toReview: true }));
-    on('save', () => this.save());
-  }
-
-  // Her answer to the current step goes into the chat as her reply.
-  answered(stepId) {
-    const q = this.panelQuestionText();
-    const a = answerFor(stepId, this.draft, this.data) || 'Done';
-    this.draft.history.push({ step: stepId, q, a });
-    this.panel.closest('.kels-row').remove();
-    this.chat.you(a);
-  }
-
-  panelQuestionText() {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = this.current.title;
-    return tmp.textContent;
-  }
-
-  async advance({ skipRead = false, toReview = false } = {}) {
-    if (this.busy) return;
-    this.busy = true;
-    try {
-      const shown = this.steps;
-      const body = this.body();
-      if (!skipRead) { this.current.read?.(body); this.answerChanged(); }
-      await this.refreshSteps();
-      const problem = G.stepProblem(this.draft.step, this.draft, this.ctx);
-      if (problem) { this.persist(); this.showError(problem); return; }
-      this.current.after?.();
-      if (!this.draft.pricesFilled) {
-        const breed = this.ctx.dam?.breed || this.draft.newDam?.breed;
-        const suggested = breed ? G.suggestedPrices({ litters: this.data.litters, dogsById: this.data.dogsById, breed, excludeLitterId: this.draft.litterId }) : null;
-        if (suggested && Object.values(this.draft.prices).every((v) => v === '')) { this.draft.prices = suggested; this.draft.pricesFilled = true; }
-      }
-      const stepId = this.draft.step;
-      this.answered(stepId);
-      this.persist();
-      // The answer can change which steps there are, and even remove this one:
-      // go on from where it was.
-      const at = shown.indexOf(stepId);
-      await this.refreshSteps();
-      let next;
-      if (toReview || (this.draft.returnToReview && stepId !== 'review')) {
-        // Fixing something from the plan: straight back to the plan, unless the
-        // fix opened a question that hasn't been answered yet.
-        const answered = new Set(this.draft.history.map((h) => h.step));
-        next = this.steps.find((x) => x !== 'review' && !answered.has(x) && this.steps.indexOf(x) > this.steps.indexOf(stepId)) || 'review';
-        if (next === 'review') this.draft.returnToReview = false;
-      } else {
-        const here = this.steps.indexOf(stepId);
-        next = here !== -1 ? this.steps[Math.min(here + 1, this.steps.length - 1)]
-          : shown.slice(at + 1).find((x) => this.steps.includes(x)) || this.steps[this.steps.length - 1];
-      }
-      await this.ask(next);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  // Back: Kels un-asks the last question; her last answer comes off the chat.
-  async back() {
-    if (this.busy || !this.draft.history.length) return;
-    this.current.read?.(this.body());
-    const prev = this.draft.history.pop();
-    this.panel.closest('.kels-row').remove();
-    // Remove the current question bubble and the previous answer + question.
-    const rows = [...this.chat.box.querySelectorAll('.kels-row')];
-    rows.slice(-3).forEach((r) => r.remove());
-    this.persist();
-    await this.ask(prev.step, { typing: 0 });
-  }
-
-  // "Change" from the plan: ask that step again, then come back to the plan.
-  async change(stepId) {
-    this.draft.returnToReview = true;
-    this.panel.closest('.kels-row').remove();
-    this.chat.you('Let me change something.');
-    await this.ask(stepId);
+  // Once the mom's breed is known, her last priced litter of that breed fills the prices.
+  onAnswered() {
+    if (this.draft.pricesFilled) return;
+    const breed = this.ctx.dam?.breed || this.draft.newDam?.breed;
+    const suggested = breed ? G.suggestedPrices({ litters: this.data.litters, dogsById: this.data.dogsById, breed, excludeLitterId: this.draft.litterId }) : null;
+    if (suggested && Object.values(this.draft.prices).every((v) => v === '')) { this.draft.prices = suggested; this.draft.pricesFilled = true; }
   }
 
   async save() {
