@@ -26,7 +26,8 @@ export function createListView(opts) {
   const {
     mount,                 // container element to render into
     search,                // { placeholder, text: (record) => string } — searchable text
-    filters = [],          // [{ id, label, options:[{value,label}], match:(record,value)=>bool }]
+    filters = [],          // [{ id, label, options:[{value,label}], match:(record,value)=>bool, initial? }]
+                             // `initial`: a value to start on (a link's query), ignored unless it's an option
     columns,               // [{ header, cell:(record)=>htmlString, className?, sortable?, sortFn:(a,b)=>number }]
     rowClass = () => '',   // (record) => extra <tr> class
     onRowClick,            // (record) => void
@@ -80,6 +81,7 @@ export function createListView(opts) {
       el.textContent = o.label;
       sel.appendChild(el);
     }
+    if (f.initial && f.options.some((o) => o.value === f.initial)) { sel.value = f.initial; state.filters[f.id] = f.initial; }
     sel.addEventListener('change', () => { state.filters[f.id] = sel.value; render(); });
     toolbar.appendChild(sel);
   }

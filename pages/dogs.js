@@ -90,7 +90,8 @@ async function init() {
       // Disposition — "keeping vs offering". `undecided` matches both the explicit
       // value and never-set records, so it isn't a hole prospective-family filtering
       // could fall through.
-      { id: 'disposition', label: 'Disposition', options: DISPOSITION, match: (d, v) => (d.disposition || 'undecided') === v },
+      // `?disposition=available` starts on it (Kels links there for "available puppies").
+      { id: 'disposition', label: 'Disposition', options: DISPOSITION, initial: param('disposition'), match: (d, v) => (d.disposition || 'undecided') === v },
       { id: 'sex', label: 'Sex', options: SEX, match: (d, v) => d.sex === v },
       { id: 'ownership', label: 'Ownership', options: OWNERSHIP_TYPE, match: (d, v) => d.ownership_type === v },
       { id: 'breed', label: 'Breed', options: breeds.map((b) => ({ value: b, label: b })), match: (d, v) => d.breed === v }

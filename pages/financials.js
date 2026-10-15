@@ -47,6 +47,10 @@ const bucket = param('bucket');
 // view to the costs paid through one account, the way a bucket narrows it to a
 // category; the summary names it and offers the way back.
 const accountParam = param('account');
+// ?dog=<id> (Kels's "JJ vet") narrows Expenses to one dog's costs the same way,
+// and the category tabs keep it.
+const dogParam = param('dog');
+const dogQuery = dogParam ? `&dog=${encodeURIComponent(dogParam)}` : '';
 const view = param('view') || (bucket ? 'expenses' : 'overview');
 
 const VIEW_TABS = [
@@ -230,9 +234,9 @@ function renderExpenseBucketTabs() {
   const tabs = document.getElementById('financials-bucket-tabs');
   if (!tabs) return;
   const catTabs = EXPENSE_CATEGORIES.map((c) =>
-    `<a class="seg-tab${c.value === bucket ? ' active' : ''}" href="financials.html?view=expenses&bucket=${encodeURIComponent(c.value)}">${esc(c.label)}</a>`
+    `<a class="seg-tab${c.value === bucket ? ' active' : ''}" href="financials.html?view=expenses&bucket=${encodeURIComponent(c.value)}${dogQuery}">${esc(c.label)}</a>`
   ).join('');
-  tabs.innerHTML = catTabs + `<a class="seg-tab${bucket ? '' : ' active'}" href="financials.html?view=expenses">All</a>`;
+  tabs.innerHTML = catTabs + `<a class="seg-tab${bucket ? '' : ' active'}" href="financials.html?view=expenses${dogQuery}">All</a>`;
 }
 
 function renderExpenseSummary(expenses) {
@@ -248,10 +252,11 @@ function renderExpenseSummary(expenses) {
     </li>`).join('');
   summary.innerHTML = `
     <div class="row-between" style="align-items:baseline;">
-      <h2 style="margin:0;">Total spent${bucket ? ` — ${esc(bucketLabel)}` : ''}${accountParam ? ` — ${esc(accountName({ account_id: accountParam }) || 'account')}` : ''}</h2>
+      <h2 style="margin:0;">Total spent${bucket ? ` — ${esc(bucketLabel)}` : ''}${accountParam ? ` — ${esc(accountName({ account_id: accountParam }) || 'account')}` : ''}${dogParam ? ` — ${esc(dogName(dogParam))}` : ''}</h2>
       <strong style="font-size:22px;">${esc(fmtMoney(grand))}</strong>
     </div>
     ${accountParam ? `<p style="margin:4px 0 0; font-size:13px;">Only costs paid through this account. <a href="financials.html?view=expenses${bucket ? `&bucket=${encodeURIComponent(bucket)}` : ''}">Show every account →</a></p>` : ''}
+    ${dogParam ? `<p style="margin:4px 0 0; font-size:13px;">Only ${esc(dogName(dogParam))}'s costs. <a href="financials.html?view=expenses${bucket ? `&bucket=${encodeURIComponent(bucket)}` : ''}">Show every dog →</a></p>` : ''}
     <p class="muted" style="margin:4px 0 0; font-size:13px;">Across ${expenses.length} expense${expenses.length === 1 ? '' : 's'} (active only).</p>
     ${catRows ? `<ul class="linked-list" style="margin:12px 0 0; padding:0; list-style:none;">${catRows}</ul>` : ''}`;
 }
@@ -261,7 +266,8 @@ async function loadExpenses() {
   expenses.sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || ''));
   return expenses
     .filter((x) => !bucket || x.category === bucket)
-    .filter((x) => !accountParam || x.account_id === accountParam);
+    .filter((x) => !accountParam || x.account_id === accountParam)
+    .filter((x) => !dogParam || (x.subject_type === 'dog' && x.subject_id === dogParam));
 }
 
 const accountName = (x) => (x.account_id && ref.accounts?.find((a) => a.id === x.account_id)?.name) || '';

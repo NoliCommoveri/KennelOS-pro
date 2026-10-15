@@ -174,7 +174,7 @@ export async function renderPedigree({ mount, rootId, generations = 3, onNavigat
 
   let offspringHtml = '';
   if (offspring.length > 0) {
-    offspringHtml = '<div style="margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px;"><h3 style="margin: 0 0 12px 0;">Offspring</h3>';
+    offspringHtml = '<div id="offspring" style="scroll-margin-top: 16px; margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px;"><h3 style="margin: 0 0 12px 0;">Offspring</h3>';
     for (const [litterId, pups] of sortedLitters) {
       offspringHtml += '<div style="margin-bottom: 12px;">';
       for (const pup of pups) {

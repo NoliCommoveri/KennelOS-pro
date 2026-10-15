@@ -142,6 +142,7 @@ const PRECACHE_URLS = [
   'data/jotformSigned.js',
   'data/kelsFavorites.js',
   'data/kelsFind.js',
+  'data/kelsAbout.js',
   'data/kelsKnowledge.js',
   'data/kennelCard.js',
   'data/kennelRepo.js',
