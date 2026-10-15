@@ -91,6 +91,25 @@ export async function openLitterWaitlistNotice(litter) {
   openNotice(d, litter, soon, opts);
 }
 
+// Open picks from outside the panel: Kels's litter check-in
+// (assets/litterCheckinUI.js), when the accept-deposits date has come. The same
+// action and "Email the family?" preview as the panel's button; returns what
+// happened as { title, message } for Kels to say.
+export async function openPicksFromCheckin(litter) {
+  const d = await loadData(litter);
+  const familyName = (entry) => entryName(entry, d.contactsById.get(entry.contact_id));
+  const heldElsewhere = openTurns(d.kennelOffers, litter.kennel_id).length > 0;
+  const turn = await actions.openPicks(litter.id);
+  if (!turn) {
+    return { title: 'Picks are open', message: heldElsewhere
+      ? 'Another family holds the turn and isn\'t first in line for this litter, so it waits for the next turn.'
+      : 'Nobody on the list is eligible for the available pups yet. The litter page shows who\'s next.' };
+  }
+  const said = offeredMessage(turn, await freshEntries(litter), familyName, d.litterName);
+  if (!turn.none) await offerEmails(offerSpecs({ next: turn }));
+  return said;
+}
+
 // Render the panel into `mount` for `litter`. `onChange` lets the litter page
 // refresh its own state (the litter record and roster) after a write.
 export async function renderWaitlistPicksPanel({ mount, litter, onChange = async () => {} }) {

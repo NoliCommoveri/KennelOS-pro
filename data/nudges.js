@@ -34,6 +34,8 @@ import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { pairingRepo } from './pairingRepo.js';
+import { litterSoldDue, litterReopenDue, litterCloseDue } from './litterCheckin.js';
+import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boardingChargeText, PICKUP_TITLE, BOARDING_TITLE } from './goHome.js';
 import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
@@ -466,7 +468,8 @@ export async function computeNudges() {
     pairings, sales, dogsById: new Map(allDogs.map((d) => [d.id, d])), littersById: new Map(litters.map((l) => [l.id, l])), today
   }));
 
-  // Litter-lifecycle nudges — all three are aggregate facts over a litter's
+  // Litter-lifecycle nudges (the rules live in data/litterCheckin.js, shared
+  // with Kels's litter check-in) — all three are aggregate facts over a litter's
   // puppy roster (and, for the close rule, its sales), so they're grouped once
   // here from data already loaded above rather than re-scanned per record on
   // every pup/sale save. Non-archived, non-empty rosters only.
@@ -476,10 +479,15 @@ export async function computeNudges() {
     const arr = pupsByLitter.get(d.litter_id);
     if (arr) arr.push(d); else pupsByLitter.set(d.litter_id, [d]);
   }
-  const salesByDog = new Map();
+  // The close rule reads the sales of EVERY pup of the litter, archived ones
+  // included: in Lite a delivered pup departs (is archived), but its sale counts.
+  const litterOfDog = new Map(allDogs.filter((d) => d.litter_id).map((d) => [d.id, d.litter_id]));
+  const salesByLitter = new Map();
   for (const s of sales) {
-    const arr = salesByDog.get(s.dog_id);
-    if (arr) arr.push(s); else salesByDog.set(s.dog_id, [s]);
+    const litterId = litterOfDog.get(s.dog_id);
+    if (!litterId) continue;
+    const arr = salesByLitter.get(litterId);
+    if (arr) arr.push(s); else salesByLitter.set(litterId, [s]);
   }
 
   for (const l of scopedLitters) {
@@ -489,17 +497,31 @@ export async function computeNudges() {
     // its litter forever. Filtering on status rather than disposition also covers
     // a row restored or synced from before that rule.
     const pups = (pupsByLitter.get(l.id) || []).filter((p) => p.status !== 'deceased');
-    if (pups.length === 0) continue;
+    const litterSales = salesByLitter.get(l.id) || [];
     const label = litterLabel(l, dogsById);
     const href = `litter.html?id=${encodeURIComponent(l.id)}`;
-    const anyAvailable = pups.some((p) => p.disposition === 'available');
+
+    // Done: no pup Available or Undecided, no sale still open, one went home on a
+    // delivered sale → suggest closing, whatever status it was left at. Checked
+    // before the empty-roster skip: a Lite litter whose pups all departed has none.
+    if (litterCloseDue(l, pups, litterSales)) {
+      nudges.push({
+        key: `litterclose:${l.id}`,
+        title: `${label} — every puppy has gone home or is staying. Close the litter?`,
+        detail: 'No puppy is available or undecided, and every sale is finished.',
+        subjectHref: href,
+        actions: [
+          { label: 'Close litter', run: async () => { await litterRepo.update(l.id, { status: 'closed' }); } }
+        ]
+      });
+      continue;
+    }
+    if (pups.length === 0) continue;
 
     // Every pup resolved to placed/keeping (or on a health hold — not for sale),
     // with at least one actually placed (an all-keeping litter never "sold"
     // anything) → suggest marking it sold.
-    if (l.status === 'ready'
-      && pups.every((p) => ['placed', 'keeping', 'health_hold'].includes(p.disposition))
-      && pups.some((p) => p.disposition === 'placed')) {
+    if (litterSoldDue(l, pups, litterSales)) {
       nudges.push({
         key: `littersold:${l.id}`,
         title: `${label} — all puppies spoken for. Mark the litter sold?`,
@@ -512,7 +534,7 @@ export async function computeNudges() {
     }
 
     // A puppy came back available on a sold/closed litter → suggest reopening.
-    if ((l.status === 'sold' || l.status === 'closed') && anyAvailable) {
+    if (litterReopenDue(l, pups)) {
       nudges.push({
         key: `litterreopen:${l.id}`,
         title: `${label} has a puppy available again — reopen the litter?`,
@@ -524,22 +546,70 @@ export async function computeNudges() {
       });
     }
 
-    // Every placed puppy has a delivered sale (a placed pup with no delivered
-    // sale — including none at all — blocks this) → suggest closing the litter.
-    if (l.status === 'sold' && !anyAvailable) {
-      const placed = pups.filter((p) => p.disposition === 'placed');
-      const allDelivered = placed.length > 0 && placed.every((p) =>
-        (salesByDog.get(p.id) || []).some((s) => s.status === 'delivered'));
-      if (allDelivered) {
-        nudges.push({
-          key: `litterclose:${l.id}`,
-          title: `${label} — every placement delivered. Close the litter?`,
-          detail: 'All placed puppies have a delivered sale.',
-          subjectHref: href,
-          actions: [
-            { label: 'Close litter', run: async () => { await litterRepo.update(l.id, { status: 'closed' }); } }
-          ]
+  }
+
+  // A sold puppy's way home (data/goHome.js, decided 2026-10-15): from a week
+  // before the ready date, a sale in progress with no pickup or boarding on the
+  // calendar → schedule the pickup; a pickup date that passed with the sale not
+  // Delivered → did they go home? (opens the Sale page set to Delivered, so its
+  // delivery prompts run); a boarding charge on the sale with no boarding logged
+  // → log it. The actions open the puppy's event form prefilled, or the sale.
+  {
+    const openSales = inScopeOnly(sales).filter((x) => GO_HOME_SALE_STATUSES.includes(x.status));
+    if (openSales.length) {
+      const littersById = new Map(litters.map((l) => [l.id, l]));
+      const contactsById = new Map((await contactRepo.getAll({ includeArchived: true })).map((c) => [c.id, c]));
+      const eventsByDog = new Map();
+      for (const e of events) {
+        if (e.subject_type !== 'dog' || (e.event_type !== 'placement' && e.event_type !== 'boarding')) continue;
+        if (!eventsByDog.has(e.subject_id)) eventsByDog.set(e.subject_id, []);
+        eventsByDog.get(e.subject_id).push(e);
+      }
+      const done = new Set();
+      for (const sale of openSales) {
+        const pup = dogsById.get(sale.dog_id);
+        if (!pup || done.has(pup.id)) continue;
+        done.add(pup.id);
+        const issue = goHomeIssue({
+          pup, litter: littersById.get(pup.litter_id), today,
+          sales: sales.filter((x) => x.dog_id === pup.id), events: eventsByDog.get(pup.id) || []
         });
+        if (!issue) continue;
+        const s2 = issue.sale;
+        const name = pup.call_name || pup.registered_name || 'This puppy';
+        const family = contactsById.get(s2.buyer_contact_id)?.name || 'their family';
+        const dogHref = (q) => `dog.html?id=${encodeURIComponent(pup.id)}&${new URLSearchParams(q).toString()}`;
+        const start = defaultStart(issue.readyDate, today);
+        const logPickup = (label) => ({ label, run: async () => { location.href = dogHref({ logEvent: 'placement', logDate: start, logTitle: PICKUP_TITLE, ...(s2.buyer_contact_id ? { logContact: s2.buyer_contact_id } : {}) }); } });
+        if (issue.kind === 'boarding') {
+          const end = boardingEnd(s2, start);
+          nudges.push({
+            key: `gohome-boarding:${s2.id}`,
+            title: `${name}'s sale includes boarding (${boardingChargeText(s2)}). Log the boarding?`,
+            detail: `${family} is paying for ${name} to stay with you after the ready date (${issue.readyDate}), but no boarding is logged.`,
+            subjectHref: `sale.html?id=${encodeURIComponent(s2.id)}`,
+            actions: [{ label: 'Log boarding', run: async () => { location.href = dogHref({ logEvent: 'boarding', logDate: start, logTitle: BOARDING_TITLE, ...(end ? { logEnd: end } : {}), logDetails: JSON.stringify({ boarding_reason: 'Deferred pickup' }) }); } }]
+          });
+        } else if (issue.kind === 'schedule') {
+          nudges.push({
+            key: `gohome-schedule:${s2.id}`,
+            title: `${name} is going home to ${family}. Schedule the pickup?`,
+            detail: `The litter is ready ${issue.readyDate}, and there's no pickup or boarding on the calendar.`,
+            subjectHref: `sale.html?id=${encodeURIComponent(s2.id)}`,
+            actions: [logPickup('Schedule pickup')]
+          });
+        } else {
+          nudges.push({
+            key: `gohome-overdue:${s2.id}:${issue.pickupDate}`,
+            title: `${name}'s pickup was ${issue.pickupDate}. Did ${name} go home?`,
+            detail: `The sale to ${family} still isn't marked Delivered.`,
+            subjectHref: `sale.html?id=${encodeURIComponent(s2.id)}`,
+            actions: [
+              { label: 'Yes, mark delivered', run: async () => { location.href = `sale.html?id=${encodeURIComponent(s2.id)}&deliver=1`; } },
+              logPickup('No, new pickup date')
+            ]
+          });
+        }
       }
     }
   }

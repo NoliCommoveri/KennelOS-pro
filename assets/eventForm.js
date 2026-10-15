@@ -177,7 +177,7 @@ export async function openEventForm(opts) {
   const draft = {
     event_type: event?.event_type || prefill?.event_type || types[0].value,
     event_date: event?.event_date || prefill?.event_date || todayYMD(),
-    event_end_date: event?.event_end_date || '',
+    event_end_date: event?.event_end_date || prefill?.event_end_date || '',
     related_contact_id: event?.related_contact_id || prefill?.related_contact_id || '',
     title: event?.title || prefill?.title || '',
     details: { ...(event?.details || prefill?.details || {}) },
@@ -605,9 +605,11 @@ export async function openEventForm(opts) {
 // re-editing the one that fired it). Call once, after the subject page has
 // loaded its record; a no-op if neither param is present.
 //
-// A `logEvent` link may also carry `logDate=<YYYY-MM-DD>`, `logTitle=<text>` and
-// `logDetails=<URL-encoded JSON object>` to prefill the new event's date, title
-// and details (the "Log the title?" nudge — Show Tracking Spec §5.4). Only
+// A `logEvent` link may also carry `logDate=<YYYY-MM-DD>`, `logTitle=<text>`,
+// `logEnd=<YYYY-MM-DD>` (a span's end), `logContact=<contact id>` and
+// `logDetails=<URL-encoded JSON object>` to prefill the new event's date, title,
+// end, related contact and details (the "Log the title?" nudge — Show Tracking
+// Spec §5.4; the go-home nudges, data/goHome.js). Only
 // string/number detail values are taken; a malformed `logDetails` is ignored.
 export async function openEventFromQuery(subjectType, subjectId, onSaved) {
   const openId = param('openEvent');
@@ -622,6 +624,9 @@ export async function openEventFromQuery(subjectType, subjectId, onSaved) {
     const date = param('logDate');
     if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) prefill.event_date = date;
     if (param('logTitle')) prefill.title = param('logTitle');
+    const end = param('logEnd');
+    if (end && /^\d{4}-\d{2}-\d{2}$/.test(end)) prefill.event_end_date = end;
+    if (param('logContact')) prefill.related_contact_id = param('logContact');
     try {
       const raw = JSON.parse(param('logDetails') || 'null');
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {

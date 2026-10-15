@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ken — KennelOS</title>
+  <title>Kels — KennelOS</title>
   <link rel="stylesheet" href="../assets/app.css">
   <link rel="manifest" href="../manifest.json">
   <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
@@ -13,23 +13,23 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="KennelOS">
 </head>
-<body class="ken-page">
+<body class="kels-page">
   <div id="app-nav"></div>
-  <main class="ken-main">
-    <section class="ken-card" aria-label="Chat with Ken">
-      <header class="ken-header">
-        <span class="ken-avatar ken-avatar-lg" aria-hidden="true">K</span>
-        <div class="ken-header-text">
-          <h1 id="ken-name">Ken</h1>
-          <p class="muted">Your KennelOS helper</p>
+  <main class="kels-main">
+    <section class="kels-card" aria-label="Chat with Kels">
+      <header class="kels-header">
+        <span id="kels-avatar"><span class="kels-avatar kels-avatar-lg" aria-hidden="true">K</span></span>
+        <div class="kels-header-text">
+          <h1 id="kels-name">Kels</h1>
+          <p class="muted" id="kels-tagline">Your personal KennelOS agent</p>
         </div>
-        <button type="button" class="btn btn-sm" id="ken-later" hidden>Save for later</button>
+        <button type="button" class="btn btn-sm" id="kels-later" hidden>Save for later</button>
       </header>
-      <div class="ken-transcript" id="ken-transcript" role="log" aria-live="polite"></div>
+      <div class="kels-transcript" id="kels-transcript" role="log" aria-live="polite"></div>
     </section>
   </main>
 
   <script type="module" src="../app.js"></script>
-  <script type="module" src="./ken.js"></script>
+  <script type="module" src="./kels.js"></script>
 </body>
 </html>

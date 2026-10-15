@@ -1,14 +1,14 @@
-// guidedLitterUI.js — Ken's "Record a new litter" task: the questions he asks,
-// one at a time, in the chat on pages/ken.html (assets/kenChat.js draws the
-// chat). Each question is a "screen" (below): Ken's line, then her answer panel
+// guidedLitterUI.js — Kels's "Record a new litter" task: the questions she asks,
+// one at a time, in the chat on pages/kels.html (assets/kelsChat.js draws the
+// chat). Each question is a "screen" (below): Kels's line, then her answer panel
 // with big buttons and Back; her answer is left in the chat as her reply, and
-// at the end Ken shows the plan ("I think I got it all. Here's what I'll
+// at the end Kels shows the plan ("I think I got it all. Here's what I'll
 // create:") for her to approve before anything is written. The steps, checks,
 // review lines and the save itself live in data/guidedLitter.js; this module
 // only draws them and keeps the draft.
 //
 // Her answers, and the chat so far, are kept after every step (settings.js
-// guidedLitterDraft), so closing the window loses nothing and Ken offers to
+// guidedLitterDraft), so closing the window loses nothing and Kels offers to
 // finish it next time. After the save, Pro shows "Let families know"
 // (assets/guidedShareUI.js, Pro-only, imported only when this edition has the
 // waitlist or Companion). Reads go through the repos; writes only through
@@ -567,7 +567,7 @@ function answerFor(stepId, draft, data) {
 
 // --- The conversation -----------------------------------------------------------------
 
-// An unfinished draft, if there is one (Ken offers to finish it).
+// An unfinished draft, if there is one (Kels offers to finish it).
 export function pendingLitterDraft() {
   const draft = getGuidedLitterDraft();
   if (!draft) return null;
@@ -579,9 +579,9 @@ export function discardGuidedLitterDraft() {
   clearGuidedLitterDraft();
 }
 
-// Run "Record a new litter" in `chat` (assets/kenChat.js). `litterId`: started
+// Run "Record a new litter" in `chat` (assets/kelsChat.js). `litterId`: started
 // from an Expected litter's page. `resume`: carry on the unfinished draft.
-// `onExit(reason)` hands the chat back to Ken's menu ('nevermind' | 'later' | 'done').
+// `onExit(reason)` hands the chat back to Kels's menu ('nevermind' | 'later' | 'done').
 // `onSaved()` runs once the records are built (nothing is left to save for later).
 export async function runLitterTask(chat, { litterId = null, resume = false, onExit = () => {}, onSaved = () => {} } = {}) {
   const data = await loadData();
@@ -597,7 +597,7 @@ export async function runLitterTask(chat, { litterId = null, resume = false, onE
         G.applyLitterChoice(draft, litter, data.dogs);
       }
     }
-    await chat.ken(`Absolutely, let's get those puppies added! I'll ask you some questions; once I'm done collecting the information, I'll build the records for you to approve. If you get stuck or need to save and come back, I'll save what we've got so far until you're ready to continue. Sound good?`, { typing: 900 });
+    await chat.say(`Absolutely, let's get those puppies added! I'll ask you some questions; once I'm done collecting the information, I'll build the records for you to approve. If you get stuck or need to save and come back, I'll save what we've got so far until you're ready to continue. Sound good?`, { typing: 900 });
     const go = await chat.choose([
       { label: 'Sounds great, let\'s start!', value: 'start', primary: true },
       { label: 'Never mind', value: 'nevermind' }
@@ -605,13 +605,13 @@ export async function runLitterTask(chat, { litterId = null, resume = false, onE
     if (go === 'nevermind') { onExit('nevermind'); return; }
   } else {
     draft.history = draft.history || [];
-    await chat.ken(`Welcome back! Here's what we have so far for ${esc(draft.label || 'your litter')}:`, { typing: 500 });
+    await chat.say(`Welcome back! Here's what we have so far for ${esc(draft.label || 'your litter')}:`, { typing: 500 });
     for (const h of draft.history) {
-      const b = await chat.ken(esc(h.q), { typing: 0 });
-      b.classList.add('ken-past');
+      const b = await chat.say(esc(h.q), { typing: 0 });
+      b.classList.add('kels-past');
       chat.you(h.a);
     }
-    await chat.ken('Let\'s pick up where we left off.', { typing: 500 });
+    await chat.say('Let\'s pick up where we left off.', { typing: 500 });
   }
   return new LitterConversation(chat, draft, data, onExit, onSaved).start();
 }
@@ -654,26 +654,26 @@ class LitterConversation {
     await this.ask(step);
   }
 
-  // Ken asks `stepId`: his question, then her answer panel.
+  // Kels asks `stepId`: her question, then the breeder's answer panel.
   async ask(stepId, { typing = 650 } = {}) {
     await this.refreshSteps();
     if (!this.steps.includes(stepId)) stepId = this.steps[0];
     this.draft.step = stepId;
     this.persist();
     this.current = this.screenFor(stepId);
-    const bubble = await this.chat.ken(`<strong>${this.current.title}</strong>`, { typing });
+    const bubble = await this.chat.say(`<strong>${this.current.title}</strong>`, { typing });
     this.panel = this.chat.panel('');
     this.fillPanel(bubble);
   }
 
   // (Re)draw the answer panel for the current step. A lead line in the screen
-  // moves up into Ken's bubble, so he's the one saying it.
+  // moves up into Kels's bubble, so she's the one saying it.
   fillPanel(bubble = null) {
     const isReview = Boolean(this.current.isReview);
     const canBack = this.draft.history.length > 0;
     this.panel.innerHTML = `<div class="gl-body">${this.current.html}</div>
       <div class="gl-error" aria-live="assertive"></div>
-      <div class="ken-panel-foot">
+      <div class="kels-panel-foot">
         ${canBack ? '<button type="button" class="btn gl-back" data-k="back">← Back</button>' : '<span></span>'}
         ${this.draft.returnToReview && !isReview ? '<button type="button" class="btn" data-k="to-review">Back to the plan</button>' : ''}
         ${isReview
@@ -681,7 +681,7 @@ class LitterConversation {
           : '<button type="button" class="btn btn-primary gl-next" data-k="next">Next →</button>'}
       </div>`;
     const lead = this.panel.querySelector('.gl-lead');
-    if (lead && bubble) { lead.classList.remove('gl-lead'); lead.classList.add('ken-lead'); bubble.appendChild(lead); }
+    if (lead && bubble) { lead.classList.remove('gl-lead'); lead.classList.add('kels-lead'); bubble.appendChild(lead); }
     else if (lead) lead.remove();
     this.wire();
     this.chat.scroll();
@@ -737,7 +737,7 @@ class LitterConversation {
     const q = this.panelQuestionText();
     const a = answerFor(stepId, this.draft, this.data) || 'Done';
     this.draft.history.push({ step: stepId, q, a });
-    this.panel.closest('.ken-row').remove();
+    this.panel.closest('.kels-row').remove();
     this.chat.you(a);
   }
 
@@ -788,14 +788,14 @@ class LitterConversation {
     }
   }
 
-  // Back: Ken un-asks the last question; her last answer comes off the chat.
+  // Back: Kels un-asks the last question; her last answer comes off the chat.
   async back() {
     if (this.busy || !this.draft.history.length) return;
     this.current.read?.(this.body());
     const prev = this.draft.history.pop();
-    this.panel.closest('.ken-row').remove();
+    this.panel.closest('.kels-row').remove();
     // Remove the current question bubble and the previous answer + question.
-    const rows = [...this.chat.box.querySelectorAll('.ken-row')];
+    const rows = [...this.chat.box.querySelectorAll('.kels-row')];
     rows.slice(-3).forEach((r) => r.remove());
     this.persist();
     await this.ask(prev.step, { typing: 0 });
@@ -804,7 +804,7 @@ class LitterConversation {
   // "Change" from the plan: ask that step again, then come back to the plan.
   async change(stepId) {
     this.draft.returnToReview = true;
-    this.panel.closest('.ken-row').remove();
+    this.panel.closest('.kels-row').remove();
     this.chat.you('Let me change something.');
     await this.ask(stepId);
   }
@@ -819,7 +819,7 @@ class LitterConversation {
       await G.saveGuidedLitter(this.draft, { onProgress: () => setGuidedLitterDraft(this.draft) });
       clearGuidedLitterDraft();
       this.onSaved();
-      this.panel.closest('.ken-row').remove();
+      this.panel.closest('.kels-row').remove();
       this.chat.you('Yes, build it');
       await this.afterSave();
     } catch (e) {
@@ -840,10 +840,10 @@ class LitterConversation {
     const pups = (await dogRepo.getByLitter(litter.id)).filter((d) => !d.is_archived);
     const name = this.draft.label || 'The litter';
     const litterHref = `${pagesPrefix()}litter.html?id=${encodeURIComponent(litter.id)}`;
-    await this.chat.ken(`Done! ✓ I built ${esc(name)}${pups.length ? ` with ${plural(pups.length, 'puppy', 'puppies')}` : ''}.`, { typing: 1100 });
+    await this.chat.say(`Done! ✓ I built ${esc(name)}${pups.length ? ` with ${plural(pups.length, 'puppy', 'puppies')}` : ''}.`, { typing: 1100 });
 
     const finish = async () => {
-      await this.chat.ken(`All set. When you're ready to offer pups to families on your waitlist, use <strong>Open picks</strong> on <a href="${esc(litterHref)}">the litter's page</a>.`);
+      await this.chat.say(`All set. When you're ready to offer pups to families on your waitlist, use <strong>Open picks</strong> on <a href="${esc(litterHref)}">the litter's page</a>.`);
       const where = await this.chat.choose([
         { label: 'See the litter', value: 'litter', primary: true },
         { label: 'Help me with something else', value: 'menu' },
@@ -858,13 +858,13 @@ class LitterConversation {
     if (!canShare) { await finish(); return; }
     try {
       const { renderShareStep } = await import('./guidedShareUI.js');
-      await this.chat.ken('<strong>Want to tell people about the new pups?</strong>');
-      const panel = this.chat.panel('<div class="gl-body"></div><div class="ken-panel-foot"></div>');
+      await this.chat.say('<strong>Want to tell people about the new pups?</strong>');
+      const panel = this.chat.panel('<div class="gl-body"></div><div class="kels-panel-foot"></div>');
       await renderShareStep({
         mount: panel.querySelector('.gl-body'),
-        foot: panel.querySelector('.ken-panel-foot'),
+        foot: panel.querySelector('.kels-panel-foot'),
         litter, pups,
-        onDone: (reply) => { panel.closest('.ken-row').remove(); if (reply) this.chat.you(reply); finish(); }
+        onDone: (reply) => { panel.closest('.kels-row').remove(); if (reply) this.chat.you(reply); finish(); }
       });
       this.chat.scroll();
     } catch {

@@ -476,10 +476,14 @@ async function renderHeaderActions() {
   const archiveBtn = editionFlags.manualDogArchive
     ? `<button class="btn btn-sm" id="btn-archive">${l.is_archived ? 'Unarchive' : 'Archive'}</button>`
     : '';
-  // An Expected litter: Ken records its birth with her, step by step.
-  const guidedBtn = l.status === 'expected' && !l.is_archived
-    ? `<a class="btn btn-primary btn-sm" href="ken.html?task=record-litter&litter=${encodeURIComponent(l.id)}">✨ Record the birth with Ken</a>`
-    : '';
+  // An Expected litter: Kels records its birth with her, step by step. A born
+  // one that isn't closed: Kels's check-in (weights, medication, what's next).
+  const guidedBtn = l.is_archived ? ''
+    : l.status === 'expected'
+      ? `<a class="btn btn-primary btn-sm" href="kels.html?task=record-litter&litter=${encodeURIComponent(l.id)}">✨ Record the birth with Kels</a>`
+      : l.status !== 'closed'
+        ? `<a class="btn btn-sm" href="kels.html?task=checkin&litter=${encodeURIComponent(l.id)}">✨ Check in with Kels</a>`
+        : '';
   els.headerActions.innerHTML = `
     ${guidedBtn}
     ${archiveBtn}

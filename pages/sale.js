@@ -9,8 +9,9 @@ import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
-import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
+import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily } from '../data/waitlistRules.js';
+import { litterCloseDue, litterLabel } from '../data/litterCheckin.js';
 import { promptDisposition, promptReleasedPup, askRegistrationPrice } from '../assets/salePrompts.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
@@ -581,6 +582,10 @@ function showError(msg) {
   els.error.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 function clearError() { els.error.innerHTML = ''; }
+// A friendly line in the same spot (not an error).
+function showNotice(msg) {
+  els.error.innerHTML = `<div class="inline-notice">${esc(msg)}</div>`;
+}
 
 function enterEdit() {
   clearError();
@@ -820,6 +825,14 @@ async function doSave() {
       }
     }
 
+    // The sale that finished the litter: delivered (or released) with no pup left
+    // Available or Undecided and no other sale open → offer to close the litter
+    // right here, where she's looking (data/litterCheckin.js litterCloseDue, the
+    // same rule as Today's nudge and Kels's check-in). Only on the transition.
+    if (TERMINAL_SALE_STATUSES.includes(saved.status) && prevStatus !== saved.status) {
+      await promptCloseLitter(saved);
+    }
+
     // Finish: navigate (new) or re-render in place (edit).
     if (isNew) { location.href = `sale.html?id=${encodeURIComponent(saved.id)}`; return; }
     ctx.original = saved;
@@ -830,6 +843,25 @@ async function doSave() {
   } catch (e) {
     showError(e.message || String(e));
   }
+}
+
+async function promptCloseLitter(sale) {
+  const dog = await dogRepo.getById(sale.dog_id);
+  const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+  if (!litter) return;
+  const all = await dogRepo.getByLitter(litter.id);
+  const pups = all.filter((d) => !d.is_archived && d.status !== 'deceased');
+  const sales = (await Promise.all(all.map((d) => saleRepo.getByDog(d.id)))).flat();
+  if (!litterCloseDue(litter, pups, sales)) return;
+  const [dam, sire] = await Promise.all([dogRepo.getById(litter.dam_id), dogRepo.getById(litter.sire_id)]);
+  const name = litterLabel(litter, new Map([dam, sire].filter(Boolean).map((d) => [d.id, d])));
+  const ok = await confirmModal({
+    title: `Close ${name}?`,
+    message: `${sale.status === 'delivered' ? 'That was the last puppy to go home. ' : ''}No puppy is available or undecided, and every sale on the litter is finished. Closing marks the litter done; you can reopen it any time.`,
+    confirmLabel: 'Close the litter',
+    cancelLabel: 'Not now'
+  });
+  if (ok) await litterRepo.update(litter.id, { status: 'closed' });
 }
 
 async function toggleArchive() {
@@ -948,6 +980,17 @@ async function main() {
   // one-click switch. Renders nothing in the ordinary in-scope case.
   renderScopeNotice(document.getElementById('scope-notice'), s, { kind: 'sale' });
   renderAll();
+  // `&deliver=1` (the "Did Cedar go home?" nudge and Kels, data/goHome.js): open
+  // the form with Delivered chosen, so her Save runs delivery's usual prompts
+  // (ownership or departure, the pickup, closing the litter). Nothing is written
+  // until she saves.
+  if (param('deliver') && isOpenSale(s)) {
+    enterEdit();
+    ctx.draft.status = 'delivered';
+    renderEdit();
+    document.getElementById('f-status')?.dispatchEvent(new Event('change'));
+    showNotice('Marked Delivered below. Check the details, then tap Save.');
+  }
 }
 
 // The open one-time Stripe link on the view (Integrations plan §4): Copy, and

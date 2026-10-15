@@ -9,7 +9,7 @@ import {
   DB_BLOCKED_EVENT, DB_READY_EVENT, DB_VERSIONCHANGE_EVENT
 } from './data/db.js';
 import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft } from './data/settings.js';
-import { renderAssistButton } from './assets/kenChat.js';
+import { renderAssistButton } from './assets/kelsChat.js';
 import { expenseRepo } from './data/expenseRepo.js';
 import { renderSampleBanner } from './assets/sampleDataUI.js';
 import { maybeShowKennelSetupPrompt, renderKennelBanner } from './assets/kennelSetupUI.js';
@@ -21,9 +21,9 @@ import { isLicenseGated, ensureLicensed } from './assets/licenseGate.js';
 import { isCloudAvailable, isUsingTestServer } from './data/cloud/cloudConfig.js';
 import { editionFlags } from './data/editionConfig.js';
 
-// Ken's floating "Ask Ken" button (assets/kenChat.js), with a dot while a
+// Kels's floating "Ask Kels" button (assets/kelsChat.js), with a dot while a
 // guided task is waiting to be finished.
-function renderKenButton() {
+function renderKelsButton() {
   const draft = getGuidedLitterDraft();
   renderAssistButton({ pending: Boolean(draft && !draft.done) });
 }
@@ -162,14 +162,14 @@ async function boot() {
     renderNav();
     registerServiceWorker();
     renderDemoBanner();
-    renderKenButton();
+    renderKelsButton();
     return;
   }
 
   renderNav();
   registerServiceWorker();
   renderCloudTestBanner();
-  renderKenButton();
+  renderKelsButton();
   firstRunPersistence();
   // One-time fold of legacy Event.cost values into the Financials ledger. Guarded
   // by a settings flag inside the repo, so it's a cheap no-op after the first run.
