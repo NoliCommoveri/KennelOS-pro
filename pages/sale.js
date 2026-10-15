@@ -19,6 +19,7 @@ import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
 import { renderScopeNotice } from '../assets/kennelScopeUI.js';
+import { deliveredOwnershipChanges } from '../data/goHome.js';
 
 // Statuses that warrant the "log a scheduled pickup" prompt (Stage4.5 Addendum §D4).
 const PLACEMENT_PROMPT_STATUSES = ['paid_in_full', 'delivered'];
@@ -657,17 +658,11 @@ function promptOwnershipUpdate(sale) {
       try {
         // Re-fetch: the co-own convenience above may have just updated this dog.
         const dog = await dogRepo.getById(sale.dog_id);
-        if (choice === 'external') {
-          const ownerId = overlay.querySelector('#own-owner').value || null;
-          const updates = { ownership_type: 'external', status: 'external_reference', status_date: todayYMD() };
-          if (ownerId) updates.owner_contact_id = ownerId;
-          await dogRepo.update(sale.dog_id, updates);
-        } else if (choice === 'co_owned') {
-          const coOwners = dog?.co_owner_contact_ids || [];
-          const updates = { ownership_type: 'co_owned' };
-          if (!coOwners.includes(sale.buyer_contact_id)) updates.co_owner_contact_ids = [...coOwners, sale.buyer_contact_id];
-          await dogRepo.update(sale.dog_id, updates);
-        }
+        const updates = deliveredOwnershipChanges(dog, choice, {
+          ownerId: choice === 'external' ? overlay.querySelector('#own-owner').value || null : null,
+          buyerId: sale.buyer_contact_id, today: todayYMD()
+        });
+        if (updates) await dogRepo.update(sale.dog_id, updates);
         close();
       } catch (e) {
         overlay.querySelector('#own-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;

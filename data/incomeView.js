@@ -27,6 +27,7 @@ import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { inScopeOnly } from './kennelScope.js';
+import { ourRole } from './studRules.js';
 import { editionFlags } from './editionConfig.js';
 import { INCOME_COMPONENTS, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
 
@@ -278,7 +279,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
   }
 
   for (const s of scopeTo(studs)) {
-    if (s.direction !== 'outgoing') continue; // incoming = we pay = an expense
+    if (ourRole(s, dogById) !== 'stud') continue; // our dam's service = we pay = an expense
     const components = studComponents(s).map((c) => ({ ...c, when: s.returned_date || s.sent_date || '' }));
     if (!components.length) continue;
     rows.push({

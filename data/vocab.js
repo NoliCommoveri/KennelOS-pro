@@ -396,9 +396,20 @@ export const CONTRACT_STATUS = [
   { value: 'void',      label: 'Void',      badge: 'badge-gray' }
 ];
 
+// Who travels for a stud service (decided 2026-10-15): our dog to them, their dog
+// to us, or no one (AI / shipped). Which of the two dogs is the stud isn't stored:
+// it's our dog's sex (studRules.ourRole), so either can travel either way.
 export const STUD_SERVICE_DIRECTION = [
-  { value: 'outgoing', label: 'Outgoing — our dog is the stud', badge: 'badge-blue' },
-  { value: 'incoming', label: 'Incoming — our dog is the dam',  badge: 'badge-purple' }
+  { value: 'to_partner', label: 'Our dog goes to them',   badge: 'badge-blue' },
+  { value: 'to_us',      label: 'Their dog comes to us',  badge: 'badge-purple' },
+  { value: 'shipped',    label: 'No one travels (AI / shipped)', badge: 'badge-neutral' }
+];
+
+// Our dog's part in a stud service, derived from its sex (studRules.ourRole), for
+// badges and report filters. Never stored.
+export const STUD_SERVICE_ROLE = [
+  { value: 'stud', label: 'Our stud', badge: 'badge-blue' },
+  { value: 'dam',  label: 'Our dam',  badge: 'badge-purple' }
 ];
 
 export const FEE_STRUCTURE = [
@@ -416,10 +427,9 @@ export const STUD_SERVICE_STATUS = [
   { value: 'cancelled', label: 'Cancelled', badge: 'badge-gray' }
 ];
 
-// Was this a physical stay or a shipment? Sibling to `direction`. The fine-
-// grained method (natural / ai_chilled / …) already lives on the linked Pairing
-// (pairing_id), so the stud record only needs the coarse in-person/AI split —
-// enough to tell the away-board whether a dog physically travelled.
+// Was this a physical stay or a shipment? Set from `direction` by the repo
+// (shipped → ai, else in_person), never asked. The fine-grained method (natural /
+// ai_chilled / …) lives on the linked Pairing (pairing_id).
 export const STUD_SERVICE_TYPE = [
   { value: 'in_person', label: 'In person', badge: 'badge-green' },
   { value: 'ai',        label: 'AI / shipped', badge: 'badge-neutral' }

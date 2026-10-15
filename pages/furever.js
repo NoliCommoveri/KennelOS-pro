@@ -3,9 +3,12 @@
 //
 // Recipients are pups with an OPEN sale (saleRepo.isOpenSale — same membership
 // predicate Companion's "family" package uses) since a seed link is inherently
-// about a specific placement: the family it's going home with. "Prepare link"
-// persists whatever note/pickup details are on screen (furever_note/furever_
-// pickup_* — plain Sale fields, no schema change) then builds the packet
+// about a specific placement: the family it's going home with. The pickup
+// date/time/place are the pup's Placement / drop-off event (shown here with an
+// Edit drop-off button; fureverSeedExport.pickupEventFor picks which one), and
+// only a pup with no drop-off event shows the old typed furever_pickup_* fields.
+// "Prepare link" persists whatever note/pickup details are on screen (plain
+// Sale fields, no schema change) then builds the packet
 // (fureverSeedExport.js), compresses it, and hands off a real sms:/mailto:
 // anchor — same activating-gesture rule as Companion (brief §5.2 there).
 import { saleRepo } from '../data/saleRepo.js';
@@ -15,13 +18,16 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { getFureverSettings, setFureverSettings, getMyKennelId, getMyContactId } from '../data/settings.js';
-import { buildSeedPacket, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
+import { eventRepo } from '../data/eventRepo.js';
+import { buildSeedPacket, pickupEventFor, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
+import { PICKUP_TITLE } from '../data/goHome.js';
+import { openEventForm } from '../assets/eventForm.js';
 import { connectDrive, isDriveConnectedThisSession } from '../data/googleDrive.js';
 import { publishPack, isSensitiveDocType } from '../data/fureverContentPack.js';
 import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
 import { DOC_TYPES, descriptor, docTypeIcon } from '../data/vocab.js';
 import { compressToEncodedURIComponent } from '../vendor/lz-string.min.mjs';
-import { esc, badge } from '../assets/ui.js';
+import { esc, badge, fmtDate } from '../assets/ui.js';
 
 // Same payload ceilings Companion uses (brief §6.1) — SMS gateways are the weak
 // link; a seed packet (~1.7K per the schema doc's own measurement) sits well
@@ -176,7 +182,7 @@ function wireIdentity(vets) {
 }
 
 // --- Recipients: one row per pup with an open sale --------------------------
-let ctx = []; // [{ sale, dog, buyer }]
+let ctx = []; // [{ sale, dog, buyer, dropoff }]
 
 async function loadData() {
   const sales = (await saleRepo.getAll({ includeArchived: true })).filter(saleRepo.isOpenSale);
@@ -185,7 +191,8 @@ async function loadData() {
     const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
     if (!dog) continue;
     const buyer = sale.buyer_contact_id ? await contactRepo.getById(sale.buyer_contact_id) : null;
-    rows.push({ sale, dog, buyer });
+    const dropoff = pickupEventFor(sale, await eventRepo.getForSubject('dog', dog.id));
+    rows.push({ sale, dog, buyer, dropoff });
   }
   rows.sort((a, b) => (a.dog.call_name || '').localeCompare(b.dog.call_name || '', undefined, { numeric: true }));
   ctx = rows;
@@ -217,7 +224,33 @@ async function renderSetupNudges(vets) {
     : '';
 }
 
-function recipientRow({ sale, dog, buyer }) {
+// The pickup date/time/place block. With a drop-off event it's that event,
+// read-only, with Edit drop-off; without one, the typed fields plus a button
+// that turns what's typed into the pup's drop-off event.
+function pickupHtml({ sale, dropoff }) {
+  if (dropoff) {
+    const d = dropoff.details || {};
+    const parts = [fmtDate(dropoff.event_date), d.placement_time, d.location].map((v) => String(v || '').trim()).filter(Boolean);
+    return `
+      <div class="field field-wide"><label>Pickup</label>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <span>${parts.map(esc).join(' · ')}</span>
+          <button type="button" class="btn btn-sm r-dropoff">Edit drop-off</button>
+        </div>
+        <span class="field-hint">From ${esc(dropoff.title || 'the drop-off event')} on the pup's timeline. Change it there and the next link sends the new plan.</span>
+      </div>`;
+  }
+  return `
+    <div class="field"><label>Pickup date</label><input class="r-pickup-date" type="date" value="${esc(sale.furever_pickup_date || '')}"></div>
+    <div class="field"><label>Pickup time</label><input class="r-pickup-time" type="text" placeholder="e.g. 2:00 PM" value="${esc(sale.furever_pickup_time || '')}"></div>
+    <div class="field"><label>Pickup place</label><input class="r-pickup-place" type="text" value="${esc(sale.furever_pickup_place || '')}"></div>
+    <div class="field field-wide">
+      <button type="button" class="btn btn-sm r-dropoff">Add a drop-off event</button>
+      <span class="field-hint">Puts the pickup on the pup's timeline (Placement / drop-off); from then on this plan follows that event.</span>
+    </div>`;
+}
+
+function recipientRow({ sale, dog, buyer, dropoff }) {
   const buyerLabel = buyer ? esc(buyer.name) : 'no buyer on file';
   return `
     <div class="card" data-sale="${esc(sale.id)}" style="margin-top:12px;">
@@ -231,9 +264,7 @@ function recipientRow({ sale, dog, buyer }) {
       <div class="r-body" style="display:none; margin-top:10px;">
         <div class="form-grid">
           <div class="field field-wide"><label>Personal note</label><textarea class="r-note">${esc(sale.furever_note || '')}</textarea></div>
-          <div class="field"><label>Pickup date</label><input class="r-pickup-date" type="date" value="${esc(sale.furever_pickup_date || '')}"></div>
-          <div class="field"><label>Pickup time</label><input class="r-pickup-time" type="text" placeholder="e.g. 2:00 PM" value="${esc(sale.furever_pickup_time || '')}"></div>
-          <div class="field"><label>Pickup place</label><input class="r-pickup-place" type="text" value="${esc(sale.furever_pickup_place || '')}"></div>
+          <div class="r-pickup" style="display:contents;">${pickupHtml({ sale, dropoff })}</div>
           <div class="field field-wide"><label>Pickup photo URL</label><input class="r-pickup-photo" type="text" placeholder="A hosted photo link" value="${esc(sale.furever_pickup_photo_url || '')}"></div>
         </div>
         <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -263,17 +294,57 @@ function renderRecipients() {
       body.style.display = open ? 'none' : 'block';
       arrow.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
     });
+    wirePickup(row, entry);
     row.querySelector('.r-save-details').addEventListener('click', () => saveDetails(row, entry));
     row.querySelector('.r-prepare').addEventListener('click', () => prepareLink(row, entry));
   });
 }
 
+// Edit drop-off opens the event; Add a drop-off event opens a new one with
+// whatever's typed. Either way the row's pickup block re-reads the timeline after.
+function wirePickup(row, entry) {
+  const btn = row.querySelector('.r-dropoff');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    clearError();
+    const typed = entry.dropoff ? null : readTypedPickup(row);
+    openEventForm({
+      subjectType: 'dog',
+      subjectId: entry.dog.id,
+      event: entry.dropoff || null,
+      prefill: typed && {
+        event_type: 'placement',
+        event_date: typed.furever_pickup_date || '',
+        related_contact_id: entry.sale.buyer_contact_id || '',
+        title: PICKUP_TITLE,
+        details: { placement_time: typed.furever_pickup_time, location: typed.furever_pickup_place }
+      },
+      onSaved: () => refreshPickup(row, entry).catch((e) => showError(e.message || String(e)))
+    }).catch((e) => showError(e.message || String(e)));
+  });
+}
+
+async function refreshPickup(row, entry) {
+  entry.dropoff = pickupEventFor(entry.sale, await eventRepo.getForSubject('dog', entry.dog.id));
+  row.querySelector('.r-pickup').innerHTML = pickupHtml(entry);
+  wirePickup(row, entry);
+}
+
+// The typed pickup fields, present only while the pup has no drop-off event.
+function readTypedPickup(row) {
+  const date = row.querySelector('.r-pickup-date');
+  if (!date) return null;
+  return {
+    furever_pickup_date: date.value || null,
+    furever_pickup_time: row.querySelector('.r-pickup-time').value.trim(),
+    furever_pickup_place: row.querySelector('.r-pickup-place').value.trim()
+  };
+}
+
 function readDetails(row) {
   return {
     furever_note: row.querySelector('.r-note').value.trim(),
-    furever_pickup_date: row.querySelector('.r-pickup-date').value || null,
-    furever_pickup_time: row.querySelector('.r-pickup-time').value.trim(),
-    furever_pickup_place: row.querySelector('.r-pickup-place').value.trim(),
+    ...readTypedPickup(row),
     furever_pickup_photo_url: row.querySelector('.r-pickup-photo').value.trim()
   };
 }

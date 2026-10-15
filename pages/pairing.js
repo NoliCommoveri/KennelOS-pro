@@ -7,9 +7,10 @@ import { pairingRepo, ReferenceBlockedError } from '../data/pairingRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
-import { PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS, LITTER_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS, PAIRING_ENDED_STATUSES, descriptor } from '../data/vocab.js';
+import { PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS, LITTER_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, STUD_SERVICE_STATUS, PAIRING_ENDED_STATUSES, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
+import { ourStudPairingIds, studParents, ourRole } from '../data/studRules.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { renderTimeline } from '../assets/timeline.js';
 import { openEventFromQuery } from '../assets/eventForm.js';
@@ -346,6 +347,9 @@ async function doSave() {
 // Resolves true when it navigated away.
 async function promptLinkedLitter(pairing, prevStatus) {
   if (pairing.status === prevStatus) return false;
+  // Our stud bred to somebody else's dam: the litter is the dam's owner's, so
+  // don't ask to record it (studRules.ourStudPairingIds).
+  if (ourStudPairingIds(await studServiceRepo.getByPairing(pairing.id), ctx.dogsById).has(pairing.id)) return false;
   const litters = await litterRepo.getAllForPairing(pairing.id);
   if (pairing.status === 'whelped' && !litters.length) {
     const ok = await confirmModal({
@@ -430,7 +434,7 @@ async function renderStudServiceSection() {
 
   const inner = `<ul class="linked-list" style="margin:14px 0 0; padding:0; list-style:none;">` + studServices.map((s) => `
     <li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
-      <span>${badge(STUD_SERVICE_DIRECTION, s.direction)} <strong>${esc(dogName(s.our_dog_id) || '—')} × ${esc(dogName(s.partner_dog_id) || '—')}</strong> ${badge(STUD_SERVICE_STATUS, s.status)}</span>
+      <span>${badge(STUD_SERVICE_ROLE, ourRole(s, ctx.dogsById))} ${badge(STUD_SERVICE_DIRECTION, s.direction)} <strong>${esc(dogName(s.our_dog_id) || '—')} × ${esc(dogName(s.partner_dog_id) || '—')}</strong> ${badge(STUD_SERVICE_STATUS, s.status)}</span>
       <a class="btn btn-sm" href="stud-service.html?id=${encodeURIComponent(s.id)}">Open stud service →</a>
     </li>`).join('') + `</ul>`;
 
@@ -499,12 +503,11 @@ async function main() {
       const ss = await studServiceRepo.getById(studServiceId);
       if (ss) {
         sourceStudServiceId = ss.id;
-        if (ss.direction === 'outgoing') {
-          ctx.draft.sire_id = ss.our_dog_id || '';
-          ctx.draft.dam_id = ss.partner_dog_id || '';
-        } else if (ss.direction === 'incoming') {
-          ctx.draft.sire_id = ss.partner_dog_id || '';
-          ctx.draft.dam_id = ss.our_dog_id || '';
+        // Sire and dam by our dog's sex (studRules.studParents).
+        const parents = studParents(ss, ctx.dogsById);
+        if (parents) {
+          ctx.draft.sire_id = parents.sireId || '';
+          ctx.draft.dam_id = parents.damId || '';
         }
         ctx.draft.pairing_type = 'actual';
         ctx.draft.status = 'planned';

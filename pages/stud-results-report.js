@@ -10,7 +10,8 @@ import { studResultRows } from '../data/breedingReports.js';
 import { createReportView } from '../assets/reportView.js';
 import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
-import { STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS, FEE_STRUCTURE, descriptor } from '../data/vocab.js';
+import { STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, STUD_SERVICE_STATUS, FEE_STRUCTURE, descriptor } from '../data/vocab.js';
+import { ourRole } from '../data/studRules.js';
 import { sumOf, rankBy } from '../data/reportMath.js';
 
 const when = (r) => r.service.sent_date || r.service.returned_date || '';
@@ -24,7 +25,10 @@ async function init() {
   const dogName = new Map(dogs.map((d) => [d.id, d.call_name || '—']));
   const contactName = new Map(contacts.map((c) => [c.id, c.name || '—']));
   const rows = studResultRows(services, litters).sort((a, b) => when(b).localeCompare(when(a)));
-  const outgoing = (r) => r.service.direction === 'outgoing';
+  // Our stud's services (our dog's sex, studRules.ourRole).
+  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  const role = (r) => ourRole(r.service, dogsById);
+  const outgoing = (r) => role(r) === 'stud';
 
   createReportView({
     mount: document.getElementById('report-mount'),
@@ -33,26 +37,28 @@ async function init() {
     search: { placeholder: 'Search dog or partner…', text: (r) => `${dogName.get(r.service.our_dog_id) || ''} ${dogName.get(r.service.partner_dog_id) || ''} ${contactName.get(r.service.partner_contact_id) || ''}` },
     dateRange: { label: 'Sent', date: when },
     filters: [
-      { id: 'direction', label: 'Direction', options: STUD_SERVICE_DIRECTION, match: (r, v) => r.service.direction === v },
+      { id: 'role', label: 'Our dog', options: STUD_SERVICE_ROLE, match: (r, v) => role(r) === v },
+      { id: 'direction', label: 'Who travels', options: STUD_SERVICE_DIRECTION, match: (r, v) => r.service.direction === v },
       { id: 'status', label: 'Status', options: STUD_SERVICE_STATUS, match: (r, v) => r.service.status === v }
     ],
     kpis: (list) => {
       const litterRows = list.filter((r) => r.litter);
       return [
-        { label: 'Services', value: String(list.length), hint: `${list.filter(outgoing).length} outgoing, ${list.length - list.filter(outgoing).length} incoming` },
+        { label: 'Services', value: String(list.length), hint: `${list.filter(outgoing).length} our stud, ${list.length - list.filter(outgoing).length} our dam` },
         { label: 'Litters produced', value: String(litterRows.length) },
         { label: 'Puppies born', value: String(sumOf(litterRows, (r) => r.born)), hint: litterRows.length ? `${(sumOf(litterRows, (r) => r.born) / litterRows.length).toFixed(1)} a litter` : '' },
-        { label: 'Fees earned', value: fmtMoney(sumOf(list.filter((r) => outgoing(r) && r.service.status === 'completed'), fee)) || '$0.00', hint: 'completed outgoing' }
+        { label: 'Fees earned', value: fmtMoney(sumOf(list.filter((r) => outgoing(r) && r.service.status === 'completed'), fee)) || '$0.00', hint: 'completed, our stud' }
       ];
     },
     charts: (list) => [{
-      type: 'hbar', title: 'Puppies sired, by our stud', subtitle: 'From the litters outgoing services produced',
+      type: 'hbar', title: 'Puppies sired, by our stud', subtitle: 'From the litters our studs\' services produced',
       rows: rankBy(list.filter((r) => outgoing(r) && r.litter), { key: (r) => r.service.our_dog_id, label: (id) => dogName.get(id) || '—', value: (r) => r.born }),
-      emptyText: 'No litters recorded from outgoing services yet.'
+      emptyText: 'No litters recorded from our studs\' services yet.'
     }],
     columns: [
       { header: 'Sent', value: (r) => (when(r) ? fmtDate(when(r)) : ''), csv: when },
-      { header: 'Direction', value: (r) => r.service.direction || '', badge: STUD_SERVICE_DIRECTION, csv: (r) => descriptor(STUD_SERVICE_DIRECTION, r.service.direction).label },
+      { header: 'Our dog is', value: (r) => role(r) || '', badge: STUD_SERVICE_ROLE, csv: (r) => (role(r) ? descriptor(STUD_SERVICE_ROLE, role(r)).label : '') },
+      { header: 'Who travels', value: (r) => r.service.direction || '', badge: STUD_SERVICE_DIRECTION, csv: (r) => descriptor(STUD_SERVICE_DIRECTION, r.service.direction).label },
       { header: 'Our dog', value: (r) => dogName.get(r.service.our_dog_id) || '—' },
       { header: 'Partner dog', value: (r) => dogName.get(r.service.partner_dog_id) || '—' },
       { header: 'Status', value: (r) => r.service.status || '', badge: STUD_SERVICE_STATUS, csv: (r) => descriptor(STUD_SERVICE_STATUS, r.service.status).label },

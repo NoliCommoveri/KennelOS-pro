@@ -7,7 +7,8 @@ import { studServiceRepo } from '../data/studServiceRepo.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
-import { STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, descriptor } from '../data/vocab.js';
+import { STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, STUD_SERVICE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, descriptor } from '../data/vocab.js';
+import { ourRole } from '../data/studRules.js';
 import { esc, badge, fmtDate } from '../assets/ui.js';
 
 const body = document.getElementById('stud-service-list');
@@ -54,7 +55,7 @@ function studServiceCard(s, dogsById, contactsById, contractsByStud, linkableCon
       <div class="row-between">
         <div>
           <a href="stud-service.html?id=${encodeURIComponent(s.id)}"><strong>${esc(ourDog?.call_name || '—')} × ${esc(partnerDog?.call_name || '—')}</strong></a>
-          ${badge(STUD_SERVICE_DIRECTION, s.direction)} ${badge(STUD_SERVICE_STATUS, s.status)}
+          ${badge(STUD_SERVICE_ROLE, ourRole(s, dogsById))} ${badge(STUD_SERVICE_DIRECTION, s.direction)} ${badge(STUD_SERVICE_STATUS, s.status)}
           <div class="muted" style="font-size:13px; margin-top:2px;">
             ${partnerContact ? esc(partnerContact.name) : '<span class="faint">No partner contact</span>'}
           </div>

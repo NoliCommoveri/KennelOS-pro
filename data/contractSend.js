@@ -5,6 +5,7 @@
 import { contractRepo } from './contractRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
+import { ourRole } from './studRules.js';
 import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
@@ -47,10 +48,10 @@ export async function gatherContractFacts(c) {
   const sale = await get(saleRepo, c.related_sale_id);
   const ss = await get(studServiceRepo, c.related_stud_service_id);
   const puppy = sale ? await get(dogRepo, sale.dog_id) : null;
-  // Outgoing: our dog is the stud. Incoming: our dog is the dam.
+  // Our dog is the stud or the dam by its sex (studRules.ourRole).
   const ours = ss ? await get(dogRepo, ss.our_dog_id) : null;
   const theirs = ss ? await get(dogRepo, ss.partner_dog_id) : null;
-  const incoming = ss?.direction === 'incoming';
+  const incoming = ss ? ourRole(ss, [ours, theirs].filter(Boolean)) === 'dam' : false;
   return {
     contract: c,
     kennel: await get(kennelRepo, c.kennel_id),

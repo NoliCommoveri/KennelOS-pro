@@ -80,6 +80,8 @@ export const PRO_ONLY_STANDALONE = [
   'assets/waitlistEmailUI.js',
   // Kels's "Set up my waitlist" (pages/kels.js imports it on start, only with the waitlist).
   'assets/waitlistSetupUI.js',
+  // A waitlist application's fields: the Waitlist entry page's and Kels's "Set up my waitlist".
+  'assets/waitlistApplicationForm.js',
   // "Review sale & send" on the waitlist family page (Integrations plan §2.6).
   'assets/pickToSend.js',
   // The Companion link builder (shared by the Companion console and the guided

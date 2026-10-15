@@ -73,7 +73,7 @@ export const REPORTS = [
 
   // Shows & Stud
   { href: 'stud-services-report.html', icon: '🧬', title: 'Stud Services', group: 'shows',
-    blurb: 'Outgoing and incoming arrangements by direction, status and date, with fees.' },
+    blurb: 'Your studs\' and your dams\' arrangements by who travels, status and date, with fees.' },
   { href: 'stud-results-report.html', icon: '🐾', title: 'Stud Results', group: 'shows',
     blurb: 'Each stud service and what came of it: the litter, puppies born, the fee.' },
   { href: 'show-record-report.html', icon: '🏆', title: 'Show Record', group: 'shows',

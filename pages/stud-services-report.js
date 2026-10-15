@@ -6,13 +6,14 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createReportView } from '../assets/reportView.js';
 import { inScope } from '../data/kennelScope.js';
-import { STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS, descriptor } from '../data/vocab.js';
+import { STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, STUD_SERVICE_STATUS, descriptor } from '../data/vocab.js';
+import { ourRole } from '../data/studRules.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { periodSeries, sumOf } from '../data/reportMath.js';
 import { SERIES_COLORS } from '../assets/chartView.js';
 
 const when = (s) => s.sent_date || s.returned_date || '';
-const dirColor = (v) => SERIES_COLORS[STUD_SERVICE_DIRECTION.findIndex((d) => d.value === v)];
+const roleColor = (v) => SERIES_COLORS[STUD_SERVICE_ROLE.findIndex((d) => d.value === v)];
 
 const FEE_STRUCTURES_WITH_PICK = ['pick_of_litter', 'flat_plus_pick'];
 
@@ -26,6 +27,8 @@ async function init() {
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const dogName = (id) => dogsById.get(id)?.call_name || '—';
   const contactName = (id) => contactsById.get(id)?.name || '—';
+  // Our stud or our dam, from our dog's sex (studRules.ourRole).
+  const role = (s) => ourRole(s, dogsById);
 
   createReportView({
     mount: document.getElementById('report-mount'),
@@ -37,31 +40,33 @@ async function init() {
     csvFilename: `stud-services-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dog or partner…', text: (s) => `${dogName(s.our_dog_id)} ${dogName(s.partner_dog_id)} ${contactName(s.partner_contact_id)}` },
     filters: [
-      { id: 'direction', label: 'Direction', options: STUD_SERVICE_DIRECTION, match: (s, v) => s.direction === v },
+      { id: 'role', label: 'Our dog', options: STUD_SERVICE_ROLE, match: (s, v) => role(s) === v },
+      { id: 'direction', label: 'Who travels', options: STUD_SERVICE_DIRECTION, match: (s, v) => s.direction === v },
       { id: 'status', label: 'Status', options: STUD_SERVICE_STATUS, match: (s, v) => s.status === v }
     ],
     dateRange: { label: 'Sent', date: when },
     kpis: (rows) => {
-      const out = rows.filter((s) => s.direction === 'outgoing');
-      const inc = rows.filter((s) => s.direction === 'incoming');
+      const out = rows.filter((s) => role(s) === 'stud');
+      const inc = rows.filter((s) => role(s) === 'dam');
       return [
-        { label: 'Outgoing', value: String(out.length), hint: `${out.filter((s) => s.status === 'completed').length} completed` },
-        { label: 'Incoming', value: String(inc.length), hint: `${inc.filter((s) => s.status === 'completed').length} completed` },
-        { label: 'Fees earned', value: fmtMoney(sumOf(out.filter((s) => s.status === 'completed'), (s) => s.fee_amount)) || '$0.00', hint: 'completed outgoing' },
-        { label: 'Fees paid', value: fmtMoney(sumOf(inc.filter((s) => s.status === 'completed'), (s) => s.fee_amount)) || '$0.00', hint: 'completed incoming' }
+        { label: 'Our studs', value: String(out.length), hint: `${out.filter((s) => s.status === 'completed').length} completed` },
+        { label: 'Our dams', value: String(inc.length), hint: `${inc.filter((s) => s.status === 'completed').length} completed` },
+        { label: 'Fees earned', value: fmtMoney(sumOf(out.filter((s) => s.status === 'completed'), (s) => s.fee_amount)) || '$0.00', hint: 'completed, our stud' },
+        { label: 'Fees paid', value: fmtMoney(sumOf(inc.filter((s) => s.status === 'completed'), (s) => s.fee_amount)) || '$0.00', hint: 'completed, our dam' }
       ];
     },
     charts: (rows, ctx) => {
       const dated = rows.filter(when);
       const p = periodSeries(dated, ctx.range, {
         date: when,
-        series: STUD_SERVICE_DIRECTION.map((d) => ({ name: d.label, color: dirColor(d.value), when: (s) => s.direction === d.value }))
+        series: STUD_SERVICE_ROLE.map((d) => ({ name: d.label, color: roleColor(d.value), when: (s) => role(s) === d.value }))
       });
       return [{ type: 'bar', title: `Stud services by ${p.granularity}`, subtitle: 'By the date sent', categories: p.categories, series: p.series }];
     },
     columns: [
       { header: 'Sent', value: (s) => (when(s) ? fmtDate(when(s)) : ''), csv: when },
-      { header: 'Direction', value: (s) => s.direction || '', badge: STUD_SERVICE_DIRECTION, csv: (s) => s.direction ? descriptor(STUD_SERVICE_DIRECTION, s.direction).label : '' },
+      { header: 'Our dog is', value: (s) => role(s) || '', badge: STUD_SERVICE_ROLE, csv: (s) => role(s) ? descriptor(STUD_SERVICE_ROLE, role(s)).label : '' },
+      { header: 'Who travels', value: (s) => s.direction || '', badge: STUD_SERVICE_DIRECTION, csv: (s) => s.direction ? descriptor(STUD_SERVICE_DIRECTION, s.direction).label : '' },
       { header: 'Our dog', value: (s) => dogName(s.our_dog_id) },
       { header: 'Partner dog', value: (s) => dogName(s.partner_dog_id) },
       { header: 'Partner contact', value: (s) => contactName(s.partner_contact_id) },

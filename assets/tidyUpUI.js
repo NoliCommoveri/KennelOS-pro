@@ -22,14 +22,17 @@ import { editionFlags } from '../data/editionConfig.js';
 import { DISPOSITION, OWNERSHIP_TYPE, DOG_STATUS, SALE_STATUS, PAIRING_STATUS, descriptor } from '../data/vocab.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { dogMatches } from '../data/guidedLitter.js';
+import { baseFromLitter } from '../data/puppyDefaults.js';
+import { deliveredOwnershipChanges } from '../data/goHome.js';
+import { studParents, ourRole } from '../data/studRules.js';
 import * as T from '../data/tidyRules.js';
 import { mergeConflicts, suggestKeep, mergeRecords } from '../data/recordMerge.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { esc, fmtDate, todayYMD } from './ui.js';
+import { addDaysToYMD } from '../data/dateUtils.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
 import { FindingsTask, plural } from './kelsFindings.js';
 
-const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const ROLE = { sire: { field: 'sire_id', sex: 'male', word: 'sire' }, dam: { field: 'dam_id', sex: 'female', word: 'dam' } };
 const label = (vocab, v) => descriptor(vocab, v).label;
 
@@ -139,14 +142,47 @@ class Tidy extends FindingsTask {
       : `${name} says ${plural(f.recorded, 'puppy was', 'puppies were')} born alive, but I only have ${plural(f.actual, 'puppy record')}.`;
     const pick = await this.ask(f, said, [
       { label: `Change the count to ${f.actual}`, value: 'count', primary: f.more },
-      ...(f.more ? [] : [{ label: 'Open the litter to add puppies', value: 'open', primary: true }])
+      ...(f.more ? [] : [{ label: f.recorded - f.actual === 1 ? 'Add the missing puppy' : 'Add the missing puppies', value: 'add', primary: true }])
     ]);
     if (pick === 'count') {
       await litterRepo.update(f.litter.id, T.countFix(f.litter, f.actual));
       return this.done(`Done. ${name} now says ${plural(f.actual, 'puppy', 'puppies')} born alive.`);
     }
-    if (pick === 'open') { location.href = `${pagesPrefix()}litter.html?id=${encodeURIComponent(f.litter.id)}`; return 'left'; }
+    if (pick === 'add') return this.addPups(f);
     return pick;
+  }
+
+  // The puppies the litter's count says are missing, added in the chat: a name and
+  // sex each, everything else from the litter (puppyDefaults.baseFromLitter, as the
+  // Litter page's Add puppies does).
+  async addPups(f) {
+    const base = baseFromLitter(f.litter, this.dogsById.get(f.litter.dam_id));
+    const name = this.b(this.litter(f.litter));
+    if (!base.breed) {
+      await this.chat.say(`${name}'s mom has no breed recorded, so her puppies can't take one from her. Add her breed first, then I can add them.`);
+      return null;
+    }
+    const n = Math.min(f.recorded - f.actual, 20);
+    const sexOpts = (v) => ['male', 'female'].map((x) => `<option value="${x}"${x === v ? ' selected' : ''}>${x === 'male' ? 'Boy' : 'Girl'}</option>`).join('');
+    const res = await this.chat.form({
+      title: `<strong>Tell me about the ${n === 1 ? 'missing puppy' : `${n} missing puppies`}.</strong><span class="kels-lead">A name and boy or girl for each. You can fill in the rest on each puppy later.</span>`,
+      html: Array.from({ length: n }, (_, i) => `<div class="gl-plan-row">
+        <input id="tp-name-${i}" type="text" autocomplete="off" placeholder="Puppy ${f.actual + i + 1}" aria-label="Puppy ${i + 1}: name">
+        <select id="tp-sex-${i}" aria-label="Puppy ${i + 1}: boy or girl">${sexOpts(i % 2 ? 'female' : 'male')}</select></div>`).join(''),
+      submitLabel: n === 1 ? 'Add the puppy' : 'Add the puppies',
+      cancelLabel: 'Not now',
+      submit: async (root) => {
+        const made = [];
+        for (let i = 0; i < n; i++) {
+          const call = root.querySelector(`#tp-name-${i}`).value.trim() || `Puppy ${f.actual + i + 1}`;
+          made.push(await dogRepo.create({ ...base, call_name: call, sex: root.querySelector(`#tp-sex-${i}`).value, disposition: 'undecided' }));
+        }
+        return { made };
+      },
+      reply: (out) => `Add ${plural(out.made.length, 'puppy', 'puppies')}`
+    });
+    if (!res.done) return null;
+    return this.done(`Added! ${name} has all ${plural(f.recorded, 'puppy', 'puppies')} now.`);
   }
 
   async litterPairing(f) {
@@ -221,14 +257,11 @@ class Tidy extends FindingsTask {
       { label: `${buyer} does`, value: 'external', primary: true },
       { label: `I co-own ${d.sex === 'female' ? 'her' : d.sex === 'male' ? 'him' : 'them'} with ${buyer}`, value: 'co' }
     ], { never: 'I still own them, don\'t ask again' });
-    if (pick === 'external') {
-      await dogRepo.update(d.id, { ownership_type: 'external', owner_contact_id: f.sale.buyer_contact_id, status: 'external_reference', status_date: this.today });
-      return this.done(`Done. ${name} is now ${esc(buyer)}'s dog. You'll still see ${name} in pedigrees.`);
-    }
-    if (pick === 'co') {
-      const co = [...new Set([...(d.co_owner_contact_ids || []), f.sale.buyer_contact_id])];
-      await dogRepo.update(d.id, { ownership_type: 'co_owned', co_owner_contact_ids: co });
-      return this.done(`Done. ${name} is co-owned with ${esc(buyer)}.`);
+    // The same changes the Sale page's Delivered save makes (goHome.deliveredOwnershipChanges).
+    if (pick === 'external' || pick === 'co') {
+      const choice = pick === 'co' ? 'co_owned' : 'external';
+      await dogRepo.update(d.id, deliveredOwnershipChanges(d, choice, { ownerId: f.sale.buyer_contact_id, buyerId: f.sale.buyer_contact_id, today: this.today }));
+      return this.done(choice === 'external' ? `Done. ${name} is now ${esc(buyer)}'s dog. You'll still see ${name} in pedigrees.` : `Done. ${name} is co-owned with ${esc(buyer)}.`);
     }
     return pick;
   }
@@ -366,8 +399,47 @@ class Tidy extends FindingsTask {
       await studServiceRepo.update(s.id, { pairing_id: pick.slice(5) });
       return this.done('Done. They\'re linked.');
     }
-    if (pick === 'new') { location.href = `${pagesPrefix()}pairing.html?new=1&stud_service=${encodeURIComponent(s.id)}`; return 'left'; }
+    if (pick === 'new') return this.recordBreeding(s, what);
     return pick;
+  }
+
+  // The stud service's breeding, recorded in the chat: its parents come from the
+  // stud service (ours is the sire or the dam by its sex, studRules.studParents,
+  // as the Pairing page's stud_service link fills them), she gives the first date
+  // and how it went, and the stud service is linked to it (StudService owns
+  // pairing_id).
+  async recordBreeding(s, what) {
+    const { sireId: sire, damId: dam } = studParents(s, this.dogsById) || {};
+    if (!sire || !dam) {
+      await this.chat.say('I can\'t tell which dog is the stud: neither dog on this stud service has a sex on file. Add it to one of them first.');
+      return null;
+    }
+    const statuses = PAIRING_STATUS.filter((t) => t.value !== 'planned');
+    const res = await this.chat.form({
+      title: `<strong>Tell me about the breeding.</strong><span class="kels-lead">${what}</span>`,
+      html: `${field('First breeding date', `<input id="tb-date" type="date" value="${esc(s.sent_date || '')}">`)}
+        ${field('How did it go?', `<select id="tb-status">${statuses.map((t) => `<option value="${esc(t.value)}"${t.value === 'bred' ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}</select>`)}`,
+      submitLabel: 'Save the breeding',
+      cancelLabel: 'Not now',
+      submit: async (root) => {
+        const date = root.querySelector('#tb-date').value;
+        if (!date) return 'Pick the date of the first breeding.';
+        const status = root.querySelector('#tb-status').value;
+        const pairing = await pairingRepo.create({
+          sire_id: sire, dam_id: dam, pairing_type: 'actual', status, planned_date: date,
+          expected_due_date: addDaysToYMD(date, 63),
+          kennel_id: await resolveKennelIdForWrite({ inheritFrom: [this.dogsById.get(dam), this.dogsById.get(sire)] })
+        });
+        await studServiceRepo.update(s.id, { pairing_id: pairing.id });
+        return { pairing };
+      },
+      reply: (out) => `${label(PAIRING_STATUS, out.pairing.status)}, ${fmtDate(out.pairing.planned_date)}`
+    });
+    if (!res.done) return null;
+    // Our stud's outside breeding: her litter isn't ours to record.
+    return this.done(res.result.pairing.status === 'whelped' && ourRole(s, this.dogsById) !== 'stud'
+      ? 'Saved and linked. When we\'re done here, pick <strong>Record a new litter</strong> and I\'ll walk you through the puppies.'
+      : 'Saved, and the stud service is linked to it.');
   }
 
   // --- Breeders & kennels (Pro) --------------------------------------------------

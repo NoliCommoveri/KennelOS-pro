@@ -1,6 +1,8 @@
-// studServiceRepo.js — all Dexie access for the StudService table. Covers both
-// directions: your stud servicing an outside female (`outgoing`) and you using
-// an outside stud on your dam (`incoming`) — Data Model v3 §5.8.
+// studServiceRepo.js — all Dexie access for the StudService table: your stud on
+// an outside dam, or an outside stud on your dam (Data Model v3 §5.8). Which one
+// is ours comes from our dog's sex (studRules.ourRole); `direction` is who
+// travels (to_partner / to_us / shipped), and `type` follows it (shipped → ai,
+// else in_person), so it's never set by hand.
 //
 // Owns the canonical studservice<->pairing link (`pairing_id`, mirrors
 // Litter.pairing_id). There is no Pairing.stud_service_id — the reverse is
@@ -10,11 +12,16 @@ import { makeRepo } from './repoBase.js';
 import { STUD_SERVICE_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
-import { todayYMD } from './dateUtils.js';
+import { eventRepo } from './eventRepo.js';
+import { getStudTripsMigrated, markStudTripsMigrated } from './settings.js';
+import { travellingDogId, studBoardingFor, studBoardingPrefill } from './studRules.js';
 
 const base = makeRepo('stud_services', STUD_SERVICE_REFERENCES);
 
 const REQUIRED_FIELDS = ['direction', 'our_dog_id', 'partner_dog_id', 'partner_contact_id', 'status'];
+
+// `type` from `direction`: only a shipment is AI; anyone travelling is in person.
+const withType = (r) => (r.direction ? { ...r, type: r.direction === 'shipped' ? 'ai' : 'in_person' } : r);
 
 function validateStudService(candidate) {
   for (const f of REQUIRED_FIELDS) {
@@ -28,6 +35,7 @@ export const studServiceRepo = {
   ...base,
 
   async create(data) {
+    data = withType(data);
     validateStudService(data);
     // Kennel scope (Multi-Kennel Scope Spec §4.3) — inherited from OUR dog, never
     // the partner's: the partner is by definition somebody else's.
@@ -42,6 +50,7 @@ export const studServiceRepo = {
   async update(id, changes) {
     const existing = await db.stud_services.get(id);
     if (!existing) throw new Error(`stud_services: no record with id ${id}`);
+    if (changes.direction) changes = withType(changes);
     validateStudService({ ...existing, ...changes });
     const saved = await base.update(id, changes);
     await contactRepo.ensureType(saved.referred_by_contact_id, 'stud_referrer');
@@ -72,37 +81,30 @@ export const studServiceRepo = {
     return [...byId.values()];
   },
 
-  // Away-board rows (Data Integrity Brief §5) — stud services where our dog
-  // physically travelled and is still away today. Union'd with
-  // eventRepo.getBoardRows() at the call site (data/awayBoard.js), never
-  // replacing it — non-stud boarding stays (grow-out, foster, owner travel)
-  // still come from Event. `type` is a plain unindexed field (§3.1), so this
-  // filters in JS, same posture as is_archived elsewhere in the repo layer.
-  // Away dog is always `our_dog_id`: whichever direction the service runs,
-  // the dog that physically travels for an in-person service is ours.
-  async getBoardRows() {
-    const today = todayYMD();
+  // Trips are boarding events now, not the service's own dates. Run on every boot:
+  // 1. a direction from before it meant who travels (outgoing / incoming) becomes
+  //    shipped for AI, else to_partner (how the Away board read it then: our dog
+  //    went). Cheap and idempotent, so a restored older file is caught too.
+  // 2. once per device (settings flag): every in-person service with a start date,
+  //    not cancelled, whose trip has no stud boarding yet gets one
+  //    (studRules.studBoardingPrefill). The match check keeps a second device, or a
+  //    re-run after Reset App, from adding it twice.
+  async migrateStudTrips() {
     const all = await db.stud_services.toArray();
-    const away = all.filter((s) =>
-      !s.is_archived && s.type === 'in_person' && s.sent_date && s.sent_date <= today &&
-      (s.returned_date == null || s.returned_date >= today)
-    );
-    const contacts = await Promise.all(
-      away.map((s) => (s.partner_contact_id ? db.contacts.get(s.partner_contact_id) : null))
-    );
-    return away.map((s, i) => ({
-      dogId: s.our_dog_id,
-      location: contacts[i]?.address || '',
-      reason: 'Stud service',
-      contactId: s.partner_contact_id || null,
-      outDate: s.sent_date,
-      returnDate: s.returned_date || null,
-      dropoffTime: '',
-      pickupTime: '',
-      sourceType: 'stud_service',
-      sourceId: s.id,
-      href: `stud-service.html?id=${encodeURIComponent(s.id)}`
-    }));
+    for (const s of all) {
+      if (s.direction !== 'outgoing' && s.direction !== 'incoming') continue;
+      await this.update(s.id, { direction: s.type === 'ai' ? 'shipped' : 'to_partner' });
+    }
+    if (getStudTripsMigrated()) return;
+    for (const s of await db.stud_services.toArray()) {
+      if (s.is_archived || s.status === 'cancelled' || !s.sent_date || !travellingDogId(s)) continue;
+      const dogId = travellingDogId(s);
+      if (studBoardingFor(s, await eventRepo.getForSubject('dog', dogId))) continue;
+      const partner = s.partner_contact_id ? await db.contacts.get(s.partner_contact_id) : null;
+      const { event_end_date, ...rest } = studBoardingPrefill(s, partner);
+      await eventRepo.create({ subject_type: 'dog', subject_id: dogId, ...rest, event_end_date: event_end_date || null });
+    }
+    markStudTripsMigrated();
   }
 };
 

@@ -4,7 +4,10 @@
 // same thing about what's done and what's missing. No reads or writes here.
 //
 // Readiness, per pup (READY_ITEMS order; an item that doesn't apply is left out):
-//   chip         a microchip number on the dog;
+//   chip         a microchip number on the dog (optional);
+//   litter_reg   the litter's registration number (optional; one answer for the litter);
+//   pup_reg      the pup's registered name and registration number (optional; for
+//                breeders who register pups before they go);
 //   shots        a vaccination logged;
 //   deworm       a deworming or flea & tick (`preventative`) logged;
 //   pickup       a drop-off date: goHome's `placement` event ("Placement / drop-off") for the
@@ -13,23 +16,30 @@
 //   balance      the sale paid in full, or its balance-due date set;
 //   contract     a signed contract on the sale (Pro, `contracts`);
 //   registration the sale's registration type;
-//   feeding      a feeding schedule: the litter's override, or one for the pup's breed (Pro, `feedingSchedule`).
-// The sale items (pickup, balance, contract, registration) apply only to a pup
+//   feeding      a feeding schedule: the litter's override, or one for the pup's breed (Pro,
+//                `feedingSchedule`; optional).
+// Optional items are checked only when she ticks them (`checks`); many breeders don't
+// track them. The sale items (pickup, balance, contract, registration) apply only to a pup
 // with a sale. The Furever link isn't tracked (decided), so it isn't an item.
-import { isOpenSale } from './vocab.js';
+import { isOpenSale, RELEASED_SALE_STATUSES } from './vocab.js';
 import { GO_HOME_SALE_STATUSES, pickupFor, readyDateOf } from './goHome.js';
 import { homePups, rosterOf } from './litterCheckin.js';
 
 export const READY_ITEMS = Object.freeze([
-  { key: 'chip', label: 'Microchip' },
+  { key: 'chip', label: 'Microchip', optional: true, ask: 'Microchip numbers' },
+  { key: 'litter_reg', label: 'Litter registration number', optional: true, ask: 'The litter\'s registration number' },
+  { key: 'pup_reg', label: 'Registered name and number', optional: true, ask: 'Each pup\'s registered name and number' },
   { key: 'shots', label: 'Shots' },
   { key: 'deworm', label: 'Deworming' },
   { key: 'pickup', label: 'Drop-off date', sale: true },
   { key: 'balance', label: 'Balance', sale: true },
   { key: 'contract', label: 'Contract signed', sale: true, flag: 'contracts' },
   { key: 'registration', label: 'Registration type', sale: true },
-  { key: 'feeding', label: 'Feeding schedule', flag: 'feedingSchedule' }
+  { key: 'feeding', label: 'Feeding schedule', flag: 'feedingSchedule', optional: true, ask: 'A feeding schedule' }
 ]);
+
+// The optional items this edition has, for "want me to check these too?".
+export const optionalItems = (flags = {}) => READY_ITEMS.filter((it) => it.optional && (!it.flag || flags[it.flag]));
 
 const PREP_STATUSES = ['whelped', 'weaning', 'ready', 'sold'];
 
@@ -67,7 +77,9 @@ const newestOf = (events, type) => events.filter((e) => !e.is_archived && e.even
 // `flags`: the edition's flags (`contracts`, `feedingSchedule`).
 // → { items: [{ key, label, done, detail }], missing: [key], pickupDate }
 // `detail` is plain text (the chip number, the last date…), or ''.
-export function readiness({ pup, sale = null, events = [], contracts = [], litter = null, hasBreedSchedule = false, flags = {}, today }) {
+// `checks`: the optional item keys she ticked; null checks them all (the Puppy
+// Record's cover page from the Sales picker).
+export function readiness({ pup, sale = null, events = [], contracts = [], litter = null, hasBreedSchedule = false, flags = {}, today, checks = null }) {
   const shots = newestOf(events, 'vaccination');
   const deworm = newestOf(events, 'preventative');
   const pickupDate = nextPickup(sale, events, today);
@@ -77,6 +89,8 @@ export function readiness({ pup, sale = null, events = [], contracts = [], litte
   const override = String(litter?.feeding_schedule_override || '').trim();
   const check = {
     chip: [Boolean(pup.microchip_id), pup.microchip_id || ''],
+    pup_reg: [Boolean(String(pup.registered_name || '').trim() && String(pup.registration_number || '').trim()), String(pup.registration_number || '').trim()],
+    litter_reg: [Boolean(String(litter?.litter_registration_number || '').trim()), String(litter?.litter_registration_number || '').trim()],
     shots: [Boolean(shots), shots ? shots.event_date : ''],
     deworm: [Boolean(deworm), deworm ? deworm.event_date : ''],
     pickup: [Boolean(pickupDate), pickupDate || ''],
@@ -86,7 +100,7 @@ export function readiness({ pup, sale = null, events = [], contracts = [], litte
     feeding: [Boolean(override) || hasBreedSchedule, override ? 'litter' : hasBreedSchedule ? 'breed' : '']
   };
   const items = READY_ITEMS
-    .filter((it) => (!it.sale || sale) && (!it.flag || flags[it.flag]))
+    .filter((it) => (!it.sale || sale) && (!it.flag || flags[it.flag]) && (!it.optional || !checks || checks.includes(it.key)))
     .map((it) => ({ key: it.key, label: it.label, done: check[it.key][0], detail: check[it.key][1] }));
   return { items, missing: items.filter((i) => !i.done).map((i) => i.key), pickupDate };
 }
@@ -102,3 +116,13 @@ export const missingFor = (rows, key) => rows.filter((r) => r.ready.missing.incl
 
 // "6 of 8 done" for one pup.
 export const doneText = (ready) => `${ready.items.filter((i) => i.done).length} of ${ready.items.length} done`;
+
+// Pups at home whose plan says they're spoken for or up for sale, with no sale going
+// ahead: Available ones still unsold at go-home time, and Placed ones nobody recorded
+// a sale for. `rows`: [{ pup, sale }] for every pup at home (pupSale; a returned,
+// cancelled or voided sale doesn't count). → the rows, Placed first.
+export function planWithoutSale(rows) {
+  const going = (s) => s && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status);
+  return rows.filter((r) => ['placed', 'available'].includes(r.pup.disposition) && !going(r.sale))
+    .sort((a, b) => (a.pup.disposition === 'placed' ? 0 : 1) - (b.pup.disposition === 'placed' ? 0 : 1));
+}

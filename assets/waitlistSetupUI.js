@@ -24,11 +24,14 @@ import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import {
   waitlistConfig, waitlistConfigProblem, waitlistSummaryLines, waitlistIsSetUp, showUpcoming, UPCOMING_STAGES,
-  embedOrigin, embedOrigins, EMBED_ORIGINS_MAX, PUBLIC_INTRO_DEFAULT
+  embedOrigin, embedOrigins, EMBED_ORIGINS_MAX, PUBLIC_INTRO_DEFAULT, kennelBreeds
 } from '../data/waitlistRules.js';
 import { FEE_CREDIT_POLICY, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER, WAITLIST_PRIORITY } from '../data/vocab.js';
 import { field } from './litterCheckinUI.js';
-import { esc, fmtMoney } from './ui.js';
+import { dogRepo } from '../data/dogRepo.js';
+import { formQuestions, snapshotQuestions, isAnswerQuestion, missingRequired } from '../data/waitlistForm.js';
+import { applicationFields, readAnswers, readPrefs } from './waitlistApplicationForm.js';
+import { esc, fmtMoney, todayYMD } from './ui.js';
 
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const opt = (value, label, selected) => `<option value="${esc(value)}"${selected ? ' selected' : ''}>${esc(label)}</option>`;
@@ -401,13 +404,62 @@ class Setup {
       { label: walk ? 'Not now' : 'Go back', value: '' }
     ]);
     if (!pick) return null;
+    if (pick === 'one') {
+      let added = 0;
+      for (;;) {
+        const entry = await this.addFamily();
+        if (!entry) break;
+        added++;
+        await this.chat.say(`Added! ${esc(entry.application?.name || 'They')} ${added === 1 ? 'is' : 'are'} in your applications, ready for you to approve on the waitlist.`);
+        if ((await this.chat.choose([{ label: 'Add another family', value: 'more', primary: true }, { label: 'That\'s all of them', value: '' }])) !== 'more') break;
+      }
+      return added ? 'saved' : null;
+    }
+    // A spreadsheet import is a page of its own (match columns, preview, commit).
     if (walk) await this.wrapUp({ leaving: true });
     const k = encodeURIComponent(this.kennel.id);
-    const href = pick === 'import' ? `waitlist-import.html?kennel=${k}` : `waitlist-entry.html?new=1&kennel=${k}`;
-    await this.chat.say(`I'll open ${pick === 'import' ? 'the waitlist import' : 'a new family'} for you. Your settings are all saved.`);
+    await this.chat.say('I\'ll open the waitlist import for you. Your settings are all saved.');
     await this.chat.pause(1300);
-    location.href = `${pagesPrefix()}${href}`;
+    location.href = `${pagesPrefix()}waitlist-import.html?kennel=${k}`;
     return 'left';
+  }
+
+  // One family she already has, typed in the chat: her application form (the same
+  // fields as the Waitlist entry page's new application, waitlistApplicationForm.js),
+  // then the program, when they applied and her notes. Saved as an application
+  // (status applied), as that page saves it.
+  async addFamily() {
+    const config = waitlistConfig(this.kennel);
+    const form = formQuestions(config);
+    const breeds = kennelBreeds(this.kennel, await dogRepo.getAll());
+    const programs = this.programs.filter((p) => !p.is_archived).sort((a, b) => a.name.localeCompare(b.name));
+    const res = await this.chat.form({
+      title: '<strong>Tell me about the family.</strong><span class="kels-lead">Your application\'s questions, so it matches what families fill in online.</span>',
+      html: `<div class="form-grid">${applicationFields({ form, config, breeds, entry: {} })}
+        ${programs.length ? field('Program', `<select id="ws-af-program"><option value="">— none —</option>${programs.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>`) : ''}
+        ${field('When they applied', `<input id="ws-af-applied" type="date" value="${esc(todayYMD())}">`, 'Their place in line comes from when their fee is received, once you approve them.')}
+        ${field('Your notes', '<textarea id="ws-af-notes" rows="2"></textarea>')}</div>`,
+      submitLabel: 'Add the family',
+      cancelLabel: 'Not now',
+      submit: async (root) => {
+        const questions = form.filter(isAnswerQuestion);
+        const application = readAnswers(root, questions);
+        const prefs = readPrefs(root);
+        const missing = missingRequired(questions, application);
+        if (!prefs.ready_timing) missing.push(form.find((q) => q.key === 'ready_timing')?.label || 'Ready to buy');
+        if (missing.length) return `Please fill in: ${missing.map((m) => m.replace(/[?.!:]+$/, '')).join(', ')}.`;
+        const entry = await waitlistEntryRepo.create({
+          ...prefs, application, application_questions: snapshotQuestions(questions),
+          waitlist_program_id: root.querySelector('#ws-af-program')?.value || null,
+          applied_date: root.querySelector('#ws-af-applied').value || todayYMD(),
+          notes: root.querySelector('#ws-af-notes').value,
+          kennel_id: this.kennel.id, status: 'applied'
+        });
+        return { entry };
+      },
+      reply: (out) => out.entry.application?.name || 'Add the family'
+    });
+    return res.done ? res.result.entry : null;
   }
 
   // --- The end -----------------------------------------------------------------------------

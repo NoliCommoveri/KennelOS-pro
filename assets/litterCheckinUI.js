@@ -195,12 +195,46 @@ class Checkin {
       { label: 'Not now', value: 'later' }
     ]);
     if (pick === 'moved') return this.logPickup(x, this.today, '<strong>When is the new pickup?</strong>');
-    if (pick === 'yes') {
-      await this.chat.say('I\'ll open the sale with Delivered chosen. Check it and tap <strong>Save</strong>; the Sale page takes it from there.');
-      await this.chat.pause(1200);
-      location.href = `${pagesPrefix()}sale.html?id=${encodeURIComponent(x.sale.id)}&deliver=1`;
-      return 'left';
+    if (pick === 'yes') return this.deliver(x);
+  }
+
+  // Marks the sale Delivered in the chat, then asks what the Sale page's Delivered
+  // save asks: Pro, how the pup now shows on her roster (goHome.
+  // deliveredOwnershipChanges, the Sale page's rule too); Lite, whether it leaves
+  // the program (archived, permanent). Closing the litter, when that's due, comes
+  // up next with the check-in's other litter questions.
+  async deliver(x) {
+    const name = esc(pupName(x.pup));
+    // Plain text for the choice labels (they're escaped there), escaped for her lines.
+    const familyText = (x.sale.buyer_contact_id && (await contactRepo.getById(x.sale.buyer_contact_id))?.name) || 'Their family';
+    const family = esc(familyText);
+    await saleRepo.update(x.sale.id, { status: 'delivered' });
+    this.didSomething = true;
+    await this.chat.say(`Done, the sale is marked Delivered. Congratulations on ${name}'s new home!`);
+    const pup = await dogRepo.getById(x.pup.id);
+    if (!pup || pup.is_archived) return;
+    if (editionFlags.externalOwnership) {
+      const coOwn = x.sale.registration_type === 'co_own';
+      await this.chat.say(`How should ${name} show on your roster now?`);
+      const choice = await this.chat.choose([
+        { label: `${familyText} owns ${pupName(x.pup)} now`, sub: 'External: kept for pedigrees and history, off your own dogs', value: 'external', primary: !coOwn },
+        { label: 'We co-own', sub: `${familyText} added as a co-owner`, value: 'co_owned', primary: coOwn },
+        { label: 'Leave it as it is', value: '' }
+      ]);
+      const changes = H.deliveredOwnershipChanges(pup, choice, { ownerId: x.sale.buyer_contact_id, buyerId: x.sale.buyer_contact_id, today: this.today });
+      if (!changes) return;
+      await dogRepo.update(pup.id, changes);
+      await this.chat.say(choice === 'external' ? `Updated. ${name} is External now, owned by ${family}.` : `Updated. You and ${family} co-own ${name}.`);
+      return;
     }
+    await this.chat.say(`Want to take ${name} off your roster? This can't be undone: ${name} leaves your dogs and can't be edited or brought back, but stays in your pedigrees and on this sale for history.`);
+    const pickLite = await this.chat.choose([
+      { label: 'Remove permanently', value: 'archive' },
+      { label: 'Keep on my roster', value: '', primary: true }
+    ]);
+    if (pickLite !== 'archive') return;
+    await dogRepo.archive(pup.id);
+    await this.chat.say(`Done. ${name} is off your roster.`);
   }
 
   async logPickup(x, date, title) {

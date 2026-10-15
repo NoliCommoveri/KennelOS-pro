@@ -14,13 +14,12 @@ import * as A from '../data/accountHealth.js';
 import { getLastBackupDate } from '../data/settings.js';
 import { requestPersistentStorage } from '../data/db.js';
 import { downloadBackup } from '../data/importExport.js';
-import { editionFlags } from '../data/editionConfig.js';
+import { editionFlags, licenseConfig } from '../data/editionConfig.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
-import { isLicenseGated } from '../data/license.js';
+import { isLicenseGated, evaluateLicense, activate } from '../data/license.js';
 import { FindingsTask, plural } from './kelsFindings.js';
 import { esc, fmtDate } from './ui.js';
 
-const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const when = (iso) => esc(fmtDate(String(iso).slice(0, 10)));
 
 // A new service worker took over while this page was open: the app on screen is
@@ -49,7 +48,6 @@ export async function gatherHealthFacts() {
   });
   if (isLicenseGated()) {
     facts.license = await safe(async () => {
-      const { evaluateLicense } = await import('../data/license.js');
       return { gated: true, ...(await evaluateLicense()) };
     });
   }
@@ -167,12 +165,17 @@ class Health extends FindingsTask {
   cloudUI() { return import('./cloudBackupUI.js'); }
   vaultUI() { return import('./cloudVaultUI.js'); }
 
-  // A fix that opens another page leaves Kels.
-  async leave(href, line) {
-    await this.chat.say(`${line} When you're done, tap me and pick <strong>Check account health</strong> to carry on.`);
-    await this.chat.pause(1400);
-    location.href = `${pagesPrefix()}${href}`;
-    return 'left';
+  // Publishes the online waitlist now (cloudWaitlist.syncWaitlistOnline, what the
+  // kennel's Online list card does) and says how it went.
+  async retryWaitlist(f, lead) {
+    await this.chat.say(`${lead ? `${lead} ` : ''}Let me try publishing the waitlist now…`, { typing: 400 });
+    const { syncWaitlistOnline, waitlistOnlineStatus } = await import('../data/cloud/cloudWaitlist.js');
+    await syncWaitlistOnline({ force: true });
+    const st = waitlistOnlineStatus(f.kennel);
+    if (st.signedIn && !st.lastError) return this.done('It worked! Your online waitlist is up to date.');
+    const { onlineProblemText } = await import('./waitlistOnlineUI.js');
+    await this.chat.say(`It didn't go through yet. ${esc(onlineProblemText(st.lastError?.code || (st.signedIn ? '' : 'signed-out')))}`);
+    return null;
   }
 }
 
@@ -265,10 +268,44 @@ const FIXES = {
 
   async 'license-grace'(f) {
     const pick = await this.ask(f, `Your Pro license needs attention${f.expiresAt ? ` (it was due ${when(f.expiresAt)})` : ''}. KennelOS still works for now, but let's sort it before it stops.`, [
-      { label: 'Open my license', value: 'fix', primary: true }
+      { label: 'Check it again now', sub: 'If you\'ve just renewed or got back online', value: 'check', primary: true },
+      ...(licenseConfig?.checkoutUrl ? [{ label: 'Renew my subscription', sub: 'Opens the store in a new tab', value: 'renew' }] : []),
+      { label: 'Use a different key', value: 'key' }
     ], { never: null });
-    if (pick !== 'fix') return pick;
-    return this.leave('settings.html#license-section', 'I\'ll open your license in Settings.');
+    if (pick === 'check') {
+      const { state, record } = await evaluateLicense();
+      if (state === 'valid') return this.done('Confirmed! Your Pro license is all good.');
+      await this.chat.say(record?.interval === 'lifetime'
+        ? 'I still can\'t reach the license server from here. Your Lifetime license is fine; once this device is online, it confirms by itself.'
+        : 'I still can\'t confirm an active subscription. If you\'ve renewed, give it a few minutes and check again; otherwise renewing keeps Pro going.');
+      return null;
+    }
+    if (pick === 'renew') {
+      await this.chat.say('I\'ll open the store in a new tab. Once you\'ve renewed, close that tab and come back here, and I\'ll check it again.');
+      if ((await this.chat.choose([{ label: 'Okay, open it', value: 'go', primary: true }, { label: 'Not now', value: '' }])) !== 'go') return null;
+      window.open(licenseConfig.checkoutUrl, '_blank', 'noopener');
+      await this.chat.choose([{ label: 'I\'m back, check it now', value: 'go', primary: true }]);
+      const { state } = await evaluateLicense();
+      if (state === 'valid') return this.done('Confirmed! Thanks for renewing.');
+      await this.chat.say('It isn\'t showing as renewed yet. It can take a few minutes; I\'ll look again next time.');
+      return null;
+    }
+    if (pick === 'key') {
+      const res = await this.chat.form({
+        title: '<strong>Paste your license key.</strong><span class="kels-lead">It\'s in your purchase confirmation email.</span>',
+        html: `<div class="field gl-field"><label>License key</label><input id="ah-key" type="text" autocomplete="off" spellcheck="false"></div>`,
+        submitLabel: 'Activate',
+        cancelLabel: 'Not now',
+        submit: async (root) => {
+          const record = await activate(root.querySelector('#ah-key').value); // throws its own message
+          return { record };
+        },
+        reply: () => 'Activate this key'
+      });
+      if (!res.done) return null;
+      return this.done('That key is active on this device. You\'re all set!');
+    }
+    return pick;
   },
 
   async update(f) {
@@ -306,18 +343,27 @@ const FIXES = {
 
   async 'waitlist-signed-out'(f) {
     const pick = await this.ask(f, `<strong>${esc(f.kennel.kennel_name || 'Your kennel')}</strong>'s waitlist is online, but this device isn't signed in to the cloud, so new applications aren't coming in here.`, [
-      { label: 'Open the kennel', value: 'fix', primary: true }
+      { label: 'Sign in now', value: 'fix', primary: true }
     ]);
     if (pick !== 'fix') return pick;
-    return this.leave(`kennel.html?id=${encodeURIComponent(f.kennel.id)}`, 'I\'ll open the kennel. Its Online list card has the sign-in.');
+    const ui = await this.cloudUI();
+    if (!(await ui.signInModal({ intro: 'Your online waitlist works through your cloud backup account.' }))) return null;
+    return this.retryWaitlist(f, 'Signed in.');
   },
 
   async 'waitlist-error'(f) {
-    const pick = await this.ask(f, `<strong>${esc(f.kennel.kennel_name || 'Your kennel')}</strong>'s online waitlist hit a problem the last time it updated${f.error?.message ? ` (${esc(f.error.message)})` : ''}.`, [
-      { label: 'Open the kennel', value: 'fix', primary: true }
+    const { onlineProblemText } = await import('./waitlistOnlineUI.js');
+    const why = f.error?.code ? onlineProblemText(f.error.code) : (f.error?.message || '');
+    const pick = await this.ask(f, `<strong>${esc(f.kennel.kennel_name || 'Your kennel')}</strong>'s online waitlist hit a problem the last time it updated.${why ? ` ${esc(why)}` : ''}`, [
+      ...(f.error?.code === 'backup-off' ? [{ label: 'Turn on cloud backup', value: 'backup', primary: true }] : []),
+      { label: 'Try again now', value: 'fix', primary: f.error?.code !== 'backup-off' }
     ]);
+    if (pick === 'backup') {
+      if (!(await (await this.cloudUI()).turnOnFlow())) return null;
+      return this.retryWaitlist(f, 'Cloud backup is on.');
+    }
     if (pick !== 'fix') return pick;
-    return this.leave(`kennel.html?id=${encodeURIComponent(f.kennel.id)}`, 'I\'ll open the kennel\'s Online list card.');
+    return this.retryWaitlist(f, '');
   },
 
   async 'vault-off'(f) {

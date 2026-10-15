@@ -1,12 +1,9 @@
-// awayBoard.js — union of "away from home" rows from two sources: boarding
-// events (Event.event_type === 'boarding') and in-person stud services
-// (Data Integrity Brief §5). Normalizes both to one view-model so board.js,
-// today.js, and dashboard.js render/count them together without knowing
-// which table a row came from. Boarding events stay for non-stud reasons
-// (grow-out, foster, owner travel, …) — only the stud-reason duplicate goes
-// away: one row per physical trip now, sourced from whichever table owns it.
+// awayBoard.js — "away from home" rows from boarding events (Event.event_type ===
+// 'boarding'), normalized to one view-model so board.js, today.js, and
+// dashboard.js render/count them the same way. A stud service's trip is a
+// boarding event too (logged when the service is saved, studRules.
+// studBoardingPrefill); the service's own dates never make a row.
 import { eventRepo } from './eventRepo.js';
-import { studServiceRepo } from './studServiceRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { isScoped, subjectInScope } from './kennelScope.js';
 
@@ -46,11 +43,8 @@ async function scopeRows(rows) {
 // Sorted soonest-return-first, open-ended stays last — same ordering
 // eventRepo.getBoardRows() used before the union.
 export async function getAwayBoardRows() {
-  const [boarding, stud] = await Promise.all([
-    eventRepo.getBoardRows(),
-    studServiceRepo.getBoardRows()
-  ]);
-  const rows = await scopeRows([...boarding.map(fromBoardingEvent), ...stud]);
+  const boarding = await eventRepo.getBoardRows();
+  const rows = await scopeRows(boarding.map(fromBoardingEvent));
   return rows.sort((a, b) => {
     if (!a.returnDate && !b.returnDate) return 0;
     if (!a.returnDate) return 1;

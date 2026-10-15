@@ -30,6 +30,7 @@ import { getSaleFeeCredit } from './incomeView.js';
 import { saleRepo } from './saleRepo.js';
 import { contractRepo } from './contractRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
+import { ourRole } from './studRules.js';
 import { eventRepo } from './eventRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { expectedPricing } from './saleDefaults.js';
@@ -463,10 +464,10 @@ export async function buildPartnerBundle(contact) {
   for (const ss of services) {
     const our = await dogRepo.getById(ss.our_dog_id);
     const partner = ss.partner_dog_id ? await dogRepo.getById(ss.partner_dog_id) : null;
-    // Direction decides which side is the stud vs. the dam: outgoing = our dog
-    // is the stud, incoming = our dog is the dam.
-    const studDog = ss.direction === 'incoming' ? partner : our;
-    const damDog = ss.direction === 'incoming' ? our : partner;
+    // Which side is the stud: our dog's sex (studRules.ourRole).
+    const ourIsDam = ourRole(ss, [our, partner].filter(Boolean)) === 'dam';
+    const studDog = ourIsDam ? partner : our;
+    const damDog = ourIsDam ? our : partner;
 
     const hasPick = FEE_STRUCTURES_WITH_PICK.includes(ss.fee_structure);
 

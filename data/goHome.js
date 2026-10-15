@@ -103,3 +103,20 @@ export const boardingEvent = (pup, start, end = '') => ({
   subject_type: 'dog', subject_id: pup.id, event_type: 'boarding', event_date: start,
   ...(end ? { event_end_date: end } : {}), title: BOARDING_TITLE, details: { boarding_reason: 'Deferred pickup' }
 });
+
+// The sold dog's changes when its sale is Delivered and she says how it leaves her
+// roster (Pro, `externalOwnership`): 'external' (the family owns it now: External,
+// status external_reference, owner = `ownerId` when given) or 'co_owned' (she keeps
+// a share: Co-owned, the buyer added as a co-owner). → the changes, or null.
+// The Sale page's delivery prompt and Kels's check-in both write these.
+export function deliveredOwnershipChanges(dog, choice, { ownerId = null, buyerId = null, today } = {}) {
+  if (!dog) return null;
+  if (choice === 'external') {
+    return { ownership_type: 'external', status: 'external_reference', status_date: today, ...(ownerId ? { owner_contact_id: ownerId } : {}) };
+  }
+  if (choice === 'co_owned') {
+    const coOwners = dog.co_owner_contact_ids || [];
+    return { ownership_type: 'co_owned', ...(buyerId && !coOwners.includes(buyerId) ? { co_owner_contact_ids: [...coOwners, buyerId] } : {}) };
+  }
+  return null;
+}

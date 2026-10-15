@@ -35,14 +35,14 @@ import {
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces
 } from '../data/waitlistRules.js';
 import {
-  formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq, READY_TIMING_LABEL,
-  MATCHING_NOTICE, matchingPrefKeys
+  formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq
 } from '../data/waitlistForm.js';
 import {
   WAITLIST_ENTRY_STATUS, WAITLIST_PREF_SEX, WAITLIST_LISTEN_MODE, WAITLIST_OFFER_OUTCOME,
-  WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, cleanPurposes, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, RELEASED_SALE_STATUSES, descriptor
+  WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, RELEASED_SALE_STATUSES, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
+import { applicationFields, answerField, prefField as prefFieldHtml, privateField, readAnswers, readPrefs } from '../assets/waitlistApplicationForm.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
@@ -760,81 +760,12 @@ function checkList(items, selected, attr) {
   return items.map(({ id, label }) => `<label class="check-inline"><input type="checkbox" ${attr}="${esc(id)}"${selected.includes(id) ? ' checked' : ''}> ${esc(label)}</label>`).join('');
 }
 
-// One application answer as a form field, by her question's answer type (Spec
-// §15.1). Fields carry data-answer="<question id>" so readForm never depends on
-// element ids built from her question ids.
-function answerField(q, value) {
-  const req = q.key === 'name' ? ' <span class="req">*</span>' : '';
-  const help = q.help ? `<span class="field-hint">${esc(q.help)}</span>` : '';
-  const attr = `data-answer="${esc(q.id)}" aria-label="${esc(q.label)}"`;
-  const v = value ?? '';
-  let input;
-  let wide = false;
-  if (q.type === 'long_text') {
-    input = `<textarea ${attr}>${esc(v)}</textarea>`;
-    wide = true;
-  } else if (q.type === 'single_choice') {
-    const opts = [...(q.options || [])];
-    if (v && !opts.includes(v)) opts.push(v);
-    input = `<select ${attr}><option value="">—</option>${opts.map((o) => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
-  } else if (q.type === 'checkboxes') {
-    const picked = Array.isArray(v) ? v : String(v).split(',').map((x) => x.trim()).filter(Boolean);
-    const opts = [...(q.options || [])];
-    for (const x of picked) if (!opts.includes(x)) opts.push(x);
-    input = `<div class="check-group">${opts.map((o) => `<label class="check-inline"><input type="checkbox" data-answer-cb="${esc(q.id)}" value="${esc(o)}"${picked.includes(o) ? ' checked' : ''}> ${esc(o)}</label>`).join('') || '<span class="faint">No options yet.</span>'}</div>`;
-    wide = true;
-  } else if (q.type === 'yes_no') {
-    const cur = answerText(q, v);
-    input = `<select ${attr}><option value="">—</option><option value="yes"${cur === 'Yes' ? ' selected' : ''}>Yes</option><option value="no"${cur === 'No' ? ' selected' : ''}>No</option></select>`;
-  } else {
-    const type = { number: 'number', date: 'date', email: 'email' }[q.type] || 'text';
-    input = `<input ${attr} type="${type}" value="${esc(v)}">`;
-  }
-  return `<div class="field${wide ? ' field-wide' : ''}"><label>${esc(q.label)}${req}</label>${input}${help}</div>`;
-}
-
-// The four preference fields. Their answers live on the entry's pref_* fields, so
-// they keep fixed element ids; `label` is her wording on the new-application form.
-function prefField(key, e, label) {
-  // A stored breed that isn't one of the kennel's (typed before this was a
-  // dropdown, or imported) stays selectable, flagged, so saving never clears it.
-  const current = e.pref_breed || '';
-  const known = resolveBreed(current, ctx.breeds);
-  const breedOpts = `<option value="">Any breed</option>`
-    + ctx.breeds.map((b) => `<option value="${esc(b)}"${known && b === known ? ' selected' : ''}>${esc(b)}</option>`).join('')
-    + (current && known === null ? `<option value="${esc(current)}" selected>${esc(current)} (not one of your breeds)</option>` : '');
-  switch (key) {
-    case 'pref_sex':
-      return `<div class="field"><label>${esc(label || 'Sex')}</label><select id="f-pref_sex">${options(WAITLIST_PREF_SEX, e.pref_sex || 'any')}</select></div>`;
-    case 'pref_breed':
-      return `<div class="field"><label>${esc(label || 'Breed')}</label><select id="f-pref_breed">${breedOpts}</select>
-        <span class="field-hint">${ctx.breeds.length ? 'Only pups of this breed are offered to them.' : 'No breeds yet: give this kennel\'s dogs a breed, or add preferred breeds on the kennel page.'}${current && known === null ? ' <strong>Their current breed doesn\'t match any of your dogs\' breeds, so no pup will match it. Pick the right one.</strong>' : ''}</span></div>`;
-    case 'pref_purposes': {
-      const picked = cleanPurposes(e.pref_purposes);
-      return `<div class="field field-wide"><label>${esc(label || 'Looking for')}</label>
-        <div>${PLACEMENT_PURPOSE.map((p) => `<label class="check-inline"><input type="checkbox" data-purpose="${esc(p.value)}"${picked.includes(p.value) ? ' checked' : ''}> ${esc(p.label)}</label>`).join(' ')}</div>
-        <span class="field-hint">Only pups whose intended registration fits are offered to them (pet and performance → Limited or None, show → Full, breeding → Full or None, co-own → Co-own). None ticked: any registration.</span></div>`;
-    }
-    case 'ready_timing':
-      return `<div class="field"><label>${esc(label || READY_TIMING_LABEL)} <span class="req">*</span></label><select id="f-ready_timing">${options(WAITLIST_READY_TIMING, e.ready_timing || '', '— Choose —')}</select>
-        <span class="field-hint">Anything but ASAP puts them on hold: no offers (so no passes used) until that many months after their fee is received, or approval if there's no fee (6+ months → 6).</span></div>`;
-    case 'pref_colors':
-      return `<div class="field"><label>${esc(label || 'Colors')}</label><input id="f-pref_colors" type="text" value="${esc((e.pref_colors || []).join(', '))}" placeholder="e.g. brindle, seal">
-        <span class="field-hint">${ctx.config.color_matching ? 'Color matching is on: only pups with one of these colors are offered.' : 'Notes only. Color matching is off in your waitlist settings.'}</span></div>`;
-    default: return '';
-  }
-}
+// Her application's fields, shared with Kels (assets/waitlistApplicationForm.js).
+const prefField = (key, e, label) => prefFieldHtml(key, e, { label, breeds: ctx.breeds, config: ctx.config });
 
 // The questions a draft's answers are read from: her form for a new application,
 // else the entry's own questions (its saved wording plus anything added since).
 const draftQuestions = () => (ctx.mode === 'new' ? ctx.form.filter(isAnswerQuestion) : entryQuestions(ctx.draft, ctx.form));
-
-// "List privately" (Spec §15.3): their name shows as "A***** K" on the public list.
-// Online, they ask on the application and she approves; here she sets it herself.
-function privateField(e) {
-  return `<div class="field field-wide"><label class="check-inline"><input id="f-private_listing" type="checkbox"${e.private_listing ? ' checked' : ''}> Show their name privately on the public list</label>
-    <span class="field-hint">Their first name shows as its first letter and an asterisk for each letter after it, then their last initial (Andrea Kim → A***** K). Their place in line is the same.</span></div>`;
-}
 
 function renderEdit() {
   const e = ctx.draft;
@@ -858,22 +789,8 @@ function renderEdit() {
     <span class="field-hint">Only you assign programs. Families never pick one.</span></div>`;
 
   // A new application follows her form, in her order and wording, so typing one in
-  // matches what families will see online. The public-list notice is shown so she
-  // can tell the family.
-  // Her matching notice heads the first preference question that filters offers.
-  const matchKeys = matchingPrefKeys(ctx.config);
-  const firstMatch = ctx.form.find((q) => matchKeys.includes(q.key));
-  const matchNotice = `<div class="field field-wide"><div class="card" style="margin:0;padding:10px 12px;">
-      <strong>Matching you with a pup</strong><p style="margin:6px 0 0;">${esc(MATCHING_NOTICE)}</p></div></div>`;
-  const newForm = () => ctx.form.map((q) => {
-    if (q.type === 'preference') return (q === firstMatch ? matchNotice : '') + prefField(q.key, e, q.label);
-    if (q.type === 'notice') {
-      return `<div class="field field-wide"><div class="card" style="margin:0;padding:10px 12px;background:var(--surface-2, transparent);">
-        <strong>${esc(q.label)}</strong><p style="margin:6px 0 0;white-space:pre-line;">${esc(q.help)}</p>
-        <span class="field-hint">Every applicant is told this. Make sure this family has heard it.</span></div></div>${privateField(e)}`;
-    }
-    return answerField(q, app[q.id]);
-  }).join('');
+  // matches what families will see online (waitlistApplicationForm.applicationFields).
+  const newForm = () => applicationFields({ form: ctx.form, config: ctx.config, breeds: ctx.breeds, entry: e });
 
   // Her FAQ heads the application, as families will see it online (Spec §15.8).
   const faq = formFaq(ctx.config);
@@ -932,30 +849,15 @@ function renderEdit() {
 function readForm() {
   const val = (id) => document.getElementById(id)?.value ?? '';
   const has = (id) => Boolean(document.getElementById(id));
-  const application = { ...(ctx.draft.application || {}) };
   const questions = draftQuestions();
-  for (const q of questions) {
-    if (q.type === 'checkboxes') {
-      application[q.id] = [...els.body.querySelectorAll('input[data-answer-cb]')]
-        .filter((el) => el.dataset.answerCb === q.id && el.checked).map((el) => el.value);
-      continue;
-    }
-    const el = [...els.body.querySelectorAll('[data-answer]')].find((x) => x.dataset.answer === q.id);
-    if (!el) continue;
-    application[q.id] = q.type === 'long_text' ? el.value : el.value.trim();
-  }
+  const application = readAnswers(els.body, questions, ctx.draft.application || {});
   const out = {
-    pref_sex: val('f-pref_sex') || 'any',
-    pref_breed: val('f-pref_breed').trim(),
-    pref_purposes: [...els.body.querySelectorAll('[data-purpose]')].filter((x) => x.checked).map((x) => x.dataset.purpose),
-    pref_colors: val('f-pref_colors').split(',').map((s) => s.trim()).filter(Boolean),
-    ready_timing: val('f-ready_timing') || null,
+    ...readPrefs(els.body),
     waitlist_program_id: val('f-program') || null,
     application,
     application_questions: snapshotQuestions(questions),
     notes: val('f-notes')
   };
-  if (has('f-private_listing')) out.private_listing = document.getElementById('f-private_listing').checked;
   if (has('f-applied_date')) out.applied_date = val('f-applied_date') || ctx.draft.applied_date || todayYMD();
   // The fee date is the position anchor (waitlistRules.anchorDate), so it can be
   // corrected but never blanked here: a cleared box keeps the date it had.

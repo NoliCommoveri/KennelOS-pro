@@ -629,7 +629,9 @@ export async function saveGuidedLitter(draft, { onProgress = () => {} } = {}) {
     const sire = await dogRepo.getById(sireId);
     const fee = draft.stud.fee_structure || null;
     const ss = await studServiceRepo.create({
-      direction: 'incoming', our_dog_id: damId, partner_dog_id: sireId,
+      // Who travelled isn't asked here: shipped for AI, else our dam went to him.
+      direction: (draft.stud.type || methodType(draft.method)) === 'ai' ? 'shipped' : 'to_partner',
+      our_dog_id: damId, partner_dog_id: sireId,
       partner_contact_id: sire?.owner_contact_id || null,
       status: 'completed', kennel_id: kennelId, pairing_id: pairingId,
       type: draft.stud.type || methodType(draft.method),

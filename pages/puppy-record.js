@@ -330,10 +330,12 @@ async function coverHtml(pups) {
     }
   }
   const today = todayYMD();
+  // Kels passes the optional checks she ticked (&checks=chip,…); without it, all of them.
+  const checks = param('checks') == null ? null : param('checks').split(',').filter(Boolean);
   const rows = await Promise.all(pups.map(async ({ dog, sale, events }) => {
     const contracts = sale && editionFlags.contracts ? await contractRepo.getBySale(sale.id) : [];
     const ready = readiness({
-      pup: dog, sale, events, contracts, litter: littersById.get(dog.litter_id) || null, today, flags: editionFlags,
+      pup: dog, sale, events, contracts, litter: littersById.get(dog.litter_id) || null, today, flags: editionFlags, checks,
       hasBreedSchedule: schedules.get((dog.breed || '').trim()) || false
     });
     const family = sale?.buyer_contact_id ? contactsById.get(sale.buyer_contact_id)?.name || '' : '';

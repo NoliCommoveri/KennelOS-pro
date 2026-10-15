@@ -12,6 +12,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { eventRepo, testTokensOf } from '../data/eventRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
+import { pickPupDefaults } from '../data/studRules.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { getMyContactId } from '../data/kennelSetup.js';
 import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
@@ -727,6 +728,8 @@ async function doSave() {
         candidate.kennel_id = await resolveKennelIdForWrite();
       }
       saved = await dogRepo.create(candidate);
+      // The pick is in: the stud service stops asking (studRules.pickDue).
+      if (ctx.pickServiceId) await studServiceRepo.update(ctx.pickServiceId, { pick_status: 'claimed' });
       location.href = `dog.html?id=${encodeURIComponent(saved.id)}`;
       return;
     }
@@ -1474,6 +1477,13 @@ async function main() {
   if (isNew) {
     ctx.mode = 'new';
     ctx.draft = blankDog();
+    // ?pick=<stud service id> (Today's "Ready to add your pick puppy?"): the pick
+    // puppy from our stud's outside breeding, prefilled (studRules.pickPupDefaults).
+    const pick = param('pick') ? await studServiceRepo.getById(param('pick')) : null;
+    if (pick) {
+      ctx.pickServiceId = pick.id;
+      Object.assign(ctx.draft, pickPupDefaults(pick, ctx.dogsById.get(pick.our_dog_id)));
+    }
     renderTitle();
     renderCapBanner();
     renderEdit();

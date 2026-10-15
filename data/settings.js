@@ -24,7 +24,9 @@ const KEYS = {
   cloudDirtySince: 'kennelOS.cloudDirtySince',
   cloudOfferPending: 'kennelOS.cloudOfferPending',
   cloudRestoredAt: 'kennelOS.cloudRestoredAt',
-  guidedLitterDraft: 'kennelOS.guidedLitterDraft'
+  guidedLitterDraft: 'kennelOS.guidedLitterDraft',
+  prepChecks: 'kennelOS.prepChecks',
+  studTripsMigrated: 'kennelOS.studTripsMigrated'
 };
 
 export function getLastBackupDate() {
@@ -364,6 +366,16 @@ export function markExpensesMigrated() {
   localStorage.setItem(KEYS.expensesMigrated, '1');
 }
 
+// Stud-trip migration flag — set once every in-person stud service's trip has a
+// boarding event (studServiceRepo.migrateStudTrips). Cleared by Reset App.
+export function getStudTripsMigrated() {
+  return localStorage.getItem(KEYS.studTripsMigrated) === '1';
+}
+
+export function markStudTripsMigrated() {
+  localStorage.setItem(KEYS.studTripsMigrated, '1');
+}
+
 // --- Guided tour (first-run wizard) -----------------------------------------
 // Wizard Runtime Spec v1 §2.1. `wizardStatus` is absent → treated as 'unseen';
 // `wizardStepIndex` is written on every advance/retreat regardless of status, so
@@ -458,6 +470,23 @@ export function setGuidedLitterDraft(draft) {
 
 export function clearGuidedLitterDraft() {
   localStorage.removeItem(KEYS.guidedLitterDraft);
+}
+
+// --- Kels's "Pups are going home": the optional checks she ticked last time ----
+// (assets/prepPupsUI.js), ticked again next time. Device-only UI state; null until
+// she's answered once. In KEYS, so Reset App clears it.
+export function getPrepChecks() {
+  try {
+    const v = JSON.parse(localStorage.getItem(KEYS.prepChecks) || 'null');
+    return Array.isArray(v) ? v.filter((k) => typeof k === 'string') : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setPrepChecks(keys) {
+  localStorage.setItem(KEYS.prepChecks, JSON.stringify(keys || []));
+  return keys;
 }
 
 // --- Cloud backup dirty signal (Cloud Phase 1 plan §3.2) ---------------------

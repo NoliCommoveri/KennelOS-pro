@@ -12,6 +12,7 @@
 // "don't ask me again" can remember it (nudgeState, prefixed `tidy:`). Order is
 // the order she raises them in: TIDY_KINDS.
 import { RELEASED_SALE_STATUSES } from './vocab.js';
+import { studParents } from './studRules.js';
 
 export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
@@ -179,16 +180,12 @@ export function deliveredOwnedFindings(dogs, sales) {
 
 // --- Stud services (Pro) ---------------------------------------------------------
 
-// The dam and sire of a stud service: incoming = our dog is the dam.
-export const studParents = (s) => (s.direction === 'incoming'
-  ? { damId: s.our_dog_id, sireId: s.partner_dog_id }
-  : { damId: s.partner_dog_id, sireId: s.our_dog_id });
-
 // A stud service whose date has passed (returned, else sent; or Completed) with
 // no breeding linked. `candidates` are breedings of the same two dogs, opened no
 // earlier than two weeks before it was sent, that no other stud service claims:
 // the "link it" answers. None means she can create one.
-export function studFindings(studServices, pairings, today) {
+// `dogs`: every dog (the stud is whichever of the two is male, studRules.studParents).
+export function studFindings(studServices, pairings, today, dogs = []) {
   const claimed = new Set(studServices.filter((s) => !s.is_archived && s.pairing_id).map((s) => s.pairing_id));
   const out = [];
   for (const s of studServices) {
@@ -196,7 +193,7 @@ export function studFindings(studServices, pairings, today) {
     const date = s.returned_date || s.sent_date || null;
     const past = s.status === 'completed' || (date && date < today);
     if (!past) continue;
-    const { damId, sireId } = studParents(s);
+    const { damId, sireId } = studParents(s, dogs) || {};
     const since = s.sent_date ? shiftDays(s.sent_date, -14) : null;
     const candidates = pairings.filter((p) => !p.is_archived && p.dam_id === damId && p.sire_id === sireId && !claimed.has(p.id)
       && (!since || (p.planned_date || String(p.created_at || '').slice(0, 10) || since) >= since));
@@ -347,7 +344,7 @@ export function tidyFindings({ litters, pairings, sales, studServices = [], dogs
     ...litterPairingFindings(litters, pairings),
     ...pupParentFindings(litters, dogs),
     ...dogParentFindings(dogs, littersById),
-    ...(flags.studServices ? studFindings(studServices, pairings, today) : []),
+    ...(flags.studServices ? studFindings(studServices, pairings, today, allDogs) : []),
     ...(flags.contactsSection ? breederKennelFindings(contacts) : []),
     ...(flags.contactsSection ? kennelContactFindings(kennels, contacts, allDogs) : []),
     ...duplicateDogFindings(allDogs),

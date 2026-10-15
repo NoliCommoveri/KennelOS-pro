@@ -131,7 +131,8 @@ export const SALE_REFERENCES = [
 
 // --- StudService: what can point at a StudService (Stage 4) ----------------
 export const STUD_SERVICE_REFERENCES = [
-  { table: 'contracts', field: 'related_stud_service_id', label: 'documented by a contract' }
+  { table: 'contracts', field: 'related_stud_service_id', label: 'documented by a contract' },
+  { table: 'expenses', field: 'stud_service_id', label: 'its stud fee expense' }
 ];
 
 // --- Contract: a leaf entity — nothing points at a Contract (Stage 4). Always

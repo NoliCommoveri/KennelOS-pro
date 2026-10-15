@@ -309,7 +309,7 @@ export const WIZARD_STEPS = [
     id: 'stud-list', hub: 'Placements', page: 'stud-services.html',
     selector: '#stud-service-list',
     title: 'Stud services',
-    body: 'Agreements with other breeders for stud services, tracked whether you own the dam or the sire. Outgoing stud services generate income; for an incoming one, record it as an expense in the pairing history of the resulting pairing.'
+    body: 'Agreements with other breeders for stud services, tracked whether you own the dam or the sire. Your stud\'s services earn income; when it\'s your dam, saving the completed service offers to log the fee as an expense. Either dog can travel either way: set who travels on each one.'
   },
   {
     id: 'stud-profile', hub: 'Placements', page: 'stud-service.html', anchor: 'studServiceBirch',

@@ -166,9 +166,9 @@ const HELP = {
   },
 
   stud_service: {
-    match: 'Each row is matched by your dog + the partner dog + direction. If a stud service with that pair already exists, the row goes to review so you can choose between updating it and adding a repeat service.',
+    match: 'Each row is matched by your dog + the partner dog. If a stud service with that pair already exists, the row goes to review so you can choose between updating it and adding a repeat service.',
     columns: {
-      direction: { need: 'required', values: STUD_SERVICE_DIRECTION, text: '"Outgoing" when your dog is the stud, "Incoming" when your dog is the dam.' },
+      direction: { need: 'required', aliases: ['who_travels'], values: STUD_SERVICE_DIRECTION, text: 'Who travels: "Our dog goes to them", "Their dog comes to us", or "No one travels" for AI / shipped (ours, theirs and AI work too). Which dog is the stud comes from your dog\'s sex.' },
       our_dog_registered_name: { need: 'required', aliases: ['our_dog_name'], text: DOG_REF('your dog') },
       partner_dog_registered_name: { need: 'required', aliases: ['partner_dog_name'], text: 'The other dog\'s registered or call name. It must already exist in KennelOS (add it as an external dog first if needed).' },
       partner_contact_name: { need: 'new', text: 'The other dog\'s owner. If no contact has that name yet, a new contact (type Breeder) is created when you commit.' },

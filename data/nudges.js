@@ -62,6 +62,7 @@ import {
 } from './waitlistActions.js';
 import { offerSpecs } from './waitlistOutbox.js';
 import { contractRepo } from './contractRepo.js';
+import { ourStudPairingIds, studParents, pickDue, serviceDate, boardingEndedUpdate } from './studRules.js';
 import { reviewTitle } from './integrationEvents.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
@@ -269,11 +270,39 @@ export async function computeNudges() {
   // so the overdue-pairing rule below is a Set lookup, not a per-pairing query
   // (getForPairing counts archived litters too, matching includeArchived above).
   const pairingIdsWithLitter = new Set(litters.map((l) => l.pairing_id).filter(Boolean));
+  // Breedings of our stud to somebody else's dam (linked to an outgoing stud
+  // service): the litter is the dam's owner's, so no rule asks her to record it.
+  const outgoingPairings = ourStudPairingIds(studServices, dogsById);
 
   const nudges = [];
 
+  // A stud service's trip boarded and the boarding has ended, but the service
+  // doesn't say so yet (studRules.boardingEndedUpdate): offer to bring its dates
+  // and status in line. It stands in for the status nudge below on that service.
+  const boardingUpdated = new Set();
+  for (const s of scopedStudServices) {
+    const u = boardingEndedUpdate(s, events, today);
+    if (!u) continue;
+    boardingUpdated.add(s.id);
+    const who = dogsById.get(u.boarding.subject_id)?.call_name || 'The dog';
+    const said = [
+      u.changes.returned_date || u.changes.sent_date ? `dates ${u.boarding.event_date} to ${u.boarding.event_end_date}` : '',
+      u.changes.status ? 'mark it completed' : ''
+    ].filter(Boolean).join(', ');
+    nudges.push({
+      key: `studboard:${s.id}:${u.boarding.event_end_date}`,
+      title: `${who}'s stud-service stay ended ${u.boarding.event_end_date} — update the stud service?`,
+      detail: `${studPartnerLabel(s, dogsById)}: ${said}.`,
+      subjectHref: `stud-service.html?id=${encodeURIComponent(s.id)}`,
+      actions: [
+        { label: 'Update it', run: async () => { await studServiceRepo.update(s.id, u.changes); } }
+      ]
+    });
+  }
+
   // §4.2 — stud-service status nudges.
   for (const s of scopedStudServices) {
+    if (boardingUpdated.has(s.id)) continue;
     let n = null;
     if (s.returned_date && s.returned_date < today && ['arranged', 'in_progress'].includes(s.status)) {
       n = studCompletedNudge(s, dogsById);
@@ -313,7 +342,7 @@ export async function computeNudges() {
     const isDone = s.status === 'completed' || (s.returned_date && s.returned_date < today);
     if (!isDone) continue;
     const key = `studpair:${s.id}`;
-    const damId = s.direction === 'incoming' ? s.our_dog_id : s.partner_dog_id;
+    const damId = studParents(s, dogsById)?.damId;
     if (damId && pairingExistsForDam(pairings, damId, s.sent_date)) continue;
     nudges.push({
       key,
@@ -356,6 +385,7 @@ export async function computeNudges() {
   // own key, so dismissing it early doesn't hide the overdue nudge below.
   for (const p of scopedPairings) {
     if (!['bred', 'confirmed_pregnant'].includes(p.status) || !p.expected_due_date) continue;
+    if (outgoingPairings.has(p.id)) continue;
     if (p.expected_due_date < today || p.expected_due_date > addDaysToYMD(today, DUE_SOON_DAYS)) continue;
     if (pairingIdsWithLitter.has(p.id)) continue;
     const days = daysBetween(today, p.expected_due_date);
@@ -377,6 +407,7 @@ export async function computeNudges() {
   // Litter" button uses).
   for (const p of scopedPairings) {
     if (!PRE_WHELP_STATUSES.includes(p.status) || !p.expected_due_date || p.expected_due_date >= today) continue;
+    if (outgoingPairings.has(p.id)) continue;
     if (pairingIdsWithLitter.has(p.id)) continue;
     nudges.push({
       key: `pairingoverdue:${p.id}`,
@@ -442,7 +473,7 @@ export async function computeNudges() {
     // dam (our stud's outside breeding: her litter is usually not ours to record),
     // and for a pairing whose dates are more than LITTER_RECORD_WINDOW_DAYS old, so
     // historical pairings entered without their litters don't flood Today.
-    if (p.status === 'whelped' && !pairingIdsWithLitter.has(p.id)) {
+    if (p.status === 'whelped' && !pairingIdsWithLitter.has(p.id) && !outgoingPairings.has(p.id)) {
       const dam = dogsById.get(p.dam_id);
       if (dam && (dam.ownership_type === 'external' || dam.status === 'external_reference')) continue;
       const refDate = p.expected_due_date || p.last_observed_date || p.planned_date || (p.created_at || '').slice(0, 10);
@@ -464,6 +495,25 @@ export async function computeNudges() {
   // Archived ones too (an archived pup can still have an open sale), so this one
   // rule reads the dogs again with them.
   const allDogs = await dogRepo.getAll({ includeArchived: true });
+
+  // An outgoing stud service paid with a pick of the litter: once the pick should
+  // be ready (63 + 56 days after the service, studRules.pickDue), ask whether it's
+  // ready to add to her dogs. Done when a puppy of that stud out of that dam is on
+  // file (archived ones count) or the pick is marked claimed.
+  for (const s of scopedStudServices) {
+    if (!pickDue(s, allDogs, today)) continue;
+    nudges.push({
+      key: `studpick:${s.id}`,
+      title: `Ready to add your pick puppy from ${studPartnerLabel(s, dogsById)}?`,
+      detail: `The litter should be ready to go home about now (bred ${serviceDate(s)}).`,
+      subjectHref: `stud-service.html?id=${encodeURIComponent(s.id)}`,
+      actions: [
+        { label: 'Add the puppy', run: async () => { location.href = `dog.html?new=1&pick=${encodeURIComponent(s.id)}`; } },
+        { label: 'Not getting one', run: async () => { await studServiceRepo.update(s.id, { pick_status: 'waived' }); } }
+      ]
+    });
+  }
+
   nudges.push(...deceasedDogNudges(dogsInScope(allDogs.filter((d) => d.status === 'deceased')), {
     pairings, sales, dogsById: new Map(allDogs.map((d) => [d.id, d])), littersById: new Map(litters.map((l) => [l.id, l])), today
   }));

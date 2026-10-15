@@ -1204,6 +1204,13 @@ function descriptorLabel(vocab, value) {
 // arrangements between the same pair. Rather than silently overwrite, any
 // existing match is always routed to needs-review as an ambiguous match (the
 // user decides update-vs-create), never auto-treated as an update.
+// Other words for who travels on a stud service row (normEnum keys).
+const STUD_DIRECTION_WORDS = {
+  ours: 'to_partner', our_dog: 'to_partner', we_travel: 'to_partner', to_them: 'to_partner',
+  theirs: 'to_us', their_dog: 'to_us', they_travel: 'to_us', to_us: 'to_us',
+  ai: 'shipped', shipped: 'shipped', 'ai_/_shipped': 'shipped', none: 'shipped', no_one: 'shipped'
+};
+
 const STUD_SERVICE_MAPPING = {
   entity: 'stud_service',
   label: 'Stud Services',
@@ -1232,7 +1239,7 @@ const STUD_SERVICE_MAPPING = {
   buildIndex(existing) {
     const byKey = new Map();
     for (const s of existing) {
-      const key = nkParts(s.our_dog_id, s.partner_dog_id, s.direction);
+      const key = nkParts(s.our_dog_id, s.partner_dog_id);
       if (!key) continue;
       if (!byKey.has(key)) byKey.set(key, []);
       byKey.get(key).push(s);
@@ -1244,8 +1251,9 @@ const STUD_SERVICE_MAPPING = {
     const reasons = [];
     const record = {};
 
-    const direction = normEnum(STUD_SERVICE_DIRECTION, col(row, 'direction'));
-    if (direction === null) reasons.push(`Unrecognized direction "${col(row, 'direction')}".`);
+    // Who travels (decided 2026-10-15); a few plain words read as one.
+    const direction = normEnum(STUD_SERVICE_DIRECTION, col(row, 'direction', 'who_travels'), STUD_DIRECTION_WORDS);
+    if (direction === null) reasons.push(`Unrecognized "who travels" "${col(row, 'direction', 'who_travels')}".`);
     else if (direction) record.direction = direction;
 
     const ourDogName = col(row, 'our_dog_registered_name', 'our_dog_name');
@@ -1297,14 +1305,13 @@ const STUD_SERVICE_MAPPING = {
     // pairing_id is deliberately never set via CSV (Addendum §A1.2) — link it
     // later from the Stud Service Detail screen.
 
-    const key = (ourDogId && partnerDogId && direction) ? nkParts(ourDogId, partnerDogId, direction) : null;
+    const key = (ourDogId && partnerDogId) ? nkParts(ourDogId, partnerDogId) : null;
     let status_ = 'create';
     let match = null;
     if (!key) {
       status_ = 'review';
       if (!ourDogName) reasons.push('No our_dog_registered_name — cannot form a natural key.');
       if (!partnerDogName) reasons.push('No partner_dog_registered_name — cannot form a natural key.');
-      if (!direction) reasons.push('No direction — cannot form a natural key.');
     } else {
       const candidates = index.byKey.get(key) || [];
       if (candidates.length === 0) {
@@ -1315,7 +1322,7 @@ const STUD_SERVICE_MAPPING = {
         // don't guess: the user picks "Update match" (and which one) or "Create new".
         status_ = 'review';
         match = candidates[0];
-        reasons.push('An existing stud service already matches this dog pair + direction. Is this an update to that arrangement, or a new repeat service? Choose "Update match" (pick the right one if more than one exists) or "Create new".');
+        reasons.push('An existing stud service already matches this dog pair. Is this an update to that arrangement, or a new repeat service? Choose "Update match" (pick the right one if more than one exists) or "Create new".');
       }
     }
 

@@ -11,6 +11,7 @@ import {
 import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft } from './data/settings.js';
 import { renderAssistButton } from './assets/kelsChat.js';
 import { expenseRepo } from './data/expenseRepo.js';
+import { studServiceRepo } from './data/studServiceRepo.js';
 import { renderSampleBanner } from './assets/sampleDataUI.js';
 import { maybeShowKennelSetupPrompt, renderKennelBanner } from './assets/kennelSetupUI.js';
 import { renderWizardMenuEntry, runWizardStep } from './assets/wizardUI.js';
@@ -174,6 +175,8 @@ async function boot() {
   // One-time fold of legacy Event.cost values into the Financials ledger. Guarded
   // by a settings flag inside the repo, so it's a cheap no-op after the first run.
   expenseRepo.migrateEventCosts().catch(() => { /* non-fatal */ });
+  // Stud trips → boarding events, and pre-"who travels" directions (studServiceRepo).
+  studServiceRepo.migrateStudTrips().catch(() => { /* non-fatal */ });
   renderSampleBanner();
   renderKennelBanner();
   renderWizardMenuEntry();

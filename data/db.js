@@ -178,6 +178,14 @@ db.version(4).stores({
   kennels: 'id, public_id, waitlist_fee_account_id, is_archived'
 });
 
+// version(5), 2026-10-15: `expenses.stud_service_id`, the stud service whose fee an
+// expense records (our dam's, logged from the Stud Service page), indexed for the
+// STUD_SERVICE_REFERENCES delete guard and the "already logged?" check. Re-lists the
+// expenses index string from version(1) with the one index added.
+db.version(5).stores({
+  expenses: 'id, event_id, [subject_type+subject_id], category, expense_date, account_id, stud_service_id, is_archived'
+});
+
 // --- Schema upgrade hand-off between open copies ---------------------------
 // A new version(N) can only install once every other open copy of the app on
 // this device lets go of the older database. A live copy does that by itself

@@ -84,6 +84,9 @@ function normalize(data) {
     amount: (isMileage && rate != null) ? round2(miles * rate) : Number(data.amount),
     category: data.category || 'other',
     event_id: data.event_id || null,
+    // The stud service whose fee this records (our dam's stud fee, logged from the
+    // Stud Service page; studRules.studFeeExpenseDue). Indexed, in STUD_SERVICE_REFERENCES.
+    stud_service_id: data.stud_service_id || null,
     // A human-facing receipt/invoice number (plain, unindexed) — the vendor's
     // own number printed on the receipt, not an id of anything in KennelOS.
     // Auto-filled by OCR off the attached receipt photo when found
@@ -128,6 +131,11 @@ export const expenseRepo = {
     const merged = normalize({ ...existing, ...changes });
     validateExpense(merged);
     return base.update(id, merged);
+  },
+
+  // The expense(s) recording a stud service's fee (expenses.stud_service_id).
+  getByStudService(studServiceId) {
+    return db.expenses.where('stud_service_id').equals(studServiceId).toArray();
   },
 
   // Every expense attached to one subject (a dog / litter / pairing / kennel),
