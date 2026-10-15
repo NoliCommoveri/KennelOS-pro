@@ -1166,6 +1166,22 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
 .kels-choice.has-sub .kels-choice-label::after { content: "\00a0›"; font-weight: 400; }
 .kels-choice.open .kels-choice-label::after { content: ""; }
 .kels-choice.primary .kels-choice-sub, .kels-choice.primary .kels-choice-hint { color: #e5f0ea; }
+/* A starrable task: the button, its ☆ in the corner (its own tap target), and when
+   it's open, the "Don't move this up" button for one she uses often. */
+.kels-choice-cell { position: relative; display: grid; gap: 4px; align-content: start; }
+.kels-choice-cell[hidden] { display: none; }
+.kels-choice-cell.open { grid-column: 1 / -1; }
+.kels-choice-cell > .kels-choice { padding-right: 44px; height: 100%; }
+.kels-star {
+  position: absolute; top: 2px; right: 2px; width: 44px; height: 44px; padding: 0;
+  border: 0; background: none; cursor: pointer; font-size: 22px; line-height: 1; color: var(--accent);
+}
+.kels-choice-cell:has(.kels-choice.primary) .kels-star { color: #fff; }
+.kels-star:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: -4px; border-radius: 12px; }
+.kels-choice-note { font-size: 13px; font-weight: 400; color: var(--text-muted); }
+.kels-choice.primary .kels-choice-note { color: #e5f0ea; }
+.kels-choice-aside { display: none; justify-self: end; font: inherit; font-size: 14px; background: none; border: 0; color: var(--accent-dark); text-decoration: underline; cursor: pointer; padding: 6px 4px; min-height: 36px; }
+.kels-choice-cell.open .kels-choice-aside { display: block; }
 .kels-panel { width: min(100%, 560px); background: var(--surface); border: 2px solid var(--accent-soft); border-radius: 16px; border-bottom-right-radius: 5px; padding: 10px 12px; }
 .kels-panel-foot { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 @media (prefers-reduced-motion: reduce) {

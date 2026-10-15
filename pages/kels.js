@@ -4,6 +4,10 @@
 // (assets/kelsChat.js). She's scripted, not a model: every line is written in
 // the task scripts. Who she is (name, line, photo) lives in kelsChat.js `KELS`.
 //
+// She opens with "What do you need help with first?": Finding Something (assets/
+// kelsFindUI.js: where a page or record is, with a button to it) or Doing
+// Something (TASKS), with an unfinished draft offered first.
+//
 // TASKS is her menu. A task is { id, label(s), sub, keywords, available(s),
 // priority(s), run(opts), resumable?, beforeStart?(opts) }. `keywords` are the
 // other words a breeder might search the menu with ("add puppies" for a new
@@ -14,7 +18,8 @@
 // `beforeStart` can redirect a start (an unfinished draft of the same task).
 // URL: ?task=<id> starts that task straight away; &litter=<id> hands it a litter
 // (an Expected litter's birth, or the litter to check on).
-import { createChat, KELS, kelsAvatar, kelsHello } from '../assets/kelsChat.js';
+import { createChat, KELS, kelsAvatar, kelsWelcome } from '../assets/kelsChat.js';
+import { runFindTask } from '../assets/kelsFindUI.js';
 import { runLitterTask, pendingLitterDraft, discardGuidedLitterDraft } from '../assets/guidedLitterUI.js';
 import { runCheckinTask, checkinState } from '../assets/litterCheckinUI.js';
 import { runTidyTask } from '../assets/tidyUpUI.js';
@@ -23,7 +28,9 @@ import { runHealthTask } from '../assets/accountHealthUI.js';
 import { runDogsTask, pendingDogsDraft, discardGuidedDogsDraft } from '../assets/guidedDogsUI.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { isLicenseGated } from '../data/license.js';
-import { param, esc } from '../assets/ui.js';
+import { param, esc, todayYMD } from '../assets/ui.js';
+import { orderTasks, withStart, withStar } from '../data/kelsFavorites.js';
+import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote } from '../data/settings.js';
 import { editionFlags } from '../data/editionConfig.js';
 
 const chat = createChat(document.getElementById('kels-transcript'));
@@ -129,7 +136,8 @@ const TASKS = [
     label: () => 'Tidy up my records',
     sub: 'Find records that don\'t agree, and duplicates, and fix them',
     keywords: ['clean up', 'cleanup', 'fix', 'check', 'mistakes', 'errors', 'duplicate', 'duplicates', 'merge', 'combine', 'same dog', 'mismatch',
-      'parents', 'sire', 'dam', 'pedigree', 'count', 'placed', 'kennel', 'contact', 'breeder', 'stud', 'audit'],
+      'parents', 'sire', 'dam', 'pedigree', 'count', 'placed', 'audit',
+      ...(editionFlags.contactsSection ? ['kennel', 'contact', 'breeder', 'vet', 'veterinarian'] : []), ...(editionFlags.studServices ? ['stud'] : [])],
     available: () => true,
     priority: () => 30,
     run: (opts) => runTidyTask(chat, opts)
@@ -188,17 +196,63 @@ async function handoff(taskId, opts = {}) {
 async function startTask(task, opts = {}) {
   const redirect = await task.beforeStart?.(opts);
   if (redirect) task = taskById(redirect.taskId);
+  // Each start counts toward "You use this often" (data/kelsFavorites.js); a
+  // resumed draft is the same work, not a new start.
+  if (!task.id.startsWith('resume-')) setKelsTaskUse(withStart(getKelsTaskUse(), task.id, todayYMD()));
   running(task);
   return task.run({ ...opts, onExit, handoff, onSaved: () => running(null) });
 }
 
+// The top: unfinished work first, then Finding Something / Doing Something.
 async function menu({ again = false } = {}) {
   const s = await state();
-  const tasks = TASKS.filter((t) => t.available(s)).sort((a, b) => b.priority(s) - a.priority(s));
-  await chat.say(again ? 'What else can I help you with?' : `${kelsHello()} What can I help you do today?`, { typing: again ? 600 : 1300 });
-  const id = await chat.choose(tasks.map((t) => ({ label: t.label(s), sub: t.sub, keywords: t.keywords, value: t.id })),
-    { stagger: 200, search: { placeholder: 'What do you need? Try "add puppies"' }, confirmHint: 'Tap again to start' });
+  const unfinished = TASKS.filter((t) => t.id.startsWith('resume-') && t.available(s));
+  await chat.say(again ? 'What else can I help you with?' : kelsWelcome(), { typing: again ? 600 : 1300 });
+  const pick = await chat.choose([
+    ...unfinished.map((t) => ({ label: t.label(s), value: `task:${t.id}`, primary: true })),
+    { label: 'Finding Something', value: 'find', primary: !unfinished.length },
+    { label: 'Doing Something', value: 'do' }
+  ], { stagger: 150 });
+  if (pick.startsWith('task:')) return startTask(taskById(pick.slice(5)));
+  if (pick === 'find') return runFindTask(chat, { onExit, handoff, tasks: taskCandidates(s) });
+  return doMenu(s);
+}
+
+// Doing Something: her tasks with a search box. Unfinished work first, then the
+// ones she starred, then the ones she uses often, then the state-based priority
+// (data/kelsFavorites.js). Every task but a resumed draft has a ☆.
+async function doMenu(s) {
+  const tasks = TASKS.filter((t) => t.available(s)).map((t) => ({ id: t.id, priority: t.priority(s), unfinished: t.id.startsWith('resume-'), t }));
+  const rows = orderTasks(tasks, { starred: getKelsFavorites(), uses: getKelsTaskUse(), noPromote: getKelsNoPromote() }, todayYMD());
+  await chat.say('Love it! Here\'s what we can do together.', { typing: 600 });
+  const id = await chat.choose(rows.map(({ task: { t, unfinished }, starred, frequent }) => ({
+    label: t.label(s), sub: t.sub, keywords: t.keywords, value: t.id,
+    ...(unfinished ? {} : { star: starred }),
+    ...(frequent ? { note: 'You use this often', noteAction: { label: 'Don\'t move this up', run: dontPromote } } : {})
+  })), { stagger: 200, search: { placeholder: 'What do you need? Try "add puppies"' }, confirmHint: 'Tap again to start', onStar: star });
   await startTask(taskById(id));
+}
+
+// The ☆: starred tasks sit at the top. Starring also undoes "Don't move this up".
+function star(id, on) {
+  const next = withStar({ starred: getKelsFavorites(), noPromote: getKelsNoPromote() }, id, on);
+  setKelsFavorites(next.starred);
+  setKelsNoPromote(next.noPromote);
+}
+
+// One she uses often, kept where its priority puts it until she stars it.
+function dontPromote(id) {
+  setKelsNoPromote([...new Set([...getKelsNoPromote(), id])]);
+}
+
+// Her tasks as Find candidates (data/kelsFind.js): a match offers to start it.
+// A little behind a page of the same words, since she asked to find something.
+function taskCandidates(s) {
+  return TASKS.filter((t) => t.available(s)).map((t) => ({
+    id: `task:${t.id}`, group: 'Something we can do together', title: t.label(s), sub: t.sub,
+    where: 'I can do this with you right now.', taskId: t.id, boost: -0.3,
+    levels: [[t.label(s), ...t.keywords], [t.sub], []]
+  }));
 }
 
 laterBtn.addEventListener('click', async () => {
@@ -214,7 +268,7 @@ async function main() {
   const asked = taskById(param('task'));
   if (!asked) { await menu(); return; }
   // Sent straight to a task: she still greets and asks, and the task is the answer.
-  await chat.say(`${kelsHello()} What can I help you do today?`, { typing: 900 });
+  await chat.say(kelsWelcome(), { typing: 900 });
   chat.you(asked.label(await state()));
   await startTask(asked, { litterId: param('litter') || null });
 }

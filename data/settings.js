@@ -27,6 +27,9 @@ const KEYS = {
   guidedLitterDraft: 'kennelOS.guidedLitterDraft',
   guidedDogsDraft: 'kennelOS.guidedDogsDraft',
   prepChecks: 'kennelOS.prepChecks',
+  kelsFavorites: 'kennelOS.kelsFavorites',
+  kelsTaskUse: 'kennelOS.kelsTaskUse',
+  kelsNoPromote: 'kennelOS.kelsNoPromote',
   studTripsMigrated: 'kennelOS.studTripsMigrated'
 };
 
@@ -509,6 +512,27 @@ export function setPrepChecks(keys) {
   localStorage.setItem(KEYS.prepChecks, JSON.stringify(keys || []));
   return keys;
 }
+
+// --- Kels's menu: her starred tasks, when she started each, and the ones she --
+// said not to move up (data/kelsFavorites.js says what they mean). Device-only:
+// her habits on this device, never in a backup or synced. In KEYS, so Reset App
+// clears them.
+function readJson(key, fallback, ok) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || 'null');
+    return ok(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+const isIdList = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+export const getKelsFavorites = () => readJson(KEYS.kelsFavorites, [], isIdList);
+export function setKelsFavorites(ids) { localStorage.setItem(KEYS.kelsFavorites, JSON.stringify(ids || [])); }
+export const getKelsNoPromote = () => readJson(KEYS.kelsNoPromote, [], isIdList);
+export function setKelsNoPromote(ids) { localStorage.setItem(KEYS.kelsNoPromote, JSON.stringify(ids || [])); }
+export const getKelsTaskUse = () => readJson(KEYS.kelsTaskUse, {}, (v) => v && typeof v === 'object' && !Array.isArray(v));
+export function setKelsTaskUse(uses) { localStorage.setItem(KEYS.kelsTaskUse, JSON.stringify(uses || {})); }
 
 // --- Cloud backup dirty signal (Cloud Phase 1 plan §3.2) ---------------------
 // `cloudDirtyAt` is the ISO time of the latest local data change. Set by ONE

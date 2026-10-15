@@ -17,9 +17,10 @@ import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { eventRepo } from '../data/eventRepo.js';
 import { inScopeOnly, dogsInScope, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { DISPOSITION, OWNERSHIP_TYPE, DOG_STATUS, SALE_STATUS, PAIRING_STATUS, descriptor } from '../data/vocab.js';
+import { DISPOSITION, OWNERSHIP_TYPE, DOG_STATUS, SALE_STATUS, PAIRING_STATUS, EVENT_TYPES, descriptor } from '../data/vocab.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { findDogMatches, matchReason, similarNamed } from '../data/dogSearch.js';
 import { baseFromLitter } from '../data/puppyDefaults.js';
@@ -48,6 +49,8 @@ const KIND_WORDS = {
   'stud-unlinked': ['stud service', 'stud services'],
   'breeder-no-kennel': ['breeder without a kennel', 'breeders without a kennel'],
   'kennel-no-contact': ['kennel without a contact', 'kennels without a contact'],
+  'event-no-vet': ['vet not in your contacts', 'vets not in your contacts'],
+  'no-vet': ['missing vet contact', 'missing vet contacts'],
   'duplicate-dogs': ['possible duplicate dog', 'possible duplicate dogs'],
   'duplicate-contacts': ['possible duplicate contact', 'possible duplicate contacts']
 };
@@ -66,12 +69,13 @@ class Tidy extends FindingsTask {
 
   async load() {
     const flags = editionFlags;
-    const [litters, pairings, sales, allDogs, studServices, contacts, kennels] = await Promise.all([
+    const [litters, pairings, sales, allDogs, studServices, contacts, kennels, vetEvents] = await Promise.all([
       litterRepo.getAll(), pairingRepo.getAll(), saleRepo.getAll(),
       dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
       flags.studServices ? studServiceRepo.getAll() : [],
       contactRepo.getAll({ includeArchived: true }),
-      kennelRepo.getAll({ includeArchived: true })
+      kennelRepo.getAll({ includeArchived: true }),
+      flags.contactsSection ? Promise.all(T.VET_EVENT_TYPES.map((t) => eventRepo.getByType(t))).then((l) => l.flat()) : []
     ]);
     this.dogsById = new Map(allDogs.map((d) => [d.id, d]));
     this.littersById = new Map(litters.map((l) => [l.id, l]));
@@ -85,7 +89,7 @@ class Tidy extends FindingsTask {
       litters: inScopeOnly(litters), pairings, sales: inScopeOnly(sales),
       studServices: inScopeOnly(studServices),
       dogs: dogsInScope(allDogs.filter((d) => !d.is_archived && !d.pedigree_only)),
-      allDogs, contacts: this.contacts, kennels: this.kennels,
+      allDogs, contacts: this.contacts, kennels: this.kennels, vetEvents,
       flags: { contactsSection: flags.contactsSection, studServices: flags.studServices },
       today: this.today
     });
@@ -128,6 +132,8 @@ class Tidy extends FindingsTask {
       case 'stud-unlinked': return this.stud(f);
       case 'breeder-no-kennel': return this.breederKennel(f);
       case 'kennel-no-contact': return this.kennelContact(f);
+      case 'event-no-vet': return this.vetEvents(f);
+      case 'no-vet': return this.noVet(f);
       case 'duplicate-dogs': return this.duplicate(f, 'dog');
       case 'duplicate-contacts': return this.duplicate(f, 'contact');
       default: return null;
@@ -526,43 +532,106 @@ class Tidy extends FindingsTask {
     if (pick === 'pick') {
       // Breeders and people with no kennel first; the note says who'd move.
       const rank = (c) => (c.kennel_id ? 2 : 0) + ((c.contact_type || []).includes('breeder') ? 0 : 1);
-      const opts = [...this.contacts].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-      const res = await this.chat.form({
-        title: '',
-        html: field('Contact', `<select id="td-contact">${opts.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${c.kennel_id ? ` (now with ${esc(this.kennel(c.kennel_id))})` : ''}</option>`).join('')}</select>`),
-        submitLabel: 'Link', cancelLabel: 'Skip',
-        submit: async (root) => { const id = root.querySelector('#td-contact').value; return id ? { id } : 'Pick a contact.'; },
-        reply: (r) => this.contact(r.id)
-      });
-      if (res.done) {
-        contactId = res.result.id;
+      contactId = await this.pickContact((a, b) => rank(a) - rank(b), (c) => (c.kennel_id ? ` (now with ${this.kennel(c.kennel_id)})` : ''));
+      if (contactId) {
         await contactRepo.update(contactId, { kennel_id: k.id });
         await contactRepo.ensureType(contactId, 'breeder');
       }
     } else if (pick === 'new') {
-      let asked = null; // a near name is asked about once; Add again keeps hers
-      const res = await this.chat.form({
-        title: '',
-        html: contactFields('td-c'),
-        submitLabel: 'Add', cancelLabel: 'Skip',
-        submit: async (root) => {
-          const { name, email, phone } = readContactFields(root, 'td-c');
-          if (!name) return 'What\'s their name?';
-          const like = similarNamed(this.contacts, name, (x) => x.name);
-          if (like && asked !== name) {
-            asked = name;
-            return `Is that ${like.name}, already in your contacts? Tap Skip and pick them instead, or Add again to add them as you typed it.`;
-          }
-          const c = await contactRepo.create({ name, email, phone, contact_type: ['breeder'], kennel_id: k.id });
-          this.contactsById.set(c.id, c);
-          return { id: c.id };
-        },
-        reply: (r) => this.contact(r.id)
-      });
-      if (res.done) contactId = res.result.id;
+      contactId = await this.addContact({ contact_type: ['breeder'], kennel_id: k.id });
     } else return pick;
     if (!contactId) return null;
     return this.done(`Done. ${this.b(this.contact(contactId))} is with ${esc(k.kennel_name)}.`);
+  }
+
+  // --- Contacts, picked or added in the chat --------------------------------------
+
+  // One of her contacts from a list, `order` first (then by name); `note(c)` is
+  // plain text after a name. The contact's id, or null on Skip.
+  async pickContact(order = () => 0, note = () => '') {
+    const opts = [...this.contacts].sort((a, b) => order(a, b) || a.name.localeCompare(b.name));
+    const res = await this.chat.form({
+      title: '',
+      html: field('Contact', `<select id="td-contact">${opts.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${esc(note(c))}</option>`).join('')}</select>`),
+      submitLabel: 'Link', cancelLabel: 'Skip',
+      // form() shows a returned string as a problem, so the pick goes back as { id }.
+      submit: async (root) => { const id = root.querySelector('#td-contact').value; return id ? { id } : 'Pick a contact.'; },
+      reply: (r) => this.contact(r.id)
+    });
+    return res.done ? res.result.id : null;
+  }
+
+  // A new contact (name, phone, email; `prefill` fills them in), made with
+  // `record`'s fields (its contact_type, kennel_id). A name near one she has is
+  // asked about once; Add again keeps hers. The id, or null on Skip.
+  async addContact(record, prefill = {}) {
+    let asked = null;
+    const res = await this.chat.form({
+      title: '',
+      html: contactFields('td-c', prefill),
+      submitLabel: 'Add', cancelLabel: 'Skip',
+      submit: async (root) => {
+        const { name, email, phone } = readContactFields(root, 'td-c');
+        if (!name) return 'What\'s their name?';
+        const like = similarNamed(this.contacts, name, (x) => x.name);
+        if (like && asked !== name) {
+          asked = name;
+          return `Is that ${like.name}, already in your contacts? Tap Skip and pick them instead, or Add again to add them as you typed it.`;
+        }
+        const c = await contactRepo.create({ name, email, phone, ...record });
+        this.contactsById.set(c.id, c);
+        return { id: c.id };
+      },
+      reply: (r) => this.contact(r.id)
+    });
+    return res.done ? res.result.id : null;
+  }
+
+  // --- Vets (Pro) -----------------------------------------------------------------
+
+  isVet(c) { return (c.contact_type || []).includes('vet'); }
+  vetsFirst() { return (a, b) => this.isVet(b) - this.isVet(a); }
+
+  // Events that name a vet who isn't in her contacts: link them all to one
+  // contact (the likely one, one she picks, or one she adds), tagged Vet, and the
+  // typed name gives way to it (tidyRules.vetLinkFix).
+  async vetEvents(f) {
+    const n = f.events.length;
+    const what = (e) => `${this.dog(e.subject_id)}'s ${descriptor(EVENT_TYPES, e.event_type).label.toLowerCase()}${e.event_date ? `, ${fmtDate(e.event_date)}` : ''}`;
+    const shown = f.events.slice(0, 4).map((e) => `<li>${esc(what(e))}</li>`).join('');
+    const more = n > 4 ? `<li>and ${n - 4} more</li>` : '';
+    const m = f.match;
+    const pick = await this.ask(f, `${n === 1 ? 'A vet record names' : `${n} vet records name`} ${this.b(f.name)} as the vet, but ${n === 1 ? 'it isn\'t' : 'they aren\'t'} linked to anyone in your contacts.<ul class="kels-list">${shown}${more}</ul>`, [
+      ...(m ? [{ label: `Link to ${m.name}`, sub: this.isVet(m) ? 'Your vet, in your contacts' : 'In your contacts', value: 'match', primary: true }] : []),
+      ...(this.contacts.length ? [{ label: 'Pick their contact', value: 'pick' }] : []),
+      { label: `Add ${f.name} to my contacts`, value: 'new', primary: !m }
+    ], { never: 'Leave it as typed, don\'t ask again' });
+    let contactId = null;
+    if (pick === 'match') contactId = m.id;
+    else if (pick === 'pick') contactId = await this.pickContact(this.vetsFirst());
+    else if (pick === 'new') contactId = await this.addContact({ contact_type: ['vet'] }, { name: f.name });
+    else return pick;
+    if (!contactId) return null;
+    await contactRepo.ensureType(contactId, 'vet');
+    for (const e of f.events) await eventRepo.update(e.id, T.vetLinkFix(e, contactId));
+    return this.done(`Done. ${n === 1 ? 'That record is' : n === 2 ? 'Both are' : `All ${n} are`} linked to ${this.b(this.contact(contactId))}, your vet.`);
+  }
+
+  async noVet(f) {
+    const pick = await this.ask(f, 'You don\'t have a vet in your contacts yet. With yours there, their number is a tap away, and you can pick them on a vet visit.', [
+      { label: 'Add my vet', value: 'new', primary: true },
+      ...(this.contacts.length ? [{ label: 'They\'re in my contacts', value: 'pick' }] : [])
+    ], { never: 'No vet to add, don\'t ask again' });
+    let contactId = null;
+    if (pick === 'new') {
+      await this.chat.say('<strong>Who\'s your vet?</strong><span class="kels-lead">The clinic or the vet\'s name both work.</span>', { typing: 400 });
+      contactId = await this.addContact({ contact_type: ['vet'] });
+    } else if (pick === 'pick') {
+      contactId = await this.pickContact();
+      if (contactId) await contactRepo.ensureType(contactId, 'vet');
+    } else return pick;
+    if (!contactId) return null;
+    return this.done(`Done. ${this.b(this.contact(contactId))} is in your contacts as your vet.`);
   }
 
   // --- Duplicates ----------------------------------------------------------------

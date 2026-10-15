@@ -22,9 +22,14 @@ export const ASSIST_LABEL = KELS.assistLabel;
 // Kels's opening line, from the menu or when a page sends the breeder straight to a task.
 export const kelsHello = () => `Hi, I'm ${esc(KELS.name)}, ${esc(KELS.tagline)}!`;
 
+// Her first message on the Kels page, before "Finding Something" / "Doing Something".
+export const kelsWelcome = () => `${kelsHello()} I'm here to help you manage your kennel :) What do you need help with first?`;
+
 // How she works, said at the start of every new task (not a resumed one), after
 // the task's own opener. The answers are INTRO_CHOICES.
 export const KELS_INTRO = 'I\'ll ask you some questions; once I\'m done collecting the information, I\'ll build the records for you to approve. If you get stuck or need to save and come back, I\'ll save what we\'ve got so far until you\'re ready to continue. Sound good?';
+// Finding Something's version: it searches, so there are no records to approve.
+export const KELS_FIND_INTRO = 'I\'ll look through the app and try to find what you\'re looking for. I\'ll search app features and your existing records. If I find several matches, I\'ll ask you to choose one or ask follow-up questions. Sound good?';
 const INTRO_CHOICES = [
   { label: 'Sounds great, let\'s start!', value: 'start', primary: true },
   { label: 'Never mind', value: 'nevermind' }
@@ -103,7 +108,12 @@ export function createChat(box) {
     // label, sub or `keywords` (her own words for it: "add puppies" finds
     // "Record a new litter"). Enter picks the first match. Resolves with the
     // chosen value; the buttons are replaced by her reply bubble (unless !echo).
-    async choose(choices, { stagger = 160, echo = true, search = null, confirmHint = 'Tap again to choose' } = {}) {
+    // A choice with `star` (true/false) gets a ☆ in its corner, its own tap
+    // target that never opens or picks it: `onStar(value, on)` keeps the change.
+    // `note` is a line always shown under the label; `noteAction` ({ label,
+    // run(value) }) a small button shown when the choice is open, that runs and
+    // then takes the note away.
+    async choose(choices, { stagger = 160, echo = true, search = null, confirmHint = 'Tap again to choose', onStar = null } = {}) {
       const holder = add(row('kels-from-you kels-choices-row', `<div class="kels-pick">
         ${search ? `<input type="search" class="kels-search" placeholder="${esc(search.placeholder || 'Search')}" aria-label="${esc(search.placeholder || 'Search')}" autocomplete="off" enterkeyhint="go">
         <p class="kels-search-empty" hidden></p>` : ''}
@@ -116,15 +126,49 @@ export function createChat(box) {
         b.className = `kels-choice${c.primary ? ' primary' : ''}${c.sub ? ' has-sub' : ''}`;
         b.dataset.value = c.value;
         if (c.sub) b.setAttribute('aria-expanded', 'false');
-        b.innerHTML = `<span class="kels-choice-label">${esc(c.label)}</span>${c.sub ? `<span class="kels-choice-sub">${esc(c.sub)}</span><span class="kels-choice-hint">${esc(confirmHint)}</span>` : ''}`;
+        b.innerHTML = `<span class="kels-choice-label">${esc(c.label)}</span>${c.note ? `<span class="kels-choice-note">${esc(c.note)}</span>` : ''}${c.sub ? `<span class="kels-choice-sub">${esc(c.sub)}</span><span class="kels-choice-hint">${esc(confirmHint)}</span>` : ''}`;
         b._words = searchWords([c.label, c.sub, ...(c.keywords || [])].join(' '));
-        list.appendChild(b);
+        // The button's cell in the grid: the button itself, or a holder for it and its star.
+        b._cell = b;
+        if (typeof c.star === 'boolean' && onStar) {
+          const cell = document.createElement('div');
+          cell.className = 'kels-choice-cell';
+          cell.appendChild(b);
+          const star = document.createElement('button');
+          star.type = 'button';
+          star.className = 'kels-star';
+          let on = c.star;
+          const show = () => {
+            star.textContent = on ? '★' : '☆';
+            star.setAttribute('aria-pressed', String(on));
+            star.setAttribute('aria-label', `${on ? 'Unstar' : 'Star'} ${c.label}`);
+            star.title = on ? 'Starred: always at the top' : 'Star it to keep it at the top';
+          };
+          show();
+          star.addEventListener('click', (e) => { e.stopPropagation(); on = !on; show(); onStar(c.value, on); });
+          cell.appendChild(star);
+          if (c.noteAction) {
+            const aside = document.createElement('button');
+            aside.type = 'button';
+            aside.className = 'kels-choice-aside';
+            aside.textContent = c.noteAction.label;
+            aside.addEventListener('click', (e) => {
+              e.stopPropagation();
+              c.noteAction.run(c.value);
+              b.querySelector('.kels-choice-note')?.remove();
+              aside.remove();
+            });
+            cell.appendChild(aside);
+          }
+          b._cell = cell;
+        }
+        list.appendChild(b._cell);
         buttons.push(b);
         scroll();
         if (stagger) await pause(stagger);
         b.classList.add('in');
       }
-      const close = () => buttons.forEach((x) => { if (x.classList.contains('open')) { x.classList.remove('open'); x.setAttribute('aria-expanded', 'false'); } });
+      const close = () => buttons.forEach((x) => { if (x.classList.contains('open')) { x.classList.remove('open'); x._cell.classList.remove('open'); x.setAttribute('aria-expanded', 'false'); } });
       return new Promise((resolve) => {
         const pickBtn = (b) => {
           const choice = choices.find((c) => String(c.value) === b.dataset.value);
@@ -138,6 +182,7 @@ export function createChat(box) {
           if (b.classList.contains('has-sub') && !b.classList.contains('open')) {
             close();
             b.classList.add('open');
+            b._cell.classList.add('open');
             b.setAttribute('aria-expanded', 'true');
             b.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' });
             return;
@@ -147,10 +192,10 @@ export function createChat(box) {
         const box = holder.querySelector('.kels-search');
         if (!box) return;
         const empty = holder.querySelector('.kels-search-empty');
-        const visible = () => buttons.filter((b) => !b.hidden);
+        const visible = () => buttons.filter((b) => !b._cell.hidden);
         box.addEventListener('input', () => {
           const q = searchWords(box.value);
-          for (const b of buttons) b.hidden = !q.every((w) => b._words.some((x) => x.startsWith(w)));
+          for (const b of buttons) b._cell.hidden = !q.every((w) => b._words.some((x) => x.startsWith(w)));
           close();
           const none = !visible().length;
           empty.hidden = !none;
@@ -223,8 +268,9 @@ export function createChat(box) {
 
     // A new task's start: her `opener` (trusted markup: "Sure thing, let's…"),
     // KELS_INTRO, and Sounds great / Never mind. → true to go ahead.
-    async intro(opener) {
-      await this.say(`${opener} ${KELS_INTRO}`, { typing: 900 });
+    // `how`: what she'll do, after the opener (KELS_INTRO unless a task says otherwise).
+    async intro(opener, how = KELS_INTRO) {
+      await this.say(`${opener} ${how}`, { typing: 900 });
       return (await this.choose(INTRO_CHOICES)) === 'start';
     },
 

@@ -92,8 +92,9 @@ function sound(w) {
 
 const allowed = (len) => (len >= 7 ? 2 : len >= 4 ? 1 : 0);
 
-// The same word, or near enough for a person's typing.
-function wordHit(x, y) {
+// The same word, or near enough for a person's typing. Also Kels's Find
+// (data/kelsFind.js), word by word.
+export function wordHit(x, y) {
   if (x === y) return true;
   const short = Math.min(x.length, y.length);
   if (short >= 3 && (x.startsWith(y) || y.startsWith(x)) && Math.abs(x.length - y.length) <= 2) return true;

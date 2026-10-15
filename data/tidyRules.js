@@ -11,9 +11,9 @@
 // A finding: { key, kind, ... }. `key` is stable for the same records, so
 // "don't ask me again" can remember it (nudgeState, prefixed `tidy:`). Order is
 // the order she raises them in: TIDY_KINDS.
-import { RELEASED_SALE_STATUSES } from './vocab.js';
+import { RELEASED_SALE_STATUSES, EVENT_TYPES } from './vocab.js';
 import { studParents } from './studRules.js';
-import { normReg } from './dogSearch.js';
+import { normReg, similarNamed } from './dogSearch.js';
 
 export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
@@ -25,6 +25,8 @@ export const TIDY_KINDS = [
   'stud-unlinked',       // a stud service past its date with no breeding linked (Pro)
   'breeder-no-kennel',   // a Breeder contact with no kennel (Pro)
   'kennel-no-contact',   // an outside kennel no contact belongs to (Pro)
+  'event-no-vet',        // vet visits / surgeries with a typed vet and no vet contact (Pro)
+  'no-vet',              // nobody in her contacts is a vet (Pro)
   'duplicate-dogs',      // two dog records for one dog
   'duplicate-contacts'   // two contact records for one person (Pro)
 ];
@@ -228,6 +230,56 @@ export function kennelContactFindings(kennels, contacts, dogs) {
     .map((k) => ({ key: `kennelcontact:${k.id}`, kind: 'kennel-no-contact', kennel: k, used: usedBy.has(k.id) }));
 }
 
+// Vet visits and surgeries with the vet typed as a name (`details.vet`, the
+// type's contactFallback: KennelAssistant, the litter check-in, or logged before
+// the picker) and no vet contact linked (related_contact_id). One finding per
+// name, however it's typed, covering every event that names it. `match`: the
+// contact it most likely is (the same name, a vet first; else a near name,
+// dogSearch.similarNamed), or null. The key carries how many events, so a new
+// one with that name asks again. `name`: her most-used spelling of it.
+export const VET_EVENT_TYPES = EVENT_TYPES.filter((t) => t.relatedContact === 'Vet').map((t) => t.value);
+const vetKey = (type) => EVENT_TYPES.find((t) => t.value === type)?.fields.find((f) => f.contactFallback)?.key;
+
+export function vetContactFindings(events, contacts) {
+  const groups = new Map();
+  for (const e of events) {
+    if (e.is_archived || e.related_contact_id || !VET_EVENT_TYPES.includes(e.event_type)) continue;
+    const typed = String(e.details?.[vetKey(e.event_type)] ?? '').trim();
+    const n = normName(typed);
+    if (!n) continue;
+    if (!groups.has(n)) groups.set(n, { spellings: new Map(), events: [] });
+    const g = groups.get(n);
+    g.events.push(e);
+    g.spellings.set(typed, (g.spellings.get(typed) || 0) + 1);
+  }
+  // Her most-used spelling names it; on a tie, one written with capitals.
+  const caps = (t) => (/[A-Z]/.test(t) ? 1 : 0);
+  for (const g of groups.values()) g.name = [...g.spellings].sort(([a, x], [b, y]) => y - x || caps(b) - caps(a))[0][0];
+  const live = contacts.filter((c) => !c.is_archived);
+  const isVet = (c) => (c.contact_type || []).includes('vet');
+  return [...groups].map(([n, g]) => {
+    const same = live.filter((c) => normName(c.name) === n).sort((a, b) => isVet(b) - isVet(a));
+    const match = same[0] || similarNamed([...live].sort((a, b) => isVet(b) - isVet(a)), g.name, (c) => c.name);
+    const list = [...g.events].sort((a, b) => String(a.event_date || '').localeCompare(String(b.event_date || '')));
+    return { key: `vetcontact:${n}:${list.length}`, kind: 'event-no-vet', name: g.name, events: list, match: match || null };
+  });
+}
+
+// Nobody in her contacts is tagged Vet. Raised once she has a dog of her own;
+// one finding, so "Don't ask me again" settles it.
+export function noVetFindings(contacts, dogs) {
+  if (!dogs.length || contacts.some((c) => !c.is_archived && (c.contact_type || []).includes('vet'))) return [];
+  return [{ key: 'novet', kind: 'no-vet' }];
+}
+
+// The event, linked to its vet: the contact replaces the typed name (as the
+// event form clears it once a contact is linked).
+export function vetLinkFix(event, contactId) {
+  const details = { ...(event.details || {}) };
+  delete details[vetKey(event.event_type)];
+  return { related_contact_id: contactId, details };
+}
+
 // Two contacts with the same name (normalized) and at least one other detail
 // in common: email, phone, address, Facebook, or kennel. A name alone isn't enough.
 export function duplicateContactFindings(contacts) {
@@ -336,7 +388,7 @@ export function duplicateDogFindings(dogs) {
 // `scoped` rows (litters, sales, studServices, dogs) are already in kennel scope;
 // `allDogs` is every dog (archived and pedigree-only included) for counting
 // litters and matching duplicates; contacts and kennels are program-wide.
-export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], flags = {}, today }) {
+export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], vetEvents = [], flags = {}, today }) {
   const littersById = new Map(litters.map((l) => [l.id, l]));
   const all = [
     ...litterCountFindings(litters, allDogs),
@@ -348,6 +400,8 @@ export function tidyFindings({ litters, pairings, sales, studServices = [], dogs
     ...(flags.studServices ? studFindings(studServices, pairings, today, allDogs) : []),
     ...(flags.contactsSection ? breederKennelFindings(contacts) : []),
     ...(flags.contactsSection ? kennelContactFindings(kennels, contacts, allDogs) : []),
+    ...(flags.contactsSection ? vetContactFindings(vetEvents, contacts) : []),
+    ...(flags.contactsSection ? noVetFindings(contacts, dogs) : []),
     ...duplicateDogFindings(allDogs),
     ...(flags.contactsSection ? duplicateContactFindings(contacts) : [])
   ];
