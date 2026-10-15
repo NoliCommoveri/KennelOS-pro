@@ -7,11 +7,12 @@
 import { esc } from './ui.js';
 
 // Who Kels is, in one place: every page, task script and the floating button
-// read these, so a new name or line changes here only. `photo` is a path under
+// read these, so a new name, title or line changes here only. `photo` is a path under
 // assets/ (precached in sw.js), or null to show her initial instead.
 export const KELS = Object.freeze({
   name: 'Kels',
   tagline: 'your personal KennelOS agent',
+  title: 'Kels, the KennelOS whiz', // the Kels page header
   assistLabel: 'Ask Kels',
   photo: 'assets/kels.png'
 });
@@ -32,6 +33,10 @@ export function kelsAvatar({ large = false } = {}) {
     ? `<img class="${cls} kels-avatar-photo" src="${esc(kelsPhotoUrl())}" alt="" aria-hidden="true">`
     : `<span class="${cls}" aria-hidden="true">${esc(KELS.name[0])}</span>`;
 }
+
+// Search words: lower case, accents and punctuation dropped.
+const searchWords = (text) => String(text || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+  .split(/[^a-z0-9]+/).filter(Boolean);
 
 const reducedMotion = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const pause = (ms) => new Promise((r) => setTimeout(r, reducedMotion() ? Math.min(ms, 80) : ms));
@@ -82,31 +87,72 @@ export function createChat(box) {
       return el.querySelector('.kels-panel');
     },
 
-    // Reply buttons that fade in one at a time. `choices`: [{ label, sub?, value,
-    // primary? }]. Resolves with the chosen value; the buttons are replaced by
-    // her reply bubble (unless keep).
-    async choose(choices, { stagger = 160, echo = true } = {}) {
-      const holder = add(row('kels-from-you kels-choices-row', '<div class="kels-choices"></div>'));
+    // Reply buttons, two across, that fade in one at a time. `choices`: [{ label,
+    // sub?, value, primary?, keywords? }]. A choice with a `sub` opens on the first
+    // tap to show it (and `confirmHint`), and is chosen on the second; one without
+    // is chosen on the first. `search` puts a box above them that filters as she
+    // types (`search.placeholder`): every typed word must start a word in the
+    // label, sub or `keywords` (her own words for it: "add puppies" finds
+    // "Record a new litter"). Enter picks the first match. Resolves with the
+    // chosen value; the buttons are replaced by her reply bubble (unless !echo).
+    async choose(choices, { stagger = 160, echo = true, search = null, confirmHint = 'Tap again to choose' } = {}) {
+      const holder = add(row('kels-from-you kels-choices-row', `<div class="kels-pick">
+        ${search ? `<input type="search" class="kels-search" placeholder="${esc(search.placeholder || 'Search')}" aria-label="${esc(search.placeholder || 'Search')}" autocomplete="off" enterkeyhint="go">
+        <p class="kels-search-empty" hidden></p>` : ''}
+        <div class="kels-choices"></div></div>`));
       const list = holder.querySelector('.kels-choices');
+      const buttons = [];
       for (const c of choices) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = `kels-choice${c.primary ? ' primary' : ''}`;
+        b.className = `kels-choice${c.primary ? ' primary' : ''}${c.sub ? ' has-sub' : ''}`;
         b.dataset.value = c.value;
-        b.innerHTML = `<span class="kels-choice-label">${esc(c.label)}</span>${c.sub ? `<span class="kels-choice-sub">${esc(c.sub)}</span>` : ''}`;
+        if (c.sub) b.setAttribute('aria-expanded', 'false');
+        b.innerHTML = `<span class="kels-choice-label">${esc(c.label)}</span>${c.sub ? `<span class="kels-choice-sub">${esc(c.sub)}</span><span class="kels-choice-hint">${esc(confirmHint)}</span>` : ''}`;
+        b._words = searchWords([c.label, c.sub, ...(c.keywords || [])].join(' '));
         list.appendChild(b);
+        buttons.push(b);
         scroll();
         if (stagger) await pause(stagger);
         b.classList.add('in');
       }
+      const close = () => buttons.forEach((x) => { if (x.classList.contains('open')) { x.classList.remove('open'); x.setAttribute('aria-expanded', 'false'); } });
       return new Promise((resolve) => {
-        list.addEventListener('click', (e) => {
-          const b = e.target.closest('.kels-choice');
-          if (!b) return;
+        const pickBtn = (b) => {
           const choice = choices.find((c) => String(c.value) === b.dataset.value);
           holder.remove();
           if (echo) this.you(choice.label);
           resolve(choice.value);
+        };
+        list.addEventListener('click', (e) => {
+          const b = e.target.closest('.kels-choice');
+          if (!b) return;
+          if (b.classList.contains('has-sub') && !b.classList.contains('open')) {
+            close();
+            b.classList.add('open');
+            b.setAttribute('aria-expanded', 'true');
+            b.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' });
+            return;
+          }
+          pickBtn(b);
+        });
+        const box = holder.querySelector('.kels-search');
+        if (!box) return;
+        const empty = holder.querySelector('.kels-search-empty');
+        const visible = () => buttons.filter((b) => !b.hidden);
+        box.addEventListener('input', () => {
+          const q = searchWords(box.value);
+          for (const b of buttons) b.hidden = !q.every((w) => b._words.some((x) => x.startsWith(w)));
+          close();
+          const none = !visible().length;
+          empty.hidden = !none;
+          empty.textContent = none ? `Nothing matches "${box.value.trim()}". Try other words, or clear the search.` : '';
+        });
+        box.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          const first = visible()[0];
+          if (first && box.value.trim()) pickBtn(first);
         });
       });
     },

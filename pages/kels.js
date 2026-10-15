@@ -4,8 +4,10 @@
 // (assets/kelsChat.js). She's scripted, not a model: every line is written in
 // the task scripts. Who she is (name, line, photo) lives in kelsChat.js `KELS`.
 //
-// TASKS is her menu. A task is { id, label(s), sub, available(s), priority(s),
-// run(opts), resumable?, beforeStart?(opts) }: the higher the priority, the
+// TASKS is her menu. A task is { id, label(s), sub, keywords, available(s),
+// priority(s), run(opts), resumable?, beforeStart?(opts) }. `keywords` are the
+// other words a breeder might search the menu with ("add puppies" for a new
+// litter); the label and sub are searched too, so they needn't repeat them: the higher the priority, the
 // nearer the top, so tasks are ordered by what she's likely to need (something
 // unfinished first, then whatever fits her kennel now). `resumable` tasks keep
 // a draft, so the header's "Save for later" shows while they run.
@@ -15,12 +17,12 @@
 import { createChat, KELS, kelsAvatar, kelsHello } from '../assets/kelsChat.js';
 import { runLitterTask, pendingLitterDraft, discardGuidedLitterDraft } from '../assets/guidedLitterUI.js';
 import { runCheckinTask, checkinState } from '../assets/litterCheckinUI.js';
+import { runTidyTask } from '../assets/tidyUpUI.js';
 import { param, esc } from '../assets/ui.js';
 
 const chat = createChat(document.getElementById('kels-transcript'));
 const laterBtn = document.getElementById('kels-later');
-document.getElementById('kels-name').textContent = KELS.name;
-document.getElementById('kels-tagline').textContent = KELS.tagline[0].toUpperCase() + KELS.tagline.slice(1);
+document.getElementById('kels-name').textContent = KELS.title;
 document.getElementById('kels-avatar').innerHTML = kelsAvatar({ large: true });
 
 // Kels's tasks. `state`: { pendingLitter, litters: { open, withPups } }.
@@ -29,6 +31,7 @@ const TASKS = [
     id: 'resume-litter',
     label: (s) => `Finish recording ${s.pendingLitter?.label || 'your litter'}`,
     sub: 'Pick up where we left off',
+    keywords: ['continue', 'resume', 'unfinished', 'draft', 'add puppies', 'puppies', 'whelp', 'birth', 'born'],
     available: (s) => Boolean(s.pendingLitter),
     priority: () => 100, // something half-done always comes first
     resumable: true,
@@ -38,6 +41,8 @@ const TASKS = [
     id: 'checkin',
     label: () => 'Check in on a litter',
     sub: 'Weights, medication, and what the litter needs next',
+    keywords: ['weigh', 'weight', 'deworm', 'flea', 'tick', 'shots', 'vaccine', 'vaccination', 'medicine', 'vet', 'microchip', 'chip',
+      'wean', 'weaning', 'ready', 'pickup', 'go home', 'going home', 'boarding', 'picks', 'deposit', 'sold', 'close', 'puppy plans', 'update puppies'],
     available: (s) => s.litters.open > 0,
     // With pups at home, the weekly check-in is the likely reason she's here.
     priority: (s) => (s.litters.withPups ? 60 : 40),
@@ -47,6 +52,7 @@ const TASKS = [
     id: 'record-litter',
     label: () => 'Record a new litter',
     sub: 'The parents, the puppies, and getting them ready for families',
+    keywords: ['add puppies', 'new puppies', 'puppies arrived', 'whelp', 'whelped', 'birth', 'born', 'delivered puppies', 'add litter', 'enter litter', 'log litter'],
     available: () => true,
     priority: () => 50,
     resumable: true,
@@ -64,6 +70,16 @@ const TASKS = [
       return null;
     },
     run: (opts) => runLitterTask(chat, opts)
+  },
+  {
+    id: 'tidy-up',
+    label: () => 'Tidy up my records',
+    sub: 'Find records that don\'t agree, and duplicates, and fix them',
+    keywords: ['clean up', 'cleanup', 'fix', 'check', 'mistakes', 'errors', 'duplicate', 'duplicates', 'merge', 'combine', 'same dog', 'mismatch',
+      'parents', 'sire', 'dam', 'pedigree', 'count', 'placed', 'kennel', 'contact', 'breeder', 'stud', 'audit'],
+    available: () => true,
+    priority: () => 30,
+    run: (opts) => runTidyTask(chat, opts)
   }
 ];
 
@@ -101,7 +117,8 @@ async function menu({ again = false } = {}) {
   const s = await state();
   const tasks = TASKS.filter((t) => t.available(s)).sort((a, b) => b.priority(s) - a.priority(s));
   await chat.say(again ? 'What else can I help you with?' : `${kelsHello()} What can I help you do today?`, { typing: again ? 600 : 1300 });
-  const id = await chat.choose(tasks.map((t) => ({ label: t.label(s), sub: t.sub, value: t.id })), { stagger: 350 });
+  const id = await chat.choose(tasks.map((t) => ({ label: t.label(s), sub: t.sub, keywords: t.keywords, value: t.id })),
+    { stagger: 200, search: { placeholder: 'What do you need? Try "add puppies"' }, confirmHint: 'Tap again to start' });
   await startTask(taskById(id));
 }
 

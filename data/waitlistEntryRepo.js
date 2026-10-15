@@ -79,6 +79,9 @@ async function syncContact(contactId) {
   }
 }
 
+// For a write that moves entries between contacts (data/recordMerge.js).
+export const syncContactWaitlistStatus = (contactId) => syncContact(contactId);
+
 export const waitlistEntryRepo = {
   ...base,
 
