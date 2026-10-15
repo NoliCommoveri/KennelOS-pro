@@ -7,7 +7,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
-import { loadMoney, incomeEntries } from '../data/moneyReport.js';
+import { loadMoney, incomeEntries, registrationSummary } from '../data/moneyReport.js';
 import { yearSummary, reviewYears } from '../data/yearReview.js';
 import { inScopeOnly, subjectInScope } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -52,7 +52,7 @@ function render(data, year) {
   const tiles = [
     tile('Litters whelped', String(s.litters.length)),
     tile('Puppies born', String(s.puppiesBorn), s.puppiesBorn ? `${s.puppiesAlive} alive (${pct(s.puppiesAlive, s.puppiesBorn)})` : ''),
-    tile('Placements', String(s.placements.length), s.fellThrough ? `${s.fellThrough} fell through` : ''),
+    tile('Placements', String(s.placements.length), [registrationSummary(s.placements), s.fellThrough ? `${s.fellThrough} fell through` : ''].filter(Boolean).join('; ')),
     tile('Titles earned', String(s.titles.length)),
     tile('Money in', money(s.moneyIn)),
     tile('Money out', money(s.moneyOut)),

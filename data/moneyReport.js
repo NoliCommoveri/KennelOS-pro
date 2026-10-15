@@ -18,6 +18,7 @@ import { litterRepo } from './litterRepo.js';
 import { pairingRepo } from './pairingRepo.js';
 import { subjectInScope } from './kennelScope.js';
 import { periodKey } from './reportMath.js';
+import { REGISTRATION_TYPE } from './vocab.js';
 
 // The in-scope income rows and expenses, loaded once.
 export async function loadMoney() {
@@ -153,6 +154,28 @@ export function pricingRows(sales, { dogsById, isPlaced, expectedFor }) {
       return { sale: s, dog, price: Number(s.price), expected: expected == null ? null : Number(expected), diff: expected == null ? null : Number(s.price) - Number(expected) };
     })
     .sort((a, b) => (b.sale.sale_date || '').localeCompare(a.sale.sale_date || ''));
+}
+
+// Pups placed with each registration: one row per REGISTRATION_TYPE in vocab order
+// (every one present, so a chart keeps its slots), then "Not set" when any sale has
+// none. `count` sales, `value` the sum of their prices, `priced` how many had one.
+// PURE; callers pass the placed sales.
+export function byRegistration(sales) {
+  const price = (s) => (s.price !== '' && s.price != null && Number.isFinite(Number(s.price)) ? Number(s.price) : null);
+  const row = (value, label, list) => ({
+    value, label, count: list.length,
+    priced: list.filter((s) => price(s) != null).length,
+    total: list.reduce((t, s) => t + (price(s) ?? 0), 0)
+  });
+  const known = new Set(REGISTRATION_TYPE.map((r) => r.value));
+  const rows = REGISTRATION_TYPE.map((r) => row(r.value, r.label, sales.filter((s) => s.registration_type === r.value)));
+  const unset = sales.filter((s) => !known.has(s.registration_type));
+  return unset.length ? [...rows, row('', 'Not set', unset)] : rows;
+}
+
+// "9 Limited · 4 Full · 1 Co-own": the registrations that have sales, in vocab order.
+export function registrationSummary(sales) {
+  return byRegistration(sales).filter((r) => r.count).map((r) => `${r.count} ${r.value === 'none' ? 'Unregistered' : r.label}`).join(' · ');
 }
 
 // Average of `value` per group key: [{ key, avg, count }].

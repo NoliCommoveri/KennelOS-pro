@@ -9,7 +9,8 @@ import { createReportView } from '../assets/reportView.js';
 import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, descriptor } from '../data/vocab.js';
-import { periodSeries, sumOf } from '../data/reportMath.js';
+import { periodSeries, sumOf, pct } from '../data/reportMath.js';
+import { byRegistration } from '../data/moneyReport.js';
 import { SERIES_COLORS } from '../assets/chartView.js';
 
 // A sale that went home (or is on its way): not released (voided, cancelled, returned).
@@ -47,12 +48,14 @@ async function init() {
     kpis: (rows) => {
       const live = rows.filter(placed);
       const withPrice = live.filter(priced);
-      const full = live.filter((s) => s.registration_type === 'full').length;
+      const count = (v) => live.filter((s) => s.registration_type === v).length;
+      const of = (n) => (live.length ? `${n} of ${live.length}` : '—');
       return [
         { label: 'Placements', value: String(live.length), hint: rows.length > live.length ? `${rows.length - live.length} fell through` : '' },
         { label: 'Sale value', value: fmtMoney(sumOf(withPrice, (s) => s.price)) || '$0.00', hint: 'prices, placed sales' },
         { label: 'Average price', value: withPrice.length ? fmtMoney(sumOf(withPrice, (s) => s.price) / withPrice.length) : '—' },
-        { label: 'Full registration', value: live.length ? `${full} of ${live.length}` : '—' }
+        { label: 'Limited registration', value: of(count('limited')), hint: pct(count('limited'), live.length) || '' },
+        { label: 'Full registration', value: of(count('full')), hint: pct(count('full'), live.length) || '' }
       ];
     },
     charts: (rows, ctx) => {
@@ -62,13 +65,19 @@ async function init() {
         date: (s) => s.sale_date,
         series: regs.map((r) => ({ name: r.label, color: regColor(r.value), when: (s) => s.registration_type === r.value }))
       });
-      const avg = REGISTRATION_TYPE.map((r) => {
-        const xs = rows.filter(placed).filter(priced).filter((s) => s.registration_type === r.value);
-        return { label: r.label, value: xs.length ? sumOf(xs, (s) => s.price) / xs.length : 0, note: `${xs.length} sale${xs.length === 1 ? '' : 's'}` };
-      });
+      const regRows = byRegistration(rows.filter(placed));
+      const placedCount = sumOf(regRows, (r) => r.count);
+      const valueTotal = sumOf(regRows, (r) => r.total);
+      const sales = (n) => `${n} sale${n === 1 ? '' : 's'}`;
+      const avg = regRows.map((r) => ({ label: r.label, value: r.priced ? r.total / r.priced : 0, note: `${sales(r.priced)} with a price` }));
       return [
         { type: 'bar', stacked: true, title: `Placements by ${p.granularity}`, subtitle: 'By registration; sales that fell through are left out', categories: p.categories, series: p.series },
-        { type: 'hbar', title: 'Average price by registration', subtitle: 'Placed sales with a price', rows: avg, format: (v) => fmtMoney(Math.round(v)) }
+        { type: 'hbar', title: 'Pups placed by registration', sort: false, format: (v) => `${v} (${pct(v, placedCount) || '0%'})`,
+          rows: regRows.map((r) => ({ label: r.label, value: r.count })), emptyText: 'No placements in this range.' },
+        { type: 'hbar', title: 'Sale value by registration', subtitle: 'Prices of placed sales', sort: false, color: SERIES_COLORS[2],
+          format: (v) => `${fmtMoney(Math.round(v))} (${pct(v, valueTotal) || '0%'})`,
+          rows: regRows.map((r) => ({ label: r.label, value: r.total, note: sales(r.priced) })), emptyText: 'No priced placements in this range.' },
+        { type: 'hbar', title: 'Average price by registration', subtitle: 'Placed sales with a price', sort: false, rows: avg, format: (v) => fmtMoney(Math.round(v)) }
       ];
     },
     columns: [
