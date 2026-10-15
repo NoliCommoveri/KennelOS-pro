@@ -608,6 +608,8 @@ export async function openEventForm(opts) {
 // end, related contact and details (the "Log the title?" nudge — Show Tracking
 // Spec §5.4; the go-home nudges, data/goHome.js). Only
 // string/number detail values are taken; a malformed `logDetails` is ignored.
+// `fromReminder=<event id>` (Today's reminder "Log new"): saving the new event
+// dismisses that reminder, if it's the same subject and type. Cancelling leaves it.
 export async function openEventFromQuery(subjectType, subjectId, onSaved) {
   const openId = param('openEvent');
   if (openId) {
@@ -631,6 +633,15 @@ export async function openEventFromQuery(subjectType, subjectId, onSaved) {
           .filter(([, v]) => typeof v === 'string' || typeof v === 'number'));
       }
     } catch { /* malformed logDetails — open without detail prefill */ }
-    openEventForm({ subjectType, subjectId, prefill, onSaved });
+    const fromReminder = param('fromReminder');
+    const saved = !fromReminder ? onSaved : async (ev) => {
+      const source = await HistoryEvent.getById(fromReminder);
+      if (source && source.subject_type === subjectType && source.subject_id === subjectId
+        && source.event_type === logType && !source.reminder_dismissed) {
+        await HistoryEvent.dismissReminder(source.id);
+      }
+      onSaved?.(ev);
+    };
+    openEventForm({ subjectType, subjectId, prefill, onSaved: saved });
   }
 }

@@ -11,7 +11,7 @@
 // records and changes nothing.
 import { understandEntries, understandSections, understandCandidates } from '../data/kelsUnderstand.js';
 import { search, clearWinner, SHORT_LIST } from '../data/kelsFind.js';
-import { isCloudAvailable, isVaultOffered } from '../data/cloud/cloudConfig.js';
+import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { edition, editionFlags } from '../data/editionConfig.js';
 import { esc } from './ui.js';
 import { KELS_UNDERSTAND_INTRO } from './kelsChat.js';
@@ -52,9 +52,9 @@ export async function runUnderstandTask(chat, { onExit = () => {} } = {}) {
 // How KennelOS works: the topics and the search, until she's done. Something else
 // after an answer goes back to the question when there is one, else to the topics.
 async function appFaq(chat, { branched }) {
-  const entries = understandEntries({ edition, flags: editionFlags, cloud: isCloudAvailable(), vault: isVaultOffered() });
-  const sections = understandSections(entries);
-  const candidates = understandCandidates(entries);
+  const entries = understandEntries({ edition, flags: editionFlags, cloud: isCloudAvailable(), vault: isVaultOffered(), online: isWaitlistOnlineOffered() });
+  const sections = understandSections(entries, editionFlags);
+  const candidates = understandCandidates(entries, editionFlags);
   let ask = '<strong>What would you like to understand?</strong> Pick a topic, or search the questions.';
   for (;;) {
     await chat.say(ask, { typing: 500 });

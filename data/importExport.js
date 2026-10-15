@@ -6,7 +6,8 @@
 // every table but the device-only ones, db.js), so it stays correct as later
 // stages add tables — no hardcoded table list (Data Model doc §9).
 import { db, dataTables } from './db.js';
-import { setLastBackupDate, markDataChanged, getMyKennelId, setMyKennelId } from './settings.js';
+import { setLastBackupDate, markDataChanged, getMyKennelId, setMyKennelId, getCloudBackupState, getCloudSyncState, remapStoredIds } from './settings.js';
+import { planMatches, dogClashes, mergePair, rekey, clashKey, describeRecord } from './restoreMatch.js';
 import { assertWritable } from './demoMode.js';
 import { enforceImportDogCap } from './editionConfig.js';
 import { SYNC_REGISTRY, overlayCloudFields, snapshotRowToLocal, isCloudField } from './syncRegistry.js';
@@ -153,16 +154,17 @@ export function inspectBackup(obj) {
 //                    result is exactly the backup's contents. A table the backup
 //                    omits ends up empty (a full export always includes all
 //                    tables; this only matters for a partial/hand-edited file).
-//   mode 'merge'   — upsert the file's rows by id, leaving other records intact.
+//   mode 'merge'   — upsert the file's rows by id, leaving other records intact;
+//                    see restoreFileMerge below. Takes `opts`.
 // Unknown collections (tables not in this schema version) are skipped, not an error.
 export async function restoreBackup(obj, mode, opts = {}) {
   assertWritable(); // restore is a full-DB write — inert in demo (defense-in-depth;
                     // the Import/Export page is also excluded from the demo build)
   if (mode === 'cloud-merge') return restoreCloudMerge(obj, opts);
   if (mode === 'vault-merge') return restoreVaultMerge(obj, opts);
+  if (mode === 'merge') return restoreFileMerge(obj, opts);
   inspectBackup(obj);
-  const known = new Set(dataTables().map((t) => t.name));
-  const entries = Object.entries(obj.collections).filter(([name]) => known.has(name));
+  const entries = knownEntries(obj);
 
   // Edition bulk-import cap (cap spec §9). No-op in Pro/Demo; in Lite it throws a
   // CapExceededError when this restore would leave more than the allowed number of
@@ -170,9 +172,7 @@ export async function restoreBackup(obj, mode, opts = {}) {
   // all-or-nothing, unlike the per-row CSV import (which lands the first N and
   // fails the rest). Dog rows carry no Blobs, so the raw backup rows classify fine
   // without decoding. `.filter(Boolean)` drops a null/hole from a hand-edited file.
-  const incomingDogs = known.has('dogs')
-    ? (obj.collections.dogs || []).filter(Boolean)
-    : [];
+  const incomingDogs = (entries.find(([name]) => name === 'dogs')?.[1] || []).filter(Boolean);
   await enforceImportDogCap({ incomingDogs, mode });
 
   const tables = dataTables();
@@ -190,6 +190,176 @@ export async function restoreBackup(obj, mode, opts = {}) {
   markDataChanged();
   await pointMyKennelAtRestoredKennel();
   return entries.map(([name, rows]) => ({ name, count: rows.length }));
+}
+
+// The file's collections this schema knows: [[tableName, rows]].
+function knownEntries(obj) {
+  const known = new Set(dataTables().map((t) => t.name));
+  return Object.entries(obj.collections).filter(([name]) => known.has(name));
+}
+
+
+// This device's copy was changed after the file's. A row without updated_at on
+// either side can't be compared, so the file's copy is taken, as before.
+const localIsNewer = (local, row) => Boolean(local && row && local.updated_at && row.updated_at && local.updated_at > row.updated_at);
+
+// --- 'merge' (a backup file or a Dropbox pull) -------------------------------
+// Rows are matched by id first. Then records the two sides each entered on their
+// own (two ids for one dog) are paired by content (data/restoreMatch.js, guide
+// §10), given one id, and merged field by field. What to do is planned first
+// (planFileMerge, no writes), so the Import/Export page can ask her about:
+//   - asks: pairs the rules aren't sure of ("Are these the same?"); `answers`
+//     carries what she said ({ askKey: localId | 'none' }), and the plan is made
+//     again with them, since a Yes can pair more (a litter once its dam is paired);
+//   - clashes: a paired dog's name, sex or parents differing (`clashChoices`:
+//     { clashKey: 'local' | 'file' }; unanswered, the newer record wins);
+//   - newerHere: rows with the same id that this device changed after the file's
+//     copy (`keepNewer`: leave them as they are; otherwise the file's copy wins).
+// Which id a pair keeps: the backup's, so two devices that restore each other's
+// files end up with one set of ids, unless this device has cloud backup or live
+// sync on (its cloud copy must never see records vanish and reappear). The old id
+// is replaced everywhere on this device: every record, device-only rows, and this
+// app's settings (rekey).
+
+async function readLocal(tables) {
+  const out = {};
+  for (const t of tables) out[t.name] = await t.toArray();
+  return out;
+}
+
+function incomingOf(obj) {
+  return Object.fromEntries(knownEntries(obj).map(([name, rows]) => [name, rows.filter(Boolean)]));
+}
+
+// This device keeps its own ids when its records are mirrored in the cloud.
+export function keepsOwnIds() {
+  return Boolean(getCloudBackupState().enabled || getCloudSyncState().enabled);
+}
+
+// Names a referenced record for the preview, from either side.
+function namer(local, incoming) {
+  const find = (table, id) => (local[table] || []).find((r) => r.id === id) || (incoming[table] || []).find((r) => r.id === id);
+  const nameOf = (table, id) => {
+    const r = id && find(table, id);
+    if (!r) return '';
+    if (table === 'dogs') return r.call_name || r.registered_name || '';
+    if (table === 'contacts') return r.name || '';
+    if (table === 'kennels') return r.kennel_name || '';
+    if (table === 'litters') return [nameOf('dogs', r.dam_id), nameOf('dogs', r.sire_id)].filter(Boolean).join(' × ');
+    return r.name || r.title || '';
+  };
+  return { find, nameOf };
+}
+
+// Works out what a file 'merge' would do, without writing:
+// { added, updated, newerHere, matched, asks, clashes }.
+//   added: rows only in the file; updated: same id, the file's copy as new or
+//   newer; newerHere: same id, changed here after the file's copy; matched: rows
+//   paired by content. asks: [{ key, table, file: text, candidates: [{ id, text }] }];
+//   clashes: [{ key, label, local: text, file: text }].
+export async function planFileMerge(obj, { answers = {} } = {}) {
+  inspectBackup(obj);
+  const local = await readLocal(dataTables());
+  const incoming = incomingOf(obj);
+  const { pairs, asks } = planMatches({ local, incoming, answers });
+  const paired = new Set(pairs.map((p) => p.fileId));
+  const summary = { added: 0, updated: 0, newerHere: 0, matched: 0 };
+  for (const [name, rows] of Object.entries(incoming)) {
+    const mine = new Map((local[name] || []).map((r) => [r.id, r]));
+    for (const r of rows) {
+      const m = mine.get(r.id);
+      if (m) summary[localIsNewer(m, r) ? 'newerHere' : 'updated']++;
+      else summary[paired.has(r.id) ? 'matched' : 'added']++;
+    }
+  }
+  const { find, nameOf } = namer(local, incoming);
+  const text = (table, id) => describeRecord(table, find(table, id) || {}, nameOf);
+  const show = (c, v) => (c.ref ? nameOf('dogs', v) || 'another dog' : String(v));
+  return {
+    ...summary,
+    asks: asks.map((q) => ({
+      key: q.key, table: q.table, file: text(q.table, q.fileId),
+      candidates: q.candidates.map((id) => ({ id, text: text(q.table, id) }))
+    })),
+    clashes: dogClashes({ local, incoming, pairs }).map((c) => ({
+      key: c.key, label: c.label, dog: nameOf('dogs', c.localId), local: show(c, c.local), file: show(c, c.file)
+    }))
+  };
+}
+
+async function restoreFileMerge(obj, { keepNewer = false, answers = {}, clashChoices = {} } = {}) {
+  inspectBackup(obj);
+  const tables = dataTables();
+  const local = await readLocal(tables);
+  const incoming = incomingOf(obj);
+  const { pairs } = planMatches({ local, incoming, answers }); // unanswered questions stay two records
+
+  const keepLocal = keepsOwnIds();
+  const fileRemap = new Map();
+  const localRemap = new Map();
+  for (const p of pairs) {
+    if (keepLocal) fileRemap.set(p.fileId, p.localId);
+    else localRemap.set(p.localId, p.fileId);
+  }
+  // A pair's id from here on → the backup id its clash choices are keyed by.
+  const pairByNewId = new Map(pairs.map((p) => [keepLocal ? p.localId : p.fileId, p.fileId]));
+
+  const writes = {};
+  const deletes = {};
+  const counts = [];
+  const finalDogs = new Map();
+  for (const { name } of tables) {
+    const out = new Map();
+    const now = new Map();
+    for (const r of local[name] || []) {
+      const n = rekey(r, localRemap);
+      now.set(n.id, n);
+      if (n !== r) {
+        out.set(n.id, n);
+        if (n.id !== r.id) (deletes[name] ||= []).push(r.id);
+      }
+    }
+    let count = 0;
+    for (const raw of incoming[name] || []) {
+      const r = rekey(raw, fileRemap);
+      const mine = now.get(r.id);
+      let row = r;
+      if (mine && pairByNewId.has(r.id)) {
+        const fileId = pairByNewId.get(r.id);
+        row = mergePair(mine, r, { table: name, choose: (field) => clashChoices[clashKey(fileId, field)] });
+      } else if (mine && keepNewer && localIsNewer(mine, r)) {
+        continue;
+      }
+      out.set(row.id, row);
+      now.set(row.id, row);
+      count++;
+    }
+    if (out.size) writes[name] = [...out.values()];
+    if (name in incoming) counts.push({ name, count });
+    if (name === 'dogs') for (const [id, d] of now) finalDogs.set(id, d);
+  }
+
+  // Edition bulk-import cap (cap spec §9), on the dogs as they'll be after the
+  // whole merge. No-op in Pro/Demo; Lite refuses before anything is written.
+  await enforceImportDogCap({ incomingDogs: [...finalDogs.values()], mode: 'replace' });
+
+  const secrets = localRemap.size ? db.table('device_secrets') : null;
+  await db.transaction('rw', secrets ? [...tables, secrets] : tables, async () => {
+    for (const [name, ids] of Object.entries(deletes)) await db.table(name).bulkDelete(ids);
+    for (const [name, rows] of Object.entries(writes)) await db.table(name).bulkPut(rows.map(decodeRowBlobs));
+    if (secrets) {
+      for (const r of await secrets.toArray()) {
+        const n = rekey(r, localRemap);
+        if (n === r) continue;
+        if (n.id !== r.id) await secrets.delete(r.id);
+        await secrets.put(n);
+      }
+    }
+  });
+  if (localRemap.size) remapStoredIds((v) => rekey(v, localRemap));
+  markDataChanged();
+  await pointMyKennelAtRestoredKennel();
+  return counts;
 }
 
 // "My kennel" (the nav banner, Furever prefill) is a settings id, not part of the

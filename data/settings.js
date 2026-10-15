@@ -35,6 +35,31 @@ const KEYS = {
   studTripsMigrated: 'kennelOS.studTripsMigrated'
 };
 
+// A restore gave records new ids (importExport.restoreFileMerge): every value this
+// app keeps in localStorage that names one (My kennel, the active kennel, Today
+// dismissals, Kels's drafts and favorites…) is passed through `rekey`, a value →
+// value function that returns the same value when nothing in it changed.
+export function remapStoredIds(rekey) {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('kennelOS.')) keys.push(k);
+  }
+  for (const k of keys) {
+    const raw = localStorage.getItem(k);
+    if (raw == null) continue;
+    let next;
+    try {
+      const parsed = JSON.parse(raw);
+      const moved = rekey(parsed);
+      next = moved === parsed ? raw : JSON.stringify(moved);
+    } catch {
+      next = rekey(raw);
+    }
+    if (next !== raw) localStorage.setItem(k, next);
+  }
+}
+
 export function getLastBackupDate() {
   return localStorage.getItem(KEYS.lastBackupDate); // ISO string or null
 }

@@ -1,10 +1,10 @@
 // import-export.js — wires the Import/Export page to the backup engine: Backup &
 // restore, CSV import, and the Danger zone. Account, kennel setup, the guided tour
 // and this device's license are on the Settings page (pages/settings.js).
-import { downloadBackup, readBackupFile, inspectBackup, restoreBackup } from '../data/importExport.js';
+import { downloadBackup, readBackupFile, inspectBackup, restoreBackup, planFileMerge } from '../data/importExport.js';
 import { getLastBackupDate } from '../data/settings.js';
 import { getResetCounts, resetApp } from '../data/appReset.js';
-import { esc, confirmModal } from '../assets/ui.js';
+import { esc, confirmModal, selectModal } from '../assets/ui.js';
 import { editionFlags, edition } from '../data/editionConfig.js';
 import { isProOnlyPage } from '../data/proPages.js';
 import { isDropboxConnected } from '../data/dropbox.js';
@@ -63,8 +63,8 @@ let renderCloudPane = () => {};
 const BLURBS = {
   'backup:local': 'Downloads every record as one JSON file — also the migration path if the app ever moves to a new web address (your data doesn’t follow automatically).',
   'backup:dropbox': 'Uploads a full backup to your own Dropbox, and refreshes what KennelAssistant sees. Pull it on your other phone to catch up.',
-  'restore:local': 'Load records from a backup file. Merge adds/updates by id and keeps everything else; Replace wipes current records first.',
-  'restore:dropbox': 'Load the backup last pushed to Dropbox — from this phone or another one. Merge adds/updates by id and keeps everything else; Replace wipes current records first.'
+  'restore:local': 'Load records from a backup file. Merge adds what’s new and asks before undoing any newer edits here; Replace wipes current records first.',
+  'restore:dropbox': 'Load the backup last pushed to Dropbox — from this phone or another one. Merge adds what’s new and asks before undoing any newer edits here; Replace wipes current records first.'
 };
 
 // Drop a preview without touching the file input — the change handler runs this
@@ -200,19 +200,139 @@ async function runNetworkAction(btn, action) {
   }
 }
 
+// Merge's questions, before anything is written (planFileMerge plans; the restore
+// does exactly that plan):
+//   1. Records each device entered on its own that the rules aren't sure are the
+//      same ("Are these the same?"). Each answer can pair more (a litter once its
+//      dam is), so the plan is made again until nothing is left to ask.
+//   2. A paired dog whose name, sex or parents differ: which to keep.
+//   3. What the merge does, and, when this device changed records after the
+//      backup was made, keep those edits or take the backup's copy.
+// → { keepNewer, answers, clashChoices } | null (cancelled).
+async function askMerge() {
+  let answers = {};
+  let plan = await planFileMerge(pendingBackup, { answers });
+  while (plan.asks.length) {
+    const got = await askSame(plan.asks);
+    if (!got) return null;
+    answers = { ...answers, ...got };
+    plan = await planFileMerge(pendingBackup, { answers });
+  }
+  const clashChoices = plan.clashes.length ? await askClashes(plan.clashes) : {};
+  if (!clashChoices) return null;
+
+  const n = (k, one, many) => `${plan[k]} ${plan[k] === 1 ? one : many}`;
+  const what = `This adds ${n('added', 'record', 'records')} and updates ${n('updated', 'record', 'records')} with the file’s newer copy.`
+    + (plan.matched ? ` ${n('matched', 'record was', 'records were')} entered on both devices, so each pair becomes one record.` : '')
+    + ' Nothing is deleted.';
+  if (!plan.newerHere) {
+    const ok = await confirmModal({ title: 'Merge data?', message: what, confirmLabel: 'Merge' });
+    return ok ? { keepNewer: true, answers, clashChoices } : null;
+  }
+  const choice = await selectModal({
+    title: 'Merge data?',
+    message: `${what} ${n('newerHere', 'record was', 'records were')} changed on this device after this backup was made.`,
+    label: 'For those',
+    options: [
+      { value: 'mine', label: 'Keep my newer edits' },
+      { value: 'file', label: 'Take the backup’s copy' }
+    ],
+    defaultValue: 'mine',
+    confirmLabel: 'Merge'
+  });
+  return choice ? { keepNewer: choice === 'mine', answers, clashChoices } : null;
+}
+
+const RECORD_WORD = {
+  kennels: 'kennel', contacts: 'contact', dogs: 'dog', pairings: 'breeding', litters: 'litter', sales: 'sale',
+  stud_services: 'stud service', accounts: 'account', waitlist_programs: 'waitlist program'
+};
+
+// A form in a modal: `body` is its fields; `read(root)` returns the answer, or a
+// string saying what's missing. → the answer | null (cancelled).
+function formModal({ title, intro, body, confirmLabel, read }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h2 style="margin-top:0;">${esc(title)}</h2>
+      <p class="muted">${esc(intro)}</p>
+      ${body}
+      <div class="fm-error"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" data-act="ok">${esc(confirmLabel)}</button>
+        <button class="btn" data-act="cancel">Cancel</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const done = (v) => { overlay.remove(); resolve(v); };
+    overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => done(null));
+    overlay.querySelector('[data-act="ok"]').addEventListener('click', () => {
+      const res = read(overlay);
+      if (typeof res === 'string') {
+        overlay.querySelector('.fm-error').innerHTML = `<div class="inline-error">${esc(res)}</div>`;
+        return;
+      }
+      done(res);
+    });
+  });
+}
+
+// "Are these the same?" for each open question. → { askKey: localId | 'none' } | null.
+function askSame(asks) {
+  const radio = (i, value, text) => `<label class="check-inline" style="display:flex; margin:4px 0;"><input type="radio" name="as-${i}" value="${esc(value)}"> ${text}</label>`;
+  return formModal({
+    title: 'Are these the same?',
+    intro: 'These look like records you entered on each device. If they’re the same, they become one record, keeping the details from both.',
+    body: asks.map((q, i) => `<div class="field">
+        <label>A ${esc(RECORD_WORD[q.table] || 'record')} in the backup: <strong>${esc(q.file)}</strong></label>
+        ${q.candidates.map((c) => radio(i, c.id, `Same as this one here: ${esc(c.text)}`)).join('')}
+        ${radio(i, 'none', 'Not the same, keep both')}
+      </div>`).join(''),
+    confirmLabel: 'Continue',
+    read: (root) => {
+      const out = {};
+      for (const [i, q] of asks.entries()) {
+        const picked = root.querySelector(`input[name="as-${i}"]:checked`);
+        if (!picked) return 'Answer each one, or choose Not the same.';
+        out[q.key] = picked.value;
+      }
+      const chosen = Object.values(out).filter((v) => v !== 'none');
+      if (new Set(chosen).size !== chosen.length) return 'One record here can only be the same as one in the backup.';
+      return out;
+    }
+  });
+}
+
+// A paired dog's name, sex or parents differ: which to keep. → { clashKey: 'local' | 'file' } | null.
+function askClashes(clashes) {
+  return formModal({
+    title: 'Which should I keep?',
+    intro: 'These dogs are the same dog on both devices, but a few details differ.',
+    body: clashes.map((c, i) => `<div class="field">
+        <label>${esc(c.dog)}: ${esc(c.label)}</label>
+        <label class="check-inline" style="display:flex; margin:4px 0;"><input type="radio" name="cl-${i}" value="local" checked> ${esc(c.local)} (this device)</label>
+        <label class="check-inline" style="display:flex; margin:4px 0;"><input type="radio" name="cl-${i}" value="file"> ${esc(c.file)} (the backup)</label>
+      </div>`).join(''),
+    confirmLabel: 'Continue',
+    read: (root) => Object.fromEntries(clashes.map((c, i) => [c.key, root.querySelector(`input[name="cl-${i}"]:checked`).value]))
+  });
+}
+
 async function doRestore(mode) {
   if (!pendingBackup) return;
-  const warning = mode === 'replace'
-    ? 'Replace ALL current records with the file’s contents? This cannot be undone.'
-    : 'Merge the file’s records into your current data (updating any with matching ids)?';
-  if (!(await confirmModal({
-    title: mode === 'replace' ? 'Replace all data?' : 'Merge data?',
-    message: warning,
-    confirmLabel: mode === 'replace' ? 'Replace' : 'Merge',
-    danger: mode === 'replace'
+  let opts = {};
+  if (mode === 'merge') {
+    opts = await askMerge();
+    if (!opts) return;
+  } else if (!(await confirmModal({
+    title: 'Replace all data?',
+    message: 'Replace ALL current records with the file’s contents? This cannot be undone.',
+    confirmLabel: 'Replace',
+    danger: true
   }))) return;
   try {
-    const result = await restoreBackup(pendingBackup, mode);
+    const result = await restoreBackup(pendingBackup, mode, opts);
     const total = result.reduce((n, r) => n + r.count, 0);
     flash(`Restore complete (${mode}) — ${total} record(s) loaded. Reloading…`);
     setTimeout(() => location.reload(), 1200);

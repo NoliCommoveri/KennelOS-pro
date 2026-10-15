@@ -89,8 +89,9 @@ function reminderRow(ev, bucketBadge) {
   // A reminder is nudging toward logging the NEXT occurrence, not editing the
   // one that fired it — so this deep-links to a fresh event of the same
   // event_type on the subject's page, prefilled like the app's other
-  // soft-suggestion prompts (eventForm.js `prefill`).
-  const logHref = subjectHref(ev, `&logEvent=${encodeURIComponent(ev.event_type)}`);
+  // soft-suggestion prompts (eventForm.js `prefill`). `fromReminder` makes
+  // saving that next one dismiss this reminder: it's been handled.
+  const logHref = subjectHref(ev, `&logEvent=${encodeURIComponent(ev.event_type)}&fromReminder=${encodeURIComponent(ev.id)}`);
   return `<li style="padding:10px 0; border-top:1px solid var(--border);">
       <div>${bucketBadge}<a href="${subjectHref(ev)}"><strong>${esc(subjectLabel(ev))}</strong></a> — ${badge(EVENT_TYPES, ev.event_type)} ${esc(ev.title)}</div>
       <div class="muted" style="font-size:13px;">⏰ ${esc(fmtDate(ev.reminder_date))}${contact ? ` · ${esc(contact)}` : ''}</div>
