@@ -5,8 +5,9 @@
 // the task scripts. Who she is (name, line, photo) lives in kelsChat.js `KELS`.
 //
 // She opens with "What do you need help with first?": Finding Something (assets/
-// kelsFindUI.js: where a page or record is, with a button to it) or Doing
-// Something (TASKS), with an unfinished draft offered first.
+// kelsFindUI.js: where a page or record is, with a button to it), Doing
+// Something (TASKS) or Understanding Something (assets/kelsUnderstandUI.js: how
+// the app works, as an FAQ), with an unfinished draft offered first.
 //
 // TASKS is her menu. A task is { id, label(s), sub, keywords, available(s),
 // priority(s), run(opts), resumable?, beforeStart?(opts) }. `keywords` are the
@@ -20,6 +21,7 @@
 // (an Expected litter's birth, or the litter to check on).
 import { createChat, KELS, kelsAvatar, kelsWelcome } from '../assets/kelsChat.js';
 import { runFindTask } from '../assets/kelsFindUI.js';
+import { runUnderstandTask } from '../assets/kelsUnderstandUI.js';
 import { runLitterTask, pendingLitterDraft, discardGuidedLitterDraft } from '../assets/guidedLitterUI.js';
 import { runCheckinTask, checkinState } from '../assets/litterCheckinUI.js';
 import { runTidyTask } from '../assets/tidyUpUI.js';
@@ -287,7 +289,8 @@ async function startTask(task, opts = {}) {
   return task.run({ ...opts, onExit, handoff, onSaved: () => running(null) });
 }
 
-// The top: unfinished work first, then Finding Something / Doing Something.
+// The top: unfinished work first, then Finding Something / Doing Something /
+// Understanding Something.
 async function menu({ again = false } = {}) {
   const s = await state();
   const unfinished = TASKS.filter((t) => t.id.startsWith('resume-') && t.available(s));
@@ -295,10 +298,12 @@ async function menu({ again = false } = {}) {
   const pick = await chat.choose([
     ...unfinished.map((t) => ({ label: t.label(s), value: `task:${t.id}`, primary: true })),
     { label: 'Finding Something', value: 'find', primary: !unfinished.length },
-    { label: 'Doing Something', value: 'do' }
+    { label: 'Doing Something', value: 'do' },
+    { label: 'Understanding Something', value: 'understand' }
   ], { stagger: 150 });
   if (pick.startsWith('task:')) return startTask(taskById(pick.slice(5)));
   if (pick === 'find') return runFindTask(chat, { onExit, handoff, tasks: taskCandidates(s) });
+  if (pick === 'understand') return runUnderstandTask(chat, { onExit });
   return doMenu(s);
 }
 
