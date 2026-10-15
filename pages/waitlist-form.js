@@ -12,7 +12,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { WAITLIST_QUESTION_TYPE, descriptor } from '../data/vocab.js';
 import {
   formQuestions, validateQuestions, newQuestion, isLocked, isChoice, DEFAULT_FORM_QUESTIONS,
-  proposeQuestionImport, applyQuestionImport, formFaq, validateFaq, newFaqItem
+  proposeQuestionImport, applyQuestionImport, formFaq, validateFaq, newFaqItem, LOCKED_TYPE_LABEL
 } from '../data/waitlistForm.js';
 import { esc, param, confirmModal, alertModal } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker } from '../assets/waitlistUI.js';
@@ -32,17 +32,6 @@ const ctx = { kennel: null, questions: [], faq: [], dirty: false, proposals: nul
 const showError = (msg) => { els.error.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; };
 const clearError = () => { els.error.innerHTML = ''; };
 
-// What a locked question's answer is, in her terms.
-const LOCKED_TYPE_LABEL = {
-  name: 'Short answer · the family\'s name',
-  email: 'Email address · used to spot returning families',
-  pref_sex: 'Either / Male / Female · decides which pups they\'re offered',
-  pref_breed: 'Breed · decides which pups they\'re offered',
-  pref_purposes: 'Pet / Performance / Show / Breeding / Co-own, choose all · mapped to registration (Limited, Full, Co-own), decides which pups they\'re offered',
-  pref_colors: 'Colors · notes, or matching if you turn color matching on',
-  ready_timing: 'ASAP / 1 month / 3 months / 6+ months · anything but ASAP is on hold that long',
-  public_notice: 'Shown to every applicant · no answer'
-};
 
 const typeOptions = (current) => WAITLIST_QUESTION_TYPE
   .map((t) => `<option value="${esc(t.value)}"${t.value === current ? ' selected' : ''}>${esc(t.label)}</option>`).join('');

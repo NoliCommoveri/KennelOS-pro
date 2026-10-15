@@ -27,7 +27,7 @@ import * as actions from '../data/waitlistActions.js';
 import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmailUI.js';
 import { offerSpecs, retryEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
-  waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches,
+  waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
   entryName, canUndoRemoval, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
   eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
@@ -491,8 +491,8 @@ async function onApprove() {
   const contactChoices = e.contact_id
     ? `<p class="muted">Linked to <strong>${esc(ctx.contact?.name || '')}</strong>.</p>`
     : `<div class="field field-wide"><label>Contact</label>
-        ${matches.map((m, i) => `<label class="check-inline" style="display:block;"><input type="radio" name="ap-contact" value="${esc(m.contact.id)}"${i === 0 && m.reason === 'email' ? ' checked' : ''}> Use existing: <strong>${esc(m.contact.name)}</strong> <span class="faint">(${m.reason === 'email' ? 'same email' : 'same name'}${m.contact.email ? `, ${esc(m.contact.email)}` : ''})</span></label>`).join('')}
-        <label class="check-inline" style="display:block;"><input type="radio" name="ap-contact" value=""${matches.length && matches[0].reason === 'email' ? '' : ' checked'}> Create a new contact for ${esc(entryName(e, null))}</label>
+        ${matches.map((m, i) => `<label class="check-inline" style="display:block;"><input type="radio" name="ap-contact" value="${esc(m.contact.id)}"${i === 0 && m.strength === 'certain' ? ' checked' : ''}> Use existing: <strong>${esc(m.contact.name)}</strong> <span class="faint">(${esc(contactMatchReason(m).toLowerCase())}${m.contact.email ? `, ${esc(m.contact.email)}` : ''})</span></label>`).join('')}
+        <label class="check-inline" style="display:block;"><input type="radio" name="ap-contact" value=""${matches.length && matches[0].strength === 'certain' ? '' : ' checked'}> Create a new contact for ${esc(entryName(e, null))}</label>
         ${matches.length ? '<span class="field-hint">A match is only a suggestion. Pick it if it\'s the same family.</span>' : ''}
       </div>`;
   // Their request on the application to list privately (Spec §15.3): she answers it here.

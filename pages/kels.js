@@ -26,11 +26,13 @@ import { runTidyTask } from '../assets/tidyUpUI.js';
 import { runPrepTask, prepState } from '../assets/prepPupsUI.js';
 import { runHealthTask } from '../assets/accountHealthUI.js';
 import { runDogsTask, pendingDogsDraft, discardGuidedDogsDraft } from '../assets/guidedDogsUI.js';
+import { pendingPeopleDraft } from '../data/guidedPeople.js';
+import { pendingFormDraft } from '../data/guidedForm.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { isLicenseGated } from '../data/license.js';
 import { param, esc, todayYMD } from '../assets/ui.js';
 import { orderTasks, withStart, withStar } from '../data/kelsFavorites.js';
-import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote } from '../data/settings.js';
+import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote, getGuidedPeopleDraft, clearGuidedPeopleDraft, getGuidedFormDraft, clearGuidedFormDraft } from '../data/settings.js';
 import { editionFlags } from '../data/editionConfig.js';
 
 const chat = createChat(document.getElementById('kels-transcript'));
@@ -38,7 +40,12 @@ const laterBtn = document.getElementById('kels-later');
 document.getElementById('kels-name').textContent = KELS.title;
 document.getElementById('kels-avatar').innerHTML = kelsAvatar({ large: true });
 
-// Kels's tasks. `state`: { pendingLitter, pendingDogs, litters: { open, withPups }, prep: { litters } }.
+// Kels's tasks. `state`: { pendingLitter, pendingDogs, pendingPeople, pendingForm, litters: { open, withPups }, prep: { litters } }.
+// Add people (Pro, contacts): its script is Pro-only, so it's imported on start.
+const runPeople = async (opts) => (await import('../assets/guidedPeopleUI.js')).runPeopleTask(chat, opts);
+// Set up my application form (Pro, waitlist): the same.
+const runForm = async (opts) => (await import('../assets/guidedFormUI.js')).runFormTask(chat, opts);
+
 const TASKS = [
   {
     id: 'resume-litter',
@@ -59,6 +66,26 @@ const TASKS = [
     priority: () => 99,
     resumable: true,
     run: (opts) => runDogsTask(chat, { ...opts, resume: true })
+  },
+  {
+    id: 'resume-people',
+    label: (s) => `Finish adding ${s.pendingPeople?.label || 'your people'}`,
+    sub: 'Pick up where we left off',
+    keywords: ['continue', 'resume', 'unfinished', 'draft', 'add people', 'contacts'],
+    available: (s) => Boolean(s.pendingPeople),
+    priority: () => 98,
+    resumable: true,
+    run: (opts) => runPeople({ ...opts, resume: true })
+  },
+  {
+    id: 'resume-form',
+    label: (s) => `Finish ${s.pendingForm?.label ? `${s.pendingForm.label}'s` : 'your'} application form`,
+    sub: 'Pick up where we left off',
+    keywords: ['continue', 'resume', 'unfinished', 'draft', 'application form', 'form', 'questions'],
+    available: (s) => Boolean(s.pendingForm),
+    priority: () => 97,
+    resumable: true,
+    run: (opts) => runForm({ ...opts, resume: true })
   },
   {
     id: 'checkin',
@@ -132,6 +159,32 @@ const TASKS = [
     run: (opts) => runDogsTask(chat, opts)
   },
   {
+    id: 'add-people',
+    label: () => 'Add people',
+    sub: editionFlags.waitlist ? 'Buyers, your vet, breeders and their kennels, and families for your waitlist' : 'Buyers, your vet, breeders and their kennels',
+    keywords: ['add person', 'add people', 'add contact', 'contact', 'contacts', 'new buyer', 'buyer', 'vet', 'veterinarian', 'groomer',
+      'co-owner', 'co owner', 'family', 'families', 'phone number', 'email', 'breeder', 'kennel', 'bred by', 'referral',
+      ...(editionFlags.waitlist ? ['applicant', 'waitlist'] : [])],
+    // Pro only: Lite has no Contacts pages.
+    available: () => editionFlags.contactsSection,
+    priority: () => 33,
+    resumable: true,
+    // Starting while some people are unfinished: finish those first, or start fresh?
+    beforeStart: async () => {
+      const p = pendingPeopleDraft(getGuidedPeopleDraft());
+      if (!p) return null;
+      await chat.say(`You have people you didn't finish adding (${esc(p.label || 'started earlier')}). Want to finish those first?`);
+      const pick = await chat.choose([
+        { label: 'Finish those', value: 'resume', primary: true },
+        { label: 'Start fresh (throw them away)', value: 'fresh' }
+      ]);
+      if (pick === 'resume') return { taskId: 'resume-people' };
+      clearGuidedPeopleDraft();
+      return null;
+    },
+    run: (opts) => runPeople(opts)
+  },
+  {
     id: 'tidy-up',
     label: () => 'Tidy up my records',
     sub: 'Find records that don\'t agree, and duplicates, and fix them',
@@ -154,6 +207,32 @@ const TASKS = [
     run: async (opts) => (await import('../assets/waitlistSetupUI.js')).runWaitlistSetupTask(chat, opts)
   },
   {
+    id: 'form-setup',
+    label: () => 'Set up my application form',
+    sub: editionFlags.accounts ? 'Your questions, FAQ, the fee and how families pay' : 'Your questions, FAQ and the fee',
+    keywords: ['application', 'application form', 'form', 'questions', 'questionnaire', 'apply', 'waitlist form', 'faq',
+      'puppy application', 'fee', 'application fee',
+      ...(editionFlags.accounts ? ['payment', 'pay', 'stripe', 'payment account'] : []),
+      ...(isVaultOffered() ? ['sensitive records', 'encrypted'] : [])],
+    // Pro only (the waitlist); its script is Pro-only too, so it's imported on start.
+    available: () => editionFlags.waitlist,
+    priority: () => 24,
+    resumable: true,
+    beforeStart: async () => {
+      const p = pendingFormDraft(getGuidedFormDraft());
+      if (!p) return null;
+      await chat.say(`You have an application form you didn't finish (${esc(p.label || 'started earlier')}). Want to finish that one first?`);
+      const pick = await chat.choose([
+        { label: 'Finish that one', value: 'resume', primary: true },
+        { label: 'Start fresh (throw it away)', value: 'fresh' }
+      ]);
+      if (pick === 'resume') return { taskId: 'resume-form' };
+      clearGuidedFormDraft();
+      return null;
+    },
+    run: (opts) => runForm(opts)
+  },
+  {
     id: 'account-health',
     label: () => 'Check account health',
     sub: isCloudAvailable() ? 'Your backups, this device, and your account' : 'Your backups and this device',
@@ -173,7 +252,12 @@ const taskById = (id) => TASKS.find((t) => t.id === id);
 
 async function state() {
   const [litters, prep] = await Promise.all([checkinState(), prepState()]);
-  return { pendingLitter: pendingLitterDraft(), pendingDogs: pendingDogsDraft(), litters, prep };
+  return {
+    pendingLitter: pendingLitterDraft(), pendingDogs: pendingDogsDraft(),
+    pendingPeople: editionFlags.contactsSection ? pendingPeopleDraft(getGuidedPeopleDraft()) : null,
+    pendingForm: editionFlags.waitlist ? pendingFormDraft(getGuidedFormDraft()) : null,
+    litters, prep
+  };
 }
 
 function running(task) {

@@ -11,6 +11,7 @@
 //  - Eligibility (§6.2) is computed per litter / per pup at the moment it's needed.
 // The repos store; the pages call these functions to decide what to write.
 import { addDaysToYMD, addMonthsToYMD } from './dateUtils.js';
+import { findContactMatches, contactMatchReason } from './contactSearch.js';
 import { WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, REGISTRATION_TYPE, cleanPurposes, registrationsForPurposes, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
 
 // --- Config (Spec §4.6) -------------------------------------------------------
@@ -1180,20 +1181,15 @@ export function deriveContactWaitlistStatus(entries) {
 // --- Applicant ↔ Contact matching (Spec §5.2) ------------------------------------
 
 // Existing contacts that might be this applicant — OFFERED at approval, never
-// applied automatically (CSV import's rule: email is the natural key; a name is a
-// hint). Email matches first, then name-only matches, archived contacts excluded.
+// applied automatically. The one contact rule (contactSearch): the same email or
+// phone is 'certain'; the same or a near name only 'possible'. Archived excluded.
+// → [{ contact, strength, reason: 'email'|'phone'|'name'|'similar name' }].
 export function contactMatches(application, contacts) {
-  const email = key(application && application.email);
-  const name = key(application && application.name);
-  const live = contacts.filter((c) => !c.is_archived);
-  const byEmail = email ? live.filter((c) => key(c.email) === email) : [];
-  const seen = new Set(byEmail.map((c) => c.id));
-  const byName = name ? live.filter((c) => !seen.has(c.id) && key(c.name) === name) : [];
-  return [
-    ...byEmail.map((contact) => ({ contact, reason: 'email' })),
-    ...byName.map((contact) => ({ contact, reason: 'name' }))
-  ];
+  const a = application || {};
+  return findContactMatches({ name: a.name, email: a.email, phone: a.phone }, contacts);
 }
+
+export { contactMatchReason };
 
 // The family's display name: the linked contact's, else the applicant's own.
 export function entryName(entry, contact) {

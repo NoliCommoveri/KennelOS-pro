@@ -82,6 +82,14 @@ export const PRO_ONLY_STANDALONE = [
   'assets/waitlistSetupUI.js',
   // A waitlist application's fields: the Waitlist entry page's and Kels's "Set up my waitlist".
   'assets/waitlistApplicationForm.js',
+  // Kels's applicant step (a family put on the waitlist in the chat): Set up my
+  // waitlist and Add people import it, only with the waitlist.
+  'assets/kelsApplicant.js',
+  // Kels's "Add people" (pages/kels.js imports it on start, only with contacts).
+  'assets/guidedPeopleUI.js',
+  // Kels's "Set up my application form" (pages/kels.js imports it on start, only
+  // with the waitlist) and the fee step it shares with "Set up my waitlist".
+  'assets/guidedFormUI.js', 'assets/waitlistFeeStep.js',
   // "Review sale & send" on the waitlist family page (Integrations plan §2.6).
   'assets/pickToSend.js',
   // The Companion link builder (shared by the Companion console and the guided

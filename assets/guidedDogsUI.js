@@ -23,7 +23,7 @@ import { findDogMatches, matchReason, breedChoices } from '../data/dogSearch.js'
 import { fmt } from '../data/guidedLitter.js';
 import { esc, todayYMD } from './ui.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
-import { StepConversation, tile, field, input, options, val, plural, pagesPrefix, kennelNameField, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
+import { StepConversation, tile, field, input, options, val, plural, pagesPrefix, kennelPicker, wireKennelPicker, readKennelPicker, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
 
 // --- The data the screens read ----------------------------------------------------
 
@@ -316,8 +316,7 @@ function screens(draft, data) {
             ${tile('bred', 'unsure', 'Not sure', { selected: false })}
           </div>
           ${other ? `<p class="gl-q">Their kennel</p>
-            ${data.outsideKennels.length ? field('A kennel you have', `<select id="gd-bk-pick"><option value="">A new kennel…</option>${data.outsideKennels.map((k) => `<option value="${esc(k.id)}"${b.kennelId === k.id ? ' selected' : ''}>${esc(k.kennel_name)}</option>`).join('')}</select>`) : ''}
-            <div id="gd-bk-new"${b.kennelId ? ' hidden' : ''}>${kennelNameField('gd-bk-name', b.kennelName)}</div>
+            ${kennelPicker('gd-bk', b, data.outsideKennels, { pickLabel: 'A kennel you have' })}
             <p class="gl-q">The breeder (optional)</p>
             ${people.length ? field('Someone in your contacts', `<select id="gd-bc-pick"><option value="">Someone new…</option>${people.map((c) => `<option value="${esc(c.id)}" data-kennel="${esc(c.kennel_id || '')}"${b.contactId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`) : ''}
             <div id="gd-bc-new"${b.contactId ? ' hidden' : ''}>${contactFields('gd-bc', { name: b.contactName, phone: b.contactPhone, email: b.contactEmail })}</div>` : ''}`,
@@ -327,8 +326,8 @@ function screens(draft, data) {
           return value === 'other' && data.outsideBreeders ? 'redraw' : true;
         },
         wire: (root) => {
+          wireKennelPicker(root, 'gd-bk');
           const kPick = root.querySelector('#gd-bk-pick');
-          kPick?.addEventListener('change', () => { root.querySelector('#gd-bk-new').hidden = Boolean(kPick.value); });
           root.querySelector('#gd-bc-pick')?.addEventListener('change', (e) => {
             root.querySelector('#gd-bc-new').hidden = Boolean(e.target.value);
             // Someone with a kennel names the kennel too.
@@ -338,8 +337,7 @@ function screens(draft, data) {
         },
         read: (root) => {
           if (!(b.bredBy === 'other' && data.outsideBreeders)) return;
-          b.kennelId = val(root, 'gd-bk-pick') || null;
-          b.kennelName = b.kennelId ? '' : val(root, 'gd-bk-name');
+          Object.assign(b, readKennelPicker(root, 'gd-bk'));
           b.contactId = val(root, 'gd-bc-pick') || null;
           const typed = b.contactId ? { name: '', phone: '', email: '' } : readContactFields(root, 'gd-bc');
           Object.assign(b, { contactName: typed.name, contactPhone: typed.phone, contactEmail: typed.email });

@@ -33,7 +33,8 @@ import { esc, fmtDate, todayYMD } from './ui.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
 import { FindingsTask, plural } from './kelsFindings.js';
-import { field, kennelNameField, contactFields, readContactFields } from './kelsSteps.js';
+import { field, kennelNameField, addContactInChat, VET_WHY, VET_NAME_HINT } from './kelsSteps.js';
+import { isVet } from '../data/contactSearch.js';
 
 const ROLE = { sire: { field: 'sire_id', sex: 'male', word: 'sire' }, dam: { field: 'dam_id', sex: 'female', word: 'dam' } };
 const label = (vocab, v) => descriptor(vocab, v).label;
@@ -561,36 +562,19 @@ class Tidy extends FindingsTask {
     return res.done ? res.result.id : null;
   }
 
-  // A new contact (name, phone, email; `prefill` fills them in), made with
-  // `record`'s fields (its contact_type, kennel_id). A name near one she has is
-  // asked about once; Add again keeps hers. The id, or null on Skip.
+  // A new contact (kelsSteps.addContactInChat), made with `record`'s fields.
+  // The id, or null on Skip.
   async addContact(record, prefill = {}) {
-    let asked = null;
-    const res = await this.chat.form({
-      title: '',
-      html: contactFields('td-c', prefill),
-      submitLabel: 'Add', cancelLabel: 'Skip',
-      submit: async (root) => {
-        const { name, email, phone } = readContactFields(root, 'td-c');
-        if (!name) return 'What\'s their name?';
-        const like = similarNamed(this.contacts, name, (x) => x.name);
-        if (like && asked !== name) {
-          asked = name;
-          return `Is that ${like.name}, already in your contacts? Tap Skip and pick them instead, or Add again to add them as you typed it.`;
-        }
-        const c = await contactRepo.create({ name, email, phone, ...record });
-        this.contactsById.set(c.id, c);
-        return { id: c.id };
-      },
-      reply: (r) => this.contact(r.id)
-    });
-    return res.done ? res.result.id : null;
+    const c = await addContactInChat(this.chat, { contacts: this.contacts, record, prefill });
+    if (!c) return null;
+    this.contactsById.set(c.id, c);
+    return c.id;
   }
 
   // --- Vets (Pro) -----------------------------------------------------------------
 
-  isVet(c) { return (c.contact_type || []).includes('vet'); }
-  vetsFirst() { return (a, b) => this.isVet(b) - this.isVet(a); }
+  isVet(c) { return isVet(c); }
+  vetsFirst() { return (a, b) => isVet(b) - isVet(a); }
 
   // Events that name a vet who isn't in her contacts: link them all to one
   // contact (the likely one, one she picks, or one she adds), tagged Vet, and the
@@ -618,13 +602,13 @@ class Tidy extends FindingsTask {
   }
 
   async noVet(f) {
-    const pick = await this.ask(f, 'You don\'t have a vet in your contacts yet. With yours there, their number is a tap away, and you can pick them on a vet visit.', [
+    const pick = await this.ask(f, `You don't have a vet in your contacts yet. ${VET_WHY}`, [
       { label: 'Add my vet', value: 'new', primary: true },
       ...(this.contacts.length ? [{ label: 'They\'re in my contacts', value: 'pick' }] : [])
     ], { never: 'No vet to add, don\'t ask again' });
     let contactId = null;
     if (pick === 'new') {
-      await this.chat.say('<strong>Who\'s your vet?</strong><span class="kels-lead">The clinic or the vet\'s name both work.</span>', { typing: 400 });
+      await this.chat.say(`<strong>Who's your vet?</strong><span class="kels-lead">${VET_NAME_HINT}</span>`, { typing: 400 });
       contactId = await this.addContact({ contact_type: ['vet'] });
     } else if (pick === 'pick') {
       contactId = await this.pickContact();

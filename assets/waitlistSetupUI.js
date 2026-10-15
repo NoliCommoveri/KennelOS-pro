@@ -20,18 +20,17 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { ownKennels, getActiveKennel } from '../data/kennelScope.js';
-import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import {
   waitlistConfig, waitlistConfigProblem, waitlistSummaryLines, waitlistIsSetUp, showUpcoming, UPCOMING_STAGES,
-  embedOrigin, embedOrigins, EMBED_ORIGINS_MAX, PUBLIC_INTRO_DEFAULT, kennelBreeds
+  embedOrigin, embedOrigins, EMBED_ORIGINS_MAX, PUBLIC_INTRO_DEFAULT
 } from '../data/waitlistRules.js';
-import { FEE_CREDIT_POLICY, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER, WAITLIST_PRIORITY } from '../data/vocab.js';
+import { WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER, WAITLIST_PRIORITY } from '../data/vocab.js';
 import { field } from './litterCheckinUI.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { formQuestions, snapshotQuestions, isAnswerQuestion, missingRequired } from '../data/waitlistForm.js';
-import { applicationFields, readAnswers, readPrefs } from './waitlistApplicationForm.js';
-import { esc, fmtMoney, todayYMD } from './ui.js';
+import { askApplicant } from './kelsApplicant.js';
+import { offerCloudBackup, CLOUD_OFF_FORM } from './kelsBackupSteps.js';
+import { askWaitlistFee } from './waitlistFeeStep.js';
+import { esc, fmtMoney } from './ui.js';
 
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const opt = (value, label, selected) => `<option value="${esc(value)}"${selected ? ' selected' : ''}>${esc(label)}</option>`;
@@ -39,14 +38,14 @@ const check = (id, label, on, attrs = '') => `<label class="check-inline ws-chec
 const group = (title, inner, hint = '') => `<fieldset class="ws-group"><legend>${esc(title)}</legend>${hint ? `<p class="field-hint">${hint}</p>` : ''}${inner}</fieldset>`;
 const numOrNull = (v) => (String(v ?? '').trim() === '' ? null : Number(v));
 
-export async function runWaitlistSetupTask(chat, { onExit = () => {} } = {}) {
+export async function runWaitlistSetupTask(chat, { onExit = () => {}, handoff = null } = {}) {
   if (!(await chat.intro('Ooh, love it, let\'s get your waitlist ready for families!'))) return onExit('nevermind');
-  return new Setup(chat, onExit).start();
+  return new Setup(chat, onExit, handoff).start();
 }
 
 class Setup {
-  constructor(chat, onExit) {
-    Object.assign(this, { chat, onExit, saved: 0 });
+  constructor(chat, onExit, handoff) {
+    Object.assign(this, { chat, onExit, handoff, saved: 0 });
     this.onlineOffered = isWaitlistOnlineOffered();
   }
 
@@ -130,70 +129,12 @@ class Setup {
   }
 
   // --- 1. The fee -----------------------------------------------------------------
+  // The shared fee step (assets/waitlistFeeStep.js): Set up my application form asks it too.
 
   async fee() {
-    const c = this.config;
-    let services = [];
-    if (editionFlags.accounts) {
-      const { accountRepo } = await import('../data/accountRepo.js');
-      services = (await accountRepo.getAll()).filter((a) => a.account_type === 'payment_service');
-    }
-    const hasStripe = services.some((a) => /stripe/i.test(a.name || ''));
-    const onlinePay = editionFlags.accounts ? group('Paid online (optional)', `
-        ${field('Families pay through', `<select id="ws-fee-account">${opt('', '— not online —', !this.kennel.waitlist_fee_account_id)}${services.map((a) => opt(a.id, a.name || 'Payment account', a.id === this.kennel.waitlist_fee_account_id)).join('')}${hasStripe ? '' : opt('new-stripe', 'Stripe (I\'ll connect it now)', false)}</select>`)}
-        ${field('Ask for the fee', `<select id="ws-fee-when">${opt('apply', 'At the end of the online application', c.fee_link_when !== 'approved')}${opt('approved', 'Once I approve them', c.fee_link_when === 'approved')}</select>`)}`,
-      'Families get a Pay button. With Stripe connected, it\'s a card checkout for the exact fee, recorded as received when they pay.') : '';
-    const res = await this.chat.form({
-      title: '<strong>First, the application fee.</strong><span class="kels-lead">Leave the amount blank if you don\'t charge one.</span>',
-      html: `<div class="ck-inline">
-          ${field('Application fee', `<input id="ws-fee" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(c.fee_amount ?? '')}" placeholder="No fee">`)}
-          ${field('The fee is', `<select id="ws-policy">${FEE_CREDIT_POLICY.map((o) => opt(o.value, o.label, o.value === c.fee_credit_policy)).join('')}</select>`)}
-        </div>
-        ${field('Days to pay after you approve them', `<input id="ws-fee-days" type="number" min="1" step="1" value="${esc(c.fee_due_days ?? '')}" placeholder="No deadline">`, 'Blank means no pay-by date.')}
-        ${field('How families pay you', `<textarea id="ws-instructions" rows="2" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions || '')}</textarea>`)}
-        ${onlinePay}`,
-      submitLabel: 'Save the fee',
-      cancelLabel: 'Skip this',
-      submit: async (root) => {
-        const q = (s) => root.querySelector(s);
-        const account = q('#ws-fee-account')?.value;
-        const changes = {
-          fee_amount: numOrNull(q('#ws-fee').value),
-          fee_credit_policy: q('#ws-policy').value,
-          fee_due_days: numOrNull(q('#ws-fee-days').value),
-          payment_instructions: q('#ws-instructions').value.trim(),
-          ...(q('#ws-fee-when') ? { fee_link_when: q('#ws-fee-when').value } : {})
-        };
-        let accountId = account && account !== 'new-stripe' ? account : null;
-        if (account === 'new-stripe') {
-          const { accountRepo } = await import('../data/accountRepo.js');
-          accountId = (await accountRepo.create({ name: 'Stripe', account_type: 'payment_service', website: 'https://dashboard.stripe.com' })).id;
-        }
-        const problem = await this.saveConfig(changes, editionFlags.accounts ? { waitlist_fee_account_id: accountId } : {});
-        return problem || { accountId, newStripe: account === 'new-stripe' };
-      },
-      reply: () => (this.config.fee_amount ? `A ${fmtMoney(this.config.fee_amount)} fee` : 'No fee')
-    });
-    if (!res.done) return null;
-    await this.chat.say('Saved. Nice and clear for families.', { typing: 400 });
-    if (res.result.accountId) await this.offerStripe(res.result.accountId, res.result.newStripe);
+    if (await askWaitlistFee(this.chat, this.kennel, { resumeTask: 'Set up my waitlist' })) this.saved++;
+    await this.reload();
     return null;
-  }
-
-  // The fee's payment account is Stripe with no key on this device: connect it here.
-  async offerStripe(accountId, isNew) {
-    const { accountRepo } = await import('../data/accountRepo.js');
-    const { getStripeKey } = await import('../data/stripeKeyStore.js');
-    const account = await accountRepo.getById(accountId);
-    if (!account || (!isNew && !/stripe/i.test(account.name || '')) || await getStripeKey(accountId)) return;
-    await this.chat.say(`Want to connect ${esc(account.name)} now? Then families pay the fee by card, and KennelOS marks it received by itself.`);
-    const pick = await this.chat.choose([{ label: 'Connect Stripe', value: 'yes', primary: true }, { label: 'Later', value: '' }]);
-    if (pick !== 'yes') { await this.chat.say('No problem. Families still see your payment instructions.', { typing: 300 }); return; }
-    const { vendorKeyFlow } = await import('./vendorKeyUI.js');
-    const a = { id: account.id, name: account.name, username: account.username || '', password: account.password || '', website: account.website || '', currency: 'usd' };
-    if (await vendorKeyFlow(this.chat, a, 'stripe', { resumeTask: 'Set up my waitlist' })) {
-      await this.chat.say('Stripe is connected. Families can pay the fee by card now!');
-    }
   }
 
   // --- 2. Offers and turns ------------------------------------------------------------
@@ -247,14 +188,12 @@ class Setup {
     // Her online list is published from this device's cloud backup.
     let st = cw.waitlistOnlineStatus(this.kennel);
     if (!st.signedIn || !st.backupOn) {
-      await this.chat.say(`Your online list is published through cloud backup, and that's ${st.signedIn ? 'off' : 'not set up'} on this device. Want to turn it on now? It only takes a minute, and your records get backed up too.`);
-      const pick = await this.chat.choose([{ label: 'Turn on cloud backup', value: 'yes', primary: true }, { label: 'Not now', value: '' }]);
-      if (pick === 'yes') await (await import('./cloudBackupUI.js')).turnOnFlow();
+      const on = await offerCloudBackup(this.chat, {
+        line: `Your online list is published through cloud backup, and that's ${st.signedIn ? 'off' : 'not set up'} on this device. ${CLOUD_OFF_FORM} Want to turn it on now? It only takes a minute, and your records get backed up too.`,
+        later: 'Okay, we\'ll leave the list offline for now, so you\'ll type each family\'s application in yourself. Once cloud backup is on, come back and we\'ll put it online.'
+      });
       st = cw.waitlistOnlineStatus(this.kennel);
-      if (!st.signedIn || !st.backupOn) {
-        await this.chat.say('Okay, we\'ll leave the list offline for now. Once cloud backup is on, come back and we\'ll put it online.');
-        return null;
-      }
+      if (!on || !st.signedIn || !st.backupOn) return null;
       await this.chat.say('Cloud backup is on. Great, let\'s put your list online.');
     }
     const { timeZoneOptions, deviceTimeZone } = await import('./waitlistOnlineUI.js');
@@ -424,42 +363,9 @@ class Setup {
     return 'left';
   }
 
-  // One family she already has, typed in the chat: her application form (the same
-  // fields as the Waitlist entry page's new application, waitlistApplicationForm.js),
-  // then the program, when they applied and her notes. Saved as an application
-  // (status applied), as that page saves it.
+  // One family she already has, typed in the chat (kelsApplicant.askApplicant).
   async addFamily() {
-    const config = waitlistConfig(this.kennel);
-    const form = formQuestions(config);
-    const breeds = kennelBreeds(this.kennel, await dogRepo.getAll());
-    const programs = this.programs.filter((p) => !p.is_archived).sort((a, b) => a.name.localeCompare(b.name));
-    const res = await this.chat.form({
-      title: '<strong>Tell me about the family.</strong><span class="kels-lead">Your application\'s questions, so it matches what families fill in online.</span>',
-      html: `<div class="form-grid">${applicationFields({ form, config, breeds, entry: {} })}
-        ${programs.length ? field('Program', `<select id="ws-af-program"><option value="">— none —</option>${programs.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>`) : ''}
-        ${field('When they applied', `<input id="ws-af-applied" type="date" value="${esc(todayYMD())}">`, 'Their place in line comes from when their fee is received, once you approve them.')}
-        ${field('Your notes', '<textarea id="ws-af-notes" rows="2"></textarea>')}</div>`,
-      submitLabel: 'Add the family',
-      cancelLabel: 'Not now',
-      submit: async (root) => {
-        const questions = form.filter(isAnswerQuestion);
-        const application = readAnswers(root, questions);
-        const prefs = readPrefs(root);
-        const missing = missingRequired(questions, application);
-        if (!prefs.ready_timing) missing.push(form.find((q) => q.key === 'ready_timing')?.label || 'Ready to buy');
-        if (missing.length) return `Please fill in: ${missing.map((m) => m.replace(/[?.!:]+$/, '')).join(', ')}.`;
-        const entry = await waitlistEntryRepo.create({
-          ...prefs, application, application_questions: snapshotQuestions(questions),
-          waitlist_program_id: root.querySelector('#ws-af-program')?.value || null,
-          applied_date: root.querySelector('#ws-af-applied').value || todayYMD(),
-          notes: root.querySelector('#ws-af-notes').value,
-          kennel_id: this.kennel.id, status: 'applied'
-        });
-        return { entry };
-      },
-      reply: (out) => out.entry.application?.name || 'Add the family'
-    });
-    return res.done ? res.result.entry : null;
+    return askApplicant(this.chat, { kennel: this.kennel });
   }
 
   // --- The end -----------------------------------------------------------------------------
@@ -468,7 +374,14 @@ class Setup {
     await this.reload();
     const lines = waitlistSummaryLines(this.config, { programs: this.programs, online: this.onlineOffered, fmtMoney });
     await this.chat.say(`${this.saved ? 'Your waitlist is ready, and it looks great!' : 'Nothing changed, and that\'s fine.'} Here's where it stands:<br>${lines.map(esc).join('<br>')}`
-      + `<br><span class="kels-lead">Your emails, pass reasons and application form use our standard wording. You can change them in your kennel's Waitlist settings and on the Application form page.</span>`);
-    if (!leaving) this.onExit('done');
+      + `<br><span class="kels-lead">Your emails and pass reasons use our standard wording. You can change them in your kennel's Waitlist settings.</span>`);
+    if (leaving) return;
+    // Her application form is a task of its own (assets/guidedFormUI.js).
+    if (this.handoff) {
+      await this.chat.say('Want to make your application form your own next? The questions families answer, and a few FAQs.');
+      const pick = await this.chat.choose([{ label: 'Set up my application form', value: 'form', primary: true }, { label: 'Not now', value: '' }]);
+      if (pick === 'form') return this.handoff('form-setup', { kennelId: this.kennel.id });
+    }
+    this.onExit('done');
   }
 }

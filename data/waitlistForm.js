@@ -75,6 +75,19 @@ export const DEFAULT_FORM_QUESTIONS = Object.freeze([
   q({ id: 'public_notice', key: 'public_notice', label: 'About our public waitlist', type: 'notice', help: PUBLIC_LIST_NOTICE })
 ]);
 
+// What a locked question's answer is, in her terms (the form page and Kels's
+// "Set up my application form").
+export const LOCKED_TYPE_LABEL = {
+  name: 'Short answer · the family\'s name',
+  email: 'Email address · used to spot returning families',
+  pref_sex: 'Either / Male / Female · decides which pups they\'re offered',
+  pref_breed: 'Breed · decides which pups they\'re offered',
+  pref_purposes: 'Pet / Performance / Show / Breeding / Co-own, choose all · mapped to registration (Limited, Full, Co-own), decides which pups they\'re offered',
+  pref_colors: 'Colors · notes, or matching if you turn color matching on',
+  ready_timing: 'ASAP / 1 month / 3 months / 6+ months · anything but ASAP is on hold that long',
+  public_notice: 'Shown to every applicant · no answer'
+};
+
 const LOCKED_DEFAULTS = DEFAULT_FORM_QUESTIONS.filter((x) => x.key);
 
 // A form saved before the placement question became the purposes question

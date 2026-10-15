@@ -16,6 +16,7 @@ import { requestPersistentStorage } from '../data/db.js';
 import { downloadBackup } from '../data/importExport.js';
 import { editionFlags, licenseConfig } from '../data/editionConfig.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
+import { VAULT_WHY } from './kelsBackupSteps.js';
 import { isLicenseGated, evaluateLicense, activate } from '../data/license.js';
 import { FindingsTask, plural } from './kelsFindings.js';
 import { esc, fmtDate } from './ui.js';
@@ -367,7 +368,7 @@ const FIXES = {
   },
 
   async 'vault-off'(f) {
-    const pick = await this.ask(f, 'Your backup leaves out Sensitive records (phone numbers, addresses, prices, notes). Turn on Sensitive records backup and they\'re saved too, encrypted so only you can read them.', [
+    const pick = await this.ask(f, `Your backup leaves out Sensitive records (phone numbers, addresses, prices, notes). ${VAULT_WHY}`, [
       { label: 'Turn it on', value: 'fix', primary: true }
     ]);
     if (pick !== 'fix') return pick;

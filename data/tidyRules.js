@@ -14,6 +14,7 @@
 import { RELEASED_SALE_STATUSES, EVENT_TYPES } from './vocab.js';
 import { studParents } from './studRules.js';
 import { normReg, similarNamed } from './dogSearch.js';
+import { normName, normEmail, normPhone, hasVet, isVet } from './contactSearch.js';
 
 export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
@@ -35,16 +36,9 @@ const blank = (v) => v == null || (typeof v === 'string' && v.trim() === '');
 const num = (v) => (blank(v) ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 const pairKey = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
 
-// Name keys: case, spacing and punctuation don't count ("Mary-Ann  Smith." = "mary ann smith").
-export const normName = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
-  .replace(/[^a-z0-9]+/g, ' ').trim();
+// Name, email and phone keys are contactSearch's, so "the same person" reads one way everywhere.
+export { normName, normPhone };
 const normId = (s) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-const normEmail = (s) => String(s ?? '').trim().toLowerCase();
-// Phone: digits only, and the last 10 so "+1 (555) 123-4567" = "555.123.4567".
-export const normPhone = (s) => {
-  const d = String(s ?? '').replace(/\D/g, '');
-  return d.length >= 7 ? d.slice(-10) : '';
-};
 const normUrl = (s) => String(s ?? '').trim().toLowerCase().replace(/^https?:\/\/(www\.|m\.)?/, '').replace(/\/+$/, '');
 
 // --- Litters -------------------------------------------------------------------
@@ -256,7 +250,6 @@ export function vetContactFindings(events, contacts) {
   const caps = (t) => (/[A-Z]/.test(t) ? 1 : 0);
   for (const g of groups.values()) g.name = [...g.spellings].sort(([a, x], [b, y]) => y - x || caps(b) - caps(a))[0][0];
   const live = contacts.filter((c) => !c.is_archived);
-  const isVet = (c) => (c.contact_type || []).includes('vet');
   return [...groups].map(([n, g]) => {
     const same = live.filter((c) => normName(c.name) === n).sort((a, b) => isVet(b) - isVet(a));
     const match = same[0] || similarNamed([...live].sort((a, b) => isVet(b) - isVet(a)), g.name, (c) => c.name);
@@ -268,7 +261,7 @@ export function vetContactFindings(events, contacts) {
 // Nobody in her contacts is tagged Vet. Raised once she has a dog of her own;
 // one finding, so "Don't ask me again" settles it.
 export function noVetFindings(contacts, dogs) {
-  if (!dogs.length || contacts.some((c) => !c.is_archived && (c.contact_type || []).includes('vet'))) return [];
+  if (!dogs.length || hasVet(contacts)) return [];
   return [{ key: 'novet', kind: 'no-vet' }];
 }
 

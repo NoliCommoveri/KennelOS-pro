@@ -13,6 +13,8 @@
 // onAct (any other [data-act] button) returns 'redraw' or 'read-redraw'. A
 // `.gl-lead` paragraph in the html moves up into Kels's bubble.
 import { esc } from './ui.js';
+import { contactRepo } from '../data/contactRepo.js';
+import { findContactMatches } from '../data/contactSearch.js';
 
 // --- Little HTML helpers the screens share -------------------------------------
 
@@ -47,6 +49,27 @@ export const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // outside parent, Add dogs' breeder), so they read the same everywhere.
 export const kennelNameField = (id, value = '') =>
   field('Kennel name', input(id, value, { placeholder: 'e.g. Elmwood Kennels' }));
+
+// Another breeder's kennel: one she has (`kennels`, outside ones), or a new name.
+// `v`: { kennelId, kennelName }. The litter task's owner kennel, Add dogs'
+// breeder and Add people's breeders all ask it this way. wireKennelPicker shows
+// the name box only while "a new one" is picked; readKennelPicker gives
+// { kennelId, kennelName } (one of them blank).
+export function kennelPicker(prefix, v = {}, kennels = [], { pickLabel = 'A kennel you already have', newLabel = 'A new kennel…' } = {}) {
+  const sorted = [...kennels].sort((a, b) => (a.kennel_name || '').localeCompare(b.kennel_name || ''));
+  return `${sorted.length ? field(pickLabel, `<select id="${prefix}-pick"><option value="">${esc(newLabel)}</option>${sorted.map((k) => `<option value="${esc(k.id)}"${v.kennelId === k.id ? ' selected' : ''}>${esc(k.kennel_name)}</option>`).join('')}</select>`) : ''}
+    <div id="${prefix}-new"${v.kennelId ? ' hidden' : ''}>${kennelNameField(`${prefix}-name`, v.kennelName)}</div>`;
+}
+
+export function wireKennelPicker(root, prefix) {
+  const pick = root.querySelector(`#${prefix}-pick`);
+  pick?.addEventListener('change', () => { root.querySelector(`#${prefix}-new`).hidden = Boolean(pick.value); });
+}
+
+export function readKennelPicker(root, prefix) {
+  const kennelId = val(root, `${prefix}-pick`) || null;
+  return { kennelId, kennelName: kennelId ? '' : val(root, `${prefix}-name`) };
+}
 
 export const contactFields = (prefix, v = {}, { nameLabel = 'Name' } = {}) =>
   `${field(nameLabel, input(`${prefix}-name`, v.name, { placeholder: 'e.g. Pat Smith' }))}
@@ -88,6 +111,41 @@ export function readBreedPicker(root, prefix) {
 export const readContactFields = (root, prefix) => ({
   name: val(root, `${prefix}-name`), phone: val(root, `${prefix}-phone`), email: val(root, `${prefix}-email`)
 });
+
+// --- People, added in the chat ------------------------------------------------------
+
+// Why her vet belongs in her contacts, and how to name one: the tidy-up's "no vet"
+// finding and Add people's vet question say it the same way.
+export const VET_WHY = 'With yours there, their number is a tap away, and you can pick them on a vet visit.';
+export const VET_NAME_HINT = 'The clinic or the vet\'s name both work.';
+
+// A new contact typed into a chat form (name, phone, email; `prefill` fills them
+// in), made with `record`'s fields (its contact_type, kennel_id). Someone she may
+// already have (contactSearch: the same email or phone, or a near name) is asked
+// about once; Add again keeps hers. The tidy-up's "Add a contact" and its vet's.
+// → the new contact, or null on Skip.
+export async function addContactInChat(chat, { contacts = [], record = {}, prefill = {}, submitLabel = 'Add', cancelLabel = 'Skip' } = {}) {
+  let asked = null;
+  const res = await chat.form({
+    title: '',
+    html: contactFields('kc-c', prefill),
+    submitLabel, cancelLabel,
+    submit: async (root) => {
+      const typed = readContactFields(root, 'kc-c');
+      if (!typed.name) return 'What\'s their name?';
+      const like = findContactMatches(typed, contacts)[0];
+      const key = JSON.stringify(typed);
+      if (like && asked !== key) {
+        asked = key;
+        const why = like.strength === 'certain' ? `That ${like.reason} is ${like.contact.name}'s` : `Is that ${like.contact.name}`;
+        return `${why}, already in your contacts${like.strength === 'certain' ? '.' : '?'} Tap ${cancelLabel} and pick them instead, or ${submitLabel} again to add them as you typed it.`;
+      }
+      return contactRepo.create({ ...typed, ...record });
+    },
+    reply: (c) => c.name
+  });
+  return res.done ? res.result : null;
+}
 
 export function pagesPrefix() {
   return location.pathname.includes('/pages/') ? '' : 'pages/';

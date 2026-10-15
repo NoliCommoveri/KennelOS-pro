@@ -8,7 +8,7 @@ import {
   db, requestPersistentStorage, isDbUpgradeBlocked,
   DB_BLOCKED_EVENT, DB_READY_EVENT, DB_VERSIONCHANGE_EVENT
 } from './data/db.js';
-import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft, getGuidedDogsDraft } from './data/settings.js';
+import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft, getGuidedDogsDraft, getGuidedPeopleDraft, getGuidedFormDraft } from './data/settings.js';
 import { renderAssistButton } from './assets/kelsChat.js';
 import { expenseRepo } from './data/expenseRepo.js';
 import { studServiceRepo } from './data/studServiceRepo.js';
@@ -25,7 +25,8 @@ import { editionFlags } from './data/editionConfig.js';
 // Kels's floating "Ask Kels" button (assets/kelsChat.js), with a dot while a
 // guided task is waiting to be finished.
 function renderKelsButton() {
-  const pending = [getGuidedLitterDraft(), getGuidedDogsDraft()].some((d) => d && !d.done);
+  const pending = [getGuidedLitterDraft(), getGuidedDogsDraft(), editionFlags.contactsSection ? getGuidedPeopleDraft() : null,
+    editionFlags.waitlist ? getGuidedFormDraft() : null].some((d) => d && !d.done);
   renderAssistButton({ pending });
 }
 

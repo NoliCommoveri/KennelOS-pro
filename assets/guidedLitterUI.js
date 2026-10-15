@@ -31,7 +31,7 @@ import * as G from '../data/guidedLitter.js';
 import { findDogMatches, matchReason, breedChoices } from '../data/dogSearch.js';
 import { esc, todayYMD } from './ui.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
-import { StepConversation, tile, field, input, options, stepper, val, plural, pagesPrefix, kennelNameField, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
+import { StepConversation, tile, field, input, options, stepper, val, plural, pagesPrefix, kennelPicker, wireKennelPicker, readKennelPicker, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
 
 // --- The data the screens read --------------------------------------------------
 
@@ -241,19 +241,12 @@ function screens(draft, data, ctx) {
   function parentKennel(role) {
     const r = G.ROLES[role];
     const s = draft[r.newKey];
-    const outside = data.kennels.filter((k) => !k.is_own_kennel).sort((a, b) => (a.kennel_name || '').localeCompare(b.kennel_name || ''));
     return {
       title: 'Does the owner have a kennel name?',
       html: `<p class="gl-lead">Optional. Tap Next to skip.</p>
-        ${outside.length ? field('A kennel you already have', `<select id="gl-sk-pick"><option value="">None, or a new one…</option>${outside.map((k) => `<option value="${esc(k.id)}"${s.kennelId === k.id ? ' selected' : ''}>${esc(k.kennel_name)}</option>`).join('')}</select>`) : ''}
-        <div id="gl-sk-new"${s.kennelId ? ' hidden' : ''}>${kennelNameField('gl-sk-name', s.kennelName)}</div>`,
-      wire: (root) => {
-        root.querySelector('#gl-sk-pick')?.addEventListener('change', (e) => { root.querySelector('#gl-sk-new').hidden = Boolean(e.target.value); });
-      },
-      read: (root) => {
-        s.kennelId = val(root, 'gl-sk-pick') || null;
-        s.kennelName = s.kennelId ? '' : val(root, 'gl-sk-name');
-      }
+        ${kennelPicker('gl-sk', s, data.kennels.filter((k) => !k.is_own_kennel), { newLabel: 'None, or a new one…' })}`,
+      wire: (root) => wireKennelPicker(root, 'gl-sk'),
+      read: (root) => Object.assign(s, readKennelPicker(root, 'gl-sk'))
     };
   }
 
