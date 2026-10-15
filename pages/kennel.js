@@ -29,7 +29,7 @@ import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
-import { waitlistConfig, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES, messengerLink } from '../data/waitlistRules.js';
+import { waitlistConfig, waitlistConfigProblem, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
 import { PUPPY_RECORD_FIELD_GROUPS, PUPPY_RECORD_FIELD_KEYS, puppyRecordFieldsValue } from '../data/puppyRecordFields.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
@@ -579,15 +579,12 @@ async function onSaveWaitlist() {
   if (q('#wl-fb-on')) {
     const page = q('#wl-fb-page').value.trim();
     const on = q('#wl-fb-on').checked;
-    if (on && !page) { showError('Add your Page link first.'); return; }
-    if (page && !messengerLink(page)) { showError('That link isn\'t a Facebook Page. Use a facebook.com or m.me address.'); return; }
     waitlist_config.facebook_button = on;
     waitlist_config.facebook_page = page;
   }
   if (q('#wl-ready-rule')) {
     waitlist_config.ready_no_answer = q('#wl-ready-rule').value;
     waitlist_config.ready_answer_days = num('#wl-ready-days');
-    if (waitlist_config.ready_answer_days != null && waitlist_config.ready_answer_days < 1) { showError('Days to answer must be at least 1.'); return; }
   }
   if (els.config.querySelector('[data-wl-show]')) {
     const show = showUpcoming({});
@@ -597,9 +594,9 @@ async function onSaveWaitlist() {
     }
     waitlist_config.show_upcoming = show;
   }
-  if (!waitlist_config.pass_reasons.length && !waitlist_config.pass_other) { showError('Keep at least one reason for passing, or tick "Other".'); return; }
   delete waitlist_config.auto_offer_next; // replaced by auto_offer_on (2026-10-08)
-  if (waitlist_config.max_passes != null && waitlist_config.max_passes < 1) { showError('Passes before removal must be at least 1.'); return; }
+  const problem = waitlistConfigProblem(waitlist_config);
+  if (problem) { showError(problem); return; }
   try {
     await kennelRepo.update(kennel.id, {
       waitlist_config,

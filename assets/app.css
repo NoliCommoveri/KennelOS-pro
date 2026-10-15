@@ -1118,6 +1118,23 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
 .kels-from-you .kels-bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
 .kels-bubble strong { font-weight: 700; }
 .kels-bubble .kels-lead { display: block; margin: 4px 0 0; color: var(--text-muted); font-size: 16px; }
+/* Numbered steps in her message (account health's "Help me replace it"). */
+.kels-bubble .kels-steps { margin: 8px 0 10px; padding-left: 22px; }
+.kels-bubble .kels-steps li { margin: 4px 0; }
+/* A saved login shown in her panel: label, value, small Show / Copy buttons. */
+/* A group of related settings in her panel ("Set up my waitlist"). */
+.kels-panel .ws-group { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px 10px; margin: 10px 0; }
+.kels-panel .ws-group legend { font-weight: 600; padding: 0 4px; }
+.kels-panel .ws-group .field-hint { margin: 0 0 6px; }
+.kels-panel .ws-check { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0; color: var(--text); font-size: 15px; }
+.kels-panel .ws-check input { margin-top: 3px; flex: 0 0 auto; }
+.kels-panel .ws-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 4px 0; }
+.kels-panel .ws-row > span { flex: 1 1 100%; font-weight: 500; }
+.kels-login { margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.kels-login .gl-q { margin: 0 0 6px; }
+.kels-login-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 2px 0; }
+.kels-login-row .faint { min-width: 74px; }
+.kels-login-row code { overflow-wrap: anywhere; }
 .kels-bubble a { color: var(--accent-dark); }
 .kels-past { opacity: 0.85; }
 .kels-typing { display: inline-flex; gap: 5px; align-items: center; padding: 11px 14px; }
@@ -1217,6 +1234,9 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
 .ck-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .ck-check { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 16px; cursor: pointer; }
 .ck-check input { width: 20px; height: 20px; }
+/* Pups are going home's "Which puppies are leaving?": one pup per row, its sale under its name. */
+.pp-checks { grid-template-columns: 1fr; }
+.pp-checks .pp-sub { display: block; font-size: 14px; }
 .gl-body textarea { width: 100%; font: inherit; font-size: 17px; padding: 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
 @media (max-width: 420px) { .ck-row { grid-template-columns: 1fr 76px 76px; } }
 .kels-main { padding-top: 8px; padding-bottom: 8px; }

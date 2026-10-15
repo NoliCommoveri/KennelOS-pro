@@ -29,7 +29,7 @@ import { paymentLink } from '../data/paymentLinks.js';
 import { JOTFORM_REGIONS, jotformConnection, connectJotform, disconnectJotform, listJotformForms, matchJotformForm } from '../data/jotformConnect.js';
 import { factsFor, guessFormType, matchWarnings } from '../data/jotformMatch.js';
 import { isDemo } from '../data/demoMode.js';
-import { STRIPE_CURRENCIES, stripeConnection, connectStripe, disconnectStripe } from '../data/stripeLinks.js';
+import { STRIPE_CURRENCIES, STRIPE_KEY_PERMISSIONS, stripeConnection, connectStripe, disconnectStripe } from '../data/stripeLinks.js';
 import { esc, badge, fmtMoney, confirmModal, alertModal } from '../assets/ui.js';
 
 const els = {
@@ -491,7 +491,7 @@ function openForm(existing = null) {
           <button type="button" class="btn btn-sm" id="af-st-off">Disconnect</button>
           <div id="af-st-msg" class="field-hint" role="status"></div></div>`
       : `<details class="jf-box"><summary><strong>Connect Stripe</strong> (optional): one-time links for the exact amount, marked paid by themselves</summary>
-          <p class="field-hint">In your Stripe Dashboard, open <strong>Developers → API keys</strong> and create a <strong>restricted key</strong> named KennelOS with only these permissions: Products <em>Write</em>, Prices <em>Write</em>, Payment Links <em>Write</em>, Checkout Sessions <em>Read</em>, PaymentIntents <em>Read</em>, Charges <em>Read</em>, Balance <em>Read</em> (the names may differ a little). Paste it here: it starts <code>rk_</code>. Never paste your full secret key (<code>sk_</code>).</p>
+          <p class="field-hint">In your Stripe Dashboard, open <strong>Developers → API keys</strong> and create a <strong>restricted key</strong> named KennelOS with only these permissions: ${STRIPE_KEY_PERMISSIONS.map(([what, level]) => `${esc(what)} <em>${esc(level)}</em>`).join(', ')} (the names may differ a little). Paste it here: it starts <code>rk_</code>. Never paste your full secret key (<code>sk_</code>).</p>
           <p class="field-hint">The key stays <strong>on this device only</strong>: never in a backup, a sync or KennelOS's cloud, so connect each device you use. Payments go straight to your Stripe account. KennelOS checks Stripe for paid links when you open it.</p>
           <div class="form-grid">
             ${field('Restricted key', '<input id="af-st-key" type="password" autocomplete="off" spellcheck="false" placeholder="rk_live_…">')}

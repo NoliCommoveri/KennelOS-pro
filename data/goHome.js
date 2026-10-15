@@ -19,6 +19,9 @@ export const SCHEDULE_LEAD_DAYS = 7;
 export const GO_HOME_SALE_STATUSES = ['deposit_paid', 'paid_in_full'];
 export const BOARDING_TITLE = 'Deferred pickup boarding';
 export const PICKUP_TITLE = 'Puppy pickup';
+// A go-home where the puppy is taken to the family (a flight nanny, ground
+// transport…): the same `placement` event, its `dropoff_method` set.
+export const DROPOFF_TITLE = 'Puppy drop-off';
 
 const ymd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
 
@@ -56,7 +59,7 @@ export function boardingChargeText(sale, fmtMoney = (v) => `$${v}`) {
 
 // A pickup event for this sale's family: a placement event with that buyer, or
 // with no contact on it (older pickups were logged without one).
-const pickupFor = (sale) => (e) => !e.is_archived && e.event_type === 'placement' && ymd(e.event_date)
+export const pickupFor = (sale) => (e) => !e.is_archived && e.event_type === 'placement' && ymd(e.event_date)
   && (!e.related_contact_id || !sale.buyer_contact_id || e.related_contact_id === sale.buyer_contact_id);
 
 // What's missing on this puppy's way home, or null. `pup`: the dog; `litter`:
@@ -87,12 +90,14 @@ export function goHomeIssue({ pup, litter, sales, events, today }) {
 // once that has passed.
 export const defaultStart = (readyDate, today) => (readyDate && readyDate > today ? readyDate : today);
 
-// The events Kels writes. A pickup: the family as its related contact. A
+// The events Kels writes. A pickup: the family as its related contact; with a
+// `method` (vocab PLACEMENT_METHODS) other than Local pickup it's a drop-off. A
 // boarding: the charge's span from `start`.
-export const pickupEvent = (pup, sale, date, time = '') => ({
+export const pickupEvent = (pup, sale, date, time = '', method = '') => ({
   subject_type: 'dog', subject_id: pup.id, event_type: 'placement', event_date: date,
-  title: PICKUP_TITLE, ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
-  details: time ? { placement_time: time } : {}
+  title: method && method !== 'Local pickup' ? DROPOFF_TITLE : PICKUP_TITLE,
+  ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
+  details: { ...(time ? { placement_time: time } : {}), ...(method ? { dropoff_method: method } : {}) }
 });
 export const boardingEvent = (pup, start, end = '') => ({
   subject_type: 'dog', subject_id: pup.id, event_type: 'boarding', event_date: start,

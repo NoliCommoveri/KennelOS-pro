@@ -78,6 +78,8 @@ export const PRO_ONLY_STANDALONE = [
   // The "Email the family?" preview (W2 step 6), imported by the waitlist pages,
   // the picks panel and (dynamically) Today's waitlist nudges.
   'assets/waitlistEmailUI.js',
+  // Kels's "Set up my waitlist" (pages/kels.js imports it on start, only with the waitlist).
+  'assets/waitlistSetupUI.js',
   // "Review sale & send" on the waitlist family page (Integrations plan §2.6).
   'assets/pickToSend.js',
   // The Companion link builder (shared by the Companion console and the guided

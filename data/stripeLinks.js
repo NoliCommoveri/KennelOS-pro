@@ -23,6 +23,13 @@ export { STRIPE_CURRENCIES, StripeError } from './stripeApi.js';
 
 export const CHECK_EVERY_MS = 15 * 60 * 1000;
 
+// The permissions her KennelOS restricted key needs, as Stripe's Dashboard names
+// them: the Accounts page's connect form and Kels's "Help me replace it" both list these.
+export const STRIPE_KEY_PERMISSIONS = Object.freeze([
+  ['Products', 'Write'], ['Prices', 'Write'], ['Payment Links', 'Write'], ['Checkout Sessions', 'Read'],
+  ['PaymentIntents', 'Read'], ['Charges', 'Read'], ['Balance', 'Read']
+]);
+
 // A restricted key only (rk_live_… / rk_test_…): never her full secret key.
 export const isRestrictedKey = (k) => /^rk_(live|test)_[A-Za-z0-9]{10,}$/.test(String(k || '').trim());
 

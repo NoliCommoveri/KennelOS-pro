@@ -13,7 +13,9 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { inScopeOnly } from '../data/kennelScope.js';
-import { REGISTRATION_TYPE, SALE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, RELEASED_SALE_STATUSES, descriptor } from '../data/vocab.js';
+import { REGISTRATION_TYPE, SALE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, RELEASED_SALE_STATUSES, descriptor, isOpenSale } from '../data/vocab.js';
+import { prepLitters, pupSale, pickedByDefault } from '../data/prepPups.js';
+import { litterLabel, rosterOf, homePups } from '../data/litterCheckin.js';
 import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
 import { editionFlags } from '../data/editionConfig.js';
 
@@ -263,29 +265,40 @@ body.addEventListener('change', async (e) => {
 });
 
 // --- Print Puppy Record modal --------------------------------------------
-// Lets the breeder jump straight to a puppy's printable record without first
-// opening its Sale — scoped to non-delivered sales (a delivered puppy is
-// already gone; nothing left to hand a buyer). Ordered by dog name.
-function openPrintModal() {
-  const eligible = state.sales
-    .filter((s) => s.status !== 'delivered')
-    .map((s) => ({ sale: s, dogName: state.dogsById.get(s.dog_id)?.call_name || '(unnamed)', buyerName: state.contactsById.get(s.buyer_contact_id)?.name || '' }))
-    .sort((a, b) => a.dogName.localeCompare(b.dogName));
+// The same picker as Kels's Pups are going home: a litter with pups still at home, then
+// which pups (ticked: a sale at Deposit paid or later; a pup with no sale prints
+// too, without the buyer block). "Other puppies" holds pups with a sale in
+// progress that aren't on one of those litters (a grown dog sold, say). Prints
+// one file (puppy-record.html?dogs=…), optionally after the breeder's cover page.
+async function openPrintModal() {
+  const [litters, dogs, sales] = await Promise.all([
+    litterRepo.getAll({ includeArchived: false }), dogRepo.getAll({ includeArchived: false }), saleRepo.getAll({ includeArchived: false })
+  ]);
+  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  const saleOf = (dog) => pupSale(sales.filter((x) => x.dog_id === dog.id));
+  const groups = prepLitters(inScopeOnly(litters), dogs, sales).map((l) => ({
+    id: l.id, label: litterLabel(l, dogsById), pups: homePups(rosterOf(l.id, dogs), sales)
+  }));
+  const grouped = new Set(groups.flatMap((g) => g.pups.map((p) => p.id)));
+  const others = [...new Set(sales.filter(isOpenSale).map((x) => x.dog_id))]
+    .map((id) => dogsById.get(id)).filter((d) => d && !grouped.has(d.id) && inScopeOnly([d]).length)
+    .sort((a, b) => (a.call_name || '').localeCompare(b.call_name || ''));
+  if (others.length) groups.push({ id: 'other', label: 'Other puppies with a sale', pups: others });
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  const options = eligible
-    .map((e) => `<option value="${esc(e.sale.id)}">${esc(e.dogName)}${e.buyerName ? ` → ${esc(e.buyerName)}` : ''}</option>`)
-    .join('');
   overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
-      <h2 style="margin-top:0;">Print a Puppy Record</h2>
-      ${eligible.length ? `
+      <h2 style="margin-top:0;">Print Puppy Records</h2>
+      ${groups.length ? `
         <div class="field">
-          <label>Puppy</label>
-          <select id="ppm-select">${options}</select>
-        </div>` : `<p class="muted">No non-delivered sales to print.</p>`}
+          <label for="ppm-litter">Litter</label>
+          <select id="ppm-litter">${groups.map((g) => `<option value="${esc(g.id)}">${esc(g.label)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Puppies</label><div id="ppm-pups" style="display:flex; flex-direction:column; gap:6px;"></div></div>
+        <label class="check-inline"><input type="checkbox" id="ppm-cover"> Start with my readiness cover page</label>
+        <div id="ppm-error"></div>` : `<p class="muted">No puppies at home or with a sale in progress.</p>`}
       <div class="form-actions">
-        ${eligible.length ? `<button class="btn btn-primary" id="ppm-print">Print</button>` : ''}
+        ${groups.length ? `<button class="btn btn-primary" id="ppm-print">Print</button>` : ''}
         <button class="btn" id="ppm-cancel">Cancel</button>
       </div>
     </div>`;
@@ -294,19 +307,32 @@ function openPrintModal() {
   const close = () => overlay.remove();
   overlay.querySelector('#ppm-cancel').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  if (!groups.length) return;
 
-  const printBtn = overlay.querySelector('#ppm-print');
-  if (printBtn) {
-    printBtn.addEventListener('click', () => {
-      const saleId = overlay.querySelector('#ppm-select').value;
-      // autoprint=1 tells puppy-record.js to invoke window.print() itself once
-      // it finishes rendering, so this really is a one-click "Print" button.
-      window.open(`puppy-record.html?sale=${encodeURIComponent(saleId)}&autoprint=1`, '_blank');
-      close();
-    });
-  }
+  const select = overlay.querySelector('#ppm-litter');
+  const list = overlay.querySelector('#ppm-pups');
+  const showPups = () => {
+    const g = groups.find((x) => x.id === select.value);
+    list.innerHTML = g.pups.map((d) => {
+      const sale = saleOf(d);
+      const buyer = sale ? state.contactsById.get(sale.buyer_contact_id)?.name || '' : '';
+      return `<label class="check-inline"><input type="checkbox" value="${esc(d.id)}"${pickedByDefault(sale) ? ' checked' : ''}> ${esc(d.call_name || d.registered_name || '(unnamed)')}${buyer ? ` → ${esc(buyer)}` : sale ? '' : ' <span class="muted">(no sale)</span>'}</label>`;
+    }).join('');
+  };
+  select.addEventListener('change', showPups);
+  showPups();
+
+  overlay.querySelector('#ppm-print').addEventListener('click', () => {
+    const ids = [...list.querySelectorAll('input:checked')].map((c) => c.value);
+    if (!ids.length) { overlay.querySelector('#ppm-error').innerHTML = '<div class="inline-error">Tick at least one puppy.</div>'; return; }
+    const cover = overlay.querySelector('#ppm-cover').checked ? '&cover=1' : '';
+    // autoprint=1 tells puppy-record.js to invoke window.print() itself once
+    // it finishes rendering, so this really is a one-click "Print" button.
+    window.open(`puppy-record.html?dogs=${ids.map(encodeURIComponent).join(',')}${cover}&autoprint=1`, '_blank');
+    close();
+  });
 }
 
-document.getElementById('btn-print-puppy-record').addEventListener('click', openPrintModal);
+document.getElementById('btn-print-puppy-record')?.addEventListener('click', () => openPrintModal().catch((e) => showError(e.message || String(e))));
 
 main().catch((e) => showError(e.message || String(e)));

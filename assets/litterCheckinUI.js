@@ -21,7 +21,7 @@ import { eventRepo } from '../data/eventRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { inScopeOnly } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { DISPOSITION, EVENT_TYPES, descriptor } from '../data/vocab.js';
+import { DISPOSITION, EVENT_TYPES, PLACEMENT_METHODS, descriptor } from '../data/vocab.js';
 import * as C from '../data/litterCheckin.js';
 import * as H from '../data/goHome.js';
 import { contactRepo } from '../data/contactRepo.js';
@@ -31,8 +31,8 @@ import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const litterHref = (l) => `${pagesPrefix()}litter.html?id=${encodeURIComponent(l.id)}`;
 const sexWord = (p) => (p.sex === 'male' ? 'boy' : p.sex === 'female' ? 'girl' : '');
-const pupName = (p) => p.call_name || p.registered_name || 'Puppy';
-const pupLine = (p) => `<strong>${esc(pupName(p))}</strong>${sexWord(p) ? ` <span class="faint">${esc(sexWord(p))}</span>` : ''}`;
+export const pupName = (p) => p.call_name || p.registered_name || 'Puppy';
+export const pupLine = (p) => `<strong>${esc(pupName(p))}</strong>${sexWord(p) ? ` <span class="faint">${esc(sexWord(p))}</span>` : ''}`;
 // A message from the waitlist ("\n\n" between paragraphs) as Kels's markup.
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((t) => esc(t)).join('<br><br>');
 
@@ -46,6 +46,7 @@ export async function checkinState() {
 // `handoff(taskId, opts)` starts another of Kels's tasks (an Expected litter's
 // birth); `onExit(reason)` hands the chat back to her menu.
 export async function runCheckinTask(chat, { litterId = null, onExit = () => {}, handoff = null } = {}) {
+  if (!(await chat.intro('Of course, let\'s check in on your litter!'))) return onExit('nevermind');
   return new Checkin(chat, onExit, handoff).start(litterId);
 }
 
@@ -203,22 +204,7 @@ class Checkin {
   }
 
   async logPickup(x, date, title) {
-    const res = await this.chat.form({
-      title,
-      html: `<div class="ck-inline">
-          ${field('Pickup date', `<input id="ck-pickup" type="date" value="${esc(date)}">`)}
-          ${field('Time (optional)', '<input id="ck-time" type="text" placeholder="e.g. 10am">')}
-        </div>`,
-      submitLabel: 'Save pickup',
-      cancelLabel: 'Not sure yet',
-      submit: async (root) => {
-        const d = root.querySelector('#ck-pickup').value;
-        if (!d) return 'Pick a date.';
-        await eventRepo.create(H.pickupEvent(x.pup, x.sale, d, root.querySelector('#ck-time').value.trim()));
-        return { d };
-      },
-      reply: (r) => `Pickup on ${fmtDate(r.d)}`
-    });
+    const res = await pickupsForm(this.chat, [{ pup: x.pup, sale: x.sale, date }], { title, cancelLabel: 'Not sure yet' });
     if (!res.done) return;
     this.didSomething = true;
     await this.chat.say(`Saved. It's on ${esc(pupName(x.pup))}'s history and your calendar. After that day, I'll ask whether ${esc(pupName(x.pup))} went home.`);
@@ -462,38 +448,7 @@ class Checkin {
   // --- Medication, deworming, shots, vet visits --------------------------------
 
   async care(kind) {
-    const k = C.CARE_KINDS[kind];
-    const type = descriptor(EVENT_TYPES, k.eventType);
-    const span = type.duration === 'span';
-    const fields = (type.fields || []).map((f) => careInput(f, f.key === k.nameKey)).join('');
-    const pups = this.home.map((p, i) => `<label class="ck-check"><input type="checkbox" id="ck-pup-${i}" checked> ${pupLine(p)}</label>`).join('');
-    const res = await this.chat.form({
-      title: `<strong>${esc(k.ask)}</strong>`,
-      html: `${fields}
-        <div class="ck-inline">
-          ${field(span ? 'Started' : 'Date', `<input id="ck-date" type="date" value="${esc(this.today)}">`)}
-          ${span ? field('Last dose (optional)', '<input id="ck-end" type="date">') : ''}
-        </div>
-        <p class="gl-q">Which puppies? <button type="button" class="gl-more" data-ck="all">All</button> <button type="button" class="gl-more" data-ck="none">None</button></p>
-        <div class="ck-checks">${pups}</div>`,
-      wire: (root) => {
-        root.querySelector('[data-ck="all"]').addEventListener('click', () => root.querySelectorAll('.ck-checks input').forEach((c) => { c.checked = true; }));
-        root.querySelector('[data-ck="none"]').addEventListener('click', () => root.querySelectorAll('.ck-checks input').forEach((c) => { c.checked = false; }));
-      },
-      submitLabel: 'Save',
-      submit: async (root) => {
-        const ids = this.home.filter((p, i) => root.querySelector(`#ck-pup-${i}`).checked).map((p) => p.id);
-        const details = {};
-        for (const f of type.fields || []) details[f.key] = root.querySelector(`#ck-f-${f.key}`)?.value ?? '';
-        const form = { date: root.querySelector('#ck-date').value, endDate: root.querySelector('#ck-end')?.value || '', details };
-        const problem = C.careProblem(kind, ids, form);
-        if (problem) return problem;
-        const events = C.careEvents(kind, ids, form);
-        for (const e of events) await eventRepo.create(e);
-        return { count: ids.length, title: events[0].title, date: form.date };
-      },
-      reply: (r) => `${r.title} for ${r.count === this.home.length ? (r.count === 1 ? 'the puppy' : `all ${r.count} puppies`) : C.plural(r.count, 'puppy', 'puppies')}`
-    });
+    const res = await careForm(this.chat, kind, this.home, this.today);
     if (!res.done) return;
     this.didSomething = true;
     await this.chat.say(`Saved. It's on each puppy's history for ${esc(fmtDate(res.result.date))}.`);
@@ -532,23 +487,7 @@ class Checkin {
   // --- Microchips ---------------------------------------------------------------
 
   async chips() {
-    const rows = this.home.map((p, i) => field(pupName(p) + (sexWord(p) ? ` (${sexWord(p)})` : ''), `<input id="ck-chip-${i}" type="text" inputmode="numeric" autocomplete="off" value="${esc(p.microchip_id || '')}">`)).join('');
-    const res = await this.chat.form({
-      title: '<strong>Microchip numbers</strong><span class="kels-lead">Type or scan each number. Leave one blank if they don\'t have a chip yet.</span>',
-      html: rows,
-      submitLabel: 'Save chips',
-      submit: async (root) => {
-        let changed = 0;
-        for (const [i, p] of this.home.entries()) {
-          const v = root.querySelector(`#ck-chip-${i}`).value.trim();
-          if (v === (p.microchip_id || '')) continue;
-          await dogRepo.update(p.id, { microchip_id: v });
-          changed++;
-        }
-        return changed;
-      },
-      reply: (n) => (n ? `Save ${C.plural(n, 'chip number')}` : 'No changes')
-    });
+    const res = await chipsForm(this.chat, this.home);
     if (!res.done) return;
     if (res.result) this.didSomething = true;
     await this.chat.say(res.result ? 'Saved.' : 'Okay, nothing changed.');
@@ -589,9 +528,97 @@ class Checkin {
   }
 }
 
+// --- Forms other tasks use too (Pups are going home, assets/prepPupsUI.js) -------------------
+
+// "When's the drop-off?": a row per pup (`rows`: [{ pup, sale, date }]) with the
+// date, an optional time and how the pup goes home (vocab PLACEMENT_METHODS: a
+// Local pickup, else a drop-off). A pup left without a date is skipped. One
+// `placement` event per pup with a date (goHome.pickupEvent).
+// → chat.form's { done, result: [{ pup, date, method }] }.
+export function pickupsForm(chat, rows, { title = '<strong>When\'s the drop-off?</strong>', cancelLabel = 'Not now' } = {}) {
+  const many = rows.length > 1;
+  const methods = `<option value="">—</option>${PLACEMENT_METHODS.map((m) => `<option>${esc(m)}</option>`).join('')}`;
+  return chat.form({
+    title: many ? `${title}<span class="kels-lead">Leave a puppy's date blank to skip them.</span>` : title,
+    html: rows.map((r, i) => `${many ? `<p class="gl-q">${pupLine(r.pup)}</p>` : ''}<div class="ck-inline">
+        ${field('Date', `<input id="ck-pickup-${i}" type="date" value="${esc(r.date || '')}" aria-label="${esc(pupName(r.pup))}: date">`)}
+        ${field('Time (optional)', `<input id="ck-time-${i}" type="text" placeholder="e.g. 10am" aria-label="${esc(pupName(r.pup))}: time">`)}
+        ${field('How', `<select id="ck-method-${i}" aria-label="${esc(pupName(r.pup))}: how">${methods}</select>`)}
+      </div>`).join(''),
+    submitLabel: many ? 'Save' : 'Save date',
+    cancelLabel,
+    submit: async (root) => {
+      const out = rows.map((r, i) => ({ ...r, date: root.querySelector(`#ck-pickup-${i}`).value, time: root.querySelector(`#ck-time-${i}`).value.trim(), method: root.querySelector(`#ck-method-${i}`).value }))
+        .filter((r) => r.date);
+      if (!out.length) return many ? 'Pick a date for at least one puppy.' : 'Pick a date.';
+      for (const r of out) await eventRepo.create(H.pickupEvent(r.pup, r.sale, r.date, r.time, r.method));
+      return out;
+    },
+    reply: (out) => (many ? `${C.plural(out.length, 'drop-off date')} saved` : `Drop-off on ${fmtDate(out[0].date)}`)
+  });
+}
+
+// "Health care" of one kind (C.CARE_KINDS) for `pups`, every one ticked. One
+// event per ticked pup. → chat.form's { done, result: { count, title, date } }.
+export function careForm(chat, kind, pups, today) {
+  const k = C.CARE_KINDS[kind];
+  const type = descriptor(EVENT_TYPES, k.eventType);
+  const span = type.duration === 'span';
+  const fields = (type.fields || []).map((f) => careInput(f, f.key === k.nameKey)).join('');
+  const boxes = pups.map((p, i) => `<label class="ck-check"><input type="checkbox" id="ck-pup-${i}" checked> ${pupLine(p)}</label>`).join('');
+  return chat.form({
+    title: `<strong>${esc(k.ask)}</strong>`,
+    html: `${fields}
+      <div class="ck-inline">
+        ${field(span ? 'Started' : 'Date', `<input id="ck-date" type="date" value="${esc(today)}">`)}
+        ${span ? field('Last dose (optional)', '<input id="ck-end" type="date">') : ''}
+      </div>
+      <p class="gl-q">Which puppies? <button type="button" class="gl-more" data-ck="all">All</button> <button type="button" class="gl-more" data-ck="none">None</button></p>
+      <div class="ck-checks">${boxes}</div>`,
+    wire: (root) => {
+      root.querySelector('[data-ck="all"]').addEventListener('click', () => root.querySelectorAll('.ck-checks input').forEach((c) => { c.checked = true; }));
+      root.querySelector('[data-ck="none"]').addEventListener('click', () => root.querySelectorAll('.ck-checks input').forEach((c) => { c.checked = false; }));
+    },
+    submitLabel: 'Save',
+    submit: async (root) => {
+      const ids = pups.filter((p, i) => root.querySelector(`#ck-pup-${i}`).checked).map((p) => p.id);
+      const details = {};
+      for (const f of type.fields || []) details[f.key] = root.querySelector(`#ck-f-${f.key}`)?.value ?? '';
+      const form = { date: root.querySelector('#ck-date').value, endDate: root.querySelector('#ck-end')?.value || '', details };
+      const problem = C.careProblem(kind, ids, form);
+      if (problem) return problem;
+      const events = C.careEvents(kind, ids, form);
+      for (const e of events) await eventRepo.create(e);
+      return { count: ids.length, title: events[0].title, date: form.date };
+    },
+    reply: (r) => `${r.title} for ${r.count === pups.length ? (r.count === 1 ? 'the puppy' : `all ${r.count} puppies`) : C.plural(r.count, 'puppy', 'puppies')}`
+  });
+}
+
+// Microchip numbers for `pups`. → chat.form's { done, result: how many changed }.
+export function chipsForm(chat, pups) {
+  const rows = pups.map((p, i) => field(pupName(p) + (sexWord(p) ? ` (${sexWord(p)})` : ''), `<input id="ck-chip-${i}" type="text" inputmode="numeric" autocomplete="off" value="${esc(p.microchip_id || '')}">`)).join('');
+  return chat.form({
+    title: '<strong>Microchip numbers</strong><span class="kels-lead">Type or scan each number. Leave one blank if they don\'t have a chip yet.</span>',
+    html: rows,
+    submitLabel: 'Save chips',
+    submit: async (root) => {
+      let changed = 0;
+      for (const [i, p] of pups.entries()) {
+        const v = root.querySelector(`#ck-chip-${i}`).value.trim();
+        if (v === (p.microchip_id || '')) continue;
+        await dogRepo.update(p.id, { microchip_id: v });
+        changed++;
+      }
+      return changed;
+    },
+    reply: (n) => (n ? `Save ${C.plural(n, 'chip number')}` : 'No changes')
+  });
+}
+
 // --- Small HTML helpers -----------------------------------------------------------
 
-function field(labelText, inputHtml, hint = '') {
+export function field(labelText, inputHtml, hint = '') {
   return `<div class="field gl-field"><label>${esc(labelText)}</label>${inputHtml}${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</div>`;
 }
 

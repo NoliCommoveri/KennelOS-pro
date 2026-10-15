@@ -78,6 +78,23 @@
 
     .pr-actions { display: flex; justify-content: center; gap: 10px; margin-bottom: 14px; }
 
+    /* Several pups in one file (?dogs=): each record starts a new page, and so
+       does the first one after the breeder's cover page. On screen, a rule. */
+    .pr-cover + .pr-pup, .pr-pup + .pr-pup { break-before: page; page-break-before: always; }
+    @media screen {
+      .pr-cover + .pr-pup, .pr-pup + .pr-pup { margin-top: 24px; padding-top: 18px; border-top: 2px dashed var(--border); }
+    }
+
+    /* The breeder's cover page (&cover=1): where each pup stands. */
+    .pr-cover-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .pr-cover-table th, .pr-cover-table td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    .pr-cover-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+    .pr-cover-sub { color: var(--text-muted); font-size: 12px; }
+    .pr-cover-missing { font-weight: 600; }
+    @media screen and (max-width: 640px) {
+      .pr-cover-table { display: block; overflow-x: auto; }
+    }
+
     @media print {
       #app-nav, .no-print { display: none !important; }
       body { background: #fff; }
@@ -89,6 +106,7 @@
       .pr-wrap, .pr-wrap * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .pr-card, .pr-parent, .pr-health-card { border: 1px solid #9aa3ae; }
       .pr-tests, .pr-health-list li { border-top-color: #c3cad3; }
+      .pr-cover-table th, .pr-cover-table td { border-bottom-color: #c3cad3; }
       /* A short section's heading stays on the same page as its card. */
       .pr-keep { break-inside: avoid; }
     }

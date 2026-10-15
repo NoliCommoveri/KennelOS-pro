@@ -1,4 +1,7 @@
-// puppy-record.js — Puppy Record print/PDF view (?sale=<id>). Resolves the
+// puppy-record.js — Puppy Record print/PDF view: one sale's pup (?sale=<id>), or
+// several pups in one file (?dogs=<id>,<id>…), each record in its own section
+// starting a new page, optionally after a cover page for the breeder (&cover=1,
+// Kels's Pups are going home and the Sales picker). For each pup it resolves the
 // puppy, its sire/dam (with genetic + breed-specific test results), its
 // health-history events (a vet visit's or surgery's with its vet's contact
 // details), and the buyer contact off the Sale, then renders a
@@ -14,7 +17,12 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { getActiveKennel } from '../data/kennelScope.js';
 import { descriptor, SEX, EVENT_TYPES } from '../data/vocab.js';
 import { PUPPY_RECORD_HEALTH_TYPES as HEALTH_EVENT_TYPES, puppyRecordShows, healthKey } from '../data/puppyRecordFields.js';
-import { esc, param } from '../assets/ui.js';
+import { contractRepo } from '../data/contractRepo.js';
+import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
+import { editionFlags } from '../data/editionConfig.js';
+import { pupSale, readiness, doneText } from '../data/prepPups.js';
+import { litterLabel } from '../data/litterCheckin.js';
+import { esc, param, todayYMD } from '../assets/ui.js';
 
 const root = document.getElementById('pr-root');
 
@@ -248,48 +256,25 @@ function buyerCardHtml(contact) {
   return `<section class="pr-card">${columnedRows(rows)}</section>`;
 }
 
-async function main() {
-  const saleId = param('sale');
-  if (!saleId) {
-    root.innerHTML = '<p class="pr-empty">No sale specified.</p>';
-    return;
-  }
-  const sale = await saleRepo.getById(saleId);
-  if (!sale) {
-    root.innerHTML = '<p class="pr-empty">Sale not found.</p>';
-    return;
-  }
-  const dog = await dogRepo.getById(sale.dog_id);
-  if (!dog) {
-    root.innerHTML = '<p class="pr-empty">Puppy not found.</p>';
-    return;
-  }
-  document.getElementById('pr-back').href = `sale.html?id=${encodeURIComponent(sale.id)}`;
-
-  const [buyer, sire, dam, litter, events, kennels, activeKennel, contacts] = await Promise.all([
-    sale.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null,
-    dog.sire_id ? dogRepo.getById(dog.sire_id) : null,
-    dog.dam_id ? dogRepo.getById(dog.dam_id) : null,
-    dog.litter_id ? litterRepo.getById(dog.litter_id) : null,
-    eventRepo.getForSubject('dog', dog.id),
-    kennelRepo.getAll({ includeArchived: true }),
-    getActiveKennel(),
-    contactRepo.getAll({ includeArchived: true })
-  ]);
-  contactsById = new Map(contacts.map((c) => [c.id, c]));
-  // The puppy's own kennel when it's one of the user's own; otherwise the
-  // active kennel scope, then the sole own kennel on record as a last resort
-  // (Lite, or "All kennels" with just one) — Multi-Kennel Scope Spec §10.
-  const ownKennel = (dog.kennel_id && kennels.find((k) => k.id === dog.kennel_id))
+// The pup's own kennel when it's one of the user's own; otherwise the active
+// kennel scope, then the sole own kennel on record as a last resort (Lite, or
+// "All kennels" with just one) — Multi-Kennel Scope Spec §10.
+function resolveKennel(dog, kennels, activeKennel) {
+  return (dog.kennel_id && kennels.find((k) => k.id === dog.kennel_id))
     || activeKennel
     || kennels.find((k) => k.is_own_kennel && !k.is_archived)
     || null;
-  shows = puppyRecordShows(ownKennel);
-  if (ownKennel?.is_own_kennel) {
-    const pick = document.getElementById('pr-fields');
-    pick.href = `kennel.html?id=${encodeURIComponent(ownKennel.id)}#puppy-record`;
-    pick.hidden = false;
-  }
+}
+
+// One pup's record, header to buyer. `sale` may be null (a pup with no sale
+// prints without the buyer block). `events`: the pup's events.
+async function recordHtml(dog, sale, events, ownKennel) {
+  const [buyer, sire, dam, litter] = await Promise.all([
+    sale?.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null,
+    dog.sire_id ? dogRepo.getById(dog.sire_id) : null,
+    dog.dam_id ? dogRepo.getById(dog.dam_id) : null,
+    dog.litter_id ? litterRepo.getById(dog.litter_id) : null
+  ]);
 
   const byType = new Map();
   for (const e of events) {
@@ -306,15 +291,12 @@ async function main() {
   const parentsOn = anyShown(['parentRegisteredName', 'parentCallName', 'parentBreed', 'parentRegistrationNumber', 'parentTests']);
   const healthOn = anyShown(HEALTH_EVENT_TYPES.map(healthKey));
 
-  const titleName = dog.call_name || dog.registered_name || 'Puppy';
-  document.title = `${titleName} — Puppy Record`;
-
-  root.innerHTML = `
+  return `<section class="pr-pup">
     <div class="pr-header">
       ${ownKennel?.logo_data_url && shows('logo') ? `<img src="${esc(ownKennel.logo_data_url)}" alt="${esc(ownKennel.kennel_name || '')} logo" style="max-height:72px; max-width:200px; object-fit:contain; margin-bottom:6px;">` : ''}
       <h1>${esc(ownKennel?.kennel_name || 'Puppy Record')}</h1>
       <div class="pr-kennel">Puppy Record</div>
-      ${shows('generatedDate') ? `<div class="pr-generated">Generated ${esc(fmtDateMDY(new Date().toISOString().slice(0, 10)))}</div>` : ''}
+      ${shows('generatedDate') ? `<div class="pr-generated">Generated ${esc(fmtDateMDY(todayYMD()))}</div>` : ''}
     </div>
 
     ${puppyOn ? sectionLabel('Puppy Information') + puppyInfoCard(dog, litter) : ''}
@@ -328,11 +310,110 @@ async function main() {
     ${healthOn ? sectionLabel('Health History') + healthCardsHtml(byType) : ''}
 
     ${buyerHtml ? `<div class="pr-keep">${sectionLabel('Buyer')}${buyerHtml}</div>` : ''}
-  `;
+  </section>`;
+}
 
-  // Launched from the Sales hub's "Print Puppy Record" modal (?autoprint=1) —
-  // open the browser print dialog as soon as the layout has settled, so that
-  // flow really is a single click through to Print/Save-as-PDF.
+// The breeder's cover page (&cover=1): the litter(s), today, and each pup's
+// readiness (data/prepPups.js, the same rules as Kels's Pups are going home), its drop-off
+// date and family. For her, not the families, so the kennel's field picks don't
+// apply to it.
+async function coverHtml(pups) {
+  const litterIds = [...new Set(pups.map((p) => p.dog.litter_id).filter(Boolean))];
+  const litters = (await Promise.all(litterIds.map((id) => litterRepo.getById(id)))).filter(Boolean);
+  const littersById = new Map(litters.map((l) => [l.id, l]));
+  const parentIds = [...new Set(litters.flatMap((l) => [l.sire_id, l.dam_id]).filter(Boolean))];
+  const parentsById = new Map((await Promise.all(parentIds.map((id) => dogRepo.getById(id)))).filter(Boolean).map((d) => [d.id, d]));
+  const schedules = new Map();
+  if (editionFlags.feedingSchedule) {
+    for (const breed of new Set(pups.map((p) => (p.dog.breed || '').trim()).filter(Boolean))) {
+      schedules.set(breed, Boolean(await breedFeedingScheduleRepo.getByBreed(breed)));
+    }
+  }
+  const today = todayYMD();
+  const rows = await Promise.all(pups.map(async ({ dog, sale, events }) => {
+    const contracts = sale && editionFlags.contracts ? await contractRepo.getBySale(sale.id) : [];
+    const ready = readiness({
+      pup: dog, sale, events, contracts, litter: littersById.get(dog.litter_id) || null, today, flags: editionFlags,
+      hasBreedSchedule: schedules.get((dog.breed || '').trim()) || false
+    });
+    const family = sale?.buyer_contact_id ? contactsById.get(sale.buyer_contact_id)?.name || '' : '';
+    const done = ready.items.filter((i) => i.done).map((i) => i.label);
+    const missing = ready.items.filter((i) => !i.done).map((i) => i.label);
+    return `<tr>
+      <td><strong>${esc(dog.call_name || dog.registered_name || 'Puppy')}</strong><div class="pr-cover-sub">${esc(doneText(ready))}</div></td>
+      <td>${family ? esc(family) : '<span class="pr-empty">No sale</span>'}${ready.pickupDate ? `<div class="pr-cover-sub">Drop-off ${esc(fmtDateMDY(ready.pickupDate))}</div>` : ''}</td>
+      <td>${done.length ? esc(done.join(', ')) : '—'}</td>
+      <td class="pr-cover-missing">${missing.length ? esc(missing.join(', ')) : 'Nothing'}</td>
+    </tr>`;
+  }));
+  const label = litters.map((l) => litterLabel(l, parentsById)).join(', ');
+  return `<section class="pr-cover">
+    <div class="pr-header">
+      <h1>Getting ready to leave</h1>
+      ${label ? `<div class="pr-kennel">${esc(label)}</div>` : ''}
+      <div class="pr-generated">${esc(fmtDateMDY(today))} · for you, not the families</div>
+    </div>
+    <table class="pr-cover-table">
+      <thead><tr><th>Puppy</th><th>Family</th><th>Done</th><th>Missing</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+  </section>`;
+}
+
+async function main() {
+  const saleId = param('sale');
+  const dogIds = (param('dogs') || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!saleId && !dogIds.length) {
+    root.innerHTML = '<p class="pr-empty">No puppy specified.</p>';
+    return;
+  }
+
+  // Each pup to print, with its sale (?sale= names it; ?dogs= finds each pup's
+  // live or delivered sale, prepPups.pupSale) and its events.
+  let pups;
+  if (saleId) {
+    const sale = await saleRepo.getById(saleId);
+    if (!sale) { root.innerHTML = '<p class="pr-empty">Sale not found.</p>'; return; }
+    const dog = await dogRepo.getById(sale.dog_id);
+    if (!dog) { root.innerHTML = '<p class="pr-empty">Puppy not found.</p>'; return; }
+    document.getElementById('pr-back').href = `sale.html?id=${encodeURIComponent(sale.id)}`;
+    pups = [{ dog, sale }];
+  } else {
+    const dogs = (await Promise.all(dogIds.map((id) => dogRepo.getById(id)))).filter(Boolean);
+    if (!dogs.length) { root.innerHTML = '<p class="pr-empty">Puppy not found.</p>'; return; }
+    pups = await Promise.all(dogs.map(async (dog) => ({ dog, sale: pupSale(await saleRepo.getByDog(dog.id)) })));
+    const back = document.getElementById('pr-back');
+    back.textContent = '← Back';
+    back.href = 'sales.html';
+  }
+
+  const [kennels, activeKennel, contacts, eventLists] = await Promise.all([
+    kennelRepo.getAll({ includeArchived: true }),
+    getActiveKennel(),
+    contactRepo.getAll({ includeArchived: true }),
+    Promise.all(pups.map((p) => eventRepo.getForSubject('dog', p.dog.id)))
+  ]);
+  pups.forEach((p, i) => { p.events = eventLists[i]; });
+  contactsById = new Map(contacts.map((c) => [c.id, c]));
+  // The kennel's field picks apply to every pup in the file: the first pup's kennel.
+  const ownKennel = resolveKennel(pups[0].dog, kennels, activeKennel);
+  shows = puppyRecordShows(ownKennel);
+  if (ownKennel?.is_own_kennel) {
+    const pick = document.getElementById('pr-fields');
+    pick.href = `kennel.html?id=${encodeURIComponent(ownKennel.id)}#puppy-record`;
+    pick.hidden = false;
+  }
+
+  const first = pups[0].dog;
+  document.title = pups.length === 1 ? `${first.call_name || first.registered_name || 'Puppy'} — Puppy Record` : `${pups.length} Puppy Records`;
+
+  const records = [];
+  for (const p of pups) records.push(await recordHtml(p.dog, p.sale, p.events, ownKennel));
+  root.innerHTML = (param('cover') ? await coverHtml(pups) : '') + records.join('');
+
+  // Launched from the Sales hub's "Print Puppy Record" picker or Kels's Pups are going home
+  // (?autoprint=1) — open the browser print dialog as soon as the layout has
+  // settled, so that flow really is a single click through to Print/Save-as-PDF.
   if (param('autoprint')) {
     setTimeout(() => window.print(), 200);
   }

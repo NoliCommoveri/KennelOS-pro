@@ -31,7 +31,7 @@ import { contactRepo } from '../contactRepo.js';
 import { eventRepo } from '../eventRepo.js';
 import { accountRepo } from '../accountRepo.js';
 import { todayYMD } from '../dateUtils.js';
-import { waitlistConfig, kennelBreeds, readyCheckLapsed } from '../waitlistRules.js';
+import { waitlistConfig, kennelBreeds, readyCheckLapsed, onlineConfig } from '../waitlistRules.js';
 import { buildProjection } from '../waitlistProjection.js';
 import { formQuestions } from '../waitlistForm.js';
 import { generateFormKey, currentFormKey, rotateFormKeys, openSealed } from '../waitlistCrypto.js';
@@ -515,6 +515,22 @@ async function syncNow({ force }) {
   }
   updateWaitlistOnlineState({ lastError: null });
   return { status: 'ok', published, unpublished, inbox, events, emails };
+}
+
+// Save her online switches for a kennel (the Online list card and Kels's "Set up my
+// waitlist"): the config (waitlistRules.onlineConfig), its time zone, a public id
+// once it goes online, then publish. `changes`: { online, online_form, embed?,
+// embed_origins?, …any other config keys }. → the saved kennel.
+export async function saveWaitlistOnline(kennelId, changes, { timeZone, today = todayYMD() } = {}) {
+  let kennel = await kennelRepo.getById(kennelId);
+  const config = onlineConfig(kennel.waitlist_config || {}, changes, today);
+  kennel = await kennelRepo.update(kennelId, { waitlist_config: config, ...(timeZone !== undefined ? { time_zone: timeZone } : {}) });
+  if (config.online && !kennel.public_id) {
+    await kennelRepo.ensurePublicId(kennelId);
+    kennel = await kennelRepo.getById(kennelId);
+  }
+  await syncWaitlistOnline().catch(() => {});
+  return kennel;
 }
 
 // What the settings card shows for one kennel.

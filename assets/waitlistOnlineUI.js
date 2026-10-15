@@ -1,12 +1,11 @@
 // waitlistOnlineUI.js — the "Online list" card on the waitlist's Publish list page
 // (Waitlist W2 Plan §9; it lived on the Kennel page until 2026-10-08). Imported
 // dynamically by pages/waitlist-publish.js, only where the waitlist online is
-// offered (Pro, cloud available, its release switch or staging). Saving goes
-// through kennelRepo; publishing through data/cloud/cloudWaitlist.js.
-import { esc, confirmModal, alertModal, todayYMD } from './ui.js';
-import { kennelRepo } from '../data/kennelRepo.js';
+// offered (Pro, cloud available, its release switch or staging). Saving and
+// publishing go through data/cloud/cloudWaitlist.js (saveWaitlistOnline).
+import { esc, confirmModal, alertModal } from './ui.js';
 import { waitlistConfig, embedOrigin, embedOrigins, EMBED_ORIGINS_MAX } from '../data/waitlistRules.js';
-import { syncWaitlistOnline, waitlistOnlineStatus, rotateFormKey, WAITLIST_ONLINE_EVENT } from '../data/cloud/cloudWaitlist.js';
+import { syncWaitlistOnline, waitlistOnlineStatus, rotateFormKey, saveWaitlistOnline, WAITLIST_ONLINE_EVENT } from '../data/cloud/cloudWaitlist.js';
 import { publicListLink, applyFormLink, embedSnippet, applyButtonSnippet } from '../data/cloud/cloudConfig.js';
 import { copyLink } from './waitlistUI.js';
 
@@ -44,6 +43,9 @@ const PROBLEM = {
   offline: 'Couldn\'t reach the server. It will try again.',
   failed: 'Publishing didn\'t work. It will try again.'
 };
+
+// Why the list isn't published, in her words (Kels's "Set up my waitlist" says it too).
+export const onlineProblemText = (code) => PROBLEM[code] || 'It didn\'t publish yet. It will try again by itself.';
 
 // Who handles the list on a syncing program: another device's lease (open now,
 // while it lasts), or this one's.
@@ -175,7 +177,6 @@ export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
     const online = root.querySelector('#wlo-online').checked;
     const onlineForm = online && root.querySelector('#wlo-form').checked;
     const timeZone = root.querySelector('#wlo-tz').value || null;
-    const before = kennel.waitlist_config || {};
     // Her website (Integrations plan §1): each line cleaned to a site address.
     const typed = root.querySelector('#wlo-embed-origins').value.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean);
     const embedOriginsList = typed.map(embedOrigin).filter(Boolean);
@@ -189,14 +190,7 @@ export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
       return;
     }
     const embedSettings = { embed: root.querySelector('#wlo-embed').checked, embed_origins: [...new Set(embedOriginsList)] };
-    // The day the list (last) went online: "Ready now?" covers holds ending from then (§16.7).
-    const config = { ...before, online, online_form: onlineForm, ...embedSettings, ...(online && before.online !== true ? { online_since: todayYMD() } : {}) };
-    kennel = await kennelRepo.update(kennel.id, { waitlist_config: config, time_zone: timeZone });
-    if (online && !kennel.public_id) {
-      await kennelRepo.ensurePublicId(kennel.id);
-      kennel = await kennelRepo.getById(kennel.id);
-    }
-    await syncWaitlistOnline().catch(() => {});
+    kennel = await saveWaitlistOnline(kennel.id, { online, online_form: onlineForm, ...embedSettings }, { timeZone });
     if (onSaved) await onSaved(); else render();
   };
 

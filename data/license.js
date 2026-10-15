@@ -130,6 +130,10 @@ export function recordFromPayload(key, data, instanceId, instanceName) {
     expiresAt: lk.expires_at || null, // ISO string or null (null = no set expiry)
     variantName,
     interval: detectInterval(variantName),
+    // How many devices the key is activated on, of how many it allows (Kels's
+    // account health shows them). Null when Lemon Squeezy didn't say.
+    activationUsage: Number.isFinite(lk.activation_usage) ? lk.activation_usage : null,
+    activationLimit: Number.isFinite(lk.activation_limit) ? lk.activation_limit : null,
     lastValidated: new Date().toISOString(),
   };
 }

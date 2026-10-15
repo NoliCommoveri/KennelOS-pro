@@ -51,6 +51,56 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   embed_origins: [] // …only these sites (embedOrigin form, at most EMBED_ORIGINS_MAX); none = any site
 });
 
+// What's wrong with a kennel's waitlist settings, or '' (Waitlist settings card and
+// Kels's "Set up my waitlist" both check with this before saving).
+export function waitlistConfigProblem(c) {
+  const whole = (v) => v == null || (Number.isInteger(Number(v)) && Number(v) >= 1);
+  if (c.fee_amount != null && !(Number(c.fee_amount) >= 0)) return 'The application fee can\'t be negative.';
+  if (!whole(c.fee_due_days)) return 'Days to pay must be a whole number, at least 1.';
+  if (c.respond_days != null && !whole(c.respond_days)) return 'Days to accept and pay the deposit must be at least 1.';
+  if (c.max_passes != null && !whole(c.max_passes)) return 'Passes before removal must be at least 1.';
+  if (c.ready_answer_days != null && !whole(c.ready_answer_days)) return 'Days to answer must be at least 1.';
+  if (Array.isArray(c.pass_reasons) && !c.pass_reasons.length && c.pass_other === false) return 'Keep at least one reason for passing, or tick "Other".';
+  if (c.facebook_button && !String(c.facebook_page || '').trim()) return 'Add your Page link first.';
+  if (String(c.facebook_page || '').trim() && !messengerLink(c.facebook_page)) return 'That link isn\'t a Facebook Page. Use a facebook.com or m.me address.';
+  return '';
+}
+
+// Her online switches applied to the stored config: applications online only with
+// the list online, and the day the list (last) went online (the "Ready now?" check
+// starts there, Spec §16.7). `next`: { online, online_form, embed?, embed_origins? }.
+export function onlineConfig(before = {}, next = {}, today) {
+  const online = Boolean(next.online);
+  return {
+    ...before,
+    ...next,
+    online,
+    online_form: online && Boolean(next.online_form),
+    ...(online && before.online !== true ? { online_since: today } : {})
+  };
+}
+
+// Has this kennel's waitlist been set up at all (any setting saved)?
+export const waitlistIsSetUp = (kennel) => Object.keys(kennel?.waitlist_config || {}).length > 0;
+
+// What's set, in plain sentences, for Kels's "Set up my waitlist" (her summary
+// before "what would you like to change?" and at the end). `programs`: the
+// kennel's live programs; `fmtMoney(n)` formats an amount.
+export function waitlistSummaryLines(config, { programs = [], online = false, fmtMoney = (n) => `$${n}` } = {}) {
+  const c = config;
+  const policy = { credited_to_purchase: 'credited to the purchase price', non_refundable: 'non-refundable', refundable: 'refundable' }[c.fee_credit_policy] || '';
+  const lines = [];
+  lines.push(c.fee_amount != null && Number(c.fee_amount) > 0
+    ? `Application fee: ${fmtMoney(c.fee_amount)}${policy ? `, ${policy}` : ''}${c.fee_due_days ? `, due within ${c.fee_due_days} day${Number(c.fee_due_days) === 1 ? '' : 's'} of approval` : ''}.`
+    : 'No application fee.');
+  lines.push(`Families get ${c.respond_days} day${Number(c.respond_days) === 1 ? '' : 's'} to accept an offer and pay the deposit, and can pass ${c.max_passes} time${Number(c.max_passes) === 1 ? '' : 's'} before they're removed${c.no_response_counts_as_pass ? ' (no response counts as a pass)' : ''}.`);
+  lines.push(autoOfferSummary(c));
+  if (c.color_matching) lines.push('Offers only go to families who listed the pup\'s color.');
+  if (online) lines.push(c.online ? `Online: your list is set to be online${c.online_form ? ', with applications online' : ''}.` : 'Your list isn\'t online.');
+  if (programs.length) lines.push(`Programs: ${programs.map((p) => p.name).join(', ')}.`);
+  return lines;
+}
+
 // --- Embedding on her own website (Integrations plan §1) --------------------------
 
 // The server checks the same rule (cloud/src/familyPages.js frameAncestors).

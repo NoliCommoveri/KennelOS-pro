@@ -597,12 +597,7 @@ export async function runLitterTask(chat, { litterId = null, resume = false, onE
         G.applyLitterChoice(draft, litter, data.dogs);
       }
     }
-    await chat.say(`Absolutely, let's get those puppies added! I'll ask you some questions; once I'm done collecting the information, I'll build the records for you to approve. If you get stuck or need to save and come back, I'll save what we've got so far until you're ready to continue. Sound good?`, { typing: 900 });
-    const go = await chat.choose([
-      { label: 'Sounds great, let\'s start!', value: 'start', primary: true },
-      { label: 'Never mind', value: 'nevermind' }
-    ]);
-    if (go === 'nevermind') { onExit('nevermind'); return; }
+    if (!(await chat.intro('Absolutely, let\'s get those puppies added!'))) { onExit('nevermind'); return; }
   } else {
     draft.history = draft.history || [];
     await chat.say(`Welcome back! Here's what we have so far for ${esc(draft.label || 'your litter')}:`, { typing: 500 });

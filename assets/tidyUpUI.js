@@ -19,7 +19,6 @@ import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { inScopeOnly, dogsInScope, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { isDismissed, dismiss } from '../data/nudgeState.js';
 import { DISPOSITION, OWNERSHIP_TYPE, DOG_STATUS, SALE_STATUS, PAIRING_STATUS, descriptor } from '../data/vocab.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { dogMatches } from '../data/guidedLitter.js';
@@ -28,12 +27,11 @@ import { mergeConflicts, suggestKeep, mergeRecords } from '../data/recordMerge.j
 import { CapExceededError } from '../data/repoBase.js';
 import { esc, fmtDate, todayYMD } from './ui.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
+import { FindingsTask, plural } from './kelsFindings.js';
 
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
-const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const ROLE = { sire: { field: 'sire_id', sex: 'male', word: 'sire' }, dam: { field: 'dam_id', sex: 'female', word: 'dam' } };
 const label = (vocab, v) => descriptor(vocab, v).label;
-const dismissKey = (f) => `tidy:${f.key}`;
 
 // What each kind is called in her opening count.
 const KIND_WORDS = {
@@ -51,12 +49,15 @@ const KIND_WORDS = {
 };
 
 export async function runTidyTask(chat, { onExit = () => {} } = {}) {
+  if (!(await chat.intro('Love it, let\'s get your records tidy!'))) return onExit('nevermind');
   return new Tidy(chat, onExit).start();
 }
 
-class Tidy {
+// The look-ask-fix loop is kelsFindings.js's; this is the tidy-up's checks and fixes.
+class Tidy extends FindingsTask {
   constructor(chat, onExit) {
-    Object.assign(this, { chat, onExit, today: todayYMD(), asked: new Set(), fixed: 0 });
+    super(chat, onExit, 'tidy');
+    this.today = todayYMD();
   }
 
   async load() {
@@ -83,61 +84,25 @@ class Tidy {
       allDogs, contacts: this.contacts, kennels: this.kennels,
       flags: { contactsSection: flags.contactsSection, studServices: flags.studServices },
       today: this.today
-    }).filter((f) => !isDismissed(dismissKey(f)));
+    });
+    this.findings = this.notDismissed(this.findings);
   }
 
-  next() { return this.findings.find((f) => !this.asked.has(f.key)); }
-
-  async start() {
-    await this.chat.say('Let me look through your records for anything that doesn\'t line up…', { typing: 700 });
-    await this.load();
-    if (!this.next()) {
-      await this.chat.say('Everything lines up. Nice work keeping your records tidy!');
-      return this.onExit('done');
-    }
-    const counts = new Map();
-    for (const f of this.findings) counts.set(f.kind, (counts.get(f.kind) || 0) + 1);
-    const parts = [...counts].map(([k, n]) => `${n} ${KIND_WORDS[k][n === 1 ? 0 : 1]}`);
-    await this.chat.say(`I found ${plural(this.findings.length, 'thing')} to look at: ${esc(parts.join(', '))}. Let's go through them one at a time.`, { typing: 900 });
-    for (;;) {
-      const f = this.next();
-      if (!f) break;
-      this.asked.add(f.key);
-      let res;
-      try {
-        res = await this.handle(f);
-      } catch (e) {
-        await this.chat.say(`Hmm, that didn't save: ${esc(e?.message || String(e))}`);
-      }
-      if (res === 'stop' || res === 'left') return res === 'stop' ? this.finish(false) : undefined;
-      await this.load();
-    }
-    return this.finish(true);
-  }
-
-  async finish(all) {
-    if (all) await this.chat.say(this.fixed ? `That's everything. I fixed ${plural(this.fixed, 'thing')} with you. Your records line up!` : 'That\'s everything I found for now.');
-    else await this.chat.say(this.fixed ? 'Okay, we\'ll stop here. Everything we fixed is saved.' : 'Okay. Ask me any time.');
-    this.onExit('done');
-  }
-
-  // Her answer to a finding: `actions` first, then the standard tail. Resolves
-  // to the chosen value; 'later', 'never' and 'stop' are handled here.
-  async ask(f, html, actions, { never = 'Don\'t ask me again' } = {}) {
-    await this.chat.say(html);
-    const pick = await this.chat.choose([
-      ...actions,
-      { label: 'Not now', value: 'later' },
-      { label: never, value: 'never' },
-      { label: 'Stop for now', value: 'stop' }
-    ], { stagger: 120 });
-    if (pick === 'never') { dismiss(dismissKey(f)); await this.chat.say('Got it. I won\'t bring that one up again.', { typing: 400 }); }
-    return pick;
-  }
-
-  async done(msg) {
-    this.fixed++;
-    await this.chat.say(msg, { typing: 400 });
+  start() {
+    return this.loop({
+      looking: 'Let me look through your records for anything that doesn\'t line up…',
+      none: 'Everything lines up. Nice work keeping your records tidy!',
+      found: (findings) => {
+        const counts = new Map();
+        for (const f of findings) counts.set(f.kind, (counts.get(f.kind) || 0) + 1);
+        const parts = [...counts].map(([k, n]) => `${n} ${KIND_WORDS[k][n === 1 ? 0 : 1]}`);
+        return `I found ${plural(findings.length, 'thing')} to look at: ${esc(parts.join(', '))}. Let's go through them one at a time.`;
+      },
+      allDone: (n) => `That's everything. I fixed ${plural(n, 'thing')} with you. Your records line up!`,
+      nothingDone: 'That\'s everything I found for now.',
+      stopped: () => 'Okay, we\'ll stop here. Everything we fixed is saved.',
+      stoppedEmpty: 'Okay. Ask me any time.'
+    });
   }
 
   // --- Names ---------------------------------------------------------------------

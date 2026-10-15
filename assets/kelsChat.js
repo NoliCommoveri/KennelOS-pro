@@ -22,6 +22,14 @@ export const ASSIST_LABEL = KELS.assistLabel;
 // Kels's opening line, from the menu or when a page sends the breeder straight to a task.
 export const kelsHello = () => `Hi, I'm ${esc(KELS.name)}, ${esc(KELS.tagline)}!`;
 
+// How she works, said at the start of every new task (not a resumed one), after
+// the task's own opener. The answers are INTRO_CHOICES.
+export const KELS_INTRO = 'I\'ll ask you some questions; once I\'m done collecting the information, I\'ll build the records for you to approve. If you get stuck or need to save and come back, I\'ll save what we\'ve got so far until you\'re ready to continue. Sound good?';
+const INTRO_CHOICES = [
+  { label: 'Sounds great, let\'s start!', value: 'start', primary: true },
+  { label: 'Never mind', value: 'nevermind' }
+];
+
 // Kels's photo as a URL any page can use (KELS.photo is relative to shared/,
 // and this module lives in shared/assets/).
 export const kelsPhotoUrl = () => (KELS.photo ? new URL(`../${KELS.photo}`, import.meta.url).href : null);
@@ -211,6 +219,13 @@ export function createChat(box) {
           resolve({ done: false });
         });
       });
+    },
+
+    // A new task's start: her `opener` (trusted markup: "Sure thing, let's…"),
+    // KELS_INTRO, and Sounds great / Never mind. → true to go ahead.
+    async intro(opener) {
+      await this.say(`${opener} ${KELS_INTRO}`, { typing: 900 });
+      return (await this.choose(INTRO_CHOICES)) === 'start';
     },
 
     pause
