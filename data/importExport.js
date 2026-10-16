@@ -272,11 +272,15 @@ export async function planFileMerge(obj, { answers = {} } = {}) {
       else summary[paired.has(r.id) ? 'matched' : 'added']++;
     }
   }
+  return { ...summary, ...questions(local, incoming, pairs, asks) };
+}
+
+// The preview's questions in words: "Are these the same?" and a paired dog's clashes.
+function questions(local, incoming, pairs, asks) {
   const { find, nameOf } = namer(local, incoming);
   const text = (table, id) => describeRecord(table, find(table, id) || {}, nameOf);
   const show = (c, v) => (c.ref ? nameOf('dogs', v) || 'another dog' : String(v));
   return {
-    ...summary,
     asks: asks.map((q) => ({
       key: q.key, table: q.table, file: text(q.table, q.fileId),
       candidates: q.candidates.map((id) => ({ id, text: text(q.table, id) }))
@@ -285,6 +289,61 @@ export async function planFileMerge(obj, { answers = {} } = {}) {
       key: c.key, label: c.label, dog: nameOf('dogs', c.localId), local: show(c, c.local), file: show(c, c.file)
     }))
   };
+}
+
+// --- A device joining live sync (Cloud Phase 2 plan §5.5) ------------------------
+// The same content matching as a file Merge (data/restoreMatch.js, guide §10),
+// between this device's records and the cloud's (`incoming`: { table: whole rows },
+// decrypted), before the join pulls anything. A pair keeps the CLOUD's id: the
+// other devices already have it, so only this device re-keys (every field of
+// every record, device-only rows and settings, as a file Merge does). The merged
+// row is stamped now, so the join's newer-wins pull keeps it and pushes it up.
+// planJoinMatches → { matched, asks, clashes } (no writes; answers as planFileMerge).
+export async function planJoinMatches(incoming, { answers = {} } = {}) {
+  const local = await readLocal(dataTables());
+  const { pairs, asks } = planMatches({ local, incoming, answers });
+  return { matched: pairs.length, ...questions(local, incoming, pairs, asks) };
+}
+
+// Writes the pairs (unanswered questions stay two records). → how many were paired.
+export async function mergeJoinMatches(incoming, { answers = {}, clashChoices = {}, now = new Date() } = {}) {
+  assertWritable();
+  const tables = dataTables();
+  const local = await readLocal(tables);
+  const { pairs } = planMatches({ local, incoming, answers });
+  if (!pairs.length) return 0;
+  const localRemap = new Map(pairs.map((p) => [p.localId, p.fileId]));
+  const pairedIds = new Set(pairs.map((p) => p.fileId));
+  const stamp = now.toISOString();
+  const writes = {};
+  const deletes = {};
+  for (const { name } of tables) {
+    const theirs = new Map((incoming[name] || []).filter(Boolean).map((r) => [r.id, r]));
+    for (const r of local[name] || []) {
+      const n = rekey(r, localRemap);
+      if (n === r) continue;
+      if (n.id !== r.id) (deletes[name] ||= []).push(r.id);
+      const cloud = pairedIds.has(n.id) ? theirs.get(n.id) : null;
+      const row = cloud
+        ? { ...mergePair(n, cloud, { table: name, choose: (field) => clashChoices[clashKey(n.id, field)] }), updated_at: stamp }
+        : n;
+      (writes[name] ||= []).push(row);
+    }
+  }
+  const secrets = db.table('device_secrets');
+  await db.transaction('rw', [...tables, secrets], async () => {
+    for (const [name, ids] of Object.entries(deletes)) await db.table(name).bulkDelete(ids);
+    for (const [name, rows] of Object.entries(writes)) await db.table(name).bulkPut(rows);
+    for (const r of await secrets.toArray()) {
+      const n = rekey(r, localRemap);
+      if (n === r) continue;
+      if (n.id !== r.id) await secrets.delete(r.id);
+      await secrets.put(n);
+    }
+  });
+  remapStoredIds((v) => rekey(v, localRemap));
+  markDataChanged();
+  return pairs.length;
 }
 
 async function restoreFileMerge(obj, { keepNewer = false, answers = {}, clashChoices = {} } = {}) {

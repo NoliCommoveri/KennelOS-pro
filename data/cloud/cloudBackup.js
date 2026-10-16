@@ -405,6 +405,14 @@ async function pushNow({ force, allowShrink, onProgress, retried = false }) {
     if (dirtyAt) clearCloudDirty(dirtyAt);
     return { status: 'pushed', snapshotId: created.snapshotId, counts: envelope.counts, vault: !!sealed };
   } catch (err) {
+    // A syncing program has no one backing device: another caught-up device may
+    // have made the latest backup since this one's (or this device joined without
+    // restoring, so it has none). Caught up to the same seq, it builds on that one.
+    if (!retried && sync.seq !== null && err instanceof api.CloudConflictError && err.code === 'not_caught_up'
+      && err.syncSeq === sync.seq && err.latestSnapshotId && err.latestSnapshotId !== state.lastSnapshotId) {
+      updateCloudBackupState({ lastSnapshotId: err.latestSnapshotId });
+      return pushNow({ force: true, allowShrink, onProgress, retried: true });
+    }
     const vaultOutcome = await vaultRefusal(err);
     if (vaultOutcome === 'retry' && !retried) return pushNow({ force: true, allowShrink, onProgress, retried: true });
     if (vaultOutcome === 'locked') return fail('vault_locked', err, { stale: err.code === 'vault_key_stale' });
@@ -464,7 +472,10 @@ function failFromError(err) {
       backingDevice: err.backingDevice || null,
       latestSnapshotId: err.latestSnapshotId || null,
       ownDevice: !!own,
-      movedToEdition: movedToEdition(err.backingDevice, own)
+      movedToEdition: movedToEdition(err.backingDevice, own),
+      // The program keeps its devices in step (Cloud Phase 2 plan §6.4): the
+      // answer is to join it, not to take over the backups.
+      syncing: !!err.syncing
     });
   }
   if (err && err.name === 'CloudKeyError') return fail('error', { code: 'unexpected_key' }, { message: err.message });
@@ -679,13 +690,28 @@ export async function restoreOnNewDevice(opts = {}) {
     // "Private details are blank here" (the card and record-page hint), unless
     // the private vault came back too. An unlock later clears it (cloudVault).
     setCloudRestoredAt(result.restored.vault?.status === 'restored' ? null : new Date().toISOString());
-    if (!getMyKennelId()) {
-      const own = (await exportAll({ encodeBlobs: false })).collections.kennels
-        ?.find((k) => k.is_own_kennel && !k.is_archived);
-      if (own) setMyKennelId(own.id);
-    }
+    await adoptOwnKennel();
   }
   return result;
+}
+
+// Points the kennel-setup identity (a setting, not a record) at the own kennel
+// that just arrived, if it isn't set.
+export async function adoptOwnKennel() {
+  if (getMyKennelId()) return;
+  const own = (await exportAll({ encodeBlobs: false })).collections.kennels
+    ?.find((k) => k.is_own_kennel && !k.is_archived);
+  if (own) setMyKennelId(own.id);
+}
+
+// A new device on a program that keeps its devices in step (Cloud Phase 2 plan
+// §2.1): it joins instead of restoring the latest backup, so backup is turned on
+// here without a push (the join brings the records; its first backup then builds
+// on the latest one, see pushNow) and first-run is done.
+export function prepareDirectJoin() {
+  if (!isCloudAvailable()) return;
+  updateCloudBackupState({ enabled: true, lastError: null, movedToEdition: null });
+  markSampleDataCleared();
 }
 
 // --- Service notices (plan §2.1, §6.1; Proposal §2a) ----------------------------

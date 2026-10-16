@@ -10,10 +10,12 @@
 //                  visible (a cheap /sync/head first)
 //
 //   enableSync()   turn it on for the program, then join (plan §2.1)
-//   joinSync()     this device joins a syncing program: a full pull where the
-//                  newer `updated_at` wins, then push what the server lacks;
-//                  nothing is deleted on either side (§5.5). Until it finishes,
-//                  `joining` stays set and any sync run resumes the join.
+//   joinSync()     this device joins a syncing program: records entered on both
+//                  sides are paired by content first (a file Merge's rules; a
+//                  pair keeps the cloud's id), then a full pull where the newer
+//                  `updated_at` wins, then push what the server lacks; nothing is
+//                  deleted on either side (§5.5). Until it finishes, `joining`
+//                  stays set and any sync run resumes the join.
 //   disableSyncHere() / disableSyncEverywhere(reauth)   (§2.4)
 //   syncReadiness()  what's missing before this device can sync (§2.1)
 //
@@ -35,12 +37,13 @@ import { editionFlags } from '../editionConfig.js';
 import { currentAccount, sessionToken, markSessionExpired } from './cloudAuth.js';
 import { getVaultKey } from './vaultKeyStore.js';
 import { VaultLockedError } from './vaultCrypto.js';
-import { buildPutRecord, buildDeleteRecord, sealFileRow } from './syncRecords.js';
+import { buildPutRecord, buildDeleteRecord, sealFileRow, readRecord } from './syncRecords.js';
 import { scanLocalChanges, writeSyncMeta, removeSyncMeta, clearSyncMeta, metaId } from './syncState.js';
 import { isBackupBlocked } from './cloudBackup.js';
 import { applyPulledRecords } from '../syncApply.js';
+import { planJoinMatches, mergeJoinMatches } from '../importExport.js';
 import { CloudKeyError } from '../syncRegistry.js';
-import { getCloudSyncState, updateCloudSyncState, getCloudBackupState, CLOUD_DATA_CHANGED_EVENT } from '../settings.js';
+import { getCloudSyncState, updateCloudSyncState, getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT, SYNC_STATUS_EVENT } from '../settings.js';
 
 export const PUSH_DEBOUNCE_MS = 10 * 1000;
 export const POLL_MS = 60 * 1000;
@@ -262,12 +265,16 @@ export async function pullChanges({ merge = false, onProgress = null, total = nu
 // --- Both, one at a time ---------------------------------------------------------
 // Serialized across tabs where the browser can (navigator.locks), and within one
 // tab by a chain, like the backup push.
+// Each run ends with SYNC_STATUS_EVENT (settings.js) on the window.
 let chain = Promise.resolve();
 function exclusive(fn) {
   const locks = globalThis.navigator?.locks;
   const run = () => (locks ? locks.request(LOCK_NAME, fn) : fn());
   const next = chain.then(run, run);
   chain = next.catch(() => {});
+  next.finally(() => {
+    try { globalThis.dispatchEvent?.(new CustomEvent(SYNC_STATUS_EVENT)); } catch { /* no window */ }
+  }).catch(() => {});
   return next;
 }
 
@@ -291,7 +298,12 @@ export function pullIfBehind() {
       const { token } = await requireSync();
       const head = await api.syncHead(token);
       if (!head.enabled) return stoppedElsewhere();
-      if (head.seq <= (getCloudSyncState().cursor || 0)) return { status: 'current' };
+      noteHead(head);
+      if (head.seq <= (getCloudSyncState().cursor || 0)) {
+        const offline = getCloudSyncState().lastError?.code === 'offline';
+        updateCloudSyncState({ lastCheckAt: new Date().toISOString(), ...(offline ? { lastError: null } : {}) });
+        return { status: 'current' };
+      }
     } catch (err) {
       return fromError(err);
     }
@@ -299,14 +311,37 @@ export function pullIfBehind() {
   });
 }
 
+// The status line's device count, from the last head check.
+function noteHead(head) {
+  if (Number.isInteger(head.devices)) updateCloudSyncState({ devices: head.devices });
+}
+
+// `pausedDetail` is the stop's detail (the shrink's { deletes, total }).
 export function syncStatus() {
   const s = getCloudSyncState();
+  const paused = s.lastError && s.lastError.code !== 'offline' ? s.lastError.code : null;
   return {
     enabled: s.enabled, joining: !!s.joining, cursor: s.cursor, lastPushAt: s.lastPushAt, lastPullAt: s.lastPullAt,
-    paused: s.lastError && s.lastError.code !== 'offline' ? s.lastError.code : null,
-    offline: s.lastError?.code === 'offline', activity: s.activity || []
+    lastCheckAt: s.lastCheckAt || null, paused, pausedDetail: paused ? s.lastError.detail ?? null : null,
+    offline: s.lastError?.code === 'offline', activity: s.activity || [], devices: s.devices ?? null
   };
 }
+
+// The activity list's "Got it": clear what's been read.
+export function clearSyncActivity() {
+  updateCloudSyncState({ activity: [] });
+}
+
+// A stop she's read and set aside (sync_off: turned off elsewhere).
+export function dismissSyncStop() {
+  updateCloudSyncState({ lastError: null });
+}
+
+// A backup paused as a second device (the 409: another device backs up, or the
+// program syncs and this device hasn't joined, plan §6.4) is what joining fixes:
+// a join merges both sides and deletes nothing, and a syncing program has no one
+// backing device. So it doesn't count against joining, and a finished join clears it.
+const joinFixes = (backup) => backup.lastError?.code === 'conflict';
 
 // --- Turning it on, joining, turning it off (§2.1, §2.4, §5.5) -------------------------
 // What this device still needs before it can keep in step (§2.1), in the order
@@ -319,7 +354,7 @@ export async function syncReadiness() {
   const missing = [];
   const backup = getCloudBackupState();
   if (!backup.enabled) missing.push('backup_off');
-  else if (isBackupBlocked(backup) && backup.lastError?.code !== 'vault_locked') missing.push('backup_paused');
+  else if (isBackupBlocked(backup) && backup.lastError?.code !== 'vault_locked' && !joinFixes(backup)) missing.push('backup_paused');
   if (!(await getVaultKey(programId))) missing.push(backup.vault === 'locked' ? 'vault_locked' : 'vault_off');
   return missing;
 }
@@ -335,13 +370,25 @@ async function refused(err) {
 // sync run that finds it set comes back here, so an interrupted join (offline,
 // the tab closed) never turns into a plain pull that drops this device's newer
 // records. → { status: 'on', pulled, keptOurs, pushed } or a stop.
-async function joinNow({ onProgress = null } = {}) {
+async function joinNow({ onProgress = null, answers = {}, clashChoices = null } = {}) {
   try {
-    const { token } = await requireSync();
+    const { token, vault } = await requireSync();
     const head = await api.syncHead(token);
     if (!head.enabled) return stoppedElsewhere();
+    noteHead(head);
     const s = getCloudSyncState();
     if (!s.joining) {
+      // The same dog typed on both sides has two ids: pair them first, as a file
+      // Merge does, asking what the rules aren't sure of (`clashChoices` null:
+      // not asked yet). A pair keeps the cloud's id.
+      const incoming = await cloudRows(token, vault, head.seq, onProgress);
+      const plan = await planJoinMatches(incoming, { answers });
+      if (plan.asks.length || (plan.clashes.length && !clashChoices)) {
+        return { status: 'ask', asks: plan.asks, clashes: plan.clashes, matched: plan.matched };
+      }
+      const matched = await mergeJoinMatches(incoming, { answers, clashChoices: clashChoices || {} });
+      updateCloudSyncState({ matched });
+      fetched = null;
       await clearSyncMeta();
       updateCloudSyncState({ enabled: true, joining: true, cursor: 0, rejected: {}, lastError: null, lastPushAt: null, lastPullAt: null });
     }
@@ -350,11 +397,35 @@ async function joinNow({ onProgress = null } = {}) {
     const push = await pushChanges({ allowShrink: true, onProgress });
     if (push.status !== 'pushed' && push.status !== 'nothing') return push;
     updateCloudSyncState({ joining: false });
+    if (joinFixes(getCloudBackupState())) updateCloudBackupState({ lastError: null });
     await pullChanges(); // anything that arrived meanwhile, by server order again
-    return { status: 'on', pulled: pull.applied, keptOurs: pull.keptOurs, pushed: push.pushed || 0 };
+    const matched = getCloudSyncState().matched || 0;
+    return { status: 'on', pulled: pull.applied, keptOurs: pull.keptOurs, pushed: push.pushed || 0, matched };
   } catch (err) {
     return fromError(err);
   }
+}
+
+// Every record the cloud has, as whole rows by table, for the join's matching.
+// Kept for the questions' round trips while the server's seq doesn't move.
+let fetched = null;
+async function cloudRows(token, vault, seq, onProgress) {
+  if (fetched && fetched.seq === seq) return fetched.rows;
+  const rows = {};
+  let since = 0;
+  for (;;) {
+    const res = await api.pullSync(token, since);
+    for (const r of res.records || []) {
+      if (r.op === 'delete') continue;
+      const { row } = await readRecord(r, vault);
+      (rows[r.tbl] ||= []).push(row);
+    }
+    progress(onProgress, 'match', res.through ?? since, seq);
+    if (!res.more) break;
+    since = res.through;
+  }
+  fetched = { seq, rows };
+  return rows;
 }
 
 async function ready() {
@@ -365,6 +436,8 @@ async function ready() {
 // "Turn on…" (§2.1): the program syncs from now on, and this device joins. On the
 // first device the join pulls nothing and uploads every record (the progress
 // bar's 'push' phase); on a program that already syncs it's an ordinary join.
+// → as joinSync: { status: 'ask' } means the program is on, and this device
+// joins with joinSync once she has answered.
 export function enableSync({ onProgress = null } = {}) {
   return exclusive(async () => {
     const notReady = await ready();
@@ -379,11 +452,15 @@ export function enableSync({ onProgress = null } = {}) {
 }
 
 // "Keep this device in step" on a program that already syncs (§2.1).
-export function joinSync({ onProgress = null } = {}) {
+// → { status: 'ask', asks, clashes, matched } while there's something to ask
+// ("Are these the same?", as planFileMerge words them; call again with the
+// answers merged into `answers`, and `clashChoices` once the clashes are
+// answered, {} if there are none), else { status: 'on', …, matched } or a stop.
+export function joinSync({ onProgress = null, answers = {}, clashChoices = null } = {}) {
   return exclusive(async () => {
     const notReady = await ready();
     if (notReady) return notReady;
-    return joinNow({ onProgress });
+    return joinNow({ onProgress, answers, clashChoices });
   });
 }
 

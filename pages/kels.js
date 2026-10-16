@@ -15,7 +15,9 @@
 // litter); the label and sub are searched too, so they needn't repeat them: the higher the priority, the
 // nearer the top, so tasks are ordered by what she's likely to need (something
 // unfinished first, then whatever fits her kennel now). `resumable` tasks keep
-// a draft, so the header's "Save for later" shows while they run.
+// a draft, so the header's "Save for later" shows while they run; `discard`
+// throws that draft away. The header's "Cancel" shows while any task runs and,
+// once she says she's sure, stops it (and discards a resumable task's draft).
 // `beforeStart` can redirect a start (an unfinished draft of the same task).
 // URL: ?task=<id> starts that task straight away; &litter=<id> hands it a litter
 // (an Expected litter's birth, or the litter to check on).
@@ -35,13 +37,14 @@ import { pendingPeopleDraft } from '../data/guidedPeople.js';
 import { pendingFormDraft } from '../data/guidedForm.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { isLicenseGated } from '../data/license.js';
-import { param, esc, todayYMD } from '../assets/ui.js';
+import { param, esc, todayYMD, confirmModal } from '../assets/ui.js';
 import { orderTasks, withStart, withStar } from '../data/kelsFavorites.js';
 import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote, getGuidedPeopleDraft, clearGuidedPeopleDraft, getGuidedFormDraft, clearGuidedFormDraft } from '../data/settings.js';
 import { editionFlags } from '../data/editionConfig.js';
 
 const chat = createChat(document.getElementById('kels-transcript'));
 const laterBtn = document.getElementById('kels-later');
+const cancelBtn = document.getElementById('kels-cancel');
 document.getElementById('kels-name').textContent = KELS.title;
 document.getElementById('kels-avatar').innerHTML = kelsAvatar({ large: true });
 
@@ -60,6 +63,7 @@ const TASKS = [
     available: (s) => Boolean(s.pendingLitter),
     priority: () => 100, // something half-done always comes first
     resumable: true,
+    discard: discardGuidedLitterDraft,
     run: (opts) => runLitterTask(chat, { ...opts, resume: true })
   },
   {
@@ -70,6 +74,7 @@ const TASKS = [
     available: (s) => Boolean(s.pendingDogs),
     priority: () => 99,
     resumable: true,
+    discard: discardGuidedDogsDraft,
     run: (opts) => runDogsTask(chat, { ...opts, resume: true })
   },
   {
@@ -80,6 +85,7 @@ const TASKS = [
     available: (s) => Boolean(s.pendingPeople),
     priority: () => 98,
     resumable: true,
+    discard: clearGuidedPeopleDraft,
     run: (opts) => runPeople({ ...opts, resume: true })
   },
   {
@@ -90,6 +96,7 @@ const TASKS = [
     available: (s) => Boolean(s.pendingForm),
     priority: () => 97,
     resumable: true,
+    discard: clearGuidedFormDraft,
     run: (opts) => runForm({ ...opts, resume: true })
   },
   {
@@ -129,6 +136,7 @@ const TASKS = [
     available: () => true,
     priority: () => 50,
     resumable: true,
+    discard: discardGuidedLitterDraft,
     // Starting a new litter while one is unfinished: finish that first, or start fresh?
     beforeStart: async () => {
       const p = pendingLitterDraft();
@@ -166,6 +174,7 @@ const TASKS = [
     available: () => true,
     priority: () => 35,
     resumable: true,
+    discard: discardGuidedDogsDraft,
     // Starting while some dogs are unfinished: finish those first, or start fresh?
     beforeStart: async () => {
       const p = pendingDogsDraft();
@@ -192,6 +201,7 @@ const TASKS = [
     available: () => editionFlags.contactsSection,
     priority: () => 33,
     resumable: true,
+    discard: clearGuidedPeopleDraft,
     // Starting while some people are unfinished: finish those first, or start fresh?
     beforeStart: async () => {
       const p = pendingPeopleDraft(getGuidedPeopleDraft());
@@ -241,6 +251,7 @@ const TASKS = [
     available: () => editionFlags.waitlist,
     priority: () => 24,
     resumable: true,
+    discard: clearGuidedFormDraft,
     beforeStart: async () => {
       const p = pendingFormDraft(getGuidedFormDraft());
       if (!p) return null;
@@ -283,8 +294,11 @@ async function state() {
   };
 }
 
+let current = null;
 function running(task) {
+  current = task;
   laterBtn.hidden = !task?.resumable;
+  cancelBtn.hidden = !task;
 }
 
 // Back to the menu after a task ends, is put off, or she says never mind.
@@ -365,12 +379,35 @@ function taskCandidates(s) {
   }));
 }
 
+// The task's open question goes away, so nothing more can be answered in it.
+const dropOpenQuestion = () => chat.box.querySelectorAll('.kels-panel-row, .kels-choices-row').forEach((r) => r.remove());
+
 laterBtn.addEventListener('click', async () => {
   // Her answers are already kept after every step; this just says so.
-  chat.box.querySelectorAll('.kels-panel-row, .kels-choices-row').forEach((r) => r.remove());
+  dropOpenQuestion();
   chat.you('Let\'s finish this later.');
   running(null);
   await chat.say('Saved! I\'ll keep what we\'ve got until you\'re ready to continue. Just tap me any time.');
+  await menu({ again: true });
+});
+
+cancelBtn.addEventListener('click', async () => {
+  const task = current;
+  if (!task) return;
+  const ok = await confirmModal({
+    title: 'Are you sure?',
+    message: task.resumable
+      ? 'This stops what we\'re doing and throws away the answers you\'ve given so far. Anything already saved to your records stays.'
+      : 'This stops what we\'re doing. Anything already saved to your records stays.',
+    confirmLabel: 'Yes, cancel', cancelLabel: 'Keep going', danger: true
+  });
+  // She may have finished (or put it off) while the question was open.
+  if (!ok || current !== task) return;
+  dropOpenQuestion();
+  chat.you('Cancel this.');
+  running(null);
+  task.discard?.();
+  await chat.say('Okay, I\'ve stopped.');
   await menu({ again: true });
 });
 

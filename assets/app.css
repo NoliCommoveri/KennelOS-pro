@@ -1107,6 +1107,7 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
 .kels-header-text { flex: 1; min-width: 0; }
 .kels-header h1 { font-size: clamp(18px, 6.3vw, 28px); line-height: 1.15; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kels-header p { margin: 0; font-size: 14px; }
+.kels-header .btn { flex: none; }
 .kels-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .kels-avatar-lg { width: 52px; height: 52px; font-size: 24px; }
 .kels-avatar-photo { object-fit: cover; padding: 0; background: none; }

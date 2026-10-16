@@ -623,6 +623,9 @@ export function setMeetKelsPending(on) {
 // event is also dispatched on the window (CLOUD_DATA_CHANGED_EVENT) so a running
 // scheduler can start its timer without polling.
 export const CLOUD_DATA_CHANGED_EVENT = 'kennelos:datachanged';
+// Live sync's: every sync run ends with it (data/cloud/cloudSync.js), so an open
+// status line can redraw itself.
+export const SYNC_STATUS_EVENT = 'kennelos:syncstatus';
 
 export function markDataChanged(iso = new Date().toISOString()) {
   try {
