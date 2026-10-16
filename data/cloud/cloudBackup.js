@@ -18,7 +18,7 @@
 //
 // Data layer: reads through importExport.exportAll, never db directly. Network
 // only through cloudApi.
-import { exportAll, restoreBackup, planCloudMerge, VAULT_PAYLOAD_FORMAT } from '../importExport.js';
+import { exportAll, restoreBackup, planCloudMerge, VAULT_PAYLOAD_FORMAT, cloudSnapshotRows, planJoinMatches, mergeJoinMatches } from '../importExport.js';
 import {
   getSampleDataManifest, getCloudDirtyAt, getCloudDirtySince, clearCloudDirty,
   getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT,
@@ -560,14 +560,15 @@ function requireToken() {
 // Choice 1: "Restore that backup here", then this device takes over. Field-merge,
 // newer wins, so nothing private on this device is lost. Returns the restore
 // summary and the push that follows.
-export async function restoreLatestAndTakeOver({ onProgress } = {}) {
+export async function restoreLatestAndTakeOver({ onProgress, ask = null } = {}) {
   if (!isCloudAvailable()) throw new api.CloudUnavailableError();
   const token = requireToken();
   const program = await api.getProgram(token);
   let restored = null;
   if (program.latestSnapshotId) {
     const envelope = await downloadSnapshot(program.latestSnapshotId);
-    restored = await restoreSnapshot(envelope, { overwrite: false, onProgress });
+    restored = await restoreSnapshot(envelope, { overwrite: false, onProgress, ask });
+    if (restored.cancelled) return { restored: null, push: null, cancelled: true };
   }
   const after = await api.takeOverBacking(token);
   updateCloudBackupState({
@@ -618,16 +619,46 @@ export function previewRestore(envelope, { overwrite = false } = {}) {
   return planCloudMerge(envelope, { overwrite });
 }
 
+// Records entered both here and in the backup (the same dog typed on each
+// device) are paired first, as a file Merge and a sync join pair them
+// (data/restoreMatch.js): each pair becomes one record under the backup's id,
+// re-keyed everywhere here, and this device's duplicate is deleted. What the
+// rules aren't sure of goes to `ask({ asks })` ("Are these the same?", until
+// nothing is left to ask), then a paired dog's clashes to `ask({ clashes })`;
+// it resolves to the answers, or null when she cancels (then nothing is
+// written). With no `ask`, only the certain pairs are made, and the rest stay
+// two records for Import/Export's Scan for duplicates. → pairs made, or null.
+async function pairWithSnapshot(envelope, ask) {
+  const incoming = cloudSnapshotRows(envelope);
+  let answers = {};
+  let plan = await planJoinMatches(incoming, { answers });
+  while (ask && plan.asks.length) {
+    const got = await ask({ asks: plan.asks });
+    if (!got) return null;
+    answers = { ...answers, ...got };
+    plan = await planJoinMatches(incoming, { answers });
+  }
+  let clashChoices = {};
+  if (ask && plan.clashes.length) {
+    clashChoices = await ask({ clashes: plan.clashes });
+    if (!clashChoices) return null;
+  }
+  return mergeJoinMatches(incoming, { answers, clashChoices });
+}
+
 // overwrite: false — new device / takeover (newer wins).
 // overwrite: true  — "Restore as of…" (a deliberate rollback).
 // Missing files are fetched by sha256; `onProgress(done, total)` reports them.
+// `ask`: pairWithSnapshot's questions. → { cancelled: true } when she cancelled one.
 // For an envelope from downloadSnapshot, the same snapshot's vault part is
 // merged too when this device is unlocked (Private Vault Plan §4.4): the
 // result's `vault` is { status: 'restored', summary, missingFiles }, or
 // { status } 'none' (no vault part), 'locked' (one this device can't open yet),
 // or 'stale' (made under a key that has since been replaced).
-export async function restoreSnapshot(envelope, { overwrite = false, onProgress } = {}) {
+export async function restoreSnapshot(envelope, { overwrite = false, onProgress, ask = null } = {}) {
   const token = requireToken();
+  const matched = await pairWithSnapshot(envelope, ask);
+  if (matched === null) return { cancelled: true };
   const total = (envelope.collections?.files || []).length;
   let done = 0;
   const result = await restoreBackup(envelope, 'cloud-merge', {
@@ -640,7 +671,7 @@ export async function restoreSnapshot(envelope, { overwrite = false, onProgress 
     }
   });
   const snapshotId = envelopeIds.get(envelope);
-  return { ...result, vault: snapshotId ? await restoreSnapshotVault(snapshotId, { overwrite, onProgress }) : { status: 'none' } };
+  return { ...result, matched, vault: snapshotId ? await restoreSnapshotVault(snapshotId, { overwrite, onProgress }) : { status: 'none' } };
 }
 
 // The 'vault-merge' of one snapshot's vault part. Also how an unlock merges the
@@ -685,6 +716,7 @@ export async function restoreSnapshotVault(snapshotId, { overwrite = false, onPr
 // settings, not in the snapshot.
 export async function restoreOnNewDevice(opts = {}) {
   const result = await restoreLatestAndTakeOver(opts);
+  if (result.cancelled) return result;
   markSampleDataCleared();
   if (result.restored) {
     // "Private details are blank here" (the card and record-page hint), unless

@@ -291,7 +291,7 @@ function questions(local, incoming, pairs, asks) {
   };
 }
 
-// --- A device joining live sync (Cloud Phase 2 plan §5.5) ------------------------
+// --- A device joining live sync (Cloud Phase 2 plan §5.5), and a cloud restore ----
 // The same content matching as a file Merge (data/restoreMatch.js, guide §10),
 // between this device's records and the cloud's (`incoming`: { table: whole rows },
 // decrypted), before the join pulls anything. A pair keeps the CLOUD's id: the
@@ -304,6 +304,10 @@ export async function planJoinMatches(incoming, { answers = {} } = {}) {
   const { pairs, asks } = planMatches({ local, incoming, answers });
   return { matched: pairs.length, ...questions(local, incoming, pairs, asks) };
 }
+
+// A cloud restore pairs the same way, against the snapshot's rows (cloudSnapshotRows),
+// before it overlays them (cloudBackup.restoreSnapshot): a pair keeps the backup's
+// id, the program's copy, and this device's duplicate id is deleted.
 
 // Writes the pairs (unanswered questions stay two records). → how many were paired.
 export async function mergeJoinMatches(incoming, { answers = {}, clashChoices = {}, now = new Date() } = {}) {
@@ -507,6 +511,19 @@ export async function planCloudMerge(snapshot, { overwrite = false } = {}) {
     summary[name] = s;
   }
   return { writes, summary };
+}
+
+// A cloud snapshot's rows as this device would hold them, for pairing
+// (planJoinMatches / mergeJoinMatches): { table: rows[] }.
+export function cloudSnapshotRows(snapshot) {
+  assertCloudSnapshot(snapshot);
+  const known = new Set(dataTables().map((t) => t.name));
+  const out = {};
+  for (const [name, rows] of Object.entries(snapshot.collections)) {
+    if (!known.has(name) || !SYNC_REGISTRY[name] || !Array.isArray(rows)) continue;
+    out[name] = rows.filter((r) => r && r.id).map((r) => snapshotRowToLocal(name, r));
+  }
+  return out;
 }
 
 export async function restoreCloudMerge(snapshot, { overwrite = false, fetchFile = null } = {}) {

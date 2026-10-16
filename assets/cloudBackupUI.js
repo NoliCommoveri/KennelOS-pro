@@ -24,6 +24,7 @@
 // Layering: talks to data/cloud/* only (never cloudApi's fetch directly, never db).
 import { esc, confirmModal, alertModal, promptModal } from './ui.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered, isSyncOffered } from '../data/cloud/cloudConfig.js';
+import { askSame, askClashes } from './mergeQuestions.js';
 import { editionFlags } from '../data/editionConfig.js';
 import {
   startSignIn, verifySignIn, currentAccount, signOut, signOutOtherDevices, defaultDeviceLabel,
@@ -590,14 +591,22 @@ async function movedToProDialog(result) {
   if (choice === 'other') return conflictDialog(result, { skipMoved: true });
 }
 
+// A cloud restore's questions (cloudBackup.restoreSnapshot `ask`): records
+// entered both here and in the backup, as a file Merge asks them.
+const askRestore = ({ asks, clashes }) => (asks
+  ? askSame(asks, { theirs: 'in your cloud backup' })
+  : askClashes(clashes, { theirsLabel: 'your cloud backup' }));
+
 async function restoreAndTakeOverFlow() {
   if (isVaultOffered()) await (await vaultUI()).unlockBeforeRestore();
   const pg = progressModal('Restoring the backup…');
   try {
-    const { restored, push } = await restoreLatestAndTakeOver({
-      onProgress: (done, total) => pg.update(`Downloading documents: ${done} of ${total}…`, done, total)
+    const { restored, push, cancelled } = await restoreLatestAndTakeOver({
+      onProgress: (done, total) => pg.update(`Downloading documents: ${done} of ${total}…`, done, total),
+      ask: askRestore
     });
     pg.close();
+    if (cancelled) return;
     if (restored?.missingFiles?.length) {
       await alertModal({ title: 'Restored', message: `${restored.missingFiles.length} document file(s) couldn't be downloaded. Try again later from Import / Export.` });
     }
@@ -680,8 +689,9 @@ async function rollBackTo(id, snapshots) {
   if (!ok) return;
   const pg2 = progressModal('Restoring…');
   try {
-    const r = await restoreSnapshot(envelope, { overwrite: true, onProgress: (d, t) => pg2.update(`Downloading documents: ${d} of ${t}…`, d, t) });
+    const r = await restoreSnapshot(envelope, { overwrite: true, ask: askRestore, onProgress: (d, t) => pg2.update(`Downloading documents: ${d} of ${t}…`, d, t) });
     pg2.close();
+    if (r.cancelled) return;
     await alertModal({
       title: 'Rolled back',
       message: r.missingFiles?.length ? `Done. ${r.missingFiles.length} document file(s) couldn't be downloaded.` : 'Done. Reloading…'
@@ -1439,10 +1449,12 @@ export async function runSignInAndRestore({ fromCard = false } = {}) {
   if (joined !== null) return joined;
   const pg = progressModal('Restoring your records…');
   try {
-    const { restored, push } = await restoreOnNewDevice({
-      onProgress: (done, total) => pg.update(`Downloading documents: ${done} of ${total}…`, done, total)
+    const { restored, push, cancelled } = await restoreOnNewDevice({
+      onProgress: (done, total) => pg.update(`Downloading documents: ${done} of ${total}…`, done, total),
+      ask: askRestore
     });
     pg.close();
+    if (cancelled) return false;
     if (!restored) {
       await alertModal({ title: 'No backup yet', message: "There's no backup on this account yet. Cloud backup is now on for this device, so your records will start backing up as you add them." });
       return fromCard ? true : 'empty';

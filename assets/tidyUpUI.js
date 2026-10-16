@@ -660,7 +660,7 @@ class Tidy extends FindingsTask {
     if (pick !== 'merge') return pick;
 
     const suggested = suggestKeep(f.a, f.b);
-    await this.chat.say('<strong>Which record should I keep?</strong><span class="kels-lead">Everything that points at the other one moves to it, and the other one is archived.</span>', { typing: 500 });
+    await this.chat.say('<strong>Which record should I keep?</strong><span class="kels-lead">Everything that points at the other one, its history too, moves to it, and the other one is deleted.</span>', { typing: 500 });
     const keepId = await this.chat.choose([f.a, f.b].map((r) => ({
       label: nameOf(r), sub: this.describe(kind, r), value: r.id, primary: r.id === suggested.id
     })).concat([{ label: 'Never mind', value: '' }]));

@@ -14,7 +14,10 @@
 //     far, so a dog she says isn't the same leaves what hangs off it unpaired.
 import { normReg, nameKey } from './dogSearch.js';
 import { normName, normEmail, normPhone } from './contactSearch.js';
-import { EVENT_TYPES, RELEASED_SALE_STATUSES, WAITLIST_OPEN_STATUSES, SEX, SALE_STATUS, LITTER_STATUS, PAIRING_STATUS, descriptor } from './vocab.js';
+import {
+  EVENT_TYPES, RELEASED_SALE_STATUSES, WAITLIST_OPEN_STATUSES, SEX, SALE_STATUS, LITTER_STATUS, PAIRING_STATUS,
+  ACCOUNT_TYPE, CONTRACT_TYPE, EXPENSE_CATEGORIES, DOC_TYPES, WAITLIST_ENTRY_STATUS, descriptor
+} from './vocab.js';
 
 const blank = (v) => v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && !v.length);
 const set = (v) => !blank(v);
@@ -143,8 +146,12 @@ const RULES = {
     && eqSet(l.offered_date, f.offered_date) ? 'same' : null)
 };
 
+// The rules, for the on-device duplicate scan (data/duplicateScan.js), which runs
+// them between two records on this device.
+export { RULES as MATCH_RULES };
+
 // Never one dog, whatever else agrees.
-function dogNever(l, f, { fk }) {
+export function dogNever(l, f, { fk }) {
   if (knownSex(l) && knownSex(f) && knownSex(l) !== knownSex(f)) return true;
   if (differs(normReg(l.registration_number), normReg(f.registration_number))) return true;
   if (differs(chip(l.microchip_id), chip(f.microchip_id))) return true;
@@ -394,6 +401,16 @@ export function describeRecord(table, r, nameOf = () => '') {
     case 'litters': return bits(dogs(r.dam_id, r.sire_id), r.whelp_date ? `whelped ${r.whelp_date}` : r.status && descriptor(LITTER_STATUS, r.status).label);
     case 'sales': return bits(nameOf('dogs', r.dog_id), nameOf('contacts', r.buyer_contact_id) && `to ${nameOf('contacts', r.buyer_contact_id)}`, r.sale_date, r.status && descriptor(SALE_STATUS, r.status).label);
     case 'stud_services': return bits(dogs(r.our_dog_id, r.partner_dog_id), r.sent_date, r.status);
+    case 'accounts': return bits(r.name, r.account_type && descriptor(ACCOUNT_TYPE, r.account_type).label, r.website);
+    case 'waitlist_programs': return bits(r.name, nameOf('kennels', r.kennel_id));
+    case 'breed_feeding_schedules': return bits(r.breed, 'feeding schedule');
+    case 'contracts': return bits(r.contract_type && `${descriptor(CONTRACT_TYPE, r.contract_type).label} contract`, nameOf('dogs', r.related_dog_id),
+      nameOf('contacts', r.related_contact_id) && `with ${nameOf('contacts', r.related_contact_id)}`, r.signed_date);
+    case 'events': return bits(r.title || (r.event_type && descriptor(EVENT_TYPES, r.event_type).label), nameOf(r.subject_type === 'dog' ? 'dogs' : r.subject_type === 'litter' ? 'litters' : 'pairings', r.subject_id), r.event_date);
+    case 'expenses': return bits(r.category && descriptor(EXPENSE_CATEGORIES, r.category).label, r.amount != null && r.amount !== '' && `$${Number(r.amount).toFixed(2)}`, r.expense_date, r.vendor);
+    case 'documents': return bits(r.title, r.doc_type && descriptor(DOC_TYPES, r.doc_type).label, nameOf('dogs', r.dog_id), r.doc_date);
+    case 'waitlist_entries': return bits(nameOf('contacts', r.contact_id), nameOf('kennels', r.kennel_id), r.applied_date && `applied ${r.applied_date}`, r.status && descriptor(WAITLIST_ENTRY_STATUS, r.status).label);
+    case 'waitlist_offers': return bits(r.offered_date && `offered ${r.offered_date}`, nameOf('litters', r.litter_id) && `litter ${nameOf('litters', r.litter_id)}`, r.outcome);
     default: return bits(r.name || r.title || r.kennel_name || r.id);
   }
 }

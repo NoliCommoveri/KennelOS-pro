@@ -1,5 +1,5 @@
 // import-export.js — wires the Import/Export page to the backup engine: Backup &
-// restore, CSV import, and the Danger zone. Account, kennel setup, the guided tour
+// restore, Duplicates (assets/duplicateScanUI.js), CSV import, and the Danger zone. Account, kennel setup, the guided tour
 // and this device's license are on the Settings page (pages/settings.js).
 import { downloadBackup, readBackupFile, inspectBackup, restoreBackup, planFileMerge } from '../data/importExport.js';
 import { getLastBackupDate } from '../data/settings.js';
@@ -13,6 +13,7 @@ import { pushToDropbox, fetchDropboxBackup } from '../data/assistantSync.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { downloadImportTemplate } from '../assets/importHelp.js';
 import { askSame, askClashes } from '../assets/mergeQuestions.js';
+import { mountDuplicateScan } from '../assets/duplicateScanUI.js';
 
 // Cloud backup UI, loaded only when this edition has a server (`cloudUrl` set),
 // so an edition without one never even loads the cloud modules (plan §7).
@@ -275,6 +276,7 @@ async function doRestore(mode) {
 }
 
 renderLastBackup();
+mountDuplicateScan(document.getElementById('duplicates-card'), { flash });
 
 function wireSegTabs(containerId, onPick) {
   const tabs = document.getElementById(containerId);
