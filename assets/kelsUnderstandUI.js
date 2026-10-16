@@ -1,7 +1,7 @@
 // kelsUnderstandUI.js — Kels's "Understanding Something" (Kels roadmap §3.14,
 // End-State guide §33), as a chat on pages/kels.html. Two halves (decided): how
 // KennelOS works, an FAQ in every edition, and how her business is doing, from her
-// reports (Pro; not built yet). With more than one half on offer she asks which
+// reports (Pro, editionFlags.reports: assets/kelsInsightsUI.js, imported on pick). With more than one half on offer she asks which
 // first ("Which is your question about?"); with one, it starts straight away.
 // Each half has its own intro, said the first time she picks it.
 //
@@ -18,10 +18,13 @@ import { KELS_UNDERSTAND_INTRO } from './kelsChat.js';
 
 // The halves, in the order she offers them: { id, label, opener, how, flag?, run }.
 // `run(chat, { branched })` → 'left' | 'done' | 'branch' (back to the question).
-// How my business is doing joins here when it's built (roadmap §3.14 B: label
-// "How my business is doing", opener "Ready when you are!", flag `reports`).
+// How my business is doing is Pro (its script and the reports it reads are Pro-only),
+// so its intro and script load only when it's picked.
+const businessHalf = () => import('./kelsInsightsUI.js');
 const HALVES = [
-  { id: 'app', label: 'How KennelOS works', opener: 'I\'m on it!', how: KELS_UNDERSTAND_INTRO, run: (chat, o) => appFaq(chat, o) }
+  { id: 'app', label: 'How KennelOS works', opener: 'I\'m on it!', how: KELS_UNDERSTAND_INTRO, run: (chat, o) => appFaq(chat, o) },
+  { id: 'business', label: 'How my business is doing', opener: 'Ready when you are!', how: async () => (await businessHalf()).KELS_BUSINESS_INTRO,
+    flag: 'reports', run: async (chat, o) => (await businessHalf()).businessCheckup(chat, o) }
 ];
 
 export async function runUnderstandTask(chat, { onExit = () => {} } = {}) {
@@ -40,7 +43,8 @@ export async function runUnderstandTask(chat, { onExit = () => {} } = {}) {
       half = halves.find((h) => h.id === v);
     }
     if (!introduced.has(half.id)) {
-      if (!(await chat.intro(half.opener, half.how))) return onExit('nevermind');
+      const how = typeof half.how === 'function' ? await half.how() : half.how;
+      if (!(await chat.intro(half.opener, how))) return onExit('nevermind');
       introduced.add(half.id);
     }
     const out = await half.run(chat, { branched });

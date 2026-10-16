@@ -114,7 +114,12 @@ export const PRO_ONLY_STANDALONE = [
   // A kennel's settings as form pieces (logo, nudges, Puppy Record fields): the
   // Kennel page's, and Kels's "Getting Started", which imports it only in the parts
   // that need that page (none in Lite).
-  'assets/kennelSettingsFields.js'
+  'assets/kennelSettingsFields.js',
+  // What each report reads and the figures its tiles show: the Pro-only report
+  // pages', and Kels's "How my business is doing", which is Pro-only too.
+  'data/reportSources.js', 'data/reportFigures.js',
+  // ...and the sentences she makes from them, with their chat.
+  'data/kennelInsights.js', 'assets/kelsInsightsUI.js'
 ];
 
 // True when a link target (an href like "contact-import.html" or with a query string)

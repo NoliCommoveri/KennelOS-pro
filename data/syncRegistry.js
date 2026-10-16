@@ -120,7 +120,7 @@ export const SYNC_REGISTRY = Object.freeze({
       'kennel_id', 'pairing_id', 'sire_id', 'dam_id', 'status', 'nickname',
       'whelp_date', 'accept_deposits_date', 'estimated_ready_date',
       'litter_registration_number', 'puppies_born_total', 'puppies_born_alive',
-      'puppies_born_deceased', 'puppies_born_abnormalities', 'foster_direction',
+      'puppies_born_deceased', 'puppies_born_abnormalities', 'delivery_type', 'foster_direction',
       'foster_partner_contact_id',
       'picks_opened_date' // a waitlist date: the auto-offer flow needs it after a restore
     ],

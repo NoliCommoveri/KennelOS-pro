@@ -3,7 +3,8 @@
 // search pick expenses, and the table shows one row per category with its total,
 // entry count and share. The expenses are moneyReport.loadMoney's — scoped exactly
 // as the Financials Overview scopes them — so the totals always agree with it.
-import { loadMoney } from '../data/moneyReport.js';
+import { loadExpenses } from '../data/reportSources.js';
+import { expenseFigures } from '../data/reportFigures.js';
 import { createReportView } from '../assets/reportView.js';
 import { fmtMoney } from '../assets/ui.js';
 import { EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, descriptor } from '../data/vocab.js';
@@ -13,14 +14,13 @@ import { SERIES_COLORS } from '../assets/chartView.js';
 const money = (v) => fmtMoney(Math.round((Number(v) || 0) * 100) / 100);
 
 async function init() {
-  const { expenses } = await loadMoney();
-  expenses.sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || ''));
+  const src = await loadExpenses();
 
   createReportView({
     mount: document.getElementById('report-mount'),
     csvFilename: `expenses-by-category-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search notes or vendor…', text: (x) => `${x.description || ''} ${x.vendor || ''} ${x.notes || ''}` },
-    dateRange: { label: 'Spent', date: (x) => x.expense_date, initial: 'this_year' },
+    dateRange: { label: 'Spent', date: src.date, initial: 'this_year' },
     filters: [
       { id: 'category', label: 'Category', options: EXPENSE_CATEGORIES, match: (x, v) => x.category === v },
       { id: 'subject', label: 'Spent on', options: EXPENSE_SUBJECT_TYPES, match: (x, v) => x.subject_type === v }
@@ -34,10 +34,10 @@ async function init() {
       }).filter((r) => r.count);
     },
     kpis: (list) => {
-      const total = sumOf(list, (x) => x.amount);
-      const top = rankBy(list, { key: (x) => x.category, value: (x) => x.amount })[0];
+      const f = expenseFigures(list);
+      const top = f.byCategory[0];
       return [
-        { label: 'Total spent', value: money(total) },
+        { label: 'Total spent', value: money(f.total) },
         { label: 'Entries', value: String(list.length) },
         { label: 'Largest category', value: top ? descriptor(EXPENSE_CATEGORIES, top.key).label : '—', hint: top ? money(top.value) : '' },
         { label: 'Mileage logged', value: sumOf(list, (x) => x.miles) ? `${Math.round(sumOf(list, (x) => x.miles))} mi` : '—', hint: `${list.filter((x) => Number(x.miles) > 0).length} mileage entries` }
@@ -58,7 +58,7 @@ async function init() {
       { header: 'Share', value: (r) => `${Math.round(r.share * 100)}%`, total: (rows) => (rows.length ? '100%' : '') }
     ],
     onRowClick: (r) => { location.href = `financials.html?view=expenses&bucket=${encodeURIComponent(r.category)}`; },
-    load: () => Promise.resolve(expenses),
+    load: () => Promise.resolve(src.rows),
     emptyText: 'No expenses in this range.'
   });
 }

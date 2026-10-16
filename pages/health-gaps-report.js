@@ -3,16 +3,12 @@
 // test name exactly as the dog page's Planned Tests panel matches them
 // (eventRepo.testTokensOf, case-insensitive, trimmed) — advisory, so a result typed
 // under another name reads as missing. Adult dogs only (no puppies, no deceased).
-import { dogRepo } from '../data/dogRepo.js';
-import { eventRepo, testTokensOf } from '../data/eventRepo.js';
-import { testGapRows } from '../data/breedingReports.js';
+import { loadHealthGaps } from '../data/reportSources.js';
 import { createReportView } from '../assets/reportView.js';
-import { dogInScope } from '../data/kennelScope.js';
 import { DOG_STATUS, SEX, descriptor } from '../data/vocab.js';
 import { rankBy } from '../data/reportMath.js';
 import { SERIES_COLORS } from '../assets/chartView.js';
 
-const TEST_TYPES = ['genetic_test', 'ofa_pennhip', 'breed_specific_test'];
 const COVERAGE = [
   { value: 'complete', label: 'All logged',     badge: 'badge-green' },
   { value: 'gaps',     label: 'Missing some',   badge: 'badge-amber' },
@@ -21,8 +17,7 @@ const COVERAGE = [
 const coverage = (r) => (!r.planned.length ? 'no_plan' : r.missing.length ? 'gaps' : 'complete');
 
 async function init() {
-  const [dogs, ...byType] = await Promise.all([dogRepo.getAll({ includeArchived: false }), ...TEST_TYPES.map((t) => eventRepo.getByType(t))]);
-  const rows = testGapRows(dogs.filter((d) => dogInScope(d) && d.status !== 'puppy' && d.status !== 'deceased'), byType.flat(), testTokensOf);
+  const { rows } = await loadHealthGaps();
 
   createReportView({
     mount: document.getElementById('report-mount'),

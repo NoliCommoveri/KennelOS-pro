@@ -6,7 +6,7 @@ import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { LITTER_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
-import { FOSTER_DIRECTION, FOSTER_COMP_MODEL } from './vocab.js';
+import { FOSTER_DIRECTION, FOSTER_COMP_MODEL, LITTER_DELIVERY_TYPE } from './vocab.js';
 import { enforceLitterCap } from './editionConfig.js';
 
 const base = makeRepo('litters', LITTER_REFERENCES);
@@ -18,6 +18,7 @@ const REQUIRED_FIELDS = ['dam_id', 'sire_id', 'status'];
 
 const FOSTER_DIRECTIONS = FOSTER_DIRECTION.map((d) => d.value);
 const FOSTER_COMP_MODELS = FOSTER_COMP_MODEL.map((m) => m.value);
+const DELIVERY_TYPES = LITTER_DELIVERY_TYPE.map((d) => d.value);
 
 function validateLitter(candidate) {
   for (const f of REQUIRED_FIELDS) {
@@ -37,6 +38,9 @@ function validateLitter(candidate) {
   if (candidate.foster_comp_model != null && candidate.foster_comp_model !== ''
       && !FOSTER_COMP_MODELS.includes(candidate.foster_comp_model)) {
     throw new Error(`Litter: foster_comp_model must be one of ${FOSTER_COMP_MODELS.join(', ')}.`);
+  }
+  if (candidate.delivery_type != null && candidate.delivery_type !== '' && !DELIVERY_TYPES.includes(candidate.delivery_type)) {
+    throw new Error(`Litter: delivery_type must be one of ${DELIVERY_TYPES.join(', ')}.`);
   }
   if (candidate.foster_our_share_pct != null && candidate.foster_our_share_pct !== '') {
     const p = Number(candidate.foster_our_share_pct);

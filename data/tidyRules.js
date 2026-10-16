@@ -11,13 +11,14 @@
 // A finding: { key, kind, ... }. `key` is stable for the same records, so
 // "don't ask me again" can remember it (nudgeState, prefixed `tidy:`). Order is
 // the order she raises them in: TIDY_KINDS.
-import { RELEASED_SALE_STATUSES, EVENT_TYPES } from './vocab.js';
+import { RELEASED_SALE_STATUSES, EVENT_TYPES, WHELPED_OR_LATER } from './vocab.js';
 import { studParents } from './studRules.js';
 import { normReg, similarNamed } from './dogSearch.js';
 import { normName, normEmail, normPhone, hasVet, isVet } from './contactSearch.js';
 
 export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
+  'litter-delivery',     // a whelped litter with no delivery type
   'pup-placed',          // a pup with a sale isn't marked Placed
   'delivered-owned',     // a delivered pup is still on her roster as hers
   'litter-pairing-parents', // a litter's parents ≠ its breeding's
@@ -83,6 +84,14 @@ export function countFix(litter, actual) {
 
 // A litter linked to a breeding with different parents. The litter's own
 // sire/dam are authoritative (§4), but either side can be the typo, so both fixes are offered.
+// A litter that's Whelped or later with no delivery type recorded (vocab
+// LITTER_DELIVERY_TYPE): she's asked how it was delivered.
+export function deliveryFindings(litters) {
+  return litters.filter((l) => !l.is_archived && WHELPED_OR_LATER.includes(l.status) && blank(l.delivery_type))
+    .sort((a, b) => (b.whelp_date || '').localeCompare(a.whelp_date || ''))
+    .map((l) => ({ key: `delivery:${l.id}`, kind: 'litter-delivery', litter: l }));
+}
+
 export function litterPairingFindings(litters, pairings) {
   const byId = new Map(pairings.map((p) => [p.id, p]));
   const out = [];
@@ -385,6 +394,7 @@ export function tidyFindings({ litters, pairings, sales, studServices = [], dogs
   const littersById = new Map(litters.map((l) => [l.id, l]));
   const all = [
     ...litterCountFindings(litters, allDogs),
+    ...deliveryFindings(litters),
     ...pupPlacedFindings(dogs, sales),
     ...deliveredOwnedFindings(dogs, sales),
     ...litterPairingFindings(litters, pairings),

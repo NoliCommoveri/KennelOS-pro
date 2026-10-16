@@ -4,12 +4,9 @@
 // passes they've used and whether they're paused. Places, pauses and passes come
 // from waitlistRules.js, the same functions the Waitlist page uses; the counts
 // from data/waitlistReports.js. Scoped by each entry's kennel.
-import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
-import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
-import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
-import { kennelRepo } from '../data/kennelRepo.js';
-import { entryName, overallPositions, isPaused, passesUsed, waitlistConfig } from '../data/waitlistRules.js';
+import { loadWaitlistToday } from '../data/reportSources.js';
+import { waitingFigures } from '../data/reportFigures.js';
+import { entryName, passesUsed } from '../data/waitlistRules.js';
 import { sexWanted, listedSince, waitBuckets, median } from '../data/waitlistReports.js';
 import { createReportView } from '../assets/reportView.js';
 import { inScope, isScoped } from '../data/kennelScope.js';
@@ -21,34 +18,16 @@ import { pct, rankBy } from '../data/reportMath.js';
 import { SERIES_COLORS } from '../assets/chartView.js';
 
 async function init() {
-  const [entries, offers, programs, contacts, kennels] = await Promise.all([
-    waitlistEntryRepo.getAll({ includeArchived: false }),
-    waitlistOfferRepo.getAll({ includeArchived: false }),
-    waitlistProgramRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true }),
-    kennelRepo.getAll({ includeArchived: true })
-  ]);
-  const contactsById = new Map(contacts.map((c) => [c.id, c]));
-  const programsById = new Map(programs.map((p) => [p.id, p]));
-  const kennelsById = new Map(kennels.map((k) => [k.id, k]));
   const today = todayYMD();
+  const src = await loadWaitlistToday(today);
+  const { rows: onList, paused, waited, place, kennelName, offers, programs, programsById, contacts } = src;
+  const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const name = (e) => entryName(e, contactsById.get(e.contact_id) || null);
   const program = (e) => programsById.get(e.waitlist_program_id)?.name || '';
-  const kennelName = (e) => kennelsById.get(e.kennel_id)?.name || '';
-  const paused = (e) => isPaused(e, today, waitlistConfig(kennelsById.get(e.kennel_id)));
-  const waited = (e) => { const s = listedSince(e); return s ? Math.max(0, daysBetween(s, today)) : null; };
-
-  // Each family's place on its own kennel's list.
-  const place = new Map();
-  for (const kennelId of new Set(entries.map((e) => e.kennel_id))) {
-    for (const [id, n] of overallPositions(entries, kennelId, programsById)) place.set(id, n);
-  }
-  const onList = entries.filter((e) => e.status === 'active' && place.has(e.id))
-    .sort((a, b) => kennelName(a).localeCompare(kennelName(b)) || place.get(a.id) - place.get(b.id));
   const kennelCount = new Set(onList.filter(inScope).map((e) => e.kennel_id)).size;
 
   // Families not on the list yet, for the pipeline tiles (scoped like the rows).
-  const pipeline = entries.filter(inScope);
+  const { pipeline } = src;
   const toReview = pipeline.filter((e) => e.status === 'applied').length;
   const feeDue = pipeline.filter((e) => e.status === 'approved').length;
 
@@ -57,7 +36,7 @@ async function init() {
 
   createReportView({
     mount: document.getElementById('report-mount'),
-    scope: inScope,
+    scope: src.scope,
     csvFilename: `waitlist-today-${today}.csv`,
     search: { placeholder: 'Search family…', text: name },
     filters: [
@@ -66,15 +45,13 @@ async function init() {
       ...(programOptions.length ? [{ id: 'program', label: 'Program', options: programOptions, match: (e, v) => e.waitlist_program_id === v }] : [])
     ],
     kpis: (list) => {
-      const sex = sexWanted(list);
-      const of = (v) => sex.find((s) => s.value === v).count;
-      const waits = list.map(waited).filter((d) => d != null);
-      const m = median(waits);
+      const f = waitingFigures(list, { paused, waited });
+      const m = f.medianWait;
       return [
-        { label: 'Waiting now', value: String(list.length), hint: `${list.filter(paused).length} paused` },
-        { label: 'Want a girl', value: String(of('female')), hint: pct(of('female'), list.length) || '' },
-        { label: 'Want a boy', value: String(of('male')), hint: pct(of('male'), list.length) || '' },
-        { label: 'Either', value: String(of('any')), hint: pct(of('any'), list.length) || '' },
+        { label: 'Waiting now', value: String(f.waiting), hint: `${f.paused} paused` },
+        { label: 'Want a girl', value: String(f.girl), hint: pct(f.girl, f.waiting) || '' },
+        { label: 'Want a boy', value: String(f.boy), hint: pct(f.boy, f.waiting) || '' },
+        { label: 'Either', value: String(f.either), hint: pct(f.either, f.waiting) || '' },
         { label: 'Time waiting', value: m == null ? '—' : `${Math.round(m)} days`, hint: m == null ? '' : 'median' },
         { label: 'Not on the list yet', value: String(toReview + feeDue), hint: `${toReview} to review, ${feeDue} fee due` }
       ];

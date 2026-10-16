@@ -3,37 +3,29 @@
 // each puppy's own expenses) and the net. A derived read (data/litterFinances.js)
 // over Sale + Expense + Litter + Dog — no new schema, no stored aggregate. Same
 // reportView framework every other report uses.
-import { getLitterFinances } from '../data/litterFinances.js';
-import { dogRepo } from '../data/dogRepo.js';
+import { loadLitterFinances } from '../data/reportSources.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { sumOf } from '../data/reportMath.js';
 import { LITTER_STATUS, FOSTER_DIRECTION, descriptor } from '../data/vocab.js';
 
 async function init() {
-  const [finances, dogs] = await Promise.all([
-    getLitterFinances(),
-    dogRepo.getAll({ includeArchived: true })
-  ]);
-  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  const src = await loadLitterFinances();
+  const dogsById = new Map(src.dogs.map((d) => [d.id, d]));
   const name = (id) => dogsById.get(id)?.call_name || '—';
-
-  // Newest litters first; the money columns read right off the derived rows.
-  finances.sort((a, b) => (b.litter.whelp_date || '').localeCompare(a.litter.whelp_date || ''));
 
   createReportView({
     mount: document.getElementById('report-mount'),
     // Active-kennel scope (Multi-Kennel Scope Spec §7) — each row IS a litter, so
     // the litter's own stamped kennel scopes its whole P&L (its income rows and its
     // cost rows all hang off it).
-    scope: (f) => inScope(f.litter),
+    scope: src.scope,
     csvFilename: `litter-pl-${new Date().toISOString().slice(0, 10)}.csv`,
     search: {
       placeholder: 'Search nickname, dam, or sire…',
       text: (f) => `${f.litter.nickname || ''} ${name(f.litter.dam_id)} ${name(f.litter.sire_id)}`
     },
-    dateRange: { label: 'Whelped', date: (f) => f.litter.whelp_date },
+    dateRange: { label: 'Whelped', date: src.date },
     kpis: (rows) => {
       const earned = sumOf(rows, (f) => f.earned);
       const spent = sumOf(rows, (f) => f.totalExpenses);
@@ -77,7 +69,7 @@ async function init() {
       { header: 'Status', value: (f) => f.litter.status || '', badge: LITTER_STATUS, csv: (f) => f.litter.status ? descriptor(LITTER_STATUS, f.litter.status).label : '' }
     ],
     onRowClick: (f) => { location.href = `litter.html?id=${encodeURIComponent(f.litter.id)}`; },
-    load: () => Promise.resolve(finances),
+    load: () => Promise.resolve(src.rows),
     emptyText: 'No litters recorded yet.'
   });
 }

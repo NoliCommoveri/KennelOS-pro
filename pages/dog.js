@@ -22,7 +22,7 @@ import { renderDogScopeNotice } from '../assets/kennelScopeUI.js';
 import {
   SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, PAIRING_TYPE, PAIRING_STATUS,
   REGISTRATION_TYPE, SALE_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_STATUS,
-  LITTER_STATUS, EVENT_TYPES, descriptor, COI_METHOD_SUGGESTIONS, CONTRACT_TYPE, CONTRACT_STATUS,
+  LITTER_STATUS, LITTER_DELIVERY_TYPE, WHELPED_OR_LATER, EVENT_TYPES, descriptor, COI_METHOD_SUGGESTIONS, CONTRACT_TYPE, CONTRACT_STATUS,
   SHOW_ENTRY_STATUS, TITLE_TRACKS
 } from '../data/vocab.js';
 import { getShowRecord } from '../data/showPoints.js';
@@ -1386,6 +1386,14 @@ async function renderContractsSection() {
   setupCollapsibleCard('contracts');
 }
 
+// How a litter was delivered, as a short pill (the full name on hover), once it's
+// Whelped or later and recorded.
+function deliveryPill(l) {
+  if (!l.delivery_type || !WHELPED_OR_LATER.includes(l.status)) return '';
+  const d = descriptor(LITTER_DELIVERY_TYPE, l.delivery_type);
+  return ` <span class="badge ${d.badge}" title="${esc(d.label)}">${esc(d.short || d.label)}</span>`;
+}
+
 // Derived "Litters" panel: litters where this dog is sire or dam.
 async function renderLittersSection() {
   if (!els.litters) return;
@@ -1398,7 +1406,7 @@ async function renderLittersSection() {
         const role = l.sire_id === d.id ? 'Sire' : 'Dam';
         const partnerId = l.sire_id === d.id ? l.dam_id : l.sire_id;
         return `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
-          <span><span class="faint">${role} ·</span> with <strong>${esc(dogName(partnerId) || '—')}</strong> ${badge(LITTER_STATUS, l.status)}${l.whelp_date ? ` <span class="faint">${esc(fmtDate(l.whelp_date))}</span>` : ''}</span>
+          <span><span class="faint">${role} ·</span> with <strong>${esc(dogName(partnerId) || '—')}</strong> ${badge(LITTER_STATUS, l.status)}${deliveryPill(l)}${l.whelp_date ? ` <span class="faint">${esc(fmtDate(l.whelp_date))}</span>` : ''}</span>
           <a class="btn btn-sm" href="litter.html?id=${encodeURIComponent(l.id)}">Open →</a>
         </li>`;
       }).join('') + `</ul>`

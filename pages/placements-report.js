@@ -2,11 +2,9 @@
 // by status / registration_type / period. Derived read over Sale; buyer resolves to
 // a Contact (there is no Buyer table). Reuses the reporting framework; no new
 // schema, no stored aggregate.
-import { saleRepo } from '../data/saleRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
+import { loadPlacements } from '../data/reportSources.js';
+import { placementFigures } from '../data/reportFigures.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, descriptor } from '../data/vocab.js';
 import { periodSeries, sumOf, pct } from '../data/reportMath.js';
@@ -20,42 +18,35 @@ const priced = (s) => s.price !== '' && s.price != null && Number.isFinite(Numbe
 const regColor = (v) => SERIES_COLORS[REGISTRATION_TYPE.findIndex((r) => r.value === v)];
 
 async function init() {
-  const [sales, dogs, contacts] = await Promise.all([
-    saleRepo.getAll({ includeArchived: false }),
-    dogRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true })
-  ]);
-  const dogsById = new Map(dogs.map((d) => [d.id, d]));
-  const contactsById = new Map(contacts.map((c) => [c.id, c]));
+  const src = await loadPlacements();
+  const dogsById = new Map(src.dogs.map((d) => [d.id, d]));
+  const contactsById = new Map(src.contacts.map((c) => [c.id, c]));
   const dogName = (s) => dogsById.get(s.dog_id)?.call_name || '—';
   const buyerName = (s) => contactsById.get(s.buyer_contact_id)?.name || '—';
-
-  sales.sort((a, b) => (b.sale_date || '').localeCompare(a.sale_date || ''));
 
   createReportView({
     mount: document.getElementById('report-mount'),
     // Active-kennel scope (Multi-Kennel Scope Spec §7) — a sale carries the kennel
     // it was placed FROM, inherited from the dog at creation, so a dog moved or
     // sold on afterwards never re-files the historic sale.
-    scope: inScope,
+    scope: src.scope,
     csvFilename: `placements-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dog or buyer…', text: (s) => `${dogName(s)} ${buyerName(s)}` },
     filters: [
       { id: 'registration_type', label: 'Registration', options: REGISTRATION_TYPE, match: (s, v) => s.registration_type === v },
       { id: 'status', label: 'Status', options: SALE_STATUS, match: (s, v) => s.status === v }
     ],
-    dateRange: { label: 'Sold', date: (s) => s.sale_date },
+    dateRange: { label: 'Sold', date: src.date },
     kpis: (rows) => {
-      const live = rows.filter(placed);
-      const withPrice = live.filter(priced);
-      const count = (v) => live.filter((s) => s.registration_type === v).length;
-      const of = (n) => (live.length ? `${n} of ${live.length}` : '—');
+      const f = placementFigures(rows);
+      const count = (v) => f.byRegistration.find((r) => r.value === v)?.count || 0;
+      const of = (n) => (f.placed ? `${n} of ${f.placed}` : '—');
       return [
-        { label: 'Placements', value: String(live.length), hint: rows.length > live.length ? `${rows.length - live.length} fell through` : '' },
-        { label: 'Sale value', value: fmtMoney(sumOf(withPrice, (s) => s.price)) || '$0.00', hint: 'prices, placed sales' },
-        { label: 'Average price', value: withPrice.length ? fmtMoney(sumOf(withPrice, (s) => s.price) / withPrice.length) : '—' },
-        { label: 'Limited registration', value: of(count('limited')), hint: pct(count('limited'), live.length) || '' },
-        { label: 'Full registration', value: of(count('full')), hint: pct(count('full'), live.length) || '' }
+        { label: 'Placements', value: String(f.placed), hint: f.fellThrough ? `${f.fellThrough} fell through` : '' },
+        { label: 'Sale value', value: fmtMoney(f.value) || '$0.00', hint: 'prices, placed sales' },
+        { label: 'Average price', value: f.avgPrice == null ? '—' : fmtMoney(f.avgPrice) },
+        { label: 'Limited registration', value: of(count('limited')), hint: pct(count('limited'), f.placed) || '' },
+        { label: 'Full registration', value: of(count('full')), hint: pct(count('full'), f.placed) || '' }
       ];
     },
     charts: (rows, ctx) => {
@@ -89,7 +80,7 @@ async function init() {
       { header: 'Status', value: (s) => s.status || '', badge: SALE_STATUS, csv: (s) => s.status ? descriptor(SALE_STATUS, s.status).label : '' }
     ],
     onRowClick: (s) => { location.href = `sale.html?id=${encodeURIComponent(s.id)}`; },
-    load: () => Promise.resolve(sales),
+    load: () => Promise.resolve(src.rows),
     emptyText: 'No sales recorded yet.'
   });
 }

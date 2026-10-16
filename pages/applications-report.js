@@ -5,11 +5,8 @@
 // pup they're offered (sex, what it's for, which parents, and breed and color where
 // those vary or count). Pure math in
 // data/waitlistReports.js; scoped by each entry's kennel.
-import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
-import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { kennelRepo } from '../data/kennelRepo.js';
+import { loadApplications } from '../data/reportSources.js';
+import { applicationFigures } from '../data/reportFigures.js';
 import { entryName, waitlistConfig } from '../data/waitlistRules.js';
 import {
   applicationGaps, wasApproved, wasDecided, wasListed, daysToApprove, daysToFee, sexWanted, mean, median,
@@ -27,13 +24,8 @@ import { SERIES_COLORS } from '../assets/chartView.js';
 const days = (n) => (n == null ? '—' : `${Math.round(n)} day${Math.round(n) === 1 ? '' : 's'}`);
 
 async function init() {
-  const [entries, programs, contacts, dogs, kennels] = await Promise.all([
-    waitlistEntryRepo.getAll({ includeArchived: false }),
-    waitlistProgramRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true }),
-    dogRepo.getAll({ includeArchived: true }),
-    kennelRepo.getAll({ includeArchived: true })
-  ]);
+  const src = await loadApplications();
+  const { rows: entries, programs, contacts, dogs, kennels } = src;
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const dogName = (id) => dogsById.get(id)?.call_name || dogsById.get(id)?.registered_name || 'A dog no longer on file';
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
@@ -41,7 +33,6 @@ async function init() {
   const today = todayYMD();
   const name = (e) => entryName(e, contactsById.get(e.contact_id) || null);
   const program = (e) => programsById.get(e.waitlist_program_id)?.name || '';
-  entries.sort((a, b) => (b.applied_date || '').localeCompare(a.applied_date || ''));
 
   // Days since the application before it (in the whole scoped set, so a filter
   // doesn't change a row's own gap).
@@ -68,7 +59,7 @@ async function init() {
     scope: inScope,
     csvFilename: `applications-${today}.csv`,
     search: { placeholder: 'Search family…', text: name },
-    dateRange: { label: 'Applied', date: (e) => e.applied_date },
+    dateRange: { label: 'Applied', date: src.date },
     filters: [
       { id: 'status', label: 'Status', options: WAITLIST_ENTRY_STATUS, match: (e, v) => e.status === v },
       { id: 'sex', label: 'Wants', options: WAITLIST_PREF_SEX, match: (e, v) => (e.pref_sex || 'any') === v },
@@ -78,19 +69,14 @@ async function init() {
       ...(programOptions.length ? [{ id: 'program', label: 'Program', options: programOptions, match: (e, v) => e.waitlist_program_id === v }] : [])
     ],
     kpis: (list) => {
-      const gaps = applicationGaps(list);
-      const decided = list.filter(wasDecided);
-      const approved = list.filter(wasApproved);
-      const listed = approved.filter(wasListed);
-      const approveDays = list.map(daysToApprove).filter((d) => d != null);
-      const feeDays = list.map(daysToFee).filter((d) => d != null);
+      const f = applicationFigures(list);
       return [
-        { label: 'Applications', value: String(list.length) },
-        { label: 'Between applications', value: days(mean(gaps)), hint: gaps.length ? `average; median ${days(median(gaps))}` : '' },
-        { label: 'Approved', value: pct(approved.length, decided.length) || '—', hint: decided.length ? `${approved.length} of ${decided.length} decided` : '' },
-        { label: 'Approved → on the list', value: pct(listed.length, approved.length) || '—', hint: approved.length ? `${listed.length} of ${approved.length}` : '' },
-        { label: 'Applied → approved', value: days(median(approveDays)), hint: approveDays.length ? 'median' : '' },
-        { label: 'Approved → fee paid', value: days(median(feeDays)), hint: feeDays.length ? 'median' : '' }
+        { label: 'Applications', value: String(f.count) },
+        { label: 'Between applications', value: days(f.meanGap), hint: f.gaps ? `average; median ${days(f.medianGap)}` : '' },
+        { label: 'Approved', value: pct(f.approved, f.decided) || '—', hint: f.decided ? `${f.approved} of ${f.decided} decided` : '' },
+        { label: 'Approved → on the list', value: pct(f.listed, f.approved) || '—', hint: f.approved ? `${f.listed} of ${f.approved}` : '' },
+        { label: 'Applied → approved', value: days(f.daysToApprove), hint: f.daysToApprove != null ? 'median' : '' },
+        { label: 'Approved → fee paid', value: days(f.daysToFee), hint: f.daysToFee != null ? 'median' : '' }
       ];
     },
     charts: (list, ctx) => {

@@ -3,12 +3,10 @@
 // not yet in, a balance, transport, boarding, a stud fee) under its due date, plus
 // foster costs fronted and not yet paid back (litterFinances.reimbursablePending).
 // Aged into buckets from today. Pure math in data/moneyReport.js.
-import { loadMoney, incomeEntries, receivableRows, AGE_BUCKETS, daysOverdue } from '../data/moneyReport.js';
-import { getLitterFinances } from '../data/litterFinances.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
+import { AGE_BUCKETS, daysOverdue } from '../data/moneyReport.js';
+import { loadReceivables } from '../data/reportSources.js';
+import { receivableFigures, OVERDUE_BUCKETS as OVERDUE } from '../data/reportFigures.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { INCOME_COMPONENTS, descriptor } from '../data/vocab.js';
@@ -17,21 +15,10 @@ import { SERIES_COLORS } from '../assets/chartView.js';
 
 const money = (v) => fmtMoney(Math.round((Number(v) || 0) * 100) / 100);
 const WHAT = [...INCOME_COMPONENTS.filter((c) => c.value !== 'pick'), { value: 'foster_reimbursable', label: 'Foster costs owed back' }];
-const OVERDUE = ['d30', 'd60', 'd90', 'd90plus'];
 
 async function init() {
   const today = todayYMD();
-  const [{ incomeRows }, finances, dogs, contacts] = await Promise.all([
-    loadMoney(), getLitterFinances(), dogRepo.getAll({ includeArchived: true }), contactRepo.getAll({ includeArchived: true })
-  ]);
-  const name = new Map(dogs.map((d) => [d.id, d.call_name || '—']));
-  const contactName = new Map(contacts.map((c) => [c.id, c.name || '—']));
-  const fosterOwed = finances.filter((f) => inScope(f.litter) && f.reimbursablePending > 0).map((f) => ({
-    litter: f.litter, amount: f.reimbursablePending,
-    label: contactName.get(f.litter.foster_partner_contact_id) || 'Foster partner',
-    litterLabel: f.litter.nickname || `${name.get(f.litter.dam_id) || '—'} × ${name.get(f.litter.sire_id) || '—'}`
-  }));
-  const rows = receivableRows(incomeEntries(incomeRows), today, fosterOwed);
+  const { rows } = await loadReceivables(today);
 
   createReportView({
     mount: document.getElementById('report-mount'),
@@ -42,11 +29,11 @@ async function init() {
       { id: 'what', label: 'For', options: WHAT, match: (r, v) => r.component === v }
     ],
     kpis: (list) => {
-      const overdue = list.filter((r) => OVERDUE.includes(r.bucket));
+      const f = receivableFigures(list);
       const soon = list.filter((r) => r.due && r.due >= today && daysOverdue(r.due, today) >= -30);
       return [
-        { label: 'Owed to you', value: money(sumOf(list, (r) => r.amount)), hint: `${list.length} item${list.length === 1 ? '' : 's'}` },
-        { label: 'Overdue', value: money(sumOf(overdue, (r) => r.amount)), hint: `${overdue.length} item${overdue.length === 1 ? '' : 's'}` },
+        { label: 'Owed to you', value: money(f.owed), hint: `${f.count} item${f.count === 1 ? '' : 's'}` },
+        { label: 'Overdue', value: money(f.overdue), hint: `${f.overdueCount} item${f.overdueCount === 1 ? '' : 's'}` },
         { label: 'Due in 30 days', value: money(sumOf(soon, (r) => r.amount)) },
         { label: 'Foster owed back', value: money(sumOf(list.filter((r) => r.component === 'foster_reimbursable'), (r) => r.amount)) }
       ];

@@ -29,7 +29,7 @@ import { normReg } from './pedigreeImport.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
-  LITTER_STATUS, REGISTRATION_TYPE, PLACEMENT_PURPOSE, cleanPurposes, SALE_STATUS, eventTypesFor, STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS,
+  LITTER_STATUS, LITTER_DELIVERY_TYPE, REGISTRATION_TYPE, PLACEMENT_PURPOSE, cleanPurposes, SALE_STATUS, eventTypesFor, STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS,
   EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, WAITLIST_PREF_SEX, WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING
 } from './vocab.js';
 
@@ -69,6 +69,12 @@ function normEnum(vocab, raw, extra = {}) {
   const hit = vocab.find((v) => v.value === k || v.label.toLowerCase() === s.toLowerCase());
   return hit ? hit.value : null;
 }
+
+// Other words for a litter's delivery (normEnum keys: lower-case, spaces → underscores).
+const DELIVERY_ALIASES = {
+  natural_assisted: 'assisted', vaginal: 'natural', planned_c_section: 'c_section_planned', 'planned_c-section': 'c_section_planned',
+  elective_c_section: 'c_section_planned', 'elective_c-section': 'c_section_planned', emergency_c_section: 'c_section_emergency', 'emergency_c-section': 'c_section_emergency'
+};
 
 // Other words for a purpose on an imported application (normEnum keys: lower-case,
 // spaces → underscores). The old placement values read as their purpose.
@@ -753,7 +759,7 @@ const LITTER_MAPPING = {
   templateHeaders: [
     'dam_registered_name', 'sire_registered_name', 'nickname', 'whelp_date',
     'litter_registration_number', 'puppies_born_total', 'puppies_born_alive',
-    'puppies_born_deceased', 'status', 'kennel_name', 'notes'
+    'puppies_born_deceased', 'delivery_type', 'status', 'kennel_name', 'notes'
   ],
   requiredForCreate: ['dam_id', 'sire_id', 'status'],
 
@@ -815,6 +821,10 @@ const LITTER_MAPPING = {
     const status = normEnum(LITTER_STATUS, col(row, 'status'));
     if (status === null) reasons.push(`Unrecognized status "${col(row, 'status')}".`);
     else if (status) record.status = status;
+
+    const delivery = normEnum(LITTER_DELIVERY_TYPE, col(row, 'delivery_type', 'delivery'), DELIVERY_ALIASES);
+    if (delivery === null) reasons.push(`Unrecognized delivery_type "${col(row, 'delivery_type', 'delivery')}" (ignored).`);
+    else if (delivery) record.delivery_type = delivery;
 
     const nickname = col(row, 'nickname');
     if (nickname) record.nickname = nickname;

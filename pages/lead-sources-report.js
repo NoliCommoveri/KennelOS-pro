@@ -3,39 +3,26 @@
 // source (Sale.lead_source, free text — grouped case-insensitively, trimmed) with
 // sales, sale value and share, and a chart of the contacts who referred buyers
 // (Sale.referred_by_contact_id).
-import { saleRepo } from '../data/saleRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
+import { loadLeadSources, leadSourceKey as sourceKey } from '../data/reportSources.js';
+import { leadFigures } from '../data/reportFigures.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtMoney } from '../assets/ui.js';
-import { RELEASED_SALE_STATUSES } from '../data/vocab.js';
 import { sumOf, rankBy } from '../data/reportMath.js';
 import { SERIES_COLORS } from '../assets/chartView.js';
 
 const money = (v) => fmtMoney(Math.round(Number(v) || 0));
 const price = (s) => (Number.isFinite(Number(s.price)) && s.price !== '' && s.price != null ? Number(s.price) : 0);
-const sourceKey = (s) => String(s.lead_source || '').trim().toLowerCase();
 
 async function init() {
-  const [sales, contacts] = await Promise.all([saleRepo.getAll({ includeArchived: false }), contactRepo.getAll({ includeArchived: true })]);
-  const contactName = new Map(contacts.map((c) => [c.id, c.name || '—']));
-  const placed = sales.filter((s) => !RELEASED_SALE_STATUSES.includes(s.status));
-  // The spelling shown for a source: the most common one used.
-  const display = new Map();
-  for (const s of placed) {
-    const k = sourceKey(s);
-    if (!k) continue;
-    const m = display.get(k) || new Map();
-    m.set(s.lead_source.trim(), (m.get(s.lead_source.trim()) || 0) + 1);
-    display.set(k, m);
-  }
-  const label = (k) => (k ? [...display.get(k).entries()].sort((a, b) => b[1] - a[1])[0][0] : 'Not recorded');
+  const src = await loadLeadSources();
+  const { label } = src;
+  const contactName = new Map(src.contacts.map((c) => [c.id, c.name || '—']));
 
   createReportView({
     mount: document.getElementById('report-mount'),
-    scope: inScope,
+    scope: src.scope,
     csvFilename: `lead-sources-${new Date().toISOString().slice(0, 10)}.csv`,
-    dateRange: { label: 'Sold', date: (s) => s.sale_date },
+    dateRange: { label: 'Sold', date: src.date },
     rowsFor: (list) => {
       const total = sumOf(list, price);
       return [...new Set(list.map(sourceKey))].map((k) => {
@@ -44,13 +31,13 @@ async function init() {
       }).sort((a, b) => b.sales - a.sales || b.value - a.value);
     },
     kpis: (list) => {
-      const top = rankBy(list.filter(sourceKey), { key: sourceKey })[0];
-      const referred = list.filter((s) => s.referred_by_contact_id);
+      const f = leadFigures(list, sourceKey);
+      const { top } = f;
       return [
-        { label: 'Sales', value: String(list.length) },
+        { label: 'Sales', value: String(f.sales) },
         { label: 'Top source', value: top ? label(top.key) : '—', hint: top ? `${top.value} sale${top.value === 1 ? '' : 's'}` : '' },
-        { label: 'Referred', value: String(referred.length), hint: `${new Set(referred.map((s) => s.referred_by_contact_id)).size} referrers` },
-        { label: 'Source not recorded', value: String(list.filter((s) => !sourceKey(s)).length) }
+        { label: 'Referred', value: String(f.referred), hint: `${f.referrers} referrers` },
+        { label: 'Source not recorded', value: String(f.unrecorded) }
       ];
     },
     charts: (list) => [
@@ -64,7 +51,7 @@ async function init() {
       { header: 'Sale value', value: (r) => money(r.value), csv: (r) => String(r.value), className: 'num', total: (rows) => money(sumOf(rows, (r) => r.value)) },
       { header: 'Share of value', value: (r) => `${Math.round(r.share * 100)}%` }
     ],
-    load: () => Promise.resolve(placed),
+    load: () => Promise.resolve(src.rows),
     emptyText: 'No placed sales in this range.'
   });
 }

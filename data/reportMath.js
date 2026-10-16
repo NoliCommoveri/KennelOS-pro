@@ -46,6 +46,20 @@ export function inRange(ymd, { from = null, to = null } = {}) {
   return true;
 }
 
+// The rows a report shows for a range, before its own filters and search: in
+// scope (`scope(row)`, when the report is scoped), then dated in the range
+// (`date(row)`, when it has a date range). reportView and Kels's kennel check-up
+// (data/kennelInsights.js) both read a report's rows through this, so what she
+// says is what the report shows for the same range.
+export function inView(rows, { scope = null, date = null } = {}, range = { from: null, to: null }) {
+  return rows.filter((r) => (!scope || scope(r)) && (!date || inRange(date(r), range)));
+}
+
+// A range preset as words in a sentence: "this year", "in the last 12 months".
+export function rangeWords(preset) {
+  return { this_year: 'this year', last_year: 'last year', last_12: 'in the last 12 months', all: 'so far' }[preset] || 'in that time';
+}
+
 // A one-line description of a range for a printed report ("Jan 1, 2026 – Dec 31, 2026").
 export function rangeLabel(preset, range, fmt = (d) => d) {
   if (preset === 'all' || (!range.from && !range.to)) return 'All time';

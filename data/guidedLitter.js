@@ -35,7 +35,7 @@ import { baseFromLitter } from './puppyDefaults.js';
 import { addDaysToYMD, todayYMD } from './dateUtils.js';
 import { similarNamed } from './dogSearch.js';
 import {
-  SEX, DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, descriptor
+  SEX, DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_DELIVERY_TYPE, descriptor
 } from './vocab.js';
 
 // 2: the parents-first order (a version-1 draft from the earlier order is dropped).
@@ -108,6 +108,7 @@ export function emptyDraft({ litterId = null } = {}) {
     alive: '',
     deceased: '0',
     abnormalities: '',
+    delivery: '',       // LITTER_DELIVERY_TYPE value, or 'later'
     kennelId: null,     // chosen on the kennel step (only asked when it can't be worked out)
     autoKennelId: null, // worked out from the parents / breeding / active kennel
     pups: [],
@@ -271,6 +272,8 @@ export function stepsFor(draft, ctx = {}) {
   const outside = (draft.newSire && !draft.newSire.mine) || ctx.sireIsOutside;
   if (ctx.canStudService && outside && !ctx.hasStudService) steps.push('stud-service');
   steps.push('born', 'count');
+  // How they were delivered, unless the litter she picked already says.
+  if (!ctx.litter?.delivery_type) steps.push('delivery');
   if (ctx.needsKennel) steps.push('kennel');
   draft.pups.forEach((_, i) => steps.push(`pup:${i}`));
   if (draft.pups.length) steps.push('plans', 'prices', 'dates', 'extras');
@@ -350,6 +353,8 @@ export function stepProblem(step, draft, ctx = {}) {
       if (Number(draft.alive) < recordedPupCount(draft)) return `${recordedPupCount(draft)} puppies are already entered on this litter, so born alive can't be fewer.`;
       return null;
     }
+    case 'delivery':
+      return blank(draft.delivery) ? 'Pick how they were delivered, or "I\'ll add it later".' : null;
     case 'kennel':
       return draft.kennelId ? null : 'Pick the kennel this litter belongs to.';
     case 'prices':
@@ -458,6 +463,7 @@ export function reviewSections(draft, ctx = {}) {
     `${ctx.litter ? 'The litter you entered before' : 'A new litter'} for ${damName} × ${sireName}, born ${fmt(draft.whelpDate)}.`,
     `${alive} born alive${deceased ? `, ${deceased} not alive` : ''}${blank(draft.abnormalities) || Number(draft.abnormalities) === 0 ? '' : `, ${draft.abnormalities} with abnormalities`}.`
   ];
+  if (!blank(draft.delivery) && draft.delivery !== 'later') birth.push(`Delivery: ${label(LITTER_DELIVERY_TYPE, draft.delivery)}.`);
   if (ctx.kennelName) birth.push(`Kennel: ${ctx.kennelName}.`);
   if (!blank(draft.nickname)) birth.push(`Nickname: ${trimmed(draft.nickname)}.`);
   sections.push({ title: 'The birth', step: 'born', lines: birth });
@@ -514,6 +520,7 @@ function litterFieldsFromDraft(draft) {
     puppies_born_deceased: deceased
   };
   if (!blank(draft.abnormalities)) fields.puppies_born_abnormalities = Number(draft.abnormalities);
+  if (!blank(draft.delivery) && draft.delivery !== 'later') fields.delivery_type = draft.delivery;
   for (const [k, v] of Object.entries(draft.prices)) if (!blank(v)) fields[k] = Number(v);
   if (!blank(draft.acceptDepositsDate)) fields.accept_deposits_date = draft.acceptDepositsDate;
   if (!blank(draft.readyDate)) fields.estimated_ready_date = draft.readyDate;

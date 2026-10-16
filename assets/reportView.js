@@ -22,7 +22,11 @@
 // Reports plan, phase 1 — every report also gets, when its page asks:
 //   dateRange — { label, date:(r)=>YYYY-MM-DD, initial? } adds a preset menu (All
 //               time / This year / Last year / Last 12 months / Custom From–To);
-//               rows outside it are filtered out like any other filter.
+//               rows outside it are filtered out like any other filter. Instead
+//               of `date`, `rowsIn:(range)=>rows` rebuilds the rows for a range (a
+//               per-dog report whose rows sum up records dated in it). The page's
+//               URL can open it on a range: ?range=<preset> (&from=&to= for custom),
+//               which is how Kels's "See the report" keeps her range.
 //   kpis      — (rows, ctx)=>[{ label, value, hint? }]: a stat strip above the table.
 //   charts    — (rows, ctx)=>[chartSpec…] (assets/chartView.js): drawn above the
 //               table from the same visible rows, so charts follow the filters too.
@@ -36,7 +40,7 @@ import { esc, badge as badgeHtml, fmtDate } from './ui.js';
 import { mountScopeChip } from './kennelScopeUI.js';
 import { mountChart } from './chartView.js';
 import { wirePrintHeader, printButton } from './printView.js';
-import { RANGE_PRESETS, rangeFor, inRange, rangeLabel } from '../data/reportMath.js';
+import { RANGE_PRESETS, rangeFor, inView, rangeLabel } from '../data/reportMath.js';
 import { todayYMD } from '../data/dateUtils.js';
 
 function downloadCsv(filename, text) {
@@ -82,7 +86,12 @@ export function createReportView(opts) {
   } = opts;
 
   let all = [];
-  const state = { q: '', filters: {}, preset: dateRange?.initial || 'all', from: '', to: '' };
+  const asked = new URLSearchParams(location.search);
+  const askedPreset = RANGE_PRESETS.some((p) => p.value === asked.get('range')) ? asked.get('range') : null;
+  const state = {
+    q: '', filters: {}, preset: (dateRange && askedPreset) || dateRange?.initial || 'all',
+    from: askedPreset === 'custom' ? asked.get('from') || '' : '', to: askedPreset === 'custom' ? asked.get('to') || '' : ''
+  };
   const currentRange = () => rangeFor(state.preset, todayYMD(), { from: state.from, to: state.to });
 
   // --- Toolbar ---
@@ -115,6 +124,8 @@ export function createReportView(opts) {
     customWrap.hidden = state.preset !== 'custom';
     customWrap.innerHTML = '<input type="date" aria-label="From"> <span class="muted">to</span> <input type="date" aria-label="To">';
     const [fromEl, toEl] = customWrap.querySelectorAll('input');
+    fromEl.value = state.from;
+    toEl.value = state.to;
     fromEl.addEventListener('change', () => { state.from = fromEl.value; render(); });
     toEl.addEventListener('change', () => { state.to = toEl.value; render(); });
     sel.addEventListener('change', () => {
@@ -213,10 +224,9 @@ export function createReportView(opts) {
   }
 
   function visibleRecords() {
-    const range = dateRange ? currentRange() : null;
-    return all.filter((r) => {
-      if (scope && !scope(r)) return false;
-      if (range && !inRange(dateRange.date(r), range)) return false;
+    const range = dateRange ? currentRange() : { from: null, to: null };
+    const base = dateRange?.rowsIn ? dateRange.rowsIn(range) : all;
+    return inView(base, { scope, date: dateRange?.rowsIn ? null : dateRange?.date }, range).filter((r) => {
       if (state.q && search?.text && !search.text(r).toLowerCase().includes(state.q)) return false;
       for (const f of filters) {
         const v = state.filters[f.id];

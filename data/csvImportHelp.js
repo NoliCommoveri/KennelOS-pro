@@ -18,7 +18,7 @@
 //   'optional' — fill it in or leave it out.
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
-  LITTER_STATUS, REGISTRATION_TYPE, PLACEMENT_PURPOSE, SALE_STATUS, eventTypesFor,
+  LITTER_STATUS, LITTER_DELIVERY_TYPE, REGISTRATION_TYPE, PLACEMENT_PURPOSE, SALE_STATUS, eventTypesFor,
   STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS, EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES,
   WAITLIST_PREF_SEX, WAITLIST_READY_TIMING
 } from './vocab.js';
@@ -126,6 +126,7 @@ const HELP = {
       puppies_born_total: { need: 'optional', text: 'Total puppies born, as a whole number.' },
       puppies_born_alive: { need: 'optional', text: 'Puppies born alive, as a whole number.' },
       puppies_born_deceased: { need: 'optional', text: 'Puppies born deceased, as a whole number.' },
+      delivery_type: { need: 'optional', aliases: ['delivery'], values: LITTER_DELIVERY_TYPE, text: 'How the litter was delivered. Leave it blank if you don\'t know.' },
       status: { need: 'new', values: LITTER_STATUS, text: 'Where the litter stands.' },
       kennel_name: KENNEL_NAME,
       notes: NOTES

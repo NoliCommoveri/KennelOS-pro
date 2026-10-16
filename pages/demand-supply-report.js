@@ -5,37 +5,14 @@
 // how many such pups are available now. Families = entries on the list (active);
 // pups = available puppies (waitlistRules.isPupAvailable). Pure math in
 // data/waitlistReports.js; both sides scoped to the active kennel.
-import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { saleRepo } from '../data/saleRepo.js';
-import { litterRepo } from '../data/litterRepo.js';
-import { kennelRepo } from '../data/kennelRepo.js';
-import { waitlistConfig, kennelBreeds } from '../data/waitlistRules.js';
-import { demandSupply } from '../data/waitlistReports.js';
+import { loadDemandSupply } from '../data/reportSources.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScopeOnly, dogInScope, ownKennels, isScoped, getActiveKennelId } from '../data/kennelScope.js';
 import { REGISTRATION_TYPE } from '../data/vocab.js';
 
 const SEXES = [{ value: 'female', label: 'Female' }, { value: 'male', label: 'Male' }];
 
 async function init() {
-  const [entries, dogs, sales, litters, kennels, own] = await Promise.all([
-    waitlistEntryRepo.getAll({ includeArchived: false }),
-    dogRepo.getAll({ includeArchived: false }),
-    saleRepo.getAll({ includeArchived: false }),
-    litterRepo.getAll({ includeArchived: false }),
-    kennelRepo.getAll({ includeArchived: true }),
-    ownKennels()
-  ]);
-  const kennelsById = new Map(kennels.map((k) => [k.id, k]));
-  const families = inScopeOnly(entries).filter((e) => e.status === 'active');
-  const pups = dogs.filter((d) => d.litter_id && dogInScope(d));
-  const scopedKennels = isScoped() ? own.filter((k) => k.id === getActiveKennelId()) : own;
-  const breeds = [...new Set(scopedKennels.flatMap((k) => kennelBreeds(k, dogs)))].sort();
-  const expected = inScopeOnly(litters).filter((l) => l.status === 'expected');
-  const { rows, availableCount, unsexed } = demandSupply({
-    families, pups, sales, breeds, configFor: (e) => waitlistConfig(kennelsById.get(e.kennel_id))
-  });
+  const { rows, availableCount, unsexed, families, expected, breeds } = await loadDemandSupply();
 
   createReportView({
     mount: document.getElementById('report-mount'),

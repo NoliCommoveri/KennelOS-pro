@@ -70,6 +70,45 @@ export function productionRows({ dogs = [], litters = [], puppies = [] }) {
   return rows.sort((a, b) => b.litters - a.litters || (a.dog.call_name || '').localeCompare(b.dog.call_name || ''));
 }
 
+// Dam & Sire Production for a date range: the dogs' rows over the litters whelped in
+// it, then a row for each breeding female of breeding age with no litter in it, said
+// as what happened (`idle`): 'expecting' (a pairing that took, its litter not born
+// yet), 'waiting' (bred, no answer yet), 'missed' (bred and didn't take) or
+// 'not_bred'. Breeding females: `breeders`, the scoped, live, owned or co-owned dogs
+// at Active breeding; of breeding age: her kennel's promote age for females (12
+// months by default) by the range's end, or today if that's sooner; no birth date,
+// she counts. `pairings`: the scoped ones; `kennelsById` for the promote age.
+export function productionRowsIn({ dogs = [], litters = [], puppies = [], breeders = [], pairings = [], kennelsById = new Map() }, range = {}, today) {
+  const dated = litters.filter((l) => l.whelp_date && inRangeYMD(l.whelp_date, range));
+  const rows = productionRows({ dogs, litters: dated, puppies });
+  const has = new Set(rows.filter((r) => r.role === 'dam').map((r) => r.dog.id));
+  const by = range.to && range.to < today ? range.to : today;
+  const littered = new Set(litters.filter((l) => l.pairing_id).map((l) => l.pairing_id));
+  for (const dog of breeders) {
+    if (dog.sex !== 'female' || dog.status !== 'active_breeding' || dog.is_archived || has.has(dog.id)) continue;
+    if (!['owned', 'co_owned'].includes(dog.ownership_type)) continue;
+    const age = ageMonths(dog.date_of_birth, by);
+    const min = kennelsById.get(dog.kennel_id)?.promote_age_female_months ?? 12;
+    if (age != null && age < min) continue;
+    const outcomes = pairings.filter((p) => p.dam_id === dog.id && p.planned_date && inRangeYMD(p.planned_date, range))
+      .map((p) => pairingOutcome(p, littered));
+    const idle = outcomes.includes('success') ? 'expecting' : outcomes.includes('pending') ? 'waiting' : outcomes.includes('failed') ? 'missed' : 'not_bred';
+    rows.push({
+      dog, role: 'dam', litters: 0, born: 0, alive: 0, livePct: null, avgLitter: null, males: 0, females: 0,
+      firstWhelp: null, lastWhelp: null, firstAge: null, lastAge: null, shortestGapDays: null, backToBack: 0,
+      lifetimeFlag: false, litterList: [], idle
+    });
+  }
+  return rows;
+}
+
+// The words for an idle row, as the report and Kels both say them.
+export const IDLE_TEXT = {
+  expecting: 'Expecting a litter', waiting: 'Bred, waiting to hear', missed: 'Bred, didn\'t take', not_bred: 'Not bred'
+};
+
+const inRangeYMD = (ymd, { from = null, to = null } = {}) => (!from || ymd >= from) && (!to || ymd <= to.slice(0, 10));
+
 // --- Pairing Success --------------------------------------------------------------------
 
 // A pairing's outcome: 'success' (confirmed pregnant, whelped, or a litter points at

@@ -2,52 +2,41 @@
 // service, outgoing or incoming: the litter it produced (a litter whose pairing_id
 // is the service's pairing — breedingReports.studResultRows), puppies born, the fee
 // and any pick. Incoming services are your dams bred to outside studs.
-import { studServiceRepo } from '../data/studServiceRepo.js';
-import { litterRepo } from '../data/litterRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
-import { studResultRows } from '../data/breedingReports.js';
+import { loadStudResults } from '../data/reportSources.js';
+import { studResultFigures } from '../data/reportFigures.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, STUD_SERVICE_STATUS, FEE_STRUCTURE, descriptor } from '../data/vocab.js';
-import { ourRole } from '../data/studRules.js';
 import { sumOf, rankBy } from '../data/reportMath.js';
 
 const when = (r) => r.service.sent_date || r.service.returned_date || '';
 const fee = (r) => (r.service.fee_amount === '' || r.service.fee_amount == null ? 0 : Number(r.service.fee_amount) || 0);
 
 async function init() {
-  const [services, litters, dogs, contacts] = await Promise.all([
-    studServiceRepo.getAll({ includeArchived: false }), litterRepo.getAll({ includeArchived: true }),
-    dogRepo.getAll({ includeArchived: true }), contactRepo.getAll({ includeArchived: true })
-  ]);
-  const dogName = new Map(dogs.map((d) => [d.id, d.call_name || '—']));
-  const contactName = new Map(contacts.map((c) => [c.id, c.name || '—']));
-  const rows = studResultRows(services, litters).sort((a, b) => when(b).localeCompare(when(a)));
-  // Our stud's services (our dog's sex, studRules.ourRole).
-  const dogsById = new Map(dogs.map((d) => [d.id, d]));
-  const role = (r) => ourRole(r.service, dogsById);
+  const src = await loadStudResults();
+  const { rows, role } = src;
+  const dogName = new Map(src.dogs.map((d) => [d.id, d.call_name || '—']));
+  const contactName = new Map(src.contacts.map((c) => [c.id, c.name || '—']));
   const outgoing = (r) => role(r) === 'stud';
 
   createReportView({
     mount: document.getElementById('report-mount'),
-    scope: (r) => inScope(r.service),
+    scope: src.scope,
     csvFilename: `stud-results-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search dog or partner…', text: (r) => `${dogName.get(r.service.our_dog_id) || ''} ${dogName.get(r.service.partner_dog_id) || ''} ${contactName.get(r.service.partner_contact_id) || ''}` },
-    dateRange: { label: 'Sent', date: when },
+    dateRange: { label: 'Sent', date: src.date },
     filters: [
       { id: 'role', label: 'Our dog', options: STUD_SERVICE_ROLE, match: (r, v) => role(r) === v },
       { id: 'direction', label: 'Who travels', options: STUD_SERVICE_DIRECTION, match: (r, v) => r.service.direction === v },
       { id: 'status', label: 'Status', options: STUD_SERVICE_STATUS, match: (r, v) => r.service.status === v }
     ],
     kpis: (list) => {
-      const litterRows = list.filter((r) => r.litter);
+      const f = studResultFigures(list, role);
       return [
-        { label: 'Services', value: String(list.length), hint: `${list.filter(outgoing).length} our stud, ${list.length - list.filter(outgoing).length} our dam` },
-        { label: 'Litters produced', value: String(litterRows.length) },
-        { label: 'Puppies born', value: String(sumOf(litterRows, (r) => r.born)), hint: litterRows.length ? `${(sumOf(litterRows, (r) => r.born) / litterRows.length).toFixed(1)} a litter` : '' },
-        { label: 'Fees earned', value: fmtMoney(sumOf(list.filter((r) => outgoing(r) && r.service.status === 'completed'), fee)) || '$0.00', hint: 'completed, our stud' }
+        { label: 'Services', value: String(f.services), hint: `${f.ourStud} our stud, ${f.services - f.ourStud} our dam` },
+        { label: 'Litters produced', value: String(f.litters) },
+        { label: 'Puppies born', value: String(f.born), hint: f.litters ? `${(f.born / f.litters).toFixed(1)} a litter` : '' },
+        { label: 'Fees earned', value: fmtMoney(f.feesEarned) || '$0.00', hint: 'completed, our stud' }
       ];
     },
     charts: (list) => [{

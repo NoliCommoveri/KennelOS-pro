@@ -3,12 +3,9 @@
 // table of birth weight, latest weight and gain. A pup well under its littermates'
 // median at its latest weigh-in is flagged (breedingReports.growthFlags). The chosen
 // litter rides the URL (?litter=) and heads the printout.
-import { litterRepo } from '../data/litterRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { eventRepo } from '../data/eventRepo.js';
+import { loadPuppyGrowth } from '../data/reportSources.js';
 import { growthSeries, growthFlags } from '../data/breedingReports.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScopeOnly } from '../data/kennelScope.js';
 import { esc, fmtDate, param } from '../assets/ui.js';
 import { SEX } from '../data/vocab.js';
 import { SERIES_COLORS } from '../assets/chartView.js';
@@ -25,18 +22,10 @@ function fmtWeight(lbs) {
 const lineColor = (i) => (i < SERIES_COLORS.length ? SERIES_COLORS[i] : '#9aa3ae');
 
 async function init() {
-  const [litters, dogs, events] = await Promise.all([
-    litterRepo.getAll({ includeArchived: false }),
-    dogRepo.getAll({ includeArchived: true }),
-    eventRepo.getByType('weight_check')
-  ]);
-  const weights = events.filter((e) => e.event_type === 'weight_check' && !e.is_archived);
+  const { rows: choices, weights, pupsOf, dogs } = await loadPuppyGrowth();
   const name = new Map(dogs.map((d) => [d.id, d.call_name || '—']));
-  const pupsOf = (l) => dogs.filter((d) => d.litter_id === l.id).sort((a, b) => (a.call_name || '').localeCompare(b.call_name || '', undefined, { numeric: true }));
   const label = (l) => l.nickname || `${name.get(l.dam_id) || '—'} × ${name.get(l.sire_id) || '—'}`;
   const weighed = new Set(weights.map((e) => e.subject_id));
-  const choices = inScopeOnly(litters).filter((l) => l.whelp_date && l.status !== 'expected')
-    .sort((a, b) => b.whelp_date.localeCompare(a.whelp_date));
   const hasData = (l) => pupsOf(l).some((p) => weighed.has(p.id));
   let current = choices.find((l) => l.id === param('litter')) || choices.find(hasData) || choices[0] || null;
 

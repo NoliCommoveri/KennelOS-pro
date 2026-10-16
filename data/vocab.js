@@ -120,6 +120,18 @@ export const LITTER_STATUS = [
 export const PAIRING_ENDED_STATUSES = ['not_pregnant', 'failed', 'cancelled'];
 export const WHELPED_OR_LATER = ['whelped', 'weaning', 'ready', 'sold', 'closed'];
 
+// How a litter was delivered (Litter.delivery_type, optional). Asked only once the
+// litter is Whelped or later (WHELPED_OR_LATER): the Litter page shows the field from
+// then on and asks for it when a litter first gets there, Kels's Record a new litter
+// asks it at the birth, and the tidy-up raises a whelped litter without it.
+// `short`: the pill on a dog's Litters list, where space is tight.
+export const LITTER_DELIVERY_TYPE = [
+  { value: 'natural',             label: 'Natural',              short: 'Natural',         badge: 'badge-green' },
+  { value: 'assisted',            label: 'Natural, assisted',    short: 'Assisted',        badge: 'badge-blue' },
+  { value: 'c_section_planned',   label: 'Planned C-section',    short: 'Planned C-sec',   badge: 'badge-amber' },
+  { value: 'c_section_emergency', label: 'Emergency C-section',  short: 'Emergency C-sec', badge: 'badge-red' }
+];
+
 // Account (accounts table) — what kind of business account it is. Badge + filter
 // only; nothing branches on it.
 export const ACCOUNT_TYPE = [

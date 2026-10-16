@@ -3,13 +3,10 @@
 // for that sex and registration (saleDefaults.expectedPricing — the same rule that
 // prefills a new sale, Full surcharge included). Averages by registration and sex
 // show whether the Full surcharge is actually being paid.
-import { saleRepo } from '../data/saleRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { litterRepo } from '../data/litterRepo.js';
-import { expectedPricing } from '../data/saleDefaults.js';
-import { pricingRows, averageBy } from '../data/moneyReport.js';
+import { averageBy } from '../data/moneyReport.js';
+import { loadPricing } from '../data/reportSources.js';
+import { pricingFigures } from '../data/reportFigures.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtDate, fmtMoney } from '../assets/ui.js';
 import { REGISTRATION_TYPE, RELEASED_SALE_STATUSES, SEX, descriptor } from '../data/vocab.js';
 import { periodSeries, sumOf } from '../data/reportMath.js';
@@ -19,45 +16,28 @@ const sexLabel = (v) => ({ male: 'Male', female: 'Female' }[v] || 'Sex unknown')
 const regLabel = (v) => (v ? descriptor(REGISTRATION_TYPE, v).label : 'No registration');
 
 async function init() {
-  const [sales, dogs, litters] = await Promise.all([
-    saleRepo.getAll({ includeArchived: false }),
-    dogRepo.getAll({ includeArchived: true }),
-    litterRepo.getAll({ includeArchived: true })
-  ]);
-  const dogsById = new Map(dogs.map((d) => [d.id, d]));
-  const littersById = new Map(litters.map((l) => [l.id, l]));
-  const rows = pricingRows(sales, {
-    dogsById,
-    isPlaced: (s) => !RELEASED_SALE_STATUSES.includes(s.status),
-    expectedFor: (s) => {
-      const dog = dogsById.get(s.dog_id);
-      const litter = dog && dog.litter_id ? littersById.get(dog.litter_id) : null;
-      return expectedPricing(dog, litter, s.registration_type).price;
-    }
-  });
+  const src = await loadPricing();
+  const { rows } = src;
   const breeds = [...new Set(rows.map((r) => r.dog?.breed).filter(Boolean))].sort();
-  const avg = (list) => (list.length ? sumOf(list, (r) => r.price) / list.length : null);
 
   createReportView({
     mount: document.getElementById('report-mount'),
-    scope: (r) => inScope(r.sale),
+    scope: src.scope,
     csvFilename: `pricing-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search pup…', text: (r) => r.dog?.call_name || '' },
-    dateRange: { label: 'Sold', date: (r) => r.sale.sale_date },
+    dateRange: { label: 'Sold', date: src.date },
     filters: [
       { id: 'reg', label: 'Registration', options: REGISTRATION_TYPE, match: (r, v) => r.sale.registration_type === v },
       { id: 'sex', label: 'Sex', options: SEX.filter((s) => s.value !== 'unknown'), match: (r, v) => r.dog?.sex === v },
       ...(breeds.length > 1 ? [{ id: 'breed', label: 'Breed', options: breeds.map((b) => ({ value: b, label: b })), match: (r, v) => r.dog?.breed === v }] : [])
     ],
     kpis: (list) => {
-      const vs = list.filter((r) => r.diff != null);
-      const full = avg(list.filter((r) => r.sale.registration_type === 'full'));
-      const limited = avg(list.filter((r) => r.sale.registration_type === 'limited'));
+      const f = pricingFigures(list);
       return [
-        { label: 'Sales', value: String(list.length) },
-        { label: 'Average price', value: list.length ? money(avg(list)) : '—' },
-        { label: 'Vs the litter’s price', value: vs.length ? `${sumOf(vs, (r) => r.diff) / vs.length >= 0 ? '+' : ''}${money(sumOf(vs, (r) => r.diff) / vs.length)}` : '—', hint: vs.length ? `average over ${vs.length} with a litter price` : 'no litter prices set' },
-        { label: 'Full over Limited', value: full != null && limited != null ? money(full - limited) : '—', hint: 'average price difference' }
+        { label: 'Sales', value: String(f.sales) },
+        { label: 'Average price', value: f.avg == null ? '—' : money(f.avg) },
+        { label: 'Vs the litter’s price', value: f.vsLitter == null ? '—' : `${f.vsLitter >= 0 ? '+' : ''}${money(f.vsLitter)}`, hint: f.vsCount ? `average over ${f.vsCount} with a litter price` : 'no litter prices set' },
+        { label: 'Full over Limited', value: f.full != null && f.limited != null ? money(f.full - f.limited) : '—', hint: 'average price difference' }
       ];
     },
     charts: (list, ctx) => {

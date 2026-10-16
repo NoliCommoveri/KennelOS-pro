@@ -10,7 +10,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, descriptor } from '../data/vocab.js';
+import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
@@ -41,7 +41,7 @@ const els = {
 
 const blankLitter = () => ({
   pairing_id: '', dam_id: '', sire_id: '', nickname: '', whelp_date: '', accept_deposits_date: '', estimated_ready_date: '', litter_registration_number: '',
-  puppies_born_total: '', puppies_born_alive: '', puppies_born_deceased: '', puppies_born_abnormalities: '', status: '', notes: '',
+  puppies_born_total: '', puppies_born_alive: '', puppies_born_deceased: '', puppies_born_abnormalities: '', delivery_type: '', status: '', notes: '',
   expected_price_male: '', expected_price_female: '', expected_deposit_male: '', expected_deposit_female: '', full_reg_surcharge_male: '', full_reg_surcharge_female: '',
   foster_direction: '', foster_partner_contact_id: '', foster_comp_model: '',
   foster_our_share_pct: '', foster_split_basis: '', foster_flat_fee_per_pup: '', foster_split_notes: '',
@@ -204,6 +204,7 @@ function renderView() {
       ${row('Estimated ready date', l.estimated_ready_date ? esc(fmtDate(l.estimated_ready_date)) : '')}
       ${row('Litter registration #', esc(l.litter_registration_number))}
       ${row('Puppies born', countsDisplay(l))}
+      ${WHELPED_OR_LATER.includes(l.status) ? row('Delivery', l.delivery_type ? badge(LITTER_DELIVERY_TYPE, l.delivery_type) : '') : ''}
       ${row('Status', badge(LITTER_STATUS, l.status))}
       ${row('Expected price (male)', esc(money(l.expected_price_male)))}
       ${row('Expected deposit (male)', esc(money(l.expected_deposit_male)))}
@@ -293,6 +294,7 @@ function renderEdit() {
       ${field('Sire', `<select id="f-sire_id">${dogOptions(l.sire_id, 'male')}</select>`, { required: true })}
       ${field('Status', `<select id="f-status">${vocabOptions(LITTER_STATUS, l.status, 'Select…')}</select>`, { required: true })}
       ${field('Whelp date', `<input id="f-whelp_date" type="date" value="${esc(l.whelp_date)}">`, { hint: 'May be a projected date while status is Expected.' })}
+      ${WHELPED_OR_LATER.includes(l.status) ? field('Delivery', `<select id="f-delivery_type">${vocabOptions(LITTER_DELIVERY_TYPE, l.delivery_type, 'Not recorded')}</select>`, { hint: 'How the litter was delivered.' }) : ''}
       ${field('Accept deposits date', `<input id="f-accept_deposits_date" type="date" value="${esc(l.accept_deposits_date)}">`, { hint: 'When you begin accepting deposits on this litter. Shown to prospective families when set.' })}
       ${field('Estimated ready date', `<input id="f-estimated_ready_date" type="date" value="${esc(l.estimated_ready_date)}">`, { hint: 'Defaults to 8 weeks (56 days) after the whelp date. Still editable.' })}
       ${field('Litter registration #', `<input id="f-litter_registration_number" type="text" value="${esc(l.litter_registration_number)}">`)}
@@ -349,6 +351,12 @@ function renderEdit() {
     ctx.pickerAllKennels = e.target.checked;
     renderEdit();
   });
+  // Delivery shows only once the status is Whelped or later, so a status change
+  // redraws the form with it (or without it).
+  document.getElementById('f-status').addEventListener('change', () => {
+    ctx.draft = readForm();
+    renderEdit();
+  });
   // Choosing a pairing fills dam/sire from it (only when those are still empty,
   // so it never clobbers a deliberate choice) — matches Stage 3 Brief §4.
   document.getElementById('f-pairing_id').addEventListener('change', (e) => {
@@ -399,6 +407,8 @@ function readForm() {
     puppies_born_alive: val('f-puppies_born_alive'),
     puppies_born_deceased: val('f-puppies_born_deceased'),
     puppies_born_abnormalities: val('f-puppies_born_abnormalities'),
+    // Hidden before Whelped: the stored value is kept, never cleared by a status change.
+    delivery_type: document.getElementById('f-delivery_type') ? val('f-delivery_type') : (ctx.draft.delivery_type ?? ''),
     expected_price_male: val('f-expected_price_male'),
     expected_price_female: val('f-expected_price_female'),
     expected_deposit_male: val('f-expected_deposit_male'),
@@ -550,6 +560,44 @@ function normalizeCounts(candidate) {
   return candidate;
 }
 
+// When a litter is created whelped-or-later, or first crosses into that band,
+// with no delivery recorded: ask for it, once, right then. Skip leaves it blank
+// (the tidy-up raises it later).
+function maybeAskDelivery(litter) {
+  if (litter.delivery_type) return Promise.resolve();
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h2 style="margin-top:0;">How was this litter delivered?</h2>
+      <p class="muted">Now that it's "${esc(descriptor(LITTER_STATUS, litter.status).label)}", record how the puppies arrived. It's part of the dam's breeding history.</p>
+      <div class="field">
+        <label>Delivery</label>
+        <select id="dl-type">${vocabOptions(LITTER_DELIVERY_TYPE, '', 'Choose…')}</select>
+      </div>
+      <div id="dl-error"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="dl-save">Save</button>
+        <button class="btn" id="dl-skip">Not now</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const close = () => { overlay.remove(); resolve(); };
+    overlay.querySelector('#dl-skip').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('#dl-save').addEventListener('click', async () => {
+      const delivery_type = overlay.querySelector('#dl-type').value;
+      if (!delivery_type) { overlay.querySelector('#dl-error').innerHTML = '<div class="inline-error">Choose how the litter was delivered, or tap Not now.</div>'; return; }
+      try {
+        await litterRepo.update(litter.id, { delivery_type });
+        close();
+      } catch (e) {
+        overlay.querySelector('#dl-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
+      }
+    });
+  });
+}
+
 // Soft-suggestion prompt: when a litter is created whelped-or-later, or first
 // crosses into that band, offer to sync its linked pairing's status to match (prefilled
 // "Whelped", but editable — the pairing's real state might be something else
@@ -622,7 +670,10 @@ async function doSave() {
       });
       const saved = await litterRepo.create(candidate);
       // A litter recorded after the fact is often created already whelped.
-      if (WHELPED_OR_LATER.includes(saved.status)) await maybePromptPairingWhelped(saved);
+      if (WHELPED_OR_LATER.includes(saved.status)) {
+        await maybeAskDelivery(saved);
+        await maybePromptPairingWhelped(saved);
+      }
       location.href = `litter.html?id=${encodeURIComponent(saved.id)}`;
       return;
     }
@@ -635,6 +686,9 @@ async function doSave() {
     renderAll();
     const enteringWhelpBand = WHELPED_OR_LATER.includes(saved.status) && !WHELPED_OR_LATER.includes(prevStatus);
     if (enteringWhelpBand) {
+      await maybeAskDelivery(saved);
+      ctx.original = await litterRepo.getById(saved.id);
+      renderAll();
       await maybePromptPairingWhelped(saved);
     }
   } catch (e) {

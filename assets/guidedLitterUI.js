@@ -24,7 +24,7 @@ import { editionFlags } from '../data/editionConfig.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { getGuidedLitterDraft, setGuidedLitterDraft, clearGuidedLitterDraft } from '../data/settings.js';
 import {
-  DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_STATUS, PAIRING_STATUS, descriptor
+  DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_STATUS, PAIRING_STATUS, LITTER_DELIVERY_TYPE, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import * as G from '../data/guidedLitter.js';
@@ -361,6 +361,15 @@ function screens(draft, data, ctx) {
       }
     }),
 
+    delivery: () => ({
+      title: 'How were they delivered?',
+      html: `<div class="gl-tiles">
+          ${LITTER_DELIVERY_TYPE.map((d) => tile('delivery', d.value, d.label, { selected: draft.delivery === d.value })).join('')}
+          ${tile('delivery', 'later', 'I\'ll add it later', { selected: draft.delivery === 'later' })}
+        </div>`,
+      onTile: (value) => { draft.delivery = value; return true; }
+    }),
+
     kennel: () => ({
       title: 'Which kennel is this litter under?',
       html: `<div class="gl-tiles">${data.own.map((k) => tile('kennel', k.id, esc(k.kennel_name), { selected: draft.kennelId === k.id })).join('')}</div>`,
@@ -524,6 +533,7 @@ function answerFor(stepId, draft, data) {
     }
     case 'born': return G.fmt(draft.whelpDate);
     case 'count': return [`${draft.alive} born alive`, Number(draft.deceased) ? `${draft.deceased} not alive` : '', Number(draft.abnormalities) ? `${draft.abnormalities} with abnormalities` : ''].filter(Boolean).join(' · ');
+    case 'delivery': return draft.delivery === 'later' ? 'I\'ll add it later' : descriptor(LITTER_DELIVERY_TYPE, draft.delivery).label;
     case 'kennel': return data.kennelsById.get(draft.kennelId)?.kennel_name || '';
     case 'plans': {
       const n = (v) => draft.pups.filter((p) => p.disposition === v).length;

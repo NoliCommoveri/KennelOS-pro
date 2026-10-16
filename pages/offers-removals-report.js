@@ -5,16 +5,12 @@
 // rules made ("didn't follow the list's rules": a second pass, no check-in or
 // ready-check answer, the fee not received) apart from hers. Pure math in
 // data/waitlistReports.js; scoped by each entry's kennel.
-import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
-import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
-import { contactRepo } from '../data/contactRepo.js';
-import { litterRepo } from '../data/litterRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
+import { loadOffersRemovals } from '../data/reportSources.js';
+import { offerFigures } from '../data/reportFigures.js';
 import { entryName } from '../data/waitlistRules.js';
-import { offerAndExitRows, offerAndExitStats, exitLabel, EXIT_GROUPS } from '../data/waitlistReports.js';
+import { offerAndExitStats, exitLabel, EXIT_GROUPS } from '../data/waitlistReports.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { WAITLIST_OFFER_OUTCOME, descriptor } from '../data/vocab.js';
@@ -28,13 +24,8 @@ const WHAT = [
 const whatLabel = (v) => WHAT.find((w) => w.value === v)?.label || v;
 
 async function init() {
-  const [entries, offers, contacts, litters, dogs] = await Promise.all([
-    waitlistEntryRepo.getAll({ includeArchived: false }),
-    waitlistOfferRepo.getAll({ includeArchived: false }),
-    contactRepo.getAll({ includeArchived: true }),
-    litterRepo.getAll({ includeArchived: true }),
-    dogRepo.getAll({ includeArchived: true })
-  ]);
+  const src = await loadOffersRemovals();
+  const { contacts, litters, dogs } = src;
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const littersById = new Map(litters.map((l) => [l.id, l]));
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
@@ -42,19 +33,19 @@ async function init() {
   const name = (r) => entryName(r.entry, contactsById.get(r.entry.contact_id) || null);
   const litter = (r) => { const l = r.offer && littersById.get(r.offer.litter_id); return l ? litterLabel(l, dogsById) : ''; };
   const reason = (r) => (r.kind === 'offer' ? (r.what === 'passed' ? r.offer.pass_reason?.label || 'Recorded by you' : '') : exitLabel(r.entry) || '');
-  const rows = offerAndExitRows(entries, offers);
+  const { rows } = src;
 
   createReportView({
     mount: document.getElementById('report-mount'),
-    scope: (r) => inScope(r.entry),
+    scope: src.scope,
     csvFilename: `offers-removals-${today}.csv`,
     search: { placeholder: 'Search family…', text: name },
-    dateRange: { label: 'Happened', date: (r) => r.date },
+    dateRange: { label: 'Happened', date: src.date },
     filters: [
       { id: 'what', label: 'What happened', options: WHAT, match: (r, v) => r.what === v }
     ],
     kpis: (list) => {
-      const s = offerAndExitStats(list);
+      const s = offerFigures(list);
       const rules = s.byGroup.find((g) => g.value === 'rules').count;
       return [
         { label: 'Offers closed', value: String(s.closed), hint: s.familiesOffered ? `to ${s.familiesOffered} famil${s.familiesOffered === 1 ? 'y' : 'ies'}` : '' },

@@ -4,43 +4,36 @@
 // stored aggregate. Whelp counts by year are surfaced as a filterable Year
 // column rather than a pre-rolled rollup; the chart and tiles are computed from
 // the visible rows on every render (Reports plan, phase 1).
-import { litterRepo } from '../data/litterRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
+import { loadLitters } from '../data/reportSources.js';
+import { litterFigures } from '../data/reportFigures.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { periodSeries, sumOf } from '../data/reportMath.js';
 import { LITTER_STATUS, descriptor } from '../data/vocab.js';
 
 async function init() {
-  const [litters, dogs] = await Promise.all([
-    litterRepo.getAll({ includeArchived: false }),
-    dogRepo.getAll({ includeArchived: true })
-  ]);
-  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  const src = await loadLitters();
+  const dogsById = new Map(src.dogs.map((d) => [d.id, d]));
   const name = (id) => dogsById.get(id)?.call_name || '—';
   const year = (l) => (l.whelp_date || '').slice(0, 4);
-
-  litters.sort((a, b) => (b.whelp_date || '').localeCompare(a.whelp_date || ''));
 
   createReportView({
     mount: document.getElementById('report-mount'),
     // Active-kennel scope (Multi-Kennel Scope Spec §7).
-    scope: inScope,
+    scope: src.scope,
     csvFilename: `litters-${new Date().toISOString().slice(0, 10)}.csv`,
     search: { placeholder: 'Search nickname, dam, or sire…', text: (l) => `${l.nickname || ''} ${name(l.dam_id)} ${name(l.sire_id)}` },
-    dateRange: { label: 'Whelped', date: (l) => l.whelp_date },
+    dateRange: { label: 'Whelped', date: src.date },
     filters: [
       { id: 'status', label: 'Status', options: LITTER_STATUS, match: (l, v) => l.status === v }
     ],
     kpis: (rows) => {
-      const born = rows.filter((l) => Number(l.puppies_born_total) > 0);
-      const total = sumOf(born, (l) => l.puppies_born_total);
+      const f = litterFigures(rows);
       return [
-        { label: 'Litters', value: String(rows.length) },
-        { label: 'Puppies born', value: String(total) },
-        { label: 'Born alive', value: String(sumOf(born, (l) => l.puppies_born_alive)) },
-        { label: 'Average litter', value: born.length ? (total / born.length).toFixed(1) : '—', hint: born.length ? `over ${born.length} with counts` : '' }
+        { label: 'Litters', value: String(f.litters) },
+        { label: 'Puppies born', value: String(f.born) },
+        { label: 'Born alive', value: String(f.alive) },
+        { label: 'Average litter', value: f.avgLitter == null ? '—' : f.avgLitter.toFixed(1), hint: f.counted ? `over ${f.counted} with counts` : '' }
       ];
     },
     charts: (rows, ctx) => {
@@ -63,7 +56,7 @@ async function init() {
       { header: 'Status', value: (l) => l.status || '', badge: LITTER_STATUS, csv: (l) => l.status ? descriptor(LITTER_STATUS, l.status).label : '' }
     ],
     onRowClick: (l) => { location.href = `litter.html?id=${encodeURIComponent(l.id)}`; },
-    load: () => Promise.resolve(litters),
+    load: () => Promise.resolve(src.rows),
     emptyText: 'No litters recorded yet.'
   });
 }

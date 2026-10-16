@@ -20,7 +20,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { inScopeOnly, dogsInScope, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { DISPOSITION, OWNERSHIP_TYPE, DOG_STATUS, SALE_STATUS, PAIRING_STATUS, EVENT_TYPES, descriptor } from '../data/vocab.js';
+import { DISPOSITION, OWNERSHIP_TYPE, DOG_STATUS, SALE_STATUS, PAIRING_STATUS, EVENT_TYPES, LITTER_DELIVERY_TYPE, descriptor } from '../data/vocab.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { findDogMatches, matchReason, similarNamed } from '../data/dogSearch.js';
 import { baseFromLitter } from '../data/puppyDefaults.js';
@@ -42,6 +42,7 @@ const label = (vocab, v) => descriptor(vocab, v).label;
 // What each kind is called in her opening count.
 const KIND_WORDS = {
   'litter-count': ['litter count', 'litter counts'],
+  'litter-delivery': ['litter without its delivery', 'litters without their delivery'],
   'pup-placed': ['puppy plan', 'puppy plans'],
   'delivered-owned': ['dog that went home', 'dogs that went home'],
   'litter-pairing-parents': ['litter and its breeding', 'litters and their breedings'],
@@ -125,6 +126,7 @@ class Tidy extends FindingsTask {
   async handle(f) {
     switch (f.kind) {
       case 'litter-count': return this.litterCount(f);
+      case 'litter-delivery': return this.litterDelivery(f);
       case 'pup-placed': return this.pupPlaced(f);
       case 'delivered-owned': return this.deliveredOwned(f);
       case 'litter-pairing-parents': return this.litterPairing(f);
@@ -158,6 +160,19 @@ class Tidy extends FindingsTask {
     }
     if (pick === 'add') return this.addPups(f);
     return pick;
+  }
+
+  // How a whelped litter was delivered, one tap.
+  async litterDelivery(f) {
+    const name = this.b(this.litter(f.litter));
+    const born = f.litter.whelp_date ? `, born ${esc(fmtDate(f.litter.whelp_date))}` : '';
+    const pick = await this.ask(f, `${name}${born}, doesn't say how it was delivered. How did the puppies arrive?`,
+      LITTER_DELIVERY_TYPE.map((d, i) => ({ label: d.label, value: `dt:${d.value}`, primary: i === 0 })),
+      { never: 'I don\'t remember' });
+    if (!pick?.startsWith('dt:')) return pick;
+    const delivery_type = pick.slice(3);
+    await litterRepo.update(f.litter.id, { delivery_type });
+    return this.done(`Saved. ${name}: ${esc(label(LITTER_DELIVERY_TYPE, delivery_type))} delivery.`);
   }
 
   // The puppies the litter's count says are missing, added in the chat: a name and

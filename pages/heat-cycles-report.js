@@ -2,11 +2,8 @@
 // with heat_cycle events: heats on record, her usual days between them, and a
 // predicted next heat (last + her average; needs two heats) with due-soon / overdue
 // marks. Derived from her own history (breedingReports.heatRows), never stored.
-import { dogRepo } from '../data/dogRepo.js';
-import { eventRepo } from '../data/eventRepo.js';
-import { heatRows } from '../data/breedingReports.js';
+import { loadHeatCycles } from '../data/reportSources.js';
 import { createReportView } from '../assets/reportView.js';
-import { dogInScope } from '../data/kennelScope.js';
 import { fmtDate } from '../assets/ui.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { DOG_STATUS, descriptor } from '../data/vocab.js';
@@ -20,8 +17,7 @@ const months = (days) => (days == null ? '' : `${(days / 30.44).toFixed(1)} mo`)
 
 async function init() {
   const today = todayYMD();
-  const [dogs, events] = await Promise.all([dogRepo.getAll({ includeArchived: false }), eventRepo.getByType('heat_cycle')]);
-  const rows = heatRows(dogs.filter((d) => d.sex === 'female' && dogInScope(d)), events, today);
+  const { rows } = await loadHeatCycles(today);
 
   createReportView({
     mount: document.getElementById('report-mount'),

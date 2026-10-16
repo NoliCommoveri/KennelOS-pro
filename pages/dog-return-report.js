@@ -4,29 +4,16 @@
 // (scoped like Financials); litters are scoped by their own kennel. A litter's
 // income counts for BOTH parents — each row is that dog's view, so the rows don't
 // add up to the program's total (the page says so; there is no Total row for that).
-import { loadMoney, dogReturnRows } from '../data/moneyReport.js';
-import { dogRepo } from '../data/dogRepo.js';
-import { litterRepo } from '../data/litterRepo.js';
-import { saleRepo } from '../data/saleRepo.js';
+import { loadDogReturn } from '../data/reportSources.js';
 import { createReportView } from '../assets/reportView.js';
-import { inScopeOnly } from '../data/kennelScope.js';
 import { fmtMoney } from '../assets/ui.js';
-import { DOG_STATUS, RELEASED_SALE_STATUSES, descriptor } from '../data/vocab.js';
+import { DOG_STATUS, descriptor } from '../data/vocab.js';
 
 const money = (v) => fmtMoney(Math.round((Number(v) || 0) * 100) / 100);
 const ROLES = [{ value: 'dam', label: 'Dams' }, { value: 'sire', label: 'Sires' }];
 
 async function init() {
-  const [{ incomeRows, expenses }, dogs, litters, sales] = await Promise.all([
-    loadMoney(),
-    dogRepo.getAll({ includeArchived: true }),
-    litterRepo.getAll({ includeArchived: false }),
-    saleRepo.getAll({ includeArchived: false })
-  ]);
-  const rows = dogReturnRows({
-    dogs, litters: inScopeOnly(litters), incomeRows, expenses, sales,
-    isPlaced: (s) => !RELEASED_SALE_STATUSES.includes(s.status)
-  });
+  const { rows } = await loadDogReturn();
 
   createReportView({
     mount: document.getElementById('report-mount'),
