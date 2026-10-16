@@ -28,6 +28,9 @@ import { runTidyTask } from '../assets/tidyUpUI.js';
 import { runPrepTask, prepState } from '../assets/prepPupsUI.js';
 import { runHealthTask } from '../assets/accountHealthUI.js';
 import { runDogsTask, pendingDogsDraft, discardGuidedDogsDraft } from '../assets/guidedDogsUI.js';
+import { runSetupTask } from '../assets/kelsSetupUI.js';
+import { setupPriority } from '../data/kelsSetup.js';
+import { dogRepo } from '../data/dogRepo.js';
 import { pendingPeopleDraft } from '../data/guidedPeople.js';
 import { pendingFormDraft } from '../data/guidedForm.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
@@ -42,7 +45,7 @@ const laterBtn = document.getElementById('kels-later');
 document.getElementById('kels-name').textContent = KELS.title;
 document.getElementById('kels-avatar').innerHTML = kelsAvatar({ large: true });
 
-// Kels's tasks. `state`: { pendingLitter, pendingDogs, pendingPeople, pendingForm, litters: { open, withPups }, prep: { litters } }.
+// Kels's tasks. `state`: { pendingLitter, pendingDogs, pendingPeople, pendingForm, litters: { open, withPups }, prep: { litters }, setup: { dogs } }.
 // Add people (Pro, contacts): its script is Pro-only, so it's imported on start.
 const runPeople = async (opts) => (await import('../assets/guidedPeopleUI.js')).runPeopleTask(chat, opts);
 // Set up my application form (Pro, waitlist): the same.
@@ -88,6 +91,24 @@ const TASKS = [
     priority: () => 97,
     resumable: true,
     run: (opts) => runForm({ ...opts, resume: true })
+  },
+  {
+    id: 'get-started',
+    label: () => 'Getting Started',
+    // Only what this edition sets up is said or searched (data/kelsSetup.js).
+    sub: editionFlags.multiKennel ? 'Your logo, nudges, tests, puppy records, kennels, connections and backup'
+      : editionFlags.puppyRecord ? 'Your logo, nudges, tests, puppy records, connections and backup' : 'Your backup, then your dogs',
+    keywords: ['setup', 'set up', 'get started', 'getting started', 'start', 'new', 'new here', 'first time', 'begin', 'welcome', 'settings', 'backup', 'back up',
+      ...(editionFlags.puppyRecord ? ['logo', 'nudges', 'lifecycle', 'promote', 'tests', 'health tests', 'preferred tests', 'ofa', 'puppy record', 'puppy records'] : []),
+      ...(editionFlags.multiKennel ? ['another kennel', 'second kennel', 'new kennel', 'two kennels', 'separate'] : []),
+      ...(editionFlags.furever ? ['furever', 'google drive', 'drive'] : []),
+      ...(editionFlags.assistant ? ['dropbox', 'kennelassistant', 'assistant', 'helper'] : []),
+      ...(isCloudAvailable() ? ['cloud'] : [])],
+    // Never in the Demo, which saves nothing.
+    available: () => !editionFlags.demoMode,
+    // Near the top until she has her first dog record.
+    priority: (s) => setupPriority(s.setup),
+    run: (opts) => runSetupTask(chat, opts)
   },
   {
     id: 'checkin',
@@ -253,12 +274,12 @@ const TASKS = [
 const taskById = (id) => TASKS.find((t) => t.id === id);
 
 async function state() {
-  const [litters, prep] = await Promise.all([checkinState(), prepState()]);
+  const [litters, prep, dogs] = await Promise.all([checkinState(), prepState(), dogRepo.getAll({ includeArchived: true })]);
   return {
     pendingLitter: pendingLitterDraft(), pendingDogs: pendingDogsDraft(),
     pendingPeople: editionFlags.contactsSection ? pendingPeopleDraft(getGuidedPeopleDraft()) : null,
     pendingForm: editionFlags.waitlist ? pendingFormDraft(getGuidedFormDraft()) : null,
-    litters, prep
+    litters, prep, setup: { dogs }
   };
 }
 

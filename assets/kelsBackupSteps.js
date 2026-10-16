@@ -16,7 +16,8 @@ export const VAULT_WHY = 'Turn on Sensitive records backup and they\'re saved to
 // up my waitlist).
 export const CLOUD_OFF_FORM = 'Without it, there\'s no link to share: families can\'t apply online, and you\'ll type each applicant in yourself.';
 
-const backupOn = async () => {
+// Cloud backup is on for this device (signed in and enabled).
+export const cloudBackupOn = async () => {
   const { getBackupStatus } = await import('../data/cloud/cloudBackup.js');
   const s = getBackupStatus();
   return Boolean(s.account?.signedIn && s.enabled);
@@ -26,11 +27,11 @@ const backupOn = async () => {
 // `line`: why she's being asked (trusted markup); `later`: said when she says not now.
 export async function offerCloudBackup(chat, { line, later = '' } = {}) {
   if (!isCloudAvailable()) return false;
-  if (await backupOn()) return true;
+  if (await cloudBackupOn()) return true;
   await chat.say(line);
   const pick = await chat.choose([{ label: 'Turn on cloud backup', value: 'yes', primary: true }, { label: 'Not now', value: '' }]);
   if (pick === 'yes') await (await import('./cloudBackupUI.js')).turnOnFlow();
-  if (await backupOn()) return true;
+  if (await cloudBackupOn()) return true;
   if (later) await chat.say(later, { typing: 300 });
   return false;
 }

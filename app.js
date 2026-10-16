@@ -15,7 +15,7 @@ import { studServiceRepo } from './data/studServiceRepo.js';
 import { renderSampleBanner } from './assets/sampleDataUI.js';
 import { maybeShowKennelSetupPrompt, renderKennelBanner } from './assets/kennelSetupUI.js';
 import { renderWizardMenuEntry, runWizardStep } from './assets/wizardUI.js';
-import { runFirstRunOnboarding } from './assets/onboardingUI.js';
+import { runFirstRunOnboarding, maybeMeetKels } from './assets/onboardingUI.js';
 import { isDemo, withSeedAllowed } from './data/demoMode.js';
 import { seedSampleData } from './data/editionTour.js';
 import { isLicenseGated, ensureLicensed } from './assets/licenseGate.js';
@@ -54,7 +54,10 @@ function registerServiceWorker() {
 // who reloads to dismiss the modal lands right back here.
 async function firstRunFlow() {
   const handled = await runFirstRunOnboarding();
-  if (!handled) await maybeShowKennelSetupPrompt();
+  if (handled) return;
+  await maybeShowKennelSetupPrompt();
+  // Just past the first-run kennel setup: introduce Kels, once.
+  await maybeMeetKels();
 }
 
 // --- Demo edition (editions plan §"The Demo edition") ----------------------

@@ -213,6 +213,37 @@ export const kennelRepo = {
     return kennelRepo.update(id, changes);
   },
 
+  // A panel test renamed in place (its spot in the list and its breed tags kept).
+  // Renamed to another test already in the panel, the two become one: the other
+  // stays, with both tests' breed tags (an untagged one makes it untagged, since
+  // it applied to every breed). Like remove, panel only: a dog's planned tests and
+  // past events keep the name they were given.
+  async renamePreferredTest(id, from, to) {
+    const existing = await db.kennels.get(id);
+    if (!existing) throw new Error(`kennels: no record with id ${id}`);
+    const name = String(to ?? '').trim();
+    if (!name) throw new Error('Give the test a name.');
+    const current = existing.preferred_tests || [];
+    if (!current.includes(from)) throw new Error(`"${from}" isn't one of this kennel's preferred tests.`);
+    if (name === from) return existing;
+    const map = { ...(existing.preferred_test_breeds || {}) };
+    const fromTags = map[testKey(from)];
+    const other = current.find((t) => t !== from && testKey(t) === testKey(name));
+    if (other) {
+      const otherTags = map[testKey(other)];
+      delete map[testKey(from)];
+      if (fromTags?.length && otherTags?.length) {
+        const merged = [...otherTags];
+        for (const b of fromTags) if (!merged.some((x) => testKey(x) === testKey(b))) merged.push(b);
+        map[testKey(other)] = merged;
+      } else delete map[testKey(other)];
+      return kennelRepo.update(id, { preferred_tests: current.filter((t) => t !== from), preferred_test_breeds: map });
+    }
+    delete map[testKey(from)];
+    if (fromTags) map[testKey(name)] = fromTags;
+    return kennelRepo.update(id, { preferred_tests: current.map((t) => (t === from ? name : t)), preferred_test_breeds: map });
+  },
+
   // Breed tag(s) a preferred test carries (Test Planning Addendum §8), sorted
   // for display — e.g. kennel.js appends "(Labrador Retriever, Golden
   // Retriever)" after a test name so two same-named tests pulled in for

@@ -981,6 +981,7 @@ a.kt-loner:hover { color: var(--accent); }
   max-width: 520px;
 }
 .onboard-title { margin: 0 0 12px; }
+.onboard-kels { display: block; width: 96px; height: 96px; border-radius: 50%; object-fit: cover; margin: 0 auto 12px; }
 .onboard-subtitle { margin: 0 0 8px; }
 .onboard-body p { color: var(--text); }
 .onboard-list { margin: 12px 0; padding-left: 20px; }

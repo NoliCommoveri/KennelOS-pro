@@ -10,6 +10,7 @@ import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js
 import { esc } from './ui.js';
 import { renderBreedPicker } from './breedTestPicker.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { setMeetKelsPending } from '../data/settings.js';
 
 // The mandatory first-run gate (Multi-Kennel Scope Spec §3.2), called from
 // app.js's boot on every page. Async because the gate's condition is a db read
@@ -116,6 +117,9 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
         const { turnOnFlow } = await import('./cloudBackupUI.js');
         await turnOnFlow({ email }).catch(() => {});
       }
+      // First run (after the tour, or Start my kennel): the page that loads next
+      // introduces Kels (onboardingUI.maybeMeetKels). Not on a reopen from Settings.
+      if (required) setMeetKelsPending(true);
       location.reload();
     } catch (e) {
       errorBox.innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;

@@ -14,6 +14,8 @@ import { seedSampleData } from '../data/editionTour.js';
 import { startWizard } from '../data/wizardState.js';
 import { showKennelSetupModal } from './kennelSetupUI.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { isMeetKelsPending, setMeetKelsPending } from '../data/settings.js';
+import { KELS, kelsPhotoUrl } from './kelsChat.js';
 
 // A single onboarding card: a dimmed, non-dismissible overlay (no backdrop close,
 // no X — the only way onward is a button) with body HTML and one or more buttons.
@@ -105,5 +107,31 @@ export async function runFirstRunOnboarding() {
   // nothing they create could be filed. Its optional email turns on cloud backup.
   declineSampleData();
   showKennelSetupModal({ mode: 'required' });
+  return true;
+}
+
+// "Introducing Kels": once, on the first page load after the first-run kennel setup saves
+// (the end of the tour hands off to it too, so both ways in end here). Try it opens
+// her Getting Started task; Maybe later just closes. Never on Kels's own page.
+// Resolves once it's answered, so app.js's cloud UI waits behind it.
+export async function maybeMeetKels() {
+  if (!isMeetKelsPending()) return false;
+  setMeetKelsPending(false);
+  if (location.pathname.endsWith('/kels.html')) return false;
+  const photo = kelsPhotoUrl();
+  const choice = await onboardCard({
+    bodyHtml: `
+      ${photo ? `<img class="onboard-kels" src="${photo}" alt="">` : ''}
+      <h2 class="onboard-title">Introducing ${KELS.name}</h2>
+      <p>Meet ${KELS.name}, your KennelOS guru! She's a sweet, fun-loving pup who can help simplify your kennel management and teach you how to use KennelOS.</p>
+      <p>To test her out, try the <strong>Getting Started</strong> flow now!</p>`,
+    buttons: [
+      { label: 'Maybe later', value: 'later' },
+      { label: 'Try Getting Started', value: 'try', primary: true }
+    ]
+  });
+  if (choice !== 'try') return true;
+  const base = location.pathname.includes('/pages/') ? '' : 'pages/';
+  location.href = `${base}kels.html?task=get-started`;
   return true;
 }

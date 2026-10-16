@@ -32,6 +32,7 @@ const KEYS = {
   kelsFavorites: 'kennelOS.kelsFavorites',
   kelsTaskUse: 'kennelOS.kelsTaskUse',
   kelsNoPromote: 'kennelOS.kelsNoPromote',
+  meetKelsPending: 'kennelOS.meetKelsPending',
   studTripsMigrated: 'kennelOS.studTripsMigrated'
 };
 
@@ -599,6 +600,13 @@ export const getKelsNoPromote = () => readJson(KEYS.kelsNoPromote, [], isIdList)
 export function setKelsNoPromote(ids) { localStorage.setItem(KEYS.kelsNoPromote, JSON.stringify(ids || [])); }
 export const getKelsTaskUse = () => readJson(KEYS.kelsTaskUse, {}, (v) => v && typeof v === 'object' && !Array.isArray(v));
 export function setKelsTaskUse(uses) { localStorage.setItem(KEYS.kelsTaskUse, JSON.stringify(uses || {})); }
+// The "Meet Kels" card is waiting for the next page load: set when the first-run
+// kennel setup saves (after the tour, or Start my kennel), cleared once shown.
+export const isMeetKelsPending = () => localStorage.getItem(KEYS.meetKelsPending) === '1';
+export function setMeetKelsPending(on) {
+  if (on) localStorage.setItem(KEYS.meetKelsPending, '1');
+  else localStorage.removeItem(KEYS.meetKelsPending);
+}
 
 // --- Cloud backup dirty signal (Cloud Phase 1 plan §3.2) ---------------------
 // `cloudDirtyAt` is the ISO time of the latest local data change. Set by ONE

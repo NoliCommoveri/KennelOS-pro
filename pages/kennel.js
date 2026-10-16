@@ -30,11 +30,14 @@ import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, WAITLIST_AUT
 import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { waitlistConfig, waitlistConfigProblem, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
-import { PUPPY_RECORD_FIELD_GROUPS, PUPPY_RECORD_FIELD_KEYS, puppyRecordFieldsValue } from '../data/puppyRecordFields.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { renderKennelCardSection } from '../assets/kennelCardUI.js';
+import {
+  fileToLogoDataUrl, logoPreview, LOGO_ACCEPT, nudgeFields, readNudgeFields,
+  puppyRecordFieldsHtml, wirePuppyRecordFields, tickAllPuppyRecordFields, readPuppyRecordFields
+} from '../assets/kennelSettingsFields.js';
 
 const els = {
   title: document.getElementById('kennel-title'),
@@ -51,19 +54,6 @@ const els = {
 
 // How many recent placements the hub lists before "see all".
 const RECENT_PLACEMENTS = 5;
-
-// Longest edge (px) a logo is downscaled to before it's stored as a data URL.
-// Keeps the backup-riding string small; a program logo needs no more resolution
-// than this on a printed one-page document.
-const LOGO_MAX_EDGE = 480;
-// A stored logo stays under about 300 KB (decided 2026-10-10): live sync carries
-// it twice in one record (readable + sealed) against the server's ~2 MB row
-// (Cloud Phase 2 plan §4.1). A PNG over it is redrawn at smaller sizes; an SVG
-// (kept as markup) over it is refused. Upload only: an older, larger logo already
-// on a kennel or in a backup still restores.
-const LOGO_MAX_CHARS = 300_000;
-const LOGO_STEP_EDGES = [LOGO_MAX_EDGE, 360, 240, 160];
-const LOGO_TOO_LARGE = 'That logo is too large. Try a smaller image.';
 
 let kennel = null;      // the kennel being viewed
 let paymentServices = []; // Payment service accounts, for the fee's "paid via" (Pro)
@@ -146,21 +136,18 @@ window.addEventListener('hashchange', () => { if (kennel) renderSectionPicker(ke
 // --- Logo ------------------------------------------------------------------
 // The logo is a plain (unindexed) data-URL string on the Kennel record, so it
 // rides JSON backups and needs no schema/index change. Uploads are downscaled
-// on a canvas to LOGO_MAX_EDGE and re-encoded as PNG (preserves transparency)
-// before storing, then stepped down further until under LOGO_MAX_CHARS, so an
-// oversized photo never bloats the record. The invoice /
+// and re-encoded by assets/kennelSettingsFields.js (fileToLogoDataUrl, shared
+// with Kels's "Getting Started"), so an oversized photo never bloats the record. The invoice /
 // receipt generator and the puppy record read this field back verbatim.
 function renderLogo() {
   const k = kennel;
-  const preview = k.logo_data_url
-    ? `<img src="${esc(k.logo_data_url)}" alt="${esc(k.kennel_name)} logo" style="max-width:180px; max-height:180px; object-fit:contain; border:1px solid var(--border); border-radius:var(--radius); background:#fff; padding:6px;">`
-    : `<p class="faint" style="margin:4px 0;">No logo yet.</p>`;
+  const preview = logoPreview(k) || `<p class="faint" style="margin:4px 0;">No logo yet.</p>`;
   els.logo.innerHTML = `
     <section class="card">
       <h2 style="margin-top:0;">Logo</h2>
       <p class="field-hint">Shown on this kennel's invoices, receipts, and puppy records. Stored on this device and included in your JSON backups. A square or wide image works best; large uploads are automatically scaled down.</p>
       <div>${preview}</div>
-      <input id="logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden>
+      <input id="logo-file" type="file" accept="${LOGO_ACCEPT}" hidden>
       <div class="form-actions">
         <button class="btn btn-sm" data-act="logo-choose">${k.logo_data_url ? 'Replace logo' : 'Upload logo'}</button>
         ${k.logo_data_url ? '<button class="btn btn-danger btn-sm" data-act="logo-remove">Remove logo</button>' : ''}
@@ -178,41 +165,6 @@ function renderLogo() {
 function logoError(msg) {
   const box = els.logo.querySelector('#logo-error');
   if (box) box.innerHTML = msg ? `<div class="inline-error">${esc(msg)}</div>` : '';
-}
-
-// Read a file, downscale it on a canvas, and resolve a PNG data URL. SVGs are
-// vector — kept as-is (data URL of the raw markup) rather than rasterized.
-function fileToLogoDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    if (!file.type.startsWith('image/')) { reject(new Error('Please choose an image file.')); return; }
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Could not read that file.'));
-    reader.onload = () => {
-      const dataUrl = String(reader.result);
-      if (file.type === 'image/svg+xml') {
-        if (dataUrl.length > LOGO_MAX_CHARS) reject(new Error(LOGO_TOO_LARGE)); else resolve(dataUrl);
-        return;
-      }
-      const img = new Image();
-      img.onerror = () => reject(new Error('That image could not be loaded.'));
-      img.onload = () => {
-        for (const edge of LOGO_STEP_EDGES) {
-          const scale = Math.min(1, edge / Math.max(img.width, img.height));
-          const w = Math.max(1, Math.round(img.width * scale));
-          const h = Math.max(1, Math.round(img.height * scale));
-          const canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
-          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-          const png = canvas.toDataURL('image/png');
-          if (png.length <= LOGO_MAX_CHARS) { resolve(png); return; }
-        }
-        reject(new Error(LOGO_TOO_LARGE));
-      };
-      img.src = dataUrl;
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 async function onLogoFile(file) {
@@ -629,20 +581,11 @@ function feedingScheduleCard() {
 // own box turns the whole section off; its fields grey out while it's off.
 function puppyRecordCard(k) {
   if (!editionFlags.puppyRecord) return '';
-  const stored = k.puppy_record_fields || {};
-  const box = (key, label, group, master = false) => `<label class="check-inline" style="display:block; margin:4px 0;${master ? ' font-weight:600;' : ' padding-left:22px;'}">
-      <input type="checkbox" data-pr-field="${esc(key)}"${group ? ` data-pr-group="${esc(group)}"` : ''}${stored[key] !== false ? ' checked' : ''}${group && stored[group] === false ? ' disabled' : ''}> ${esc(label)}
-    </label>`;
-  const groups = PUPPY_RECORD_FIELD_GROUPS.map((g) => `
-      <div class="field">
-        ${g.key ? box(g.key, g.label, null, true) : `<label>${esc(g.label)}</label>`}
-        ${g.fields.map((f) => box(f.key, f.label, g.key)).join('')}
-      </div>`).join('');
   return `
     <section class="card" data-ks="puppy-record">
       <h2 style="margin-top:0;">Puppy Record fields</h2>
       <p class="field-hint">What this kennel's printed Puppy Records show. Unticked fields are left off the record entirely; a section with nothing ticked is left off, heading and all.</p>
-      <div class="form-grid">${groups}</div>
+      <div class="form-grid">${puppyRecordFieldsHtml(k)}</div>
       <div class="form-actions">
         <button class="btn btn-primary btn-sm" data-act="save-puppy-record">Save</button>
         <button class="btn btn-sm" data-act="puppy-record-all">Tick all</button>
@@ -652,13 +595,8 @@ function puppyRecordCard(k) {
 
 async function onSavePuppyRecord() {
   clearError();
-  const checked = {};
-  for (const key of PUPPY_RECORD_FIELD_KEYS) {
-    const cb = els.config.querySelector(`[data-pr-field="${CSS.escape(key)}"]`);
-    checked[key] = cb ? cb.checked : true;
-  }
   try {
-    await kennelRepo.update(kennel.id, { puppy_record_fields: puppyRecordFieldsValue(checked) });
+    await kennelRepo.update(kennel.id, { puppy_record_fields: readPuppyRecordFields(els.config) });
     await reloadKennel();
     renderConfig();
   } catch (err) { showError(err.message || String(err)); }
@@ -671,16 +609,7 @@ function nudgeCard(k) {
     <section class="card" data-ks="nudges">
       <h2 style="margin-top:0;">Lifecycle nudges</h2>
       <p class="field-hint">Opt-in reminders to promote kept puppies to active breeding once they're old enough.</p>
-      <div class="form-grid">
-        <div class="field field-wide"><label class="check-inline"><input id="e-promote-enabled" type="checkbox"${k.promote_nudge_enabled ? ' checked' : ''}> Nudge me to promote kept puppies to active breeding once they're old enough</label></div>
-        <div class="field field-wide">
-          <label>Promote age (months)</label>
-          <div class="promote-age-row">
-            <div class="field"><label>Male</label><input id="e-promote-male" type="number" min="0" step="1" value="${esc(k.promote_age_male_months ?? 6)}"></div>
-            <div class="field"><label>Female</label><input id="e-promote-female" type="number" min="0" step="1" value="${esc(k.promote_age_female_months ?? 12)}"></div>
-          </div>
-        </div>
-      </div>
+      ${nudgeFields(k)}
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-nudges">Save</button></div>
     </section>`;
 }
@@ -763,14 +692,8 @@ function wireConfig() {
   const saveNudges = els.config.querySelector('[data-act="save-nudges"]');
   if (saveNudges) saveNudges.addEventListener('click', onSaveNudges);
   els.config.querySelector('[data-act="save-puppy-record"]')?.addEventListener('click', onSavePuppyRecord);
-  els.config.querySelector('[data-act="puppy-record-all"]')?.addEventListener('click', () => {
-    els.config.querySelectorAll('[data-pr-field]').forEach((cb) => { cb.checked = true; cb.disabled = false; });
-  });
-  els.config.querySelectorAll('[data-pr-field]:not([data-pr-group])').forEach((master) => {
-    master.addEventListener('change', () => {
-      els.config.querySelectorAll(`[data-pr-group="${CSS.escape(master.dataset.prField)}"]`).forEach((cb) => { cb.disabled = !master.checked; });
-    });
-  });
+  els.config.querySelector('[data-act="puppy-record-all"]')?.addEventListener('click', () => tickAllPuppyRecordFields(els.config));
+  wirePuppyRecordFields(els.config);
   const saveWaitlist = els.config.querySelector('[data-act="save-waitlist"]');
   if (saveWaitlist) saveWaitlist.addEventListener('click', onSaveWaitlist);
   els.config.querySelector('[data-act="add-reason"]')?.addEventListener('click', () => {
@@ -838,11 +761,7 @@ async function onApplyConfirm() {
 
 async function onSaveNudges() {
   clearError();
-  const changes = {
-    promote_nudge_enabled: els.config.querySelector('#e-promote-enabled').checked,
-    promote_age_male_months: Number(els.config.querySelector('#e-promote-male').value) || 0,
-    promote_age_female_months: Number(els.config.querySelector('#e-promote-female').value) || 0
-  };
+  const changes = readNudgeFields(els.config);
   try {
     await kennelRepo.update(kennel.id, changes);
     await reloadKennel();
