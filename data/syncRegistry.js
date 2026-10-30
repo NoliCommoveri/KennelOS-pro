@@ -93,7 +93,9 @@ export const SYNC_REGISTRY = Object.freeze({
     ],
     // Her application form's key pairs (W2 Plan §7): the private halves open every
     // online application, so they ride the private vault and file backups only.
-    private: ['waitlist_form_keys'],
+    private: ['waitlist_form_keys',
+      // Her extra charges price list (guide §21.2): prices, private like a sale's.
+      'extra_charge_list'],
     pending: []
   },
 
@@ -166,7 +168,9 @@ export const SYNC_REGISTRY = Object.freeze({
       'integration_reviews',
       // The open link's amount, and each payment's fee as the vendor reported it
       // (plan §4 → §5): money, private like price and processing_fee_amount.
-      'payment_link_amount', 'processing_fee_reports'
+      'payment_link_amount', 'processing_fee_reports',
+      // Extra charges (guide §21.2): names and amounts, money like price.
+      'extra_charges'
     ],
     pending: []
   },
@@ -264,7 +268,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // Level 0; D9: payment-link refs are cloud): written to be sent to buyers.
       'payment_link', 'payment_instructions'
     ],
-    private: ['username', 'password', 'customer_id', 'notes', 'fee_note'],
+    // fee_charge_back (guide §21.2): her own choice to bill the fee back, private by
+    // rule zero (unlike the vendor's published rate above).
+    private: ['username', 'password', 'customer_id', 'notes', 'fee_note', 'fee_charge_back'],
     pending: []
   },
 

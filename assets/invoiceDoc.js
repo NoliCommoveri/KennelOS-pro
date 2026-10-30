@@ -108,7 +108,9 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
   // so the balance line is reduced by it and says so.
   const feeCredit = isSale ? await getSaleFeeCredit(record.id) : 0;
   const items = isFee ? waitlistLines(record) : incomeLineItems(source, record, { feeCredit });
-  const baseByKey = new Map(items.map((it) => [it.component, it.amount]));
+  // Keyed by line key: the component, or `extra:<id>` for each extra charge.
+  const baseByKey = new Map(items.map((it) => [it.key || it.component, it.amount]));
+  const labelByKey = new Map(items.map((it) => [it.key || it.component, it.invoiceLabel]));
 
   // The record's own due date, read now: a sale's balance due / pickup date, a
   // fee's pay-by date. A line with no dueDate of its own (the default, or a
@@ -140,7 +142,7 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
     if (base == null || base <= 0) continue;
     const collected = numOf(line.collected);
     const partial = line.mode === 'partial';
-    let label = line.key === 'application_fee' ? 'Waitlist application fee' : (INVOICE_LINE_LABELS[line.key] || line.key);
+    let label = line.key === 'application_fee' ? 'Waitlist application fee' : (labelByKey.get(line.key) || INVOICE_LINE_LABELS[line.key] || line.key);
     if (line.key === 'balance' && feeCredit > 0) label += ` (after ${money(feeCredit)} application fee credit)`;
     const marker = isSale && !isReceipt ? (FOOTNOTE[line.key] || '') : '';
     if (marker) markersUsed.add(marker);

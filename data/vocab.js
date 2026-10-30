@@ -486,7 +486,9 @@ export const INVOICE_LINE_LABELS = {
   balance: 'Remaining Purchase Price',
   transport: 'Transport Fee',
   boarding: 'Boarding Fee',
-  stud_fee: 'Stud Fee'
+  stud_fee: 'Stud Fee',
+  // Never printed as is: each extra charge prints its own name (§21.2).
+  extra: 'Extra Charge'
 };
 
 // Enforced choice list for Sale's `deferred_boarding_frequency` field — the
@@ -876,6 +878,9 @@ export const INCOME_COMPONENTS = [
   { value: 'balance',   label: 'Balance',           badge: 'badge-green' },
   { value: 'transport', label: 'Transport',         badge: 'badge-blue' },
   { value: 'boarding',  label: 'Deferred boarding',  badge: 'badge-amber' },
+  // A sale's extra charges (Sale.extra_charges, §21.2): photo packages, a payment
+  // fee charged back… One component per charge, all under this one heading.
+  { value: 'extra',     label: 'Extra charges',     badge: 'badge-blue' },
   { value: 'stud_fee',  label: 'Stud fees',         badge: 'badge-purple' },
   { value: 'pick',      label: 'Pick value (est.)', badge: 'badge-neutral' },
   { value: 'application_fee', label: 'Application fees', badge: 'badge-green' },

@@ -29,7 +29,8 @@ import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { inScopeOnly } from './kennelScope.js';
 import { ourRole } from './studRules.js';
 import { editionFlags } from './editionConfig.js';
-import { INCOME_COMPONENTS, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
+import { saleExtraCharges } from './extraCharges.js';
+import { INCOME_COMPONENTS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
 
@@ -46,7 +47,7 @@ function boardingCount(sale) {
 // status has advanced past the point that money changes hands. Date-driven first
 // so a returned/cancelled sale that recorded a paid deposit still reads as paid —
 // exactly the "keep recorded paid amounts as earned" rule (owner decision, §21).
-function depositPaid(s) {
+export function depositPaid(s) {
   return !!s.deposit_date || ['deposit_paid', 'paid_in_full', 'delivered'].includes(s.status);
 }
 function balancePaid(s) {
@@ -54,7 +55,8 @@ function balancePaid(s) {
 }
 
 // Break a Sale into its earned/anticipated cash components. `price` splits into a
-// deposit portion and a balance portion; transport + deferred boarding ride with
+// deposit portion and a balance portion; transport, deferred boarding and each
+// extra charge (§21.2, one `extra` component apiece, keyed by its id) ride with
 // the balance (collected at pickup). On a returned/cancelled sale, only what was
 // actually recorded as paid survives (as earned) — the rest is dropped, never
 // anticipated (§21). A LOST sale (vocab.isLostSale: voided, or returned for a
@@ -74,16 +76,18 @@ function saleComponents(s, feeCredit = 0) {
     { component: 'deposit', amount: deposit, paid: depositPaid(s) },
     { component: 'balance', amount: balance, paid: balancePaid(s) },
     { component: 'transport', amount: num(s.transport_fee), paid: balancePaid(s) },
-    { component: 'boarding', amount: num(s.deferred_boarding_amount) * boardingCount(s), paid: balancePaid(s) }
+    { component: 'boarding', amount: num(s.deferred_boarding_amount) * boardingCount(s), paid: balancePaid(s) },
+    ...saleExtraCharges(s).map((x) => ({ component: 'extra', key: `extra:${x.id}`, label: x.label, amount: x.amount, paid: balancePaid(s) }))
   ];
   const out = [];
   for (const p of parts) {
     if (!p.amount) continue;
+    const named = p.key ? { key: p.key, label: p.label } : {};
     if (dead) {
-      if (p.paid) out.push({ component: p.component, amount: p.amount, state: 'earned' });
+      if (p.paid) out.push({ component: p.component, ...named, amount: p.amount, state: 'earned' });
       // unpaid remainder of a dead sale → dropped from both totals
     } else {
-      out.push({ component: p.component, amount: p.amount, state: p.paid ? 'earned' : 'anticipated' });
+      out.push({ component: p.component, ...named, amount: p.amount, state: p.paid ? 'earned' : 'anticipated' });
     }
   }
   return out;
@@ -159,7 +163,10 @@ function sumBy(components, state) {
 // Cash line items for an invoice/receipt on ONE income record (§24). Reuses the
 // exact earned/anticipated classification the Income view uses, so a generated
 // document can never show a component the ledger wouldn't. Drops the non-cash
-// `pick` line (never invoiceable) and tags each item with its display label.
+// `pick` line (never invoiceable) and tags each item with its line `key` (the
+// component, or `extra:<id>` for an extra charge, so a sale's several extra charges
+// are separate lines), its Financials `label` and the buyer-facing `invoiceLabel`
+// (an extra charge's own name).
 // `sourceType` is 'sale' | 'stud'; the invoice page and the generator modal
 // both call this so their line items can't drift.
 // `feeCredit` (sales only): a credited application fee already received — pass
@@ -168,7 +175,12 @@ export function incomeLineItems(sourceType, record, { feeCredit = 0 } = {}) {
   const comps = sourceType === 'sale' ? saleComponents(record, feeCredit) : studComponents(record);
   return comps
     .filter((c) => c.state !== 'noncash')
-    .map((c) => ({ ...c, label: descriptor(INCOME_COMPONENTS, c.component).label }));
+    .map((c) => ({
+      ...c,
+      key: c.key || c.component,
+      label: descriptor(INCOME_COMPONENTS, c.component).label,
+      invoiceLabel: c.component === 'extra' ? c.label : (INVOICE_LINE_LABELS[c.component] || c.component)
+    }));
 }
 
 // What the buyer has paid on a sale (deposit, balance, transport, boarding), read

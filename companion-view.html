@@ -449,6 +449,7 @@
           if (dp.duration) sub += ' × ' + esc(dp.duration);
           facts += '<div class="row"><span class="k">Deferred pickup</span><span class="v">' + esc(money(dp.total)) + '<span class="subnote">' + sub + '</span></span></div>';
         }
+        (p.extraCharges || []).forEach(function (x) { facts += row(x.label, esc(money(x.amount))); });
         facts += row('Remaining balance', money(p.remainingBalance) ? esc(money(p.remainingBalance)) : '');
         if (p.balanceDueDate) facts += row('Balance due', esc(fmtDate(p.balanceDueDate)));
         if (facts) h += '<div style="margin-top:10px;">' + facts + '</div>';

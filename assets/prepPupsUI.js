@@ -13,7 +13,8 @@
 // drop-off forms (assets/litterCheckinUI.js), the litter's registration number, a
 // balance-due date, each contract's status, the registration type, the litter's
 // feeding note. Only the breed feeding schedule (a table editor) leaves for its
-// page. Unpaid balances then get a payment request, then an invoice (Pro). Each fix is saved
+// page. Unpaid balances then get (Pro) a deposit fee charged back and extras from her
+// price list (guide §21.2), a payment request, then an invoice. Each fix is saved
 // when approved, so there's no draft. Then, in Pro, the Furever link (not tracked,
 // so only offered) and the printed puppy records: one file, a cover page for her,
 // then each pup's record (pages/puppy-record.html?dogs=…&cover=1). Anything that
@@ -26,6 +27,9 @@ import { contactRepo } from '../data/contactRepo.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
+import { kennelRepo } from '../data/kennelRepo.js';
+import { saleExtraCharges, kennelChargeList, newExtraCharge, depositFeeChargeBack } from '../data/extraCharges.js';
+import { depositPaid } from '../data/incomeView.js';
 import { inScopeOnly, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { saleFeeEstimate } from '../data/processingFees.js';
@@ -627,6 +631,7 @@ class Prep {
     for (const [i, { r, due }] of owing.entries()) {
       const who = esc(r.buyer?.name || 'the family');
       if (owing.length > 1) await this.chat.say(`<strong>${esc(pupName(r.pup))}</strong>: ${esc(fmtMoney(due))} from ${who}.`);
+      if (await this.extras(r)) await this.chat.say(`That makes ${who}'s balance ${esc(fmtMoney(await balanceDueOn(r.sale)))}.`, { typing: 300 });
       if (canRequest) {
         await this.chat.say(`First, a payment request to ${who}: the amount and how to pay, sent by email or text.`, { typing: 400 });
         if ((await this.chat.choose([{ label: 'Send a payment request', value: 'go', primary: true }, { label: 'Skip', value: '' }])) === 'go') {
@@ -645,6 +650,49 @@ class Prep {
       }
       await this.chat.say(i === owing.length - 1 ? 'Okay, that\'s the balances!' : 'Okay, next family.', { typing: 300 });
     }
+  }
+
+  // Before asking a family for their balance (Pro, extraCharges, guide §21.2): the
+  // deposit's fee charged back, when it came through an account set to charge it
+  // back and the sale doesn't carry it yet (the Sale page asks too, but not for a
+  // deposit recorded some other way); then extras from her kennel's price list not
+  // already on the sale. Both ride the balance, so the payment request and invoice
+  // that follow include them. → true when the sale changed (r.sale is refreshed).
+  async extras(r) {
+    if (!editionFlags.extraCharges) return false;
+    let sale = await saleRepo.getById(r.sale.id);
+    let changed = false;
+    const who = esc(r.buyer?.name || 'the family');
+    const account = sale.deposit_paid_via_account_id ? await accountRepo.getById(sale.deposit_paid_via_account_id) : null;
+    const offer = depositFeeChargeBack(sale, account, depositPaid(sale));
+    if (offer) {
+      await this.chat.say(`${who}'s deposit came through ${esc(account.name)}, which took about ${esc(fmtMoney(offer.amount))}. Add "${esc(offer.label)}" to their balance?`, { typing: 400 });
+      if ((await this.chat.choose([{ label: 'Add it', value: 'go', primary: true }, { label: 'Skip', value: '' }])) === 'go') {
+        sale = await saleRepo.update(sale.id, { extra_charges: [...saleExtraCharges(sale), { id: crypto.randomUUID(), ...offer }] });
+        changed = true;
+      }
+    }
+    const kennel = await kennelRepo.getById(sale.kennel_id || r.pup.kennel_id);
+    const have = new Set(saleExtraCharges(sale).map((x) => x.label.toLowerCase()));
+    const presets = kennelChargeList(kennel).filter((x) => !have.has(x.label.toLowerCase()));
+    if (presets.length) {
+      const res = await this.chat.form({
+        title: `<strong>Did ${who} get any extras?</strong><span class="kels-lead">Each one goes on their invoice as its own line.</span>`,
+        html: presets.map((x, i) => `<label class="check-inline"><input type="checkbox" data-xc="${i}"> ${esc(x.label)} <span class="faint">${esc(fmtMoney(x.amount))}</span></label>`).join('<br>'),
+        submitLabel: 'Add them',
+        cancelLabel: 'No extras',
+        submit: async (root) => {
+          const picked = [...root.querySelectorAll('[data-xc]:checked')].map((el) => presets[Number(el.dataset.xc)]);
+          if (!picked.length) return 'Tick what they\'re getting, or choose No extras.';
+          sale = await saleRepo.update(sale.id, { extra_charges: [...saleExtraCharges(sale), ...picked.map(newExtraCharge)] });
+          return picked;
+        },
+        reply: (picked) => picked.map((x) => x.label).join(', ')
+      });
+      if (res.done) changed = true;
+    }
+    r.sale = sale;
+    return changed;
   }
 
   async feeding() {

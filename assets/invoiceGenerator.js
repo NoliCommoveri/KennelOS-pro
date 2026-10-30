@@ -119,7 +119,7 @@ export async function openInvoiceGenerator({ preselect = null, onClose = null } 
 
   function lineRowHtml(key) {
     const ln = st.lines[key];
-    const label = INVOICE_LINE_LABELS[key] || key;
+    const label = ln.label || INVOICE_LINE_LABELS[key] || key;
     // Deposits are always due immediately, so they get a static note rather than
     // a date picker; the other four line types carry a calculated due date.
     const dueField = st.doc !== 'invoice'
@@ -204,9 +204,9 @@ export async function openInvoiceGenerator({ preselect = null, onClose = null } 
     st.soonest = soonest;
     st.source = row.source_type;
     st.record = record;
-    st.order = items.map((it) => it.component);
+    st.order = items.map((it) => it.key);
     st.lines = {};
-    for (const it of items) st.lines[it.component] = { base: it.amount, include: true, mode: 'full', collected: '', dueDate: soonest };
+    for (const it of items) st.lines[it.key] = { base: it.amount, label: it.invoiceLabel, include: true, mode: 'full', collected: '', dueDate: soonest };
     st.number = record.invoice_number || '';
     st.notes = record.invoice_notes || '';
     st.payMethod = record.payment_method || '';

@@ -10,6 +10,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { extraChargesTotal } from '../data/extraCharges.js';
 import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
@@ -824,7 +825,8 @@ function renderExpensesSection() {
 }
 
 // Deliberately simple, per owner decision: this litter's puppy sales and their
-// total sale value (price + transport + deferred boarding, when present). No
+// total sale value (price + transport + deferred boarding + extra charges, when
+// present). No
 // earned/anticipated split and no net here — that lives on the litter P&L report
 // (litter-finances-report). Sales reach the litter via the puppy's dog_id.
 const saleNum = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
@@ -833,7 +835,7 @@ function saleBoardingCount(s) {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 function saleValue(s) {
-  return saleNum(s.price) + saleNum(s.transport_fee) + saleNum(s.deferred_boarding_amount) * saleBoardingCount(s);
+  return saleNum(s.price) + saleNum(s.transport_fee) + saleNum(s.deferred_boarding_amount) * saleBoardingCount(s) + extraChargesTotal(s);
 }
 
 async function renderIncomeSection() {
@@ -856,7 +858,8 @@ async function renderIncomeSection() {
         const buyer = contactById.get(s.buyer_contact_id)?.name || '—';
         const t = saleNum(s.transport_fee);
         const b = saleNum(s.deferred_boarding_amount) * saleBoardingCount(s);
-        const extras = [t ? `transport ${fmtMoney(t)}` : '', b ? `boarding ${fmtMoney(b)}` : ''].filter(Boolean).join(', ');
+        const x = extraChargesTotal(s);
+        const extras = [t ? `transport ${fmtMoney(t)}` : '', b ? `boarding ${fmtMoney(b)}` : '', x ? `extra charges ${fmtMoney(x)}` : ''].filter(Boolean).join(', ');
         return `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border); gap:12px;">
           <span><a href="sale.html?id=${encodeURIComponent(s.id)}">${esc(puppy?.call_name || 'Puppy')}</a> <span class="faint">→ ${esc(buyer)}</span> ${badge(SALE_STATUS, s.status)}</span>
           <span style="text-align:right;"><strong>${esc(fmtMoney(saleValue(s)))}</strong>${extras ? `<br><span class="faint" style="font-size:12px;">${esc('incl. ' + extras)}</span>` : ''}</span>

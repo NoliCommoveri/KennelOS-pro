@@ -7,6 +7,12 @@
 //   2b. her preferred tests (each new dog's planned tests): add, remove, rename, as
 //      many rounds as she likes (kennelRepo's add / remove / renamePreferredTest);
 //   3. Puppy Record fields (Pro): everything, or what to leave off;
+//   3b. her extra charges price list (Pro, extraCharges): photo packages and the
+//      like, saved on the kennel (data/extraCharges.js);
+//   3c. her vendor and third-party accounts (Pro, Accounts): added or changed in
+//      rounds; a marketplace's or payment service's fee, and whether she charges a
+//      payment service's fee back to the family; Stripe connected right here
+//      (waitlistFeeStep.offerStripe);
 //   4. another kennel (Pro, multi-kennel), for a separate side of the business: two
 //      breeds with their own waitlists, a pet side and a show side; it starts with
 //      the nudge and Puppy Record settings from 1–3, and its own logo;
@@ -27,14 +33,17 @@ import { resolveMyKennelId } from '../data/kennelSetup.js';
 import { editionFlags, edition } from '../data/editionConfig.js';
 import { isProOnlyPage } from '../data/proPages.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
-import { setupParts, logoUses, listWords, settingsToCopy, newKennelNameProblem, possessive, SETUP_HOW } from '../data/kelsSetup.js';
+import { setupParts, logoUses, listWords, settingsToCopy, newKennelNameProblem, possessive, accountLine, FEE_ACCOUNT_TYPES, SETUP_HOW } from '../data/kelsSetup.js';
+import { kennelChargeList, readExtraCharges } from '../data/extraCharges.js';
+import { paymentLink } from '../data/paymentLinks.js';
 import { EXPORT_MAX_DAYS } from '../data/accountHealth.js';
 import { getLastBackupDate, setFureverSettings } from '../data/settings.js';
 import { downloadBackup } from '../data/importExport.js';
 import { isDropboxConnected } from '../data/dropbox.js';
 import { offerCloudBackup, cloudBackupOn } from './kelsBackupSteps.js';
 import { field, input, val, kennelNameField, pagesPrefix } from './kelsSteps.js';
-import { esc } from './ui.js';
+import { ACCOUNT_TYPE } from '../data/vocab.js';
+import { esc, fmtMoney } from './ui.js';
 
 export async function runSetupTask(chat, { onExit = () => {}, handoff = null } = {}) {
   if (!(await chat.intro('Welcome aboard! Let\'s get KennelOS set up just the way you like it.', SETUP_HOW))) return onExit('nevermind');
@@ -283,6 +292,158 @@ class Setup {
     });
     await this.reload();
     if (res.done) await this.chat.say('Saved! Every puppy record you print will look just like that.', { typing: 300 });
+  }
+
+  // --- 3b. Extra charges price list (Pro) ---------------------------------------------
+  async 'extra-charges'() {
+    const list = kennelChargeList(this.kennel);
+    if (list.length) {
+      await this.chat.say(`Your extras price list: what you offer on top of a puppy, each its own line on the invoice.<ul>${list.map((x) => `<li>${esc(x.label)}: ${esc(fmtMoney(x.amount))}</li>`).join('')}</ul>`);
+      const pick = await this.chat.choose([{ label: 'Keep it', value: '', primary: true }, { label: 'Change it', value: 'change' }]);
+      if (pick === 'change') await this.askCharges(list);
+      else await this.chat.say('Lovely, it stays.', { typing: 300 });
+      return;
+    }
+    await this.chat.say('Do you offer extras with your puppies, like photo or video packages? List them here with their prices, and you can add them to any sale. Each one prints as its own line on the invoice.');
+    const pick = await this.chat.choose([{ label: 'Yes, let me list them', value: 'yes', primary: true }, { label: 'Not now', value: '' }]);
+    if (pick === 'yes') await this.askCharges([]);
+    else await this.chat.say('No problem. The price list is on your kennel\'s page whenever you want it.', { typing: 300 });
+  }
+
+  async askCharges(list) {
+    const row = (x = { id: '', label: '', amount: '' }) => `<div class="xc-row" data-xc-id="${esc(x.id)}" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+      <input class="xc-label" type="text" value="${esc(x.label)}" placeholder="e.g. Gold photo package" aria-label="Name" style="flex:2; min-width:0;">
+      <input class="xc-amount" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(x.amount)}" placeholder="$" aria-label="Price" style="flex:1; min-width:0;">
+      <button type="button" class="gl-more" data-xc-remove aria-label="Remove">✕</button>
+    </div>`;
+    const res = await this.chat.form({
+      title: '<strong>Your extras and their prices.</strong><span class="kels-lead">You can change the price on any one sale.</span>',
+      html: `<div class="field gl-field" id="xc-list">${(list.length ? list : [undefined, undefined]).map((x) => row(x)).join('')}</div>
+        <button type="button" class="gl-more" data-xc-add>+ Another one</button>`,
+      wire: (root) => {
+        root.querySelector('[data-xc-add]').addEventListener('click', () => {
+          root.querySelector('#xc-list').insertAdjacentHTML('beforeend', row());
+          root.querySelector('#xc-list').lastElementChild.querySelector('.xc-label').focus();
+        });
+        root.querySelector('#xc-list').addEventListener('click', (e) => {
+          if (e.target.closest('[data-xc-remove]')) e.target.closest('.xc-row').remove();
+        });
+      },
+      submit: async (root) => {
+        const rows = [...root.querySelectorAll('#xc-list .xc-row')].map((el) => ({
+          id: el.dataset.xcId || null, label: el.querySelector('.xc-label').value, amount: el.querySelector('.xc-amount').value
+        }));
+        const { list: next, error } = readExtraCharges(rows);
+        if (error) return error;
+        await kennelRepo.update(this.kennel.id, { extra_charge_list: next });
+        return next;
+      },
+      reply: (next) => (next.length ? listWords(next.map((x) => `${x.label} ${fmtMoney(x.amount)}`)) : 'No extras for now'),
+      cancelLabel: 'Skip for now'
+    });
+    await this.reload();
+    if (res.done && res.result.length) await this.chat.say('Saved! On a sale, pick them from <strong>Add an extra charge</strong>.', { typing: 300 });
+  }
+
+  // --- 3c. Vendor and third-party accounts (Pro, Accounts) ------------------------------
+  // The Accounts page's records: her registry, marketplaces, payment services,
+  // suppliers, labs… Kels asks only what the app uses: the name and type, a website,
+  // the fee a marketplace or payment service takes, a payment service's link, and
+  // (extraCharges) whether only some families pay that way and she charges them its
+  // fee (Account.fee_charge_back). Logins and referral codes stay on the Accounts page.
+  async accounts() {
+    const { accountRepo } = await import('../data/accountRepo.js');
+    const chargeBack = !!editionFlags.extraCharges;
+    const load = async () => (await accountRepo.getAll()).filter((a) => !a.is_archived).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    let list = await load();
+    const lines = () => `<ul>${list.map((a) => `<li>${esc(accountLine(a, { chargeBack }))}</li>`).join('')}</ul>`;
+    const why = `Marketplaces and payment services take a fee, so I'll keep it, and your income is what you actually received.${chargeBack ? ' If a payment service costs you a fee only when a family chooses it (PayPal sent as business, say), I can add that fee to their balance.' : ''}`;
+    await this.chat.say(list.length
+      ? `Next, your vendor and third-party accounts. Here's what you have:${lines()}Want to add one, or change one?`
+      : `Next, your vendor and third-party accounts: your registry, where you list puppies, how families pay you (Zelle, PayPal, Stripe…), suppliers, labs. ${why} Want to set them up?`);
+    for (;;) {
+      const pick = await this.chat.choose([
+        { label: list.length ? 'Add another' : 'Add one', value: 'add', primary: !list.length },
+        ...(list.length ? [{ label: 'Change one', value: 'change' }] : []),
+        { label: list.length ? 'That\'s all' : 'Not now', value: '', primary: !!list.length }
+      ]);
+      if (!pick) break;
+      let account = null;
+      if (pick === 'change') {
+        await this.chat.say('Which one?', { typing: 200 });
+        const id = await this.chat.choose([...list.map((a) => ({ label: a.name || 'Account', value: a.id })), { label: 'Never mind', value: '' }]);
+        account = list.find((a) => a.id === id) || null;
+        if (!account) continue;
+      }
+      const saved = await this.askAccount(accountRepo, account, chargeBack);
+      if (!saved) continue;
+      list = await load();
+      if (!account && saved.account_type === 'payment_service' && /stripe/i.test(saved.name || '')) {
+        const { offerStripe } = await import('./waitlistFeeStep.js');
+        await offerStripe(this.chat, saved.id, true, 'Getting Started');
+      }
+      await this.chat.say(`Saved. Anything else?${lines()}`, { typing: 300 });
+    }
+    await this.chat.say(list.length
+      ? 'They\'re all on your Accounts page, with room for logins and referral codes too.'
+      : 'No problem. You can add them any time on your Accounts page.', { typing: 300 });
+  }
+
+  // One account, new (`a` null) or one she has. → the saved account, or null.
+  async askAccount(accountRepo, a, chargeBack) {
+    const type = a?.account_type || '';
+    const typeOptions = `<option value="">— choose —</option>${ACCOUNT_TYPE.map((t) => `<option value="${esc(t.value)}"${t.value === type ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}`;
+    const res = await this.chat.form({
+      title: a ? `<strong>${esc(a.name || 'Account')}</strong>` : '<strong>A vendor or third-party account.</strong><span class="kels-lead">If one way to pay is free and another isn\'t (PayPal personal and business), add them as two.</span>',
+      html: `${field('Its name', input('ks-ac-name', a?.name ?? '', { placeholder: 'e.g. AKC, Good Dog, PayPal (business)' }))}
+        ${field('What it is', `<select id="ks-ac-type">${typeOptions}</select>`)}
+        ${field('Website (optional)', input('ks-ac-site', a?.website ?? '', { type: 'url', inputmode: 'url', placeholder: 'https://…' }))}
+        <div id="ks-ac-fee"${FEE_ACCOUNT_TYPES.includes(type) ? '' : ' hidden'}>
+          <div class="ck-inline">
+            ${field('Fee percentage', input('ks-ac-percent', a?.fee_percent ?? '', { type: 'number', min: 0, max: 99.99, step: 0.01, inputmode: 'decimal', placeholder: 'e.g. 3.49' }))}
+            ${field('Fixed fee ($)', input('ks-ac-fixed', a?.fee_fixed ?? '', { type: 'number', min: 0, step: 0.01, inputmode: 'decimal', placeholder: 'e.g. 0.49' }))}
+          </div>
+          <p class="field-hint">What it keeps of each payment. Leave both blank if it's free.</p>
+        </div>
+        <div id="ks-ac-pay"${type === 'payment_service' ? '' : ' hidden'}>
+          ${field('Its payment link (optional)', input('ks-ac-link', a?.payment_link ?? '', { type: 'url', inputmode: 'url', placeholder: 'https://…' }), 'A PayPal.me or Stripe link families can tap.')}
+          ${chargeBack ? `<label class="check-inline"><input id="ks-ac-back" type="checkbox"${a?.fee_charge_back ? ' checked' : ''}> Only some families pay this way, and I charge them the fee</label>
+            <p class="field-hint">When a deposit comes in this way, the sale offers to add the fee to their balance.</p>` : ''}
+        </div>`,
+      wire: (root) => {
+        root.querySelector('#ks-ac-type').addEventListener('change', (e) => {
+          root.querySelector('#ks-ac-fee').hidden = !FEE_ACCOUNT_TYPES.includes(e.target.value);
+          root.querySelector('#ks-ac-pay').hidden = e.target.value !== 'payment_service';
+        });
+      },
+      submitLabel: 'Save',
+      cancelLabel: 'Never mind',
+      submit: async (root) => {
+        const q = (sel) => root.querySelector(sel);
+        const num = (v) => (String(v).trim() === '' ? null : Number(v));
+        const name = q('#ks-ac-name').value.trim();
+        const account_type = q('#ks-ac-type').value;
+        if (!name) return 'What\'s it called?';
+        if (!account_type) return `What is ${name}? Pick the closest one.`;
+        const changes = { name, account_type, website: q('#ks-ac-site').value.trim() };
+        if (FEE_ACCOUNT_TYPES.includes(account_type)) {
+          changes.fee_percent = num(q('#ks-ac-percent').value);
+          changes.fee_fixed = num(q('#ks-ac-fixed').value);
+          if (changes.fee_percent != null && !(changes.fee_percent >= 0 && changes.fee_percent < 100)) return 'The percentage should be under 100.';
+          if (changes.fee_fixed != null && !(changes.fee_fixed >= 0)) return 'The fixed fee can\'t be below $0.';
+        }
+        if (account_type === 'payment_service') {
+          const typed = q('#ks-ac-link').value.trim();
+          const link = typed ? paymentLink(typed) : '';
+          if (typed && !link) return 'That link doesn\'t look like a web address. Copy it from the service and paste it here.';
+          changes.payment_link = link;
+          if (q('#ks-ac-back')) changes.fee_charge_back = q('#ks-ac-back').checked;
+        }
+        return a ? accountRepo.update(a.id, changes) : accountRepo.create(changes);
+      },
+      reply: (saved) => accountLine(saved, { chargeBack })
+    });
+    return res.done ? res.result : null;
   }
 
   // --- 4. Another kennel (Pro, multi-kennel) -----------------------------------------

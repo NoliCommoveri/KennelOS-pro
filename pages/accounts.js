@@ -29,6 +29,7 @@ import { paymentLink } from '../data/paymentLinks.js';
 import { JOTFORM_REGIONS, jotformConnection, connectJotform, disconnectJotform, listJotformForms, matchJotformForm } from '../data/jotformConnect.js';
 import { factsFor, guessFormType, matchWarnings } from '../data/jotformMatch.js';
 import { isDemo } from '../data/demoMode.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { STRIPE_CURRENCIES, STRIPE_KEY_PERMISSIONS, stripeConnection, connectStripe, disconnectStripe } from '../data/stripeLinks.js';
 import { esc, badge, fmtMoney, confirmModal, alertModal } from '../assets/ui.js';
 
@@ -260,13 +261,17 @@ function pickJotformModal(accountId, takenIds) {
   });
 }
 
+// Charging the fee back (guide §21.2) only works through a deposit's "paid via",
+// which lists Payment services, and only with editionFlags.extraCharges.
+const chargesBack = (a) => editionFlags.extraCharges && a.account_type === 'payment_service' && !!a.fee_charge_back;
+
 // A sales channel's fee (Good Dog, Stripe…): the rate, whether she usually passes
 // it on, and her note on it.
 function feeHtml(a) {
   const rate = feeRate(a);
   if (!rate && !a.fee_note) return '';
   return `<div class="acct-section"><div class="acct-section-title">Processing fee</div>
-    ${rate ? `<div class="acct-row"><span class="acct-v"><strong>${esc(rateLabel(rate))}</strong> <span class="muted">per sale${a.fee_passed_to_buyer_default ? ' · usually passed to the buyer' : ''}</span></span></div>` : ''}
+    ${rate ? `<div class="acct-row"><span class="acct-v"><strong>${esc(rateLabel(rate))}</strong> <span class="muted">per sale${a.fee_passed_to_buyer_default ? ' · usually passed to the buyer' : ''}${chargesBack(a) ? ' · charged back on a deposit' : ''}</span></span></div>` : ''}
     ${a.fee_note ? `<div class="acct-instructions">${esc(a.fee_note)}</div>` : ''}
   </div>`;
 }
@@ -414,6 +419,8 @@ function openForm(existing = null) {
       ${field('Fee percentage', `<input id="af-fee-percent" type="number" min="0" max="99.99" step="0.01" value="${esc(a.fee_percent)}" placeholder="e.g. 6.25">`, { hint: 'Percent of the sale price.' })}
       ${field('Fixed fee ($)', `<input id="af-fee-fixed" type="number" min="0" step="0.01" value="${esc(a.fee_fixed)}" placeholder="e.g. 5.00">`, { hint: 'Added on top, per sale.' })}
       <div class="field field-wide"><label class="check-inline"><input id="af-fee-passed" type="checkbox"${a.fee_passed_to_buyer_default ? ' checked' : ''}> I usually pass this fee on to the buyer in a higher price</label></div>
+      ${editionFlags.extraCharges ? `<div class="field field-wide" id="af-chargeback-field"${a.account_type === 'payment_service' ? '' : ' hidden'}><label class="check-inline"><input id="af-fee-chargeback" type="checkbox"${a.fee_charge_back ? ' checked' : ''}> Charge this fee back to the buyer</label>
+        <span class="field-hint">For a payment option only some buyers choose (PayPal or Zelle sent as business…). When a deposit is paid through this account, the sale offers to add the fee to the balance as its own invoice line.</span></div>` : ''}
       ${field('About the fee', `<input id="af-fee-note" type="text" value="${esc(a.fee_note)}" placeholder="e.g. card payments only; bank transfer is free">`, { wide: true, hint: 'Private — just for you.' })}
     </div>
     <div class="form-grid" style="margin-top:14px;">
@@ -444,6 +451,8 @@ function openForm(existing = null) {
   $('#af-type').addEventListener('change', () => {
     $('#af-forms-section').hidden = !isFormService();
     $('#af-pay-section').hidden = !isPaymentService();
+    const chargeBack = $('#af-chargeback-field');
+    if (chargeBack) chargeBack.hidden = !isPaymentService();
   });
   $('#af-form-add').addEventListener('click', (e) => {
     formsBox.insertAdjacentHTML('beforeend', formRowHtml());
@@ -608,6 +617,7 @@ function openForm(existing = null) {
     };
     // The payment link belongs to a Payment service only; another type leaves it stored.
     if (isPaymentService()) {
+      if ($('#af-fee-chargeback')) data.fee_charge_back = $('#af-fee-chargeback').checked;
       data.payment_link = val('#af-pay-link');
       data.payment_instructions = $('#af-pay-instructions').value.trim();
     }

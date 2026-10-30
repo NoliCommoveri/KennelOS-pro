@@ -27,6 +27,7 @@
 // on a breaking shape change.
 import { dogRepo } from './dogRepo.js';
 import { getSaleFeeCredit } from './incomeView.js';
+import { saleExtraCharges } from './extraCharges.js';
 import { saleRepo } from './saleRepo.js';
 import { contractRepo } from './contractRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
@@ -351,13 +352,19 @@ export async function buildFamilyBundle(contact) {
         };
       }
 
+      // Extra charges (§21.2): photo packages, a payment fee charged back. Only
+      // each one's name and amount go out.
+      const extraCharges = saleExtraCharges(sale).map((x) => ({ label: x.label, amount: x.amount }));
+      const extrasTotal = extraCharges.reduce((t, x) => t + x.amount, 0);
+
       // Remaining balance is COMPUTED here, never stored: price + transport fee +
-      // deferred boarding − deposit − a credited waitlist application fee already
-      // paid toward the price (Waitlist Spec §5.3; the same credit the Financials
-      // ledger and the invoice apply). Absent components count as 0.
+      // deferred boarding + extra charges − deposit − a credited waitlist
+      // application fee already paid toward the price (Waitlist Spec §5.3; the same
+      // credit the Financials ledger and the invoice apply). Absent components
+      // count as 0.
       const feeCredit = await getSaleFeeCredit(sale.id);
       const remainingBalance = price != null
-        ? Number(price) + Number(transportFee || 0) + deferredTotal - Number(deposit || 0) - feeCredit
+        ? Number(price) + Number(transportFee || 0) + deferredTotal + extrasTotal - Number(deposit || 0) - feeCredit
         : null;
 
       // Deferred Pickup Boarding section — pinned to the top of the event history,
@@ -388,6 +395,7 @@ export async function buildFamilyBundle(contact) {
         deposit: showFin ? deposit : null,
         transportFee: showFin ? transportFee : null,
         deferredPickup: showFin ? deferredPickup : null,
+        extraCharges: showFin ? extraCharges : [],
         remainingBalance: showFin ? remainingBalance : null,
         balanceDueDate: showFin ? (sale.balance_due_date || null) : null,
         // Owner/breeder kennel — populated only when this pup came from a foster

@@ -3,6 +3,8 @@
 // at the top of the menu, and what a second kennel starts with. Pure: no db, no
 // DOM; `flags` is editionFlags.
 import { similarNamed } from './dogSearch.js';
+import { feeRate, rateLabel } from './processingFees.js';
+import { ACCOUNT_TYPE, descriptor } from './vocab.js';
 
 // The parts, in the order she asks them. Each only where the edition has what it
 // sets up, so a part for a missing feature is never asked or mentioned. The
@@ -12,6 +14,10 @@ import { similarNamed } from './dogSearch.js';
 //   nudges       — the Today hub's promote nudge;
 //   tests        — her preferred tests: added, removed or renamed;
 //   puppy-record — Pro (Puppy Record);
+//   extra-charges — Pro (extraCharges): her price list of extras (photo packages…);
+//   accounts     — Pro (Accounts): her vendor and third-party accounts (registry,
+//                  marketplace, payment service…), a seller's or payment service's
+//                  fee, and whether she charges that fee back (extraCharges);
 //   kennels      — Pro (multiKennel): another kennel, for a separate side of the business;
 //   furever      — Pro (Furever): Google Drive, for families' content packages;
 //   assistant    — Pro (KennelAssistant): Dropbox, for a helper's phone;
@@ -22,6 +28,8 @@ export function setupParts(flags = {}, { kennelPage = true } = {}) {
     kennelPage ? 'nudges' : null,
     kennelPage ? 'tests' : null,
     kennelPage && flags.puppyRecord ? 'puppy-record' : null,
+    kennelPage && flags.extraCharges ? 'extra-charges' : null,
+    flags.accounts ? 'accounts' : null,
     kennelPage && flags.multiKennel ? 'kennels' : null,
     flags.furever ? 'furever' : null,
     flags.assistant ? 'assistant' : null,
@@ -43,6 +51,22 @@ export function logoUses(flags = {}) {
 export function listWords(words) {
   if (words.length < 2) return words[0] || '';
   return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
+// The account types that take a cut of what families pay (a marketplace, a payment
+// service), so the setup asks their fee; only a payment service takes payments
+// itself (a link, a charge-back).
+export const FEE_ACCOUNT_TYPES = ['marketplace', 'payment_service'];
+
+// An account as she'd say it: "PayPal (business), Payment service: 3.49% + $0.49,
+// charged back to the family" / "AKC, Registry / club".
+export function accountLine(a = {}, { chargeBack = false } = {}) {
+  const head = `${String(a.name || 'Account').trim()}${a.account_type ? `, ${descriptor(ACCOUNT_TYPE, a.account_type).label}` : ''}`;
+  if (!FEE_ACCOUNT_TYPES.includes(a.account_type)) return head;
+  const rate = feeRate(a);
+  const bits = [rate ? rateLabel(rate) : 'no fee'];
+  if (chargeBack && rate && a.account_type === 'payment_service' && a.fee_charge_back) bits.push('charged back to the family');
+  return `${head}: ${bits.join(', ')}`;
 }
 
 // "Elmwood Kennels'", "Bluebell's".

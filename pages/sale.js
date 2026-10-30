@@ -8,6 +8,9 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
+import { kennelRepo } from '../data/kennelRepo.js';
+import { saleExtraCharges, readExtraCharges, kennelChargeList, newExtraCharge, depositFeeChargeBack } from '../data/extraCharges.js';
+import { depositPaid } from '../data/incomeView.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
 import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily } from '../data/waitlistRules.js';
@@ -41,7 +44,7 @@ const blankSale = () => ({
   transport_fee: '', deferred_boarding_amount: '', deferred_boarding_frequency: '',
   deferred_boarding_duration_days: '', end_reason: '', end_note: '',
   sales_channel_account_id: '', processing_fee_amount: '', fee_passed_to_buyer: false,
-  deposit_paid_via_account_id: '', balance_paid_via_account_id: ''
+  deposit_paid_via_account_id: '', balance_paid_via_account_id: '', extra_charges: []
 });
 
 const ctx = {
@@ -53,18 +56,22 @@ const ctx = {
   // Sales channels (Pro: Accounts) and the processing fee last filled in for her
   // (Integrations plan §5) — a fee still at that value follows the price; a fee
   // she typed stays put.
-  accounts: [], accountsById: new Map(), suggestedFee: null
+  accounts: [], accountsById: new Map(), suggestedFee: null,
+  // Own kennels, for the extra charges price list (Pro, §21.2).
+  kennels: []
 };
 
 async function loadRefs() {
-  const [dogs, contacts, leadSources, litters, accounts] = await Promise.all([
+  const [dogs, contacts, leadSources, litters, accounts, kennels] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
     saleRepo.getLeadSources(),
     litterRepo.getAll({ includeArchived: true }),
     // Accounts are a Pro page; Lite records the fee on the sale alone.
-    editionFlags.accounts ? accountRepo.getAll({ includeArchived: true }) : []
+    editionFlags.accounts ? accountRepo.getAll({ includeArchived: true }) : [],
+    editionFlags.extraCharges ? kennelRepo.getAll() : []
   ]);
+  ctx.kennels = kennels.filter((k) => k.is_own_kennel);
   ctx.accounts = accounts;
   ctx.accountsById = new Map(accounts.map((a) => [a.id, a]));
   ctx.allDogs = dogs;
@@ -198,7 +205,7 @@ function feeFields(s) {
   const channel = editionFlags.accounts
     ? `${field('Sold through', `<select id="f-sales_channel_account_id">${channelOptions(s.sales_channel_account_id)}</select>`, { hint: 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.' })}
       ${field('Deposit paid via', `<select id="f-deposit_paid_via_account_id">${paidViaOptions(s.deposit_paid_via_account_id)}</select>`, { hint: 'The Payment service the deposit is paid through (Stripe, Zelle…).' })}
-      ${field('Balance paid via', `<select id="f-balance_paid_via_account_id">${paidViaOptions(s.balance_paid_via_account_id)}</select>`, { hint: 'The rest of the price, transport and boarding. Blank: the deposit\'s.' })}`
+      ${field('Balance paid via', `<select id="f-balance_paid_via_account_id">${paidViaOptions(s.balance_paid_via_account_id)}</select>`, { hint: 'The rest of the price, transport, boarding and extra charges. Blank: the deposit\'s.' })}`
     : '';
   return `${channel}
       ${field('Processing fee', `<input id="f-processing_fee_amount" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount)}">`, { hint: estimated != null ? `Estimated ${fmtMoney(estimated)} from each payment's account rate. Change it to what was actually charged.` : 'What the marketplace or payment service kept of this sale.' })}
@@ -293,6 +300,91 @@ function wireFeeFields() {
   updateNetLine();
 }
 
+// --- Extra charges (Pro, §21.2) ------------------------------------------------
+// Photo packages, a payment fee charged back…: one invoice line each, paid with
+// the balance. The price list is the sale's kennel's (the dog's, for a new sale);
+// with neither known, every own kennel's.
+function priceList(draft = ctx.draft) {
+  const own = (id) => ctx.kennels.find((k) => k.id === id);
+  const kennel = own(draft.kennel_id) || own(ctx.dogsById.get(draft.dog_id)?.kennel_id);
+  if (kennel) return kennelChargeList(kennel);
+  const seen = new Set();
+  return ctx.kennels.flatMap(kennelChargeList).filter((x) => {
+    const k = `${x.label}|${x.amount}`;
+    return seen.has(k) ? false : (seen.add(k), true);
+  });
+}
+
+function extraChargesField(s) {
+  if (!editionFlags.extraCharges) return '';
+  const rows = (Array.isArray(s.extra_charges) ? s.extra_charges : []).map((x) => `
+    <div class="xc-row" data-xc-id="${esc(x.id)}" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+      <input class="xc-label" type="text" value="${esc(x.label)}" placeholder="e.g. Gold photo package" style="flex:2; min-width:120px;">
+      <input class="xc-amount" type="number" min="0" step="0.01" value="${esc(x.amount)}" placeholder="$" style="flex:1; min-width:80px;">
+      <button type="button" class="btn btn-sm" data-xc-remove aria-label="Remove">✕</button>
+    </div>`).join('');
+  const presets = priceList(s);
+  return `<div class="field field-wide">
+      <label>Extra charges</label>
+      <div id="xc-rows">${rows}</div>
+      <select id="xc-add" style="max-width:320px;">
+        <option value="">+ Add an extra charge…</option>
+        ${presets.map((p) => `<option value="${esc(p.id)}">${esc(p.label)} (${esc(fmtMoney(p.amount))})</option>`).join('')}
+        <option value="custom">Something else…</option>
+      </select>
+      <span class="field-hint">Each prints as its own line on the invoice, paid with the balance. Keep your usual ones on the Kennel page's Extra charges price list.</span>
+    </div>`;
+}
+
+function readExtraChargeRows() {
+  const prior = new Map((Array.isArray(ctx.draft.extra_charges) ? ctx.draft.extra_charges : []).map((x) => [x.id, x]));
+  return [...document.querySelectorAll('#xc-rows .xc-row')].map((el) => ({
+    ...prior.get(el.dataset.xcId),
+    id: el.dataset.xcId,
+    label: el.querySelector('.xc-label').value,
+    amount: el.querySelector('.xc-amount').value
+  }));
+}
+
+function wireExtraCharges() {
+  document.getElementById('xc-add')?.addEventListener('change', (e) => {
+    const choice = e.target.value;
+    if (!choice) return;
+    ctx.draft = readForm();
+    const preset = priceList().find((p) => p.id === choice) || null;
+    ctx.draft.extra_charges = [...ctx.draft.extra_charges, newExtraCharge(preset)];
+    renderEdit();
+    const labels = document.querySelectorAll('#xc-rows .xc-label');
+    if (!preset) labels[labels.length - 1]?.focus();
+  });
+  document.getElementById('xc-rows')?.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-xc-remove]')?.closest('.xc-row');
+    if (!row) return;
+    ctx.draft = readForm();
+    ctx.draft.extra_charges = ctx.draft.extra_charges.filter((x) => x.id !== row.dataset.xcId);
+    renderEdit();
+  });
+}
+
+// After a save: the deposit was paid through an account set to charge its fee back
+// (Account.fee_charge_back), so offer to add that fee to the balance as an extra
+// charge. Asked once, when it first applies: a sale that already qualified before
+// this save (she said no then) isn't asked again.
+async function offerDepositFeeChargeBack(saved, before) {
+  if (!editionFlags.extraCharges) return saved;
+  const offerFor = (s) => s && depositFeeChargeBack(s, ctx.accountsById.get(s.deposit_paid_via_account_id), depositPaid(s));
+  const offer = offerFor(saved);
+  if (!offer || offerFor(before)) return saved;
+  const ok = await confirmModal({
+    title: `Add the ${offer.label.replace(/ fee$/, '')} fee to the balance?`,
+    message: `The deposit was paid through ${ctx.accountsById.get(saved.deposit_paid_via_account_id)?.name || 'an account'}, which took about ${fmtMoney(offer.amount)}. Add "${offer.label}" (${fmtMoney(offer.amount)}) as an extra charge, so it's on the balance invoice? You can change or remove it on the sale.`,
+    confirmLabel: 'Add it', cancelLabel: 'Skip'
+  });
+  if (!ok) return saved;
+  const extra_charges = [...saleExtraCharges(saved), { id: crypto.randomUUID(), ...offer }];
+  return saleRepo.update(saved.id, { extra_charges });
+}
+
 // --- Read-only view --------------------------------------------------------
 function row(label, valueHtml) {
   return `<dt>${esc(label)}</dt><dd>${valueHtml || '<span class="faint">—</span>'}</dd>`;
@@ -326,6 +418,7 @@ function renderView() {
       ${row('Deposit amount', esc(money(s.deposit_amount)))}
       ${row('Transport fee', esc(money(s.transport_fee)))}
       ${row('Deferred pickup boarding', s.deferred_boarding_amount != null && s.deferred_boarding_amount !== '' ? `${esc(money(s.deferred_boarding_amount))}${s.deferred_boarding_frequency ? ` per ${esc(s.deferred_boarding_frequency)}` : ''}${s.deferred_boarding_duration_days ? ` × ${esc(s.deferred_boarding_duration_days)}` : ''}` : '')}
+      ${saleExtraCharges(s).length ? row('Extra charges', saleExtraCharges(s).map((x) => `${esc(x.label)} <span class="muted">${esc(money(x.amount))}</span>`).join('<br>')) : ''}
       ${row('Sale date', s.sale_date ? esc(fmtDate(s.sale_date)) : '')}
       ${row('Deposit date', s.deposit_date ? esc(fmtDate(s.deposit_date)) : '')}
       ${row('Balance due date', s.balance_due_date ? esc(fmtDate(s.balance_due_date)) : '')}
@@ -382,6 +475,7 @@ function renderEdit() {
           <span class="faint">×</span>
           <input id="f-deferred_boarding_duration_days" type="text" placeholder="count" value="${esc(s.deferred_boarding_duration_days)}" style="flex:1; min-width:70px;">
         </div>`, { hint: 'A boarding rate for a buyer who delayed pickup — the count is the number of frequency units (e.g. 2 = 2 weeks). A plain rate, not a Financials cost.' })}
+      ${extraChargesField(s)}
       ${field('Sale date', `<input id="f-sale_date" type="date" value="${esc(s.sale_date)}">`)}
       ${field('Deposit date', `<input id="f-deposit_date" type="date" value="${esc(s.deposit_date)}">`)}
       ${field('Balance due date', `<input id="f-balance_due_date" type="date" value="${esc(s.balance_due_date)}">`)}
@@ -399,6 +493,7 @@ function renderEdit() {
     </div>`;
 
   wireFeeFields();
+  wireExtraCharges();
   document.getElementById('picker-archived')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     ctx.pickerArchived = e.target.checked;
@@ -493,6 +588,10 @@ function readForm() {
       : ctx.draft.balance_paid_via_account_id || null,
     processing_fee_amount: val('f-processing_fee_amount'),
     fee_passed_to_buyer: !!document.getElementById('f-fee_passed_to_buyer')?.checked,
+    // Extra charges (Pro); Lite keeps whatever was set elsewhere.
+    extra_charges: document.getElementById('xc-rows')
+      ? readExtraChargeRows()
+      : (Array.isArray(ctx.draft.extra_charges) ? ctx.draft.extra_charges : []),
     notes: val('f-notes')
   };
 }
@@ -725,6 +824,11 @@ async function doSave() {
     showError(`Choose why the sale was ${descriptor(SALE_STATUS, candidate.status).label.toLowerCase()}.`);
     return;
   }
+  if (document.getElementById('xc-rows')) {
+    const { list, error } = readExtraCharges(candidate.extra_charges);
+    if (error) { showError(error); return; }
+    candidate.extra_charges = list;
+  }
   try {
     if (isNew) {
       // Kennel scope (Multi-Kennel Scope Spec §6): the sale files under the kennel
@@ -734,12 +838,14 @@ async function doSave() {
         inheritFrom: ctx.dogsById.get(candidate.dog_id)
       });
     }
-    const saved = isNew
+    let saved = isNew
       ? await saleRepo.create(candidate)
       : await saleRepo.update(ctx.original.id, candidate);
 
     // --- Post-save prompt sequence: each awaits the previous, all optional
     // (a Skip never blocks the save that already happened above). ---
+
+    saved = await offerDepositFeeChargeBack(saved, isNew ? null : ctx.original);
 
     // Co-own placement convenience (Data Model v3 §5.6): pairs naturally with
     // adding the buyer to the dog's co_owner_contact_ids — never automatic.

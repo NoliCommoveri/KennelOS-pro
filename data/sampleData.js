@@ -93,7 +93,12 @@ export async function seedSampleData() {
       'Juvenile Hereditary Cataract (DNA)', 'Degenerative Myelopathy (DNA)', 'Holter Monitor (ARVC)'
     ],
     preferred_breeds: [BREED, BOXER],
-    promote_nudge_enabled: true, promote_age_male_months: 14, promote_age_female_months: 11
+    promote_nudge_enabled: true, promote_age_male_months: 14, promote_age_female_months: 11,
+    // Her usual extras (guide §21.2): what a sale's "Add an extra charge" offers.
+    extra_charge_list: [
+      { id: crypto.randomUUID(), label: 'Gold photo package', amount: 150 },
+      { id: crypto.randomUUID(), label: 'Birth-to-8-weeks video', amount: 75 }
+    ]
   });
   const meadowRidge = await kennelRepo.create({
     kennel_name: 'Meadow Ridge Kennels', prefix: 'MDWR', location: 'Concord, NH', is_own_kennel: false
@@ -678,7 +683,7 @@ export async function seedSampleData() {
   // Cedar (Autumn litter) on an OPEN sale to Jamal (Thread C, G2/G9): deposit
   // paid, a future balance-due date, a transport fee, and deferred pickup boarding
   // — so the family companion bundle's computed remaining-balance math is
-  // exercised (price + transport + boarding×units − deposit). A `full`
+  // exercised (price + transport + boarding×units + extra charges − deposit). A `full`
   // registration broadens REGISTRATION_TYPE coverage beyond `limited`.
   const cedarSale = await saleRepo.create({
     kennel_id: thornfield.id,
@@ -686,6 +691,8 @@ export async function seedSampleData() {
     price: 2800, deposit_amount: 500, deposit_date: daysFromToday(-20), balance_due_date: daysFromToday(21),
     transport_fee: 250,
     deferred_boarding_amount: 25, deferred_boarding_frequency: 'Day', deferred_boarding_duration_days: 10,
+    // A photo package from the price list, one invoice line of its own (§21.2).
+    extra_charges: [{ id: crypto.randomUUID(), label: 'Gold photo package', amount: 150 }],
     registration_type: 'full', status: 'deposit_paid', lead_source: 'Referral',
     notes: 'Reserved from the Autumn litter; buyer delayed pickup, boarding with us until then.'
   });
