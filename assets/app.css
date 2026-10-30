@@ -870,8 +870,11 @@ a.kt-loner:hover { color: var(--accent); }
 .dbx-status { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 13px; }
 .dbx-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex: 0 0 auto; }
 .dbx-dot-on { background: var(--accent); }
-.dl-meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
-.dl-meta dt { color: var(--text-muted); font-size: 13px; }
+/* The label column is capped (fit-content) so a long label, like an application
+   question, wraps instead of taking the whole width and squeezing the values to
+   zero (they'd wrap a letter per line off the card's edge and read as blank). */
+.dl-meta { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); gap: 4px 16px; margin: 0; }
+.dl-meta dt { color: var(--text-muted); font-size: 13px; overflow-wrap: anywhere; }
 /* Long unbroken values (a URL, a registration string) must wrap inside the 1fr
    column instead of running off the right edge on narrow screens. min-width:0
    lets the grid cell shrink below its content's intrinsic width. */
