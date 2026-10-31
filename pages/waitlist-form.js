@@ -299,6 +299,7 @@ async function main() {
   ctx.kennel = kennel;
   mountKennelPicker(els.picker, { kennel, own });
   els.back.href = `waitlist.html?kennel=${encodeURIComponent(kennel.id)}`;
+  document.getElementById('wf-kels').href = `kels.html?task=form-setup&kennel=${encodeURIComponent(kennel.id)}`;
   if (own.length > 1) els.title.textContent = `Application form — ${kennel.kennel_name}`;
   ctx.questions = formQuestions(kennel.waitlist_config);
   ctx.faq = formFaq(kennel.waitlist_config);

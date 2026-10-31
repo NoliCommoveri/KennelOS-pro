@@ -283,6 +283,25 @@ export function compareEntries(a, b, programsById) {
     || String(a.id).localeCompare(String(b.id));
 }
 
+// Families she just put on the list, in the order SHE wants them (Kels's Add people,
+// "the order they'll be added"): each one's changes so they sort that way among
+// themselves. The moment the fee was recorded (fee_received_at) orders same-day
+// families, so each is stamped a second after the one before. Only a family she
+// put after someone who paid later needs a moved-by-breeder date: it takes that
+// later date (position_anchor_date). Families already on the list are untouched.
+// → [{ id, changes }]
+export function chosenOrderChanges(entries, now = new Date()) {
+  let floor = '';
+  return entries.map((e, i) => {
+    const own = e.fee_received_date || e.approved_date || '';
+    const date = own < floor ? floor : own;
+    floor = date;
+    const changes = { fee_received_at: new Date(now.getTime() + i * 1000).toISOString() };
+    if (date !== own) changes.position_anchor_date = date;
+    return { id: e.id, changes };
+  });
+}
+
 // Is this entry ON the list (the rolling list's members)?
 export const isOnList = (entry) => Boolean(entry) && !entry.is_archived && entry.status === 'active';
 

@@ -76,6 +76,10 @@ export const possessive = (name) => (/s$/i.test(String(name).trim()) ? `${String
 // as it's answered, so there's no draft to build, approve or come back to.
 export const SETUP_HOW = 'I\'ll go through your kennel\'s settings with you one at a time and save each one as we go. Skip anything you\'re not ready for; you can change it all later. Sound good?';
 
+// "Set up my accounts" (its own menu task, the same part as Getting Started's
+// `accounts`): what she'll do, said after the opener.
+export const ACCOUNTS_HOW = 'Your registry, where you list puppies, how families pay you, suppliers and labs. I\'ll save each one as we go, and you can change them all later on your Accounts page. Ready?';
+
 // While she's new (not one dog record on file, of any kind), the task sits near
 // the top of her menu, however often she's run it; from her first dog on, near
 // the bottom. `dogs`: every dog record, archived ones included.

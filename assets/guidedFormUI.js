@@ -206,7 +206,10 @@ async function loadData(kennel) {
 
 // Run it in `chat`. `resume`: carry on the unfinished draft. `kennelId`: the
 // kennel to set up (Set up my waitlist's handoff), else asked with several.
-export async function runFormTask(chat, { resume = false, kennelId = null, onExit = () => {}, onSaved = () => {}, handoff = null } = {}) {
+// `within`: run inside another task (Add people, before its applicants): after the
+// save, the sensitive records, fee and link steps, then straight back (onExit), with
+// no "add a family" or "anything else?".
+export async function runFormTask(chat, { resume = false, kennelId = null, onExit = () => {}, onSaved = () => {}, handoff = null, within = false } = {}) {
   let draft = resume ? G.pendingFormDraft(getGuidedFormDraft()) : null;
   let kennel = draft ? await kennelRepo.getById(draft.kennelId) : null;
   if (draft && !kennel) { clearGuidedFormDraft(); draft = null; }
@@ -235,13 +238,13 @@ export async function runFormTask(chat, { resume = false, kennelId = null, onExi
     await StepConversation.replay(chat, draft.history);
     await chat.say('Let\'s pick up where we left off.', { typing: 500 });
   }
-  return new FormConversation(chat, draft, await loadData(kennel), { onExit, onSaved, handoff }).start();
+  return new FormConversation(chat, draft, await loadData(kennel), { onExit, onSaved, handoff, within }).start();
 }
 
 class FormConversation extends StepConversation {
-  constructor(chat, draft, data, { onExit, onSaved, handoff }) {
+  constructor(chat, draft, data, { onExit, onSaved, handoff, within = false }) {
     super(chat, draft);
-    Object.assign(this, { data, onExit, onSaved, handoff });
+    Object.assign(this, { data, onExit, onSaved, handoff, within });
   }
 
   persist() {
@@ -281,6 +284,7 @@ class FormConversation extends StepConversation {
     await offerSensitiveRecords(this.chat, { what: 'Applications hold families\' phone numbers, addresses and notes.' });
     await this.fee(kennel);
     await this.shareLink(kennel);
+    if (this.within) { this.onExit('done'); return; }
     await this.applicants(kennel);
     await this.finish(kennel);
   }

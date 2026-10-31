@@ -33,7 +33,7 @@ import { resolveMyKennelId } from '../data/kennelSetup.js';
 import { editionFlags, edition } from '../data/editionConfig.js';
 import { isProOnlyPage } from '../data/proPages.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
-import { setupParts, logoUses, listWords, settingsToCopy, newKennelNameProblem, possessive, accountLine, FEE_ACCOUNT_TYPES, SETUP_HOW } from '../data/kelsSetup.js';
+import { setupParts, logoUses, listWords, settingsToCopy, newKennelNameProblem, possessive, accountLine, FEE_ACCOUNT_TYPES, SETUP_HOW, ACCOUNTS_HOW } from '../data/kelsSetup.js';
 import { kennelChargeList, readExtraCharges } from '../data/extraCharges.js';
 import { paymentLink } from '../data/paymentLinks.js';
 import { EXPORT_MAX_DAYS } from '../data/accountHealth.js';
@@ -48,6 +48,14 @@ import { esc, fmtMoney } from './ui.js';
 export async function runSetupTask(chat, { onExit = () => {}, handoff = null } = {}) {
   if (!(await chat.intro('Welcome aboard! Let\'s get KennelOS set up just the way you like it.', SETUP_HOW))) return onExit('nevermind');
   return new Setup(chat, onExit, handoff).start();
+}
+
+// "Set up my accounts" (Pro, Accounts): Getting Started's vendor and third-party
+// accounts part on its own, for a breeder already set up.
+export async function runAccountsTask(chat, { onExit = () => {} } = {}) {
+  if (!(await chat.intro('Let\'s set up your vendor and third-party accounts!', ACCOUNTS_HOW))) return onExit('nevermind');
+  await new Setup(chat, onExit, null).accounts({ standalone: true });
+  return onExit('done');
 }
 
 const DAY = 86_400_000;
@@ -351,7 +359,7 @@ class Setup {
   // the fee a marketplace or payment service takes, a payment service's link, and
   // (extraCharges) whether only some families pay that way and she charges them its
   // fee (Account.fee_charge_back). Logins and referral codes stay on the Accounts page.
-  async accounts() {
+  async accounts({ standalone = false } = {}) {
     const { accountRepo } = await import('../data/accountRepo.js');
     const chargeBack = !!editionFlags.extraCharges;
     const load = async () => (await accountRepo.getAll()).filter((a) => !a.is_archived).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -359,8 +367,8 @@ class Setup {
     const lines = () => `<ul>${list.map((a) => `<li>${esc(accountLine(a, { chargeBack }))}</li>`).join('')}</ul>`;
     const why = `Marketplaces and payment services take a fee, so I'll keep it, and your income is what you actually received.${chargeBack ? ' If a payment service costs you a fee only when a family chooses it (PayPal sent as business, say), I can add that fee to their balance.' : ''}`;
     await this.chat.say(list.length
-      ? `Next, your vendor and third-party accounts. Here's what you have:${lines()}Want to add one, or change one?`
-      : `Next, your vendor and third-party accounts: your registry, where you list puppies, how families pay you (Zelle, PayPal, Stripe…), suppliers, labs. ${why} Want to set them up?`);
+      ? `${standalone ? 'Here are your accounts' : 'Next, your vendor and third-party accounts. Here\'s what you have'}:${lines()}Want to add one, or change one?`
+      : `${standalone ? 'You don\'t have any yet. Think of' : 'Next, your vendor and third-party accounts:'} your registry, where you list puppies, how families pay you (Zelle, PayPal, Stripe…), suppliers, labs. ${why} Want to set them up?`);
     for (;;) {
       const pick = await this.chat.choose([
         { label: list.length ? 'Add another' : 'Add one', value: 'add', primary: !list.length },

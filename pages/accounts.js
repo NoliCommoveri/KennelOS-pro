@@ -655,6 +655,8 @@ function openForm(existing = null) {
 }
 
 els.add.addEventListener('click', () => openForm());
+// Kels's Set up my accounts (never in the Demo, which saves nothing).
+document.getElementById('btn-kels').hidden = isDemo();
 els.search.addEventListener('input', render);
 els.typeFilter.addEventListener('change', render);
 els.showArchived.addEventListener('change', render);

@@ -9,19 +9,22 @@
 //
 // After the save: her dogs with no breeder kennel, to link to a kennel ("Do you
 // want to link any kennels to dogs you own as the kennel who bred it?"); then,
-// with the waitlist (editionFlags.waitlist, a list set up), a buyer put on it in
-// the chat (assets/kelsApplicant.js, imported only then), linked to their contact.
+// with the waitlist (editionFlags.waitlist), "Do any of these need to go on your
+// waitlist?" (ticked; the waitlist and its form set up here first when they aren't),
+// then each one's application (assets/kelsApplicant.js, imported only then), linked
+// to their contact and approved, with the fee settled, and their order in line.
 // Pro-only (proPages.js); pages/kels.js imports it on start.
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { ownKennels } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { waitlistIsSetUp } from '../data/waitlistRules.js';
+import { waitlistIsSetUp, waitlistConfig, feeForEntry, isFeeWaived, compareEntries, overallPositions, chosenOrderChanges } from '../data/waitlistRules.js';
+import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { getGuidedPeopleDraft, setGuidedPeopleDraft, clearGuidedPeopleDraft } from '../data/settings.js';
 import { CONTACT_TYPE, descriptor } from '../data/vocab.js';
 import * as G from '../data/guidedPeople.js';
-import { esc } from './ui.js';
+import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
 import {
   StepConversation, tile, field, input, options, val, pagesPrefix,
   kennelPicker, wireKennelPicker, readKennelPicker, VET_WHY, VET_NAME_HINT
@@ -381,40 +384,184 @@ class PeopleConversation extends StepConversation {
     if (res.done) await this.chat.say(`Linked. ✓ ${res.result.length === 1 ? 'Its page shows' : 'Their pages show'} who bred ${res.result.length === 1 ? 'it' : 'them'} now.`, { typing: 500 });
   }
 
-  // With a waitlist set up: put a buyer she just added on it, in the chat.
+  // With the waitlist (Pro): "Do any of these need to go on your waitlist?", every
+  // person she just added who isn't on one already, ticked. With no waitlist set up
+  // yet, Set up my waitlist and then Set up my application form run here first.
+  // Then the kennel (with several), and for each ticked person: Buyer added to their
+  // contact types, their application (kelsApplicant), and approval (she added them
+  // herself): has the fee been paid, not yet, or not charging (a program, a new
+  // one, or waived for just them). Last, the order of the ones now on the list.
   async waitlist(saved) {
-    const buyers = saved.filter((c) => (c.contact_type || []).includes('buyer'));
-    if (!buyers.length) return;
-    const kennels = (await ownKennels()).filter((k) => !k.is_archived && waitlistIsSetUp(k));
-    if (!kennels.length) return;
-    const one = buyers.length === 1 ? buyers[0] : null;
-    await this.chat.say(`Would you like to put ${one ? esc(one.name) : 'any of them'} on your waitlist? I'll ask your application's questions, and they'll be in your applications, ready for you to approve.`);
+    const people = saved.filter((c) => (c.waitlist_status || 'none') !== 'active');
+    if (!people.length) return;
+    const one = people.length === 1 ? people[0] : null;
+    const res = await this.chat.form({
+      title: one
+        ? `<strong>Does ${esc(one.name)} need to go on your waitlist?</strong><span class="kels-lead">I'll ask your application's questions and add them to your list.</span>`
+        : '<strong>Do any of these need to go on your waitlist?</strong><span class="kels-lead">Tick them, and I\'ll ask your application\'s questions for each and add them to your list.</span>',
+      html: `<div class="field gl-field">${people.map((c) => `<label class="check-inline"><input type="checkbox" data-wl="${esc(c.id)}"${one ? ' checked' : ''}> ${esc(c.name)}${c.contact_type?.length ? ` <span class="faint">${esc(typeText(c.contact_type))}</span>` : ''}</label>`).join('<br>')}</div>`,
+      submitLabel: one ? 'Yes, add them' : 'Add them',
+      cancelLabel: one ? 'No' : 'None of them',
+      submit: (root) => {
+        const ids = [...root.querySelectorAll('[data-wl]:checked')].map((el) => el.dataset.wl);
+        return ids.length ? people.filter((c) => ids.includes(c.id)) : `Tick who goes on the waitlist, or choose ${one ? 'No' : 'None of them'}.`;
+      },
+      reply: (picked) => picked.map((c) => c.name).join(', ')
+    });
+    if (!res.done) return;
+    const picked = res.result;
+    const kennel = await this.waitlistKennel();
+    if (!kennel) return;
     const { askApplicant } = await import('./kelsApplicant.js');
-    let left = [...buyers];
-    for (;;) {
-      const pick = await this.chat.choose([
-        ...left.map((c) => ({ label: one ? 'Yes, add them' : c.name, value: c.id, primary: Boolean(one) })),
-        { label: one ? 'Not now' : 'That\'s all for now', value: '' }
-      ]);
-      if (!pick) return;
-      const contact = left.find((c) => c.id === pick);
-      let kennel = kennels[0];
-      if (kennels.length > 1) {
-        await this.chat.say(`<strong>Which kennel's waitlist?</strong>`, { typing: 400 });
-        const kid = await this.chat.choose(kennels.map((k) => ({ label: k.kennel_name, value: k.id })));
-        kennel = kennels.find((k) => k.id === kid);
-      }
+    const onList = [];
+    const feeDue = [];
+    for (const [i, contact] of picked.entries()) {
+      await contactRepo.ensureType(contact.id, 'buyer');
       const entry = await askApplicant(this.chat, {
         kennel, contact,
-        title: `<strong>Tell me about ${esc(contact.name)}'s application.</strong><span class="kels-lead">Your application's questions, so it matches what families fill in online.</span>`
+        title: `<strong>${esc(contact.name)}'s application${picked.length > 1 ? ` (${i + 1} of ${picked.length})` : ''}.</strong><span class="kels-lead">Your application's questions, so it matches what families fill in online. Their name, email and phone are filled in.</span>`
       });
-      if (entry) {
-        await this.chat.say(`Added! ${esc(contact.name)} is in your applications, ready for you to approve.`, { typing: 500 });
-        left = left.filter((c) => c !== contact);
-      }
-      if (!left.length || one) return;
-      await this.chat.say('Anyone else?', { typing: 300 });
+      if (!entry) { await this.chat.say(`Okay, I'll leave ${esc(contact.name)} off for now.`, { typing: 300 }); continue; }
+      const done = await this.approveApplicant(kennel, entry, contact);
+      (done.status === 'active' ? onList : feeDue).push({ entry: done, contact });
     }
+    if (feeDue.length) {
+      await this.chat.say(`${esc(G.draftLabel({ people: feeDue.map((x) => x.contact) }))} ${feeDue.length === 1 ? 'is' : 'are'} approved with the fee due. Mark it received on the waitlist when it comes in, and they'll take their place in line.`, { typing: 400 });
+    }
+    if (onList.length) await this.listOrder(kennel, onList);
+  }
+
+  // The kennel whose waitlist they go on: one set up (asked with several), or, with
+  // none set up, Set up my waitlist then Set up my application form, right here.
+  async waitlistKennel() {
+    const setUp = async () => (await ownKennels()).filter((k) => !k.is_archived && waitlistIsSetUp(k));
+    let kennels = await setUp();
+    if (!kennels.length) {
+      await this.chat.say('Your waitlist isn\'t set up yet, so let\'s do that first: your fee, offers and programs, then your application form. Then I\'ll come right back to them.', { typing: 500 });
+      const go = await this.chat.choose([{ label: 'Set up my waitlist', value: 'go', primary: true }, { label: 'Not now', value: '' }]);
+      if (!go) return null;
+      const { runWaitlistSetupTask } = await import('./waitlistSetupUI.js');
+      await new Promise((resolve) => { runWaitlistSetupTask(this.chat, { onExit: resolve, within: true }); });
+      kennels = await setUp();
+      if (!kennels.length) { await this.chat.say('No problem. Once your waitlist is set up, you can add them from the Waitlist page.', { typing: 300 }); return null; }
+      await this.chat.say('Now your application form: the questions families answer. I\'ll use it for their applications.', { typing: 400 });
+      const form = await this.chat.choose([{ label: 'Set up my application form', value: 'go', primary: true }, { label: 'Use the standard one for now', value: '' }]);
+      if (form) {
+        const { runFormTask } = await import('./guidedFormUI.js');
+        await new Promise((resolve) => { runFormTask(this.chat, { kennelId: kennels.length === 1 ? kennels[0].id : null, onExit: resolve, within: true }); });
+        kennels = await setUp();
+      }
+      await this.chat.say('Okay, back to your applicants!', { typing: 300 });
+    }
+    if (kennels.length === 1) return kennels[0];
+    await this.chat.say('<strong>Which kennel\'s waitlist?</strong>', { typing: 400 });
+    const kid = await this.chat.choose(kennels.map((k) => ({ label: k.kennel_name, value: k.id })));
+    return kennels.find((k) => k.id === kid);
+  }
+
+  // Approve the application she just entered (waitlistActions.approve) and settle the
+  // fee: paid (when, how), not yet (fee due), or not charging (an existing waived
+  // program, a new program, or waived for just them). No fee set, or a waived program
+  // chosen on the application: straight onto the list. → the entry as saved.
+  async approveApplicant(kennel, entry, contact) {
+    const A = await import('../data/waitlistActions.js');
+    const { waitlistProgramRepo } = await import('../data/waitlistProgramRepo.js');
+    const config = waitlistConfig(kennel);
+    const programs = (await waitlistProgramRepo.getByKennel(kennel.id)).filter((p) => !p.is_archived);
+    const program = programs.find((p) => p.id === entry.waitlist_program_id) || null;
+    const fee = feeForEntry(config, program);
+    const today = todayYMD();
+    if (!(fee > 0)) {
+      const approved = await A.approve(entry.id, { date: today, contactId: contact.id });
+      return approved.status === 'active' ? approved : A.feeReceived(entry.id, { date: today, amount: null });
+    }
+    const who = esc(contact.name);
+    await this.chat.say(`Has ${who} already paid the ${esc(fmtMoney(fee))} application fee?`, { typing: 300 });
+    const pick = await this.chat.choose([
+      { label: 'Yes, they paid', value: 'paid', primary: true },
+      { label: 'Not yet', value: 'due' },
+      { label: 'Not charging for this applicant', value: 'free' }
+    ]);
+    if (pick === 'paid') {
+      const res = await this.chat.form({
+        title: `<strong>When did ${who} pay?</strong><span class="kels-lead">Their place in line starts the day they paid.</span>`,
+        html: `<div class="ck-inline">${field('Paid on', input('wa-paid', today, { type: 'date' }))}${field('How (optional)', input('wa-method', '', { placeholder: 'e.g. Zelle', list: 'wa-methods' }))}</div>
+          <datalist id="wa-methods">${['Cash', 'Check', 'Venmo', 'Zelle', 'PayPal', 'Credit/debit card'].map((m) => `<option value="${esc(m)}">`).join('')}</datalist>`,
+        submitLabel: 'Save',
+        cancelLabel: 'Not yet, after all',
+        submit: (root) => {
+          const date = val(root, 'wa-paid');
+          if (!date) return 'When did they pay?';
+          if (date > today) return 'That date is in the future.';
+          return { date, method: val(root, 'wa-method') };
+        },
+        reply: (r) => `Paid ${fmtDate(r.date)}${r.method ? `, ${r.method}` : ''}`
+      });
+      await A.approve(entry.id, { date: today, contactId: contact.id });
+      if (!res.done) return waitlistEntryRepo.getById(entry.id);
+      return A.feeReceived(entry.id, { date: res.result.date, amount: fee, method: res.result.method });
+    }
+    if (pick === 'free') return this.waiveFee(kennel, config, programs, entry, contact);
+    return A.approve(entry.id, { date: today, contactId: contact.id });
+  }
+
+  // "Not charging for this applicant": a program that waives the fee (one she has, or
+  // a new one: Set up my waitlist's program form, fee prefilled at $0), or waived for
+  // just them. A new program that still charges is linked, and the fee falls due.
+  async waiveFee(kennel, config, programs, entry, contact) {
+    const A = await import('../data/waitlistActions.js');
+    const today = todayYMD();
+    const waived = programs.filter((p) => isFeeWaived(config, p));
+    await this.chat.say(`Got it. Is that because of a program, like repeat buyers, or just for ${esc(contact.name)}?`, { typing: 300 });
+    const pick = await this.chat.choose([
+      ...waived.map((p) => ({ label: `${p.name} program`, value: p.id })),
+      { label: 'Set up a new program', value: 'new' },
+      { label: `Just ${contact.name}`, value: 'one', primary: !waived.length }
+    ]);
+    let programId = waived.find((p) => p.id === pick)?.id || null;
+    if (pick === 'new') {
+      const { askNewProgram } = await import('./waitlistSetupUI.js');
+      const made = await askNewProgram(this.chat, kennel, config, { fee: 0, title: '<strong>A new program</strong><span class="kels-lead">The fee is set to $0 (waived). Change it if they pay a different amount.</span>' });
+      programId = made ? made.id : null;
+      if (!made) await this.chat.say(`Okay, I'll waive it for just ${esc(contact.name)}.`, { typing: 300 });
+    }
+    const approved = await A.approve(entry.id, { date: today, contactId: contact.id, programId });
+    if (approved.status === 'active') return approved;
+    if (programId) return approved; // a new program that still charges: the fee is due
+    return A.feeReceived(entry.id, { date: today, amount: 0, method: 'Waived' });
+  }
+
+  // The new families now on the list, numbered in the order they'll be in line among
+  // themselves; she can change the numbers (waitlistRules.chosenOrderChanges). Then
+  // each one's place on the whole list.
+  async listOrder(kennel, onList) {
+    const { waitlistProgramRepo } = await import('../data/waitlistProgramRepo.js');
+    const programsById = await waitlistProgramRepo.getMapForKennel(kennel.id);
+    const fresh = async () => Promise.all(onList.map(async (x) => ({ ...x, entry: await waitlistEntryRepo.getById(x.entry.id) })));
+    let rows = (await fresh()).sort((a, b) => compareEntries(a.entry, b.entry, programsById));
+    if (rows.length > 1) {
+      const res = await this.chat.form({
+        title: '<strong>Here\'s the order they\'ll be in line.</strong><span class="kels-lead">Among these families, by the day each paid (or today, with no fee). Change the numbers to reorder them.</span>',
+        html: `<div class="field gl-field">${rows.map((x, i) => `<label class="check-inline" style="gap:10px;"><input type="number" min="1" max="${rows.length}" step="1" data-order="${esc(x.entry.id)}" value="${i + 1}" style="width:4.5em;" aria-label="${esc(x.contact.name)}'s place"> ${esc(x.contact.name)}</label>`).join('<br>')}</div>`,
+        submitLabel: 'Looks right',
+        cancelLabel: 'Keep this order',
+        submit: (root) => {
+          const nums = [...root.querySelectorAll('[data-order]')].map((el) => ({ id: el.dataset.order, n: Number(el.value) }));
+          const seen = new Set(nums.map((x) => x.n));
+          if (nums.some((x) => !Number.isInteger(x.n) || x.n < 1 || x.n > rows.length) || seen.size !== rows.length) return `Use each number from 1 to ${rows.length} once.`;
+          return nums.sort((a, b) => a.n - b.n).map((x) => rows.find((r) => r.entry.id === x.id));
+        },
+        reply: (order) => order.map((x, i) => `${i + 1}. ${x.contact.name}`).join(', ')
+      });
+      if (res.done && res.result.some((x, i) => x !== rows[i])) {
+        for (const { id, changes } of chosenOrderChanges(res.result.map((x) => x.entry))) await waitlistEntryRepo.update(id, changes);
+        rows = await fresh();
+      }
+    }
+    const all = await waitlistEntryRepo.getByKennel(kennel.id);
+    const places = overallPositions(all, kennel.id, programsById);
+    rows.sort((a, b) => (places.get(a.entry.id) || 0) - (places.get(b.entry.id) || 0));
+    await this.chat.say(`Added! ${rows.map((x) => `${esc(x.contact.name)} is <strong>#${places.get(x.entry.id)}</strong>`).join(', ')} on your list.`, { typing: 500 });
   }
 
   async finish(saved) {

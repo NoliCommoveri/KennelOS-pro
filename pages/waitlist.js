@@ -55,6 +55,7 @@ async function main() {
   // One primary action; everything else lives under Manage. (CSV import is on the
   // Import/Export page.)
   els.actions.innerHTML = `
+    <a class="btn" href="kels.html?task=waitlist-setup&${kq}">✨ Set up your waitlist with Kels</a>
     <a class="btn btn-primary" href="waitlist-entry.html?new=1&${kq}">+ New application</a>
     <div class="action-menu" id="wl-manage">
       <button class="btn" type="button" aria-haspopup="menu" aria-expanded="false">Manage ▾</button>

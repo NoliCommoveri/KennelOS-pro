@@ -38,14 +38,51 @@ const check = (id, label, on, attrs = '') => `<label class="check-inline ws-chec
 const group = (title, inner, hint = '') => `<fieldset class="ws-group"><legend>${esc(title)}</legend>${hint ? `<p class="field-hint">${hint}</p>` : ''}${inner}</fieldset>`;
 const numOrNull = (v) => (String(v ?? '').trim() === '' ? null : Number(v));
 
-export async function runWaitlistSetupTask(chat, { onExit = () => {}, handoff = null } = {}) {
+// A new program for `kennel`, in the chat → the saved program, or null on "Never
+// mind". Set up my waitlist's programs step, and Add people's "Not charging for
+// this applicant" (`fee` 0 prefills a waived fee). `config`: waitlistConfig(kennel).
+export async function askNewProgram(chat, kennel, config, { fee = null, title = '<strong>A new program</strong>' } = {}) {
+  const res = await chat.form({
+    title,
+    html: `${field('Name', '<input id="wp-name" type="text" placeholder="e.g. Repeat buyers">')}
+      <div class="ck-inline">
+        ${field('Place in line', `<select id="wp-priority">${WAITLIST_PRIORITY.map((o) => opt(o.value, o.label, o.value === 'standard')).join('')}</select>`)}
+        ${field('Application fee', `<input id="wp-fee" type="number" min="0" step="0.01" value="${fee == null ? '' : esc(fee)}" placeholder="${config.fee_amount != null ? `Normal (${esc(fmtMoney(config.fee_amount))})` : 'Normal'}">`, '0 waives it.')}
+        ${field('Days to accept', `<input id="wp-respond" type="number" min="1" step="1" placeholder="Normal (${esc(config.respond_days)})">`)}
+      </div>
+      ${group('Also', check('wp-passes', 'Their passes don\'t count toward removal', false) + check('wp-pause', 'They may pause without it counting against them', false))}
+      ${field('Description for families (optional)', '<textarea id="wp-public" rows="2"></textarea>', 'Blank keeps the program private.')}`,
+    submitLabel: 'Save program',
+    cancelLabel: 'Never mind',
+    submit: async (root) => {
+      const q = (s) => root.querySelector(s);
+      const name = q('#wp-name').value.trim();
+      if (!name) return 'Give the program a name.';
+      const respond = numOrNull(q('#wp-respond').value);
+      if (respond != null && !(Number.isInteger(respond) && respond >= 1)) return 'Days to accept must be at least 1.';
+      return waitlistProgramRepo.create({
+        kennel_id: kennel.id, name, priority: q('#wp-priority').value,
+        fee_override: numOrNull(q('#wp-fee').value), respond_days_override: respond,
+        passes_count: !q('#wp-passes').checked, pause_allowed: q('#wp-pause').checked,
+        public_description: q('#wp-public').value.trim()
+      });
+    },
+    reply: (p) => p.name
+  });
+  return res.done ? res.result : null;
+}
+
+// `kennelId`: the kennel to set up (the Waitlist page's button), skipping "which kennel?".
+// `within`: run inside Add people, before its applicants: no "families you already
+// have" step (those are the people she's adding).
+export async function runWaitlistSetupTask(chat, { onExit = () => {}, handoff = null, kennelId = null, within = false } = {}) {
   if (!(await chat.intro('Ooh, love it, let\'s get your waitlist ready for families!'))) return onExit('nevermind');
-  return new Setup(chat, onExit, handoff).start();
+  return new Setup(chat, onExit, handoff, kennelId, within).start();
 }
 
 class Setup {
-  constructor(chat, onExit, handoff) {
-    Object.assign(this, { chat, onExit, handoff, saved: 0 });
+  constructor(chat, onExit, handoff, kennelId = null, within = false) {
+    Object.assign(this, { chat, onExit, handoff, kennelId, within, saved: 0 });
     this.onlineOffered = isWaitlistOnlineOffered();
   }
 
@@ -72,7 +109,7 @@ class Setup {
       await this.chat.say('You\'ll need your kennel set up first. Once it is, come back and we\'ll build your waitlist together.');
       return this.onExit('done');
     }
-    let kennel = kennels.length === 1 ? kennels[0] : null;
+    let kennel = kennels.find((k) => k.id === this.kennelId) || (kennels.length === 1 ? kennels[0] : null);
     if (!kennel) {
       const active = await getActiveKennel();
       await this.chat.say('<strong>Which kennel\'s waitlist are we setting up?</strong>');
@@ -89,7 +126,7 @@ class Setup {
     if (waitlistIsSetUp(this.kennel)) return this.changeMenu(true);
 
     await this.chat.say(`Let's build ${esc(this.kennel.kennel_name || 'your kennel')}'s waitlist. It's a few short screens, and you can change any of it later.`, { typing: 700 });
-    for (const step of ['fee', 'offers', 'online', 'programs', 'families']) {
+    for (const step of ['fee', 'offers', 'online', 'programs', ...(this.within ? [] : ['families'])]) {
       const r = await this.runSection(step, { walk: true });
       if (r === 'left') return null;
       if (r === 'stop') break;
@@ -296,37 +333,11 @@ class Setup {
   }
 
   async programForm() {
-    const res = await this.chat.form({
-      title: '<strong>A new program</strong>',
-      html: `${field('Name', '<input id="wp-name" type="text" placeholder="e.g. Repeat buyers">')}
-        <div class="ck-inline">
-          ${field('Place in line', `<select id="wp-priority">${WAITLIST_PRIORITY.map((o) => opt(o.value, o.label, o.value === 'standard')).join('')}</select>`)}
-          ${field('Application fee', `<input id="wp-fee" type="number" min="0" step="0.01" placeholder="${this.config.fee_amount != null ? `Normal (${esc(fmtMoney(this.config.fee_amount))})` : 'Normal'}">`, '0 waives it.')}
-          ${field('Days to accept', `<input id="wp-respond" type="number" min="1" step="1" placeholder="Normal (${esc(this.config.respond_days)})">`)}
-        </div>
-        ${group('Also', check('wp-passes', 'Their passes don\'t count toward removal', false) + check('wp-pause', 'They may pause without it counting against them', false))}
-        ${field('Description for families (optional)', '<textarea id="wp-public" rows="2"></textarea>', 'Blank keeps the program private.')}`,
-      submitLabel: 'Save program',
-      cancelLabel: 'Never mind',
-      submit: async (root) => {
-        const q = (s) => root.querySelector(s);
-        const name = q('#wp-name').value.trim();
-        if (!name) return 'Give the program a name.';
-        const respond = numOrNull(q('#wp-respond').value);
-        if (respond != null && !(Number.isInteger(respond) && respond >= 1)) return 'Days to accept must be at least 1.';
-        const p = await waitlistProgramRepo.create({
-          kennel_id: this.kennel.id, name, priority: q('#wp-priority').value,
-          fee_override: numOrNull(q('#wp-fee').value), respond_days_override: respond,
-          passes_count: !q('#wp-passes').checked, pause_allowed: q('#wp-pause').checked,
-          public_description: q('#wp-public').value.trim()
-        });
-        this.saved++;
-        await this.reload();
-        return p;
-      },
-      reply: (p) => p.name
-    });
-    return res.done ? res.result : null;
+    const p = await askNewProgram(this.chat, this.kennel, this.config);
+    if (!p) return null;
+    this.saved++;
+    await this.reload();
+    return p;
   }
 
   // --- 5. Families she already has ---------------------------------------------------------

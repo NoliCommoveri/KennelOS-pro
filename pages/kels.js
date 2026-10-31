@@ -19,7 +19,8 @@
 // throws that draft away. The header's "Cancel" shows while any task runs and,
 // once she says she's sure, stops it (and discards a resumable task's draft).
 // `beforeStart` can redirect a start (an unfinished draft of the same task).
-// URL: ?task=<id> starts that task straight away; &litter=<id> hands it a litter
+// URL: ?task=<id> starts that task straight away; &kennel=<id> hands it a kennel
+// (the waitlist and application form tasks); &litter=<id> hands it a litter
 // (an Expected litter's birth, or the litter to check on).
 import { createChat, KELS, kelsAvatar, kelsWelcome } from '../assets/kelsChat.js';
 import { runFindTask } from '../assets/kelsFindUI.js';
@@ -30,7 +31,7 @@ import { runTidyTask } from '../assets/tidyUpUI.js';
 import { runPrepTask, prepState } from '../assets/prepPupsUI.js';
 import { runHealthTask } from '../assets/accountHealthUI.js';
 import { runDogsTask, pendingDogsDraft, discardGuidedDogsDraft } from '../assets/guidedDogsUI.js';
-import { runSetupTask } from '../assets/kelsSetupUI.js';
+import { runSetupTask, runAccountsTask } from '../assets/kelsSetupUI.js';
 import { setupPriority } from '../data/kelsSetup.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { pendingPeopleDraft } from '../data/guidedPeople.js';
@@ -267,6 +268,18 @@ const TASKS = [
     run: (opts) => runForm(opts)
   },
   {
+    id: 'accounts-setup',
+    label: () => 'Set up my accounts',
+    sub: 'Vendors, marketplaces, payment services and their fees',
+    keywords: ['accounts', 'account', 'vendor', 'vendors', 'third party', 'third-party', 'marketplace', 'good dog', 'puppyfind',
+      'registry', 'akc', 'supplier', 'lab', 'insurance', 'payment', 'pay', 'paypal', 'zelle', 'venmo', 'stripe', 'square',
+      'fee', 'fees', 'processing fee', 'business', 'charge back', 'chargeback', 'payment link'],
+    // Pro only (Accounts), and never in the Demo, which saves nothing.
+    available: () => editionFlags.accounts && !editionFlags.demoMode,
+    priority: () => 22,
+    run: (opts) => runAccountsTask(chat, opts)
+  },
+  {
     id: 'account-health',
     label: () => 'Check account health',
     sub: isCloudAvailable() ? 'Your backups, this device, and your account' : 'Your backups and this device',
@@ -417,7 +430,7 @@ async function main() {
   // Sent straight to a task: she still greets and asks, and the task is the answer.
   await chat.say(kelsWelcome(), { typing: 900 });
   chat.you(asked.label(await state()));
-  await startTask(asked, { litterId: param('litter') || null });
+  await startTask(asked, { litterId: param('litter') || null, kennelId: param('kennel') || null });
 }
 
 main().catch((e) => chat.say(`Sorry, something went wrong: ${esc(e.message || String(e))}`, { typing: 0 }));
