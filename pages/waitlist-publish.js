@@ -91,7 +91,7 @@ async function renderText(kennel) {
       <h2 style="margin:0;">Copy the list as text</h2>
       <span class="pill-row"><span class="field-hint" id="pub-copied"></span><button class="btn btn-primary btn-sm" id="pub-copy">Copy</button></span>
     </div>
-    <p class="field-hint">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details and programs are left out, and so are paused families. A family holding a turn shows as "Currently deciding" in their place. It's a snapshot: copy it again after the list changes.</p>
+    <p class="field-hint">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details and programs are left out${waitlistConfig(kennel).public_show_paused ? '. Paused families show "Skipped until" the date their pause ends' : ', and so are paused families (Waitlist settings can show them)'}. A family holding a turn shows as "Currently deciding" in their place. It's a snapshot: copy it again after the list changes.</p>
     <textarea id="pub-text-body" readonly style="width:100%;min-height:220px;font-family:inherit;">${esc(text)}</textarea>`;
   els.text.querySelector('#pub-copy').addEventListener('click', async () => {
     const ta = els.text.querySelector('#pub-text-body');

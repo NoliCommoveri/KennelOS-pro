@@ -38,6 +38,7 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   checkin_months: 6,
   soon_notice_text: '', // blank = SOON_NOTICE_DEFAULT
   public_intro_text: '', // blank = PUBLIC_INTRO_DEFAULT (the message under her public list's heading)
+  public_show_paused: false, // paused families on the public list, "Skipped until …" in place of their preferences
   email_templates: null, // her wording per email kind (waitlistEmails.js; W2 step 6); null/blank = the defaults
   email_reminders: true, // the server's reminder and "Ready now?" emails while the list is online (W2 step 7)
   pass_reasons: null, // her reasons for a pass (Spec §16.5); null = DEFAULT_PASS_REASONS
@@ -631,6 +632,21 @@ export function isReadyHeld(entry, today, config = null) {
 // place is kept; and they're left off the public list with their number skipped.
 export function isPaused(entry, today, config = null) {
   return isManuallyPaused(entry, today) || isReadyHeld(entry, today, config);
+}
+
+// When a paused family's pause ends, for the public list's "Skipped until …": her
+// own pause's paused_until, or the readiness hold's readyFromDate (the later when
+// both apply). Null when not paused, or when the hold has no end date yet ("Ready
+// now?" unanswered, or answered No with their pause request waiting for her).
+export function pausedUntil(entry, today, config = null) {
+  const dates = [];
+  if (isManuallyPaused(entry, today)) dates.push(entry.paused_until);
+  if (isReadyHeld(entry, today, config)) {
+    const from = readyFromDate(entry);
+    if (!(from && today < from)) return null;
+    dates.push(from);
+  }
+  return dates.length ? dates.sort().at(-1) : null;
 }
 
 // Is the family listening for this litter? Everyone is, unless they've chosen
@@ -1247,7 +1263,10 @@ export const listedName = (entry, fullName) => (entry && entry.private_listing ?
 // The public list for one kennel: the allow-listed fields only (position, first
 // name + last initial, or the private form of it, sex preference, date added). Positions are the REAL §6.1
 // positions; paused families are left out and their numbers skipped (#1, #2, #4),
-// so nobody's public number shifts when a pause ends (decided 2026-10-06).
+// so nobody's public number shifts when a pause ends (decided 2026-10-06). With
+// config.public_show_paused on, paused families show at their number instead, with
+// `skipped: true` and `skipped_until` (pausedUntil, or null) in place of their sex
+// preference.
 // Listen-only families show, with no marker. Programs, notes and money never do.
 // `nameOf(entry)` returns the family's full name.
 // `deciding(entry)`: a family holding a turn (placeHidden). Their row stays, at
@@ -1260,14 +1279,22 @@ export const DECIDING_LABEL = 'Currently deciding';
 export function publicList(entries, kennelId, programsById = new Map(), { today, nameOf = (e) => entryName(e, null), deciding = () => false, config = null } = {}) {
   return rankedList(entries, kennelId, programsById)
     .map((e, i) => ({ entry: e, position: i + 1 }))
-    .filter(({ entry }) => !isPaused(entry, today, config))
-    .map(({ entry, position }) => ({
+    .map(({ entry, position }) => ({ entry, position, paused: isPaused(entry, today, config) }))
+    .filter(({ paused }) => !paused || Boolean(config && config.public_show_paused))
+    .map(({ entry, position, paused }) => ({
       position,
       name: deciding(entry) ? DECIDING_LABEL : listedName(entry, nameOf(entry)),
-      pref_sex: entry.pref_sex || 'any',
+      ...(paused ? { skipped: true, skipped_until: pausedUntil(entry, today, config) } : { pref_sex: entry.pref_sex || 'any' }),
       added: anchorDate(entry),
       ...(deciding(entry) ? { deciding: true } : {})
     }));
+}
+
+// What a public-list row shows under "Wants": the sex preference, or for a paused
+// family (shown only with public_show_paused) "Skipped until …" / "Skipped for now".
+export function publicWants(row, fmtDate = (d) => d) {
+  if (row.skipped) return row.skipped_until ? `Skipped until ${fmtDate(row.skipped_until)}` : 'Skipped for now';
+  return PUBLIC_SEX[row.pref_sex] || 'Either';
 }
 
 const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
@@ -1277,7 +1304,7 @@ const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
 export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d) => d } = {}) {
   const head = `${kennelName ? `${kennelName} Waitlist` : 'Waitlist'}${today ? ` (updated ${fmtDate(today)})` : ''}`;
   if (!rows.length) return `${head}\nNo families to show right now.`;
-  const lines = rows.map((r) => `#${r.position} ${r.name} · ${PUBLIC_SEX[r.pref_sex] || 'Either'} · added ${fmtDate(r.added)}`);
+  const lines = rows.map((r) => `#${r.position} ${r.name} · ${publicWants(r, fmtDate)} · added ${fmtDate(r.added)}`);
   const gaps = rows.some((r, i) => r.position !== i + 1);
   return [head, '', ...lines, ...(gaps ? ['', 'Note: in special circumstances, some applicant names may not be displayed above. Their place is being held, but they are not currently eligible for available pups.'] : [])].join('\n');
 }

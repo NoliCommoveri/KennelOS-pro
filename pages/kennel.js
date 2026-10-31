@@ -408,6 +408,8 @@ function waitlistCard(k) {
         <div class="field field-wide">
           <label class="check-inline"><input id="wl-noresp" type="checkbox"${c.no_response_counts_as_pass ? ' checked' : ''}> No response by the deadline counts as a pass</label>
           <label class="check-inline"><input id="wl-colors" type="checkbox"${c.color_matching ? ' checked' : ''}> Match on color (only offer pups in a color the family listed)</label>
+          <label class="check-inline"><input id="wl-show-paused" type="checkbox"${c.public_show_paused ? ' checked' : ''}> Show paused families on the public list</label>
+          <span class="field-hint">They keep their number and show "Skipped until" the date their pause ends in place of what they want. Unticked, they're left off and their number is skipped. Applies to the list online and the list copied as text.</span>
         </div>
         <div class="field field-wide"><label>Offer the next family automatically when…</label>
           ${WAITLIST_AUTO_OFFER_TRIGGER.map((t) => `<label class="check-inline"><input type="checkbox" data-wl-auto="${esc(t.value)}"${c.auto_offer_on.includes(t.value) ? ' checked' : ''}> ${esc(t.label)}</label>`).join('')}
@@ -507,6 +509,7 @@ async function onSaveWaitlist() {
     ...(q('#wl-fee-when') ? { fee_link_when: q('#wl-fee-when').value } : {}),
     no_response_counts_as_pass: q('#wl-noresp').checked,
     color_matching: q('#wl-colors').checked,
+    public_show_paused: q('#wl-show-paused').checked,
     auto_offer_on: [...els.config.querySelectorAll('[data-wl-auto]:checked')].map((b) => b.dataset.wlAuto),
     // Stored only when she's changed it, so the default wording stays the default.
     soon_notice_text: q('#wl-soon-text').value.trim() === SOON_NOTICE_DEFAULT.trim() ? '' : q('#wl-soon-text').value.trim(),
