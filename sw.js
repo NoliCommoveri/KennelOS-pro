@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v86';
+const CACHE_NAME = 'kennelos-pro-shell-v87';
 
 const PRECACHE_URLS = [
   './',
@@ -28,6 +28,7 @@ const PRECACHE_URLS = [
   'assets/contactPicker.js',
   'assets/kels.png',
   'assets/kelsChat.js',
+  'assets/dogCheckinUI.js',
   'assets/litterCheckinUI.js',
   'assets/tidyUpUI.js',
   'assets/prepPupsUI.js',
@@ -82,6 +83,7 @@ const PRECACHE_URLS = [
   'assets/invoicePdf.js',
   'assets/invoiceGenerator.js',
   'assets/waitlistOnlineUI.js',
+  'assets/notificationsUI.js',
   'assets/waitlistEmailUI.js',
   'assets/waitlistPicksPanel.js',
   'assets/waitlistUI.js',
@@ -106,6 +108,7 @@ const PRECACHE_URLS = [
   'data/cloud/cloudIntegrations.js',
   'data/cloud/cloudVault.js',
   'data/cloud/cloudWaitlist.js',
+  'data/cloud/cloudNotify.js',
   'data/cloud/serverWork.js',
   'data/cloud/vaultCrypto.js',
   'data/cloud/vaultKeyStore.js',
@@ -125,6 +128,7 @@ const PRECACHE_URLS = [
   'data/depositRequest.js',
   'data/calendarMath.js',
   'data/dateUtils.js',
+  'data/dogCare.js',
   'data/db.js',
   'data/demoMode.js',
   'data/documentRepo.js',
@@ -435,10 +439,55 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((names) => Promise.all(
-        names.filter((name) => name !== CACHE_NAME).map((name) => caches.delete(name))
+        names.filter((name) => name !== CACHE_NAME && name !== NOTIFY_CACHE).map((name) => caches.delete(name))
       ))
       .then(() => self.clients.claim())
   );
+});
+
+// --- App alerts (docs/KennelOS_Notifications_Plan.md §2.3) ----------------------------
+// A push carries no text. The worker asks the server what to show, proving itself
+// with its subscription's own secret; the server's address is the note
+// data/cloud/cloudNotify.js leaves in NOTIFY_CACHE (kept across CACHE_NAME bumps).
+// Whatever goes wrong, a plain alert still shows: a push must always show one.
+const NOTIFY_CACHE = 'kennelos-notify';
+const PLAIN_ALERT = { title: 'KennelOS', body: 'Something new on your waitlist.', path: 'pages/today.html', tag: 'kennelos-waitlist' };
+
+async function alertText() {
+  try {
+    const config = await (await (await caches.open(NOTIFY_CACHE)).match('config'))?.json();
+    const sub = await self.registration.pushManager.getSubscription();
+    if (!config?.api || !sub) return PLAIN_ALERT;
+    const { endpoint, keys } = sub.toJSON();
+    const res = await fetch(`${config.api}/notify/push/pending`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint, auth: keys.auth })
+    });
+    if (!res.ok) return PLAIN_ALERT;
+    const t = await res.json();
+    return { ...PLAIN_ALERT, ...t };
+  } catch {
+    return PLAIN_ALERT;
+  }
+}
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(alertText().then((t) => self.registration.showNotification(t.title, {
+    body: t.body, tag: t.tag, renotify: true,
+    icon: 'assets/icons/icon-192.png', badge: 'assets/icons/favicon-32.png',
+    data: { path: t.path }
+  })));
+});
+
+// Tapping an alert: the app's window, if one is open, goes to the page; else a new one.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const path = String(event.notification.data?.path || PLAIN_ALERT.path);
+  const url = new URL(/^pages\/[\w-]+\.html(\?[\w=%&.-]*)?$/.test(path) ? path : PLAIN_ALERT.path, self.registration.scope).href;
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+    const win = wins.find((w) => w.url.startsWith(self.registration.scope));
+    if (win) return win.focus().then((w) => (w || win).navigate(url)).catch(() => self.clients.openWindow(url));
+    return self.clients.openWindow(url);
+  }));
 });
 
 // Cache-first for same-origin GET requests; falls through to the network

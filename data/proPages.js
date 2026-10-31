@@ -79,6 +79,9 @@ export const PRO_ONLY_STANDALONE = [
   // The "Email the family?" preview (W2 step 6), imported by the waitlist pages,
   // the picks panel and (dynamically) Today's waitlist nudges.
   'assets/waitlistEmailUI.js',
+  // The Settings page's Notifications card (app alerts and the email digest), imported
+  // only with a server and editionFlags.waitlist.
+  'assets/notificationsUI.js',
   // Kels's "Set up my waitlist" (pages/kels.js imports it on start, only with the waitlist).
   'assets/waitlistSetupUI.js',
   // A waitlist application's fields: the Waitlist entry page's and Kels's "Set up my waitlist".

@@ -1,6 +1,7 @@
 // heat-cycles-report.js — "Heat Cycles" (Reports plan, phase 3). One row per female
 // with heat_cycle events: heats on record, her usual days between them, and a
-// predicted next heat (last + her average; needs two heats) with due-soon / overdue
+// predicted next heat (last + her average, or 6 months after a single heat:
+// dogCare.predictNextHeat) with due-soon / overdue
 // marks. Derived from her own history (breedingReports.heatRows), never stored.
 import { loadHeatCycles } from '../data/reportSources.js';
 import { createReportView } from '../assets/reportView.js';
@@ -43,7 +44,7 @@ async function init() {
       { header: 'Status', value: (r) => r.dog.status || '', badge: DOG_STATUS, csv: (r) => (r.dog.status ? descriptor(DOG_STATUS, r.dog.status).label : '') },
       { header: 'Heats logged', value: (r) => String(r.heats) },
       { header: 'Last heat', value: (r) => fmtDate(r.last), csv: (r) => r.last },
-      { header: 'Usual interval', value: (r) => (r.avgInterval ? `${r.avgInterval} days (${months(r.avgInterval)})` : 'Needs two heats') },
+      { header: 'Usual interval', value: (r) => (r.avgInterval ? `${r.avgInterval} days (${months(r.avgInterval)})` : 'One heat: 6 months assumed') },
       { header: 'Next heat (predicted)', value: (r) => (r.next ? fmtDate(r.next) : ''), csv: (r) => r.next || '' },
       { header: 'When', value: (r) => (r.until == null ? '' : r.until < 0 ? `${-r.until} days overdue` : r.until === 0 ? 'Today' : `in ${r.until} days`),
         tone: (r) => descriptor(STATUS, r.status).badge || null }

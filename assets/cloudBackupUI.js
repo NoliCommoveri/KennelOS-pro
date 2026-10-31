@@ -1636,6 +1636,11 @@ export async function bootCloud() {
   if (isWaitlistOnlineOffered() && editionFlags.waitlist) {
     import('../data/cloud/cloudWaitlist.js').then((m) => m.startWaitlistScheduler()).catch(() => {});
   }
+  // App alerts (Notifications plan §2.1): a device with them on tells the server its
+  // subscription again once a day, so a dropped one (iPhone) comes back.
+  if (editionFlags.waitlist) {
+    import('../data/cloud/cloudNotify.js').then((m) => m.refreshAlertsHere()).catch(() => {});
+  }
   // Vendor integrations (Integrations plan §0): Pro; asks nothing until the
   // account has a connection.
   if (editionFlags.accounts) {

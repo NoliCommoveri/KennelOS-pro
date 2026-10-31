@@ -75,6 +75,8 @@ function showSoftIssues(details, eventDate) {
 // user pick which targets get the SAME payload, and save writes one independent
 // Event per checked target (no cascade record, no stored link between them).
 // `subjectId` is unused in this mode. The single-subject path is unchanged.
+// `cascadeSelected` (ids) ticks only those at first (default: all);
+// `cascadeTitle` heads the form (the Dogs page's "Log for several dogs").
 
 // --- Weight-check regression guard ---------------------------------------
 // A weight_check whose value is below the dog's previous weight is a soft
@@ -130,11 +132,11 @@ async function findPriorWeighIn(dogId, newKey, excludeId) {
 }
 
 export async function openEventForm(opts) {
-  const { subjectType, subjectId, event = null, prefill = null, cascadeTargets = null, onSaved, onCancel } = opts;
+  const { subjectType, subjectId, event = null, prefill = null, cascadeTargets = null, cascadeSelected = null, cascadeTitle = 'Log event for whole litter', onSaved, onCancel } = opts;
   const types = eventTypesFor(subjectType);
   const isEdit = !!event;
   const isCascade = !isEdit && !!cascadeTargets?.length;
-  const cascadeChecked = new Set(cascadeTargets ? cascadeTargets.map((t) => t.id) : []);
+  const cascadeChecked = new Set(cascadeTargets ? (cascadeSelected || cascadeTargets.map((t) => t.id)) : []);
 
   // Contacts are only ever needed for relatedContact types (boarding, placement,
   // both dog-subject) — loaded once up front so the picker is ready on first render.
@@ -276,7 +278,7 @@ export async function openEventForm(opts) {
     const perTargetHtml = checkedTargets.length
       ? `<div class="form-grid" style="margin-top:10px;">` + checkedTargets.map((t) =>
           perTargetFieldDefs.map((f) => perTargetFieldHtml(t, f)).join('')).join('') + `</div>`
-      : '<p class="faint" style="margin-top:10px;">Select at least one puppy above to enter its weight.</p>';
+      : '<p class="faint" style="margin-top:10px;">Select at least one above to enter its weight.</p>';
     return sharedHtml + perTargetHtml;
   }
 
@@ -320,7 +322,7 @@ export async function openEventForm(opts) {
     const isSpan = typeDef.duration === 'span';
     modal.innerHTML = `
       <div class="row-between" style="margin-bottom:12px;">
-        <h2 style="margin:0;">${isEdit ? 'Edit event' : isCascade ? 'Log event for whole litter' : 'Add event'}</h2>
+        <h2 style="margin:0;">${isEdit ? 'Edit event' : isCascade ? esc(cascadeTitle) : 'Add event'}</h2>
         <button class="btn btn-sm" data-act="cancel">✕</button>
       </div>
       ${isCascade ? `<div class="field field-wide" style="margin-bottom:14px;">
@@ -466,7 +468,7 @@ export async function openEventForm(opts) {
   async function doSave() {
     captureInputs();
     if (isCascade && !cascadeChecked.size) {
-      showError('Select at least one puppy to apply this event to.');
+      showError('Select at least one to apply this event to.');
       return;
     }
     // Soft warning: reminder should not precede the event.

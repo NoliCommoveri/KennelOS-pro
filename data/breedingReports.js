@@ -3,6 +3,8 @@
 // records in, report rows out (tests/breedingReports.test.js); pages load and scope.
 // Nothing here is stored — every rate is computed for what's on screen.
 
+import { predictNextHeat } from './dogCare.js';
+
 const DAY = 86400000;
 const ymdMs = (ymd) => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10)));
 export const daysBetween = (a, b) => Math.round((ymdMs(b) - ymdMs(a)) / DAY);
@@ -208,9 +210,9 @@ export function growthFlags(series, ratio = 0.85) {
 // --- Heat cycles (Reports plan, phase 3) ---------------------------------------------------
 
 // Per female with heat_cycle events: heats on record, the last one's start, the
-// average days between starts, and a predicted next start (last + average, needs
-// two heats). `status`: 'due_soon' (within `soonDays`), 'overdue' (predicted date
-// passed with no new heat logged), 'ok', or null without a prediction. PURE.
+// average days between starts, and a predicted next start (dogCare.predictNextHeat:
+// last + average, or 6 months after a single heat). `status`: 'due_soon' (within
+// `soonDays`), 'overdue' (predicted date passed with no new heat logged), 'ok'. PURE.
 export function heatRows(females, events, today, soonDays = 30) {
   const out = [];
   for (const dog of females) {
@@ -219,12 +221,7 @@ export function heatRows(females, events, today, soonDays = 30) {
     const gaps = starts.slice(1).map((d, i) => daysBetween(starts[i], d));
     const avg = gaps.length ? Math.round(gaps.reduce((t, g) => t + g, 0) / gaps.length) : null;
     const last = starts[starts.length - 1];
-    let next = null;
-    if (avg) {
-      const t = ymdMs(last) + avg * DAY;
-      const d = new Date(t);
-      next = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-    }
+    const next = predictNextHeat(starts).next;
     const until = next ? daysBetween(today, next) : null;
     out.push({
       dog, heats: starts.length, first: starts[0], last, avgInterval: avg,

@@ -292,6 +292,22 @@ export const disconnectIntegration = (token, id) =>
 // → { events: [{ seq, provider, kind, recordType, recordId, payload, createdAt }], last, more }
 export const readIntegrationEvents = (token, since = 0) => getJson(`/integrations/events?since=${encodeURIComponent(since)}`, { token });
 
+// --- Notifications: app alerts and the email digest (Notifications plan) ------------------
+// → { kinds, push: { available, publicKey, kinds, hideNames, thisDevice, devices },
+//     digest: { available, email, pendingEmail, frequency, kinds } }
+export const getNotifySettings = (token) => getJson('/notify', { token });
+// { push_kinds?, hide_names?, digest_kinds?, digest_frequency?, tz? } → the settings
+export const putNotifySettings = (token, body) => getJson('/notify', { method: 'PUT', token, json: body });
+export const subscribePush = (token, { endpoint, auth }) => getJson('/notify/push/subscribe', { method: 'POST', token, json: { endpoint, auth } });
+export const unsubscribePush = (token) => getJson('/notify/push/unsubscribe', { method: 'POST', token, json: {} });
+// → { ok }
+export const testPush = (token) => getJson('/notify/push/test', { method: 'POST', token, json: {} });
+// Her sign-in address is on at once; another → { pending: true } until verifyDigest.
+export const startDigest = (token, { email, frequency, kinds, tz }) =>
+  getJson('/notify/digest', { method: 'POST', token, json: { email, frequency, kinds, tz } });
+export const verifyDigest = (token, code) => getJson('/notify/digest/verify', { method: 'POST', token, json: { code } });
+export const stopDigest = (token) => getJson('/notify/digest', { method: 'DELETE', token });
+
 export const getNotices = () => getJson('/notice').then((b) => b.notices || []);
 
 // --- Changing the account's email (Phase 1 plan §2.6) ---------------------------

@@ -29,6 +29,7 @@ import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/e
 import { CapExceededError } from '../data/repoBase.js';
 import { todayYMD, daysFromToday, addDaysToYMD } from '../data/dateUtils.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { CLOUD_DATA_CHANGED_EVENT } from '../data/settings.js';
 
 const DUE_SOON_DAYS = 30; // shared window with the reminder buckets (§3.3)
 
@@ -225,6 +226,29 @@ async function renderNudges() {
     });
     const dismissBtn = holder.querySelector('[data-nudge-dismiss]');
     dismissBtn.addEventListener('click', () => { dismiss(key); renderNudges(); });
+  });
+}
+
+// Nudges redraw by themselves when data changes while Today is open: above all a
+// family's message or status-page action, which the waitlist inbox takes in a
+// moment after the app opens and every few minutes after (cloudWaitlist.js), so
+// it shows without her leaving the page. Debounced, and one redraw at a time.
+const NUDGE_REFRESH_MS = 1500;
+function watchForNudgeChanges() {
+  let timer = null;
+  let running = false;
+  let again = false;
+  const redraw = async () => {
+    timer = null;
+    if (running) { again = true; return; }
+    running = true;
+    try { await renderNudges(); } catch { /* the next change tries again */ }
+    running = false;
+    if (again) { again = false; redraw(); }
+  };
+  window.addEventListener(CLOUD_DATA_CHANGED_EVENT, () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(redraw, NUDGE_REFRESH_MS);
   });
 }
 
@@ -531,6 +555,7 @@ async function main() {
   // path for the two top cards). The remaining sections render synchronously
   // from the data main() already loaded.
   const asyncCards = Promise.all([renderNudges(), renderReminders()]);
+  watchForNudgeChanges();
   renderAvailable(scopedDogs, scopedLitters);
   const scopedUpcoming = upcoming.filter(eventInScope);
   if (editionFlags.shows) {

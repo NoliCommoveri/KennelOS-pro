@@ -27,6 +27,7 @@ import { runFindTask } from '../assets/kelsFindUI.js';
 import { runUnderstandTask } from '../assets/kelsUnderstandUI.js';
 import { runLitterTask, pendingLitterDraft, discardGuidedLitterDraft } from '../assets/guidedLitterUI.js';
 import { runCheckinTask, checkinState } from '../assets/litterCheckinUI.js';
+import { runDogCheckinTask, dogCheckinState } from '../assets/dogCheckinUI.js';
 import { runTidyTask } from '../assets/tidyUpUI.js';
 import { runPrepTask, prepState } from '../assets/prepPupsUI.js';
 import { runHealthTask } from '../assets/accountHealthUI.js';
@@ -49,7 +50,7 @@ const cancelBtn = document.getElementById('kels-cancel');
 document.getElementById('kels-name').textContent = KELS.title;
 document.getElementById('kels-avatar').innerHTML = kelsAvatar({ large: true });
 
-// Kels's tasks. `state`: { pendingLitter, pendingDogs, pendingPeople, pendingForm, litters: { open, withPups }, prep: { litters }, setup: { dogs } }.
+// Kels's tasks. `state`: { pendingLitter, pendingDogs, pendingPeople, pendingForm, litters: { open, withPups }, prep: { litters }, setup: { dogs }, dogs: { breeding, heatsDue, missing } }.
 // Add people (Pro, contacts): its script is Pro-only, so it's imported on start.
 const runPeople = async (opts) => (await import('../assets/guidedPeopleUI.js')).runPeopleTask(chat, opts);
 // Set up my application form (Pro, waitlist): the same.
@@ -128,6 +129,17 @@ const TASKS = [
     // With pups at home, the weekly check-in is the likely reason she's here.
     priority: (s) => (s.litters.withPups ? 60 : 40),
     run: (opts) => runCheckinTask(chat, opts)
+  },
+  {
+    id: 'dog-checkin',
+    label: () => 'Check in on my dogs',
+    sub: 'Upcoming heats, and this month\'s dewormer and heartworm preventative',
+    keywords: ['heat', 'heats', 'season', 'cycle', 'in heat', 'deworm', 'dewormer', 'heartworm', 'flea', 'tick', 'preventative', 'monthly meds',
+      'breeding dogs', 'females', 'girls', 'dams'],
+    available: (s) => s.dogs.breeding > 0,
+    // Up near the top while a heat is coming (or late) or a dog is missing this month's preventative.
+    priority: (s) => (s.dogs.heatsDue || s.dogs.missing ? 55 : 30),
+    run: (opts) => runDogCheckinTask(chat, opts)
   },
   {
     id: 'record-litter',
@@ -298,12 +310,12 @@ const TASKS = [
 const taskById = (id) => TASKS.find((t) => t.id === id);
 
 async function state() {
-  const [litters, prep, dogs] = await Promise.all([checkinState(), prepState(), dogRepo.getAll({ includeArchived: true })]);
+  const [litters, prep, dogs, dogCare] = await Promise.all([checkinState(), prepState(), dogRepo.getAll({ includeArchived: true }), dogCheckinState()]);
   return {
     pendingLitter: pendingLitterDraft(), pendingDogs: pendingDogsDraft(),
     pendingPeople: editionFlags.contactsSection ? pendingPeopleDraft(getGuidedPeopleDraft()) : null,
     pendingForm: editionFlags.waitlist ? pendingFormDraft(getGuidedFormDraft()) : null,
-    litters, prep, setup: { dogs }
+    litters, prep, setup: { dogs }, dogs: dogCare
   };
 }
 

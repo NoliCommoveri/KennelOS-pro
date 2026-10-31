@@ -64,6 +64,7 @@ import { offerSpecs } from './waitlistOutbox.js';
 import { contractRepo } from './contractRepo.js';
 import { ourStudPairingIds, studParents, pickDue, serviceDate, boardingEndedUpdate } from './studRules.js';
 import { reviewTitle } from './integrationEvents.js';
+import { heatForecast, heatBasisText, preventativeGaps, monthOf, monthName } from './dogCare.js';
 
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
@@ -374,6 +375,44 @@ export async function computeNudges() {
       subjectHref: `dog.html?id=${encodeURIComponent(damId)}`,
       actions: [
         { label: 'Create pairing', run: async () => { location.href = `pairing.html?new=1&dam=${encodeURIComponent(damId)}`; } }
+      ]
+    });
+  }
+
+  // A heat coming (dogCare.heatForecast): each active breeding female with a heat
+  // on record, from HEAT_NOTICE_DAYS before her predicted next heat (one heat: 6
+  // months after it; more: her average interval). Past the date it asks whether it
+  // happened. Logging a heat (a future date too) moves the prediction, so the key
+  // changes and this one goes; each wording has its own key, so dismissing "soon"
+  // still asks later.
+  for (const h of heatForecast(scopedDogs, events, today)) {
+    if (h.state === 'later') continue;
+    const name = h.dog.call_name || 'She';
+    const overdue = h.state === 'overdue';
+    nudges.push({
+      key: `heatwatch:${h.dog.id}:${h.next}:${h.state}`,
+      title: overdue ? `${name} was expected to cycle recently — has that happened?` : `${name} is expected to go into heat soon — keep an eye out`,
+      detail: `Predicted around ${h.next} (${heatBasisText(h)}).`,
+      subjectHref: `dog.html?id=${encodeURIComponent(h.dog.id)}`,
+      actions: [
+        { label: 'Log heat', run: async () => { location.href = `dog.html?id=${encodeURIComponent(h.dog.id)}&logEvent=heat_cycle&logDate=${overdue ? today : h.next}`; } }
+      ]
+    });
+  }
+
+  // This month's preventatives (deworming, heartworm, flea & tick): from the 1st,
+  // while any active breeding dog has no preventative event dated this month. It
+  // goes by itself once every one has one. Log opens one form for all of them.
+  const noPreventative = preventativeGaps(scopedDogs, events, today);
+  if (noPreventative.length) {
+    const names = noPreventative.map((d) => d.call_name || 'Unnamed');
+    nudges.push({
+      key: `preventatives:${monthOf(today)}`,
+      title: `Time for ${monthName(today).split(' ')[0]}'s preventatives (deworming, heartworm, flea & tick)`,
+      detail: `Not logged yet this month: ${names.length > 6 ? `${names.slice(0, 6).join(', ')} and ${names.length - 6} more` : names.join(', ')}.`,
+      subjectHref: 'dogs.html?logEvent=preventative&from=today',
+      actions: [
+        { label: 'Log', run: async () => { location.href = 'dogs.html?logEvent=preventative&from=today'; } }
       ]
     });
   }

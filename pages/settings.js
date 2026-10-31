@@ -10,6 +10,7 @@ import { isTourAvailable, restartWizard } from '../data/wizardState.js';
 import { runWizardStep } from '../assets/wizardUI.js';
 import { esc } from '../assets/ui.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { editionFlags } from '../data/editionConfig.js';
 
 // Loaded only when this edition has a server (`cloudUrl` set), so an edition
 // without one never even loads the cloud modules (plan §7).
@@ -24,6 +25,13 @@ function flash(text, kind = 'ok') {
 // --- Account (the cloud sign-in) -------------------------------------------------
 if (cloudUI) cloudUI.mountCloudAccountCard(document.getElementById('account-section'));
 else document.getElementById('account-section')?.remove();
+
+// --- Notifications: app alerts and the email digest (Pro, with a server) ------------
+if (cloudUI && editionFlags.waitlist) {
+  import('../assets/notificationsUI.js')
+    .then((m) => m.mountNotificationsCard(document.getElementById('notify-section')))
+    .catch(() => document.getElementById('notify-section')?.remove());
+} else document.getElementById('notify-section')?.remove();
 
 // Guided tour — the tour anchors to specific sample records, so it's only
 // offerable while the "Thornfield Kennels" sample data is loaded (same gate as
