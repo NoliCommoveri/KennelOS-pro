@@ -12,6 +12,7 @@ import { LITTER_STATUS, DISPOSITION, descriptor, isOpenSale } from './vocab.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { depositsDueLitters } from './waitlistRules.js';
 import { readyDateOf } from './goHome.js';
+import { dogEvents } from './dogCare.js';
 
 // A litter moves to Weaning from 4 weeks; Ready from its estimated ready date
 // (or 8 weeks, when that's blank).
@@ -248,13 +249,7 @@ export function lastWeighedDate(weights, pups) {
 // vaccine…), else the kind's title.
 export function careEvents(kind, pupIds, form) {
   const k = CARE_KINDS[kind];
-  const name = String(form.details?.[k.nameKey] ?? '').trim();
-  const details = Object.fromEntries(Object.entries(form.details || {}).filter(([, v]) => String(v ?? '').trim() !== '').map(([key, v]) => [key, String(v).trim()]));
-  return pupIds.map((id) => ({
-    subject_type: 'dog', subject_id: id, event_type: k.eventType,
-    event_date: form.date, ...(form.endDate ? { event_end_date: form.endDate } : {}),
-    title: name || k.title, details
-  }));
+  return dogEvents({ eventType: k.eventType, dogIds: pupIds, date: form.date, endDate: form.endDate, details: form.details, title: form.details?.[k.nameKey], fallbackTitle: k.title });
 }
 
 // What's wrong with a care form, or ''.

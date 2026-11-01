@@ -431,6 +431,28 @@ export async function offerNextTurn(kennelId, { today = todayYMD() } = {}) {
   }
 }
 
+// Who'd get the next turn in this kennel, without offering it (Kels's Review my
+// waitlist: "Next in line is…"): nextTurn on the kennel's records. → { entry,
+// litters: [{ litter, eligibleDogs }] } or null (a turn is open, or nobody fits).
+export async function previewNextTurn(kennelId, { today = todayYMD() } = {}) {
+  const c = await kennelContext(kennelId);
+  return nextTurn(c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today));
+}
+
+// More time for an open turn (Kels's Review my waitlist, "Give them more time"):
+// every open offer of the turn gets the new respond-by date, noted on each. The
+// date must be after today. → the turn (turnView).
+export async function extendTurn(turnId, { until, date = todayYMD() } = {}) {
+  if (!until || until <= date) throw new Error('Pick a new deadline after today.');
+  const offers = (await waitlistOfferRepo.getAll()).filter((o) => !o.is_archived && o.outcome === 'open' && turnIdOf(o) === turnId);
+  if (!offers.length) throw new Error('That turn isn\'t open any more.');
+  const rows = [];
+  for (const o of offers) {
+    rows.push(await waitlistOfferRepo.update(o.id, { respond_by_date: until, notes: appendNote(o.notes, `Given more time on ${date}: until ${until} (was ${o.respond_by_date || 'no date'}).`) }));
+  }
+  return turnView(rows);
+}
+
 // The next turn in this litter's kennel (the Litter page's "Offer to them").
 export async function offerNext(litterId, { today = todayYMD() } = {}) {
   const litter = await litterRepo.getById(litterId);
@@ -1319,10 +1341,14 @@ export async function declinePickupRequest(entryId, requestId, { date = todayYMD
 // archived. The offer that gave them the pup is marked `backed_out_date` (never a
 // pass; that litter isn't offered to them again); a turn still open is closed and the
 // kennel moves on. → { entry, sale, outcome, next, waiting }
-export async function approveBackOut(entryId, { outcome, remove = [], pup = null, date = todayYMD() } = {}) {
+// `told` ({ reason?: { id, label, text? } }): she heard some other way (a call, a
+// message) and no request is waiting: the same path, recorded as hers (Kels Roadmap
+// §3.16, decided 2026-11-01: a back-out is handled the same however she heard).
+export async function approveBackOut(entryId, { outcome, remove = [], pup = null, date = todayYMD(), told = null } = {}) {
   if (!['keep', 'move', 'refund'].includes(outcome)) throw new Error('Choose what happens to their deposit.');
   const entry = await load(entryId);
-  const req = entry.back_out_request;
+  const req = pending(entry.back_out_request) ? entry.back_out_request
+    : told ? { requested_date: date, by: 'breeder', reason: told.reason || { id: 'told', label: 'They told you' } } : null;
   if (!pending(req)) throw new Error('There\'s no back-out request waiting for this family.');
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
   const sale = await ownSale(entry, sales);

@@ -116,6 +116,33 @@ export const readContactFields = (root, prefix) => ({
 
 // Why her vet belongs in her contacts, and how to name one: the tidy-up's "no vet"
 // finding and Add people's vet question say it the same way.
+// A document's file in a chat form: a PDF, or photos of the pages (taken or
+// chosen; documentModal.storeDocumentFile turns them into one PDF). Add dogs'
+// documents and Log health test results' certificate. `wireFilePicker` returns a
+// getter for what she picked: { kind: 'pdf' | 'photo', files } or null.
+export const filePicker = (prefix, { label = 'The file', hint = 'Nothing chosen yet.' } = {}) => `
+  <div class="field gl-field"><label>${esc(label)}</label>
+    <div class="pill-row">
+      <label class="btn">📄 Choose a PDF<input type="file" id="${prefix}-pdf" accept="application/pdf" hidden></label>
+      <label class="btn">📷 Take photos<input type="file" id="${prefix}-camera" accept="image/*" capture="environment" multiple hidden></label>
+      <label class="btn">🖼 Choose photos<input type="file" id="${prefix}-photos" accept="image/*" multiple hidden></label>
+    </div>
+    <span class="field-hint" id="${prefix}-picked">${esc(hint)}</span>
+  </div>`;
+export function wireFilePicker(root, prefix, { hint = 'Nothing chosen yet.' } = {}) {
+  let pending = null;
+  const picked = root.querySelector(`#${prefix}-picked`);
+  const take = (kind, el) => {
+    pending = el.files.length ? { kind, files: [...el.files].slice(0, kind === 'pdf' ? 1 : undefined) } : null;
+    picked.textContent = !pending ? hint
+      : kind === 'pdf' ? `📎 ${pending.files[0].name}` : `🖼 ${plural(pending.files.length, 'photo', 'photos')}`;
+  };
+  root.querySelector(`#${prefix}-pdf`).addEventListener('change', (e) => take('pdf', e.target));
+  root.querySelector(`#${prefix}-camera`).addEventListener('change', (e) => take('photo', e.target));
+  root.querySelector(`#${prefix}-photos`).addEventListener('change', (e) => take('photo', e.target));
+  return () => pending;
+}
+
 export const VET_WHY = 'With yours there, their number is a tap away, and you can pick them on a vet visit.';
 export const VET_NAME_HINT = 'The clinic or the vet\'s name both work.';
 

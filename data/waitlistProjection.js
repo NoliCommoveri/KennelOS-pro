@@ -27,6 +27,7 @@ import {
   messengerLink, embedOrigins
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
+import { completedTestsByDog } from './healthTestLog.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
@@ -298,14 +299,39 @@ export function titlesByDog(events = []) {
 // Internal `sire_id`/`dam_id`/`litter_id` are kept for the per-family view and
 // stripped by toUpcomingView.
 // A parent as family pages show one (Coming up, Available Puppies, Review Your
-// Preferences): call name and earned titles. And a litter's breed: the dam's, else
-// the sire's.
-const parentView = (dogsById, titles, id) => ({ name: dogsById.get(id)?.call_name || 'Unknown', titles: [...(titles.get(id) || [])] });
+// Preferences, a turn): call name and earned titles, and, where she shows them,
+// its completed health tests (`tests`: [{ name, result }], absent when none or
+// hidden). And a litter's breed: the dam's, else the sire's.
+const parentView = (dogsById, titles, id, testsOf = () => []) => {
+  const tests = testsOf(id);
+  return { name: dogsById.get(id)?.call_name || 'Unknown', titles: [...(titles.get(id) || [])], ...(tests.length ? { tests } : {}) };
+};
+
+// Which of a dog's tests family pages show (PARENT_TESTS_SHOWN): its own say
+// (Dog.waitlist_tests), else her Waitlist setting (`parent_tests`, default 'off').
+const SHOWN = ['off', 'normal', 'all'];
+export function parentTestsShown(dog, config) {
+  if (SHOWN.includes(dog?.waitlist_tests)) return dog.waitlist_tests;
+  return SHOWN.includes(config?.parent_tests) ? config.parent_tests : 'off';
+}
+
+// dogId → the tests a family page shows for it ([] when off or none), copied by
+// name: a test's name and result, nothing else (never its flag). 'normal' keeps
+// only results flagged Normal, judged on each test's LATEST result: a retest
+// flagged Abnormal hides that test rather than falling back to an older Normal.
+function parentTestsOf(dogsById, config, events) {
+  const done = completedTestsByDog(events);
+  return (id) => {
+    const shown = id ? parentTestsShown(dogsById.get(id), config) : 'off';
+    if (shown === 'off') return [];
+    return (done.get(id) || []).filter((t) => shown === 'all' || t.outcome === 'Normal').map((t) => ({ name: t.name, result: t.result }));
+  };
+}
 const breedOf = (dogsById, damId, sireId) => orNull(dogsById.get(damId)?.breed || dogsById.get(sireId)?.breed);
 
-function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, today }) {
+function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today }) {
   const show = showUpcoming(config);
-  const parent = (id) => parentView(dogsById, titles, id);
+  const parent = (id) => parentView(dogsById, titles, id, testsOf);
   const where = (u) => ({ public: show[u.stage].public, family: show[u.stage].family });
   const shown = (u) => show[u.stage].public || show[u.stage].family;
   const litterItems = upcomingItems(kennel, { litters, pairings })
@@ -362,7 +388,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const kennelOffers = offers.filter((o) => !o.is_archived && o.kennel_id === kennel.id);
   const opts = { today, config, programsById };
   const titles = titlesByDog(events);
-  const parent = (id) => parentView(dogsById, titles, id);
+  const testsOf = parentTestsOf(dogsById, config, events);
+  const parent = (id) => parentView(dogsById, titles, id, testsOf);
 
   // Each live litter's queue tells which families match it now (Q13); a family
   // sees only that they match, never their place in it (decided 2026-10-08).
@@ -430,7 +457,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   }
 
   const hidden = new Map(live.map((e) => [e.id, placeHidden(e, kennelOffers)]));
-  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, today });
+  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today });
   const ctx = {
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),

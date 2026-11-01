@@ -5,7 +5,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { createListView } from '../assets/listView.js';
 import { dogInScope } from '../data/kennelScope.js';
 import { badge, fmtDate, esc, param } from '../assets/ui.js';
-import { descriptor, SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, EVENT_TYPES } from '../data/vocab.js';
+import { descriptor, SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, EVENT_TYPES, dogListOrder, dogStatusOrder, dogSexOrder } from '../data/vocab.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { openEventForm } from '../assets/eventForm.js';
 import { breedingDogs, homeDogs, preventativeGaps } from '../data/dogCare.js';
@@ -33,9 +33,7 @@ function dobAscUndatedLast(a, b) {
 const dobDesc = (a, b) => (b.date_of_birth || '').localeCompare(a.date_of_birth || '');
 const nameAsc = (a, b) => (a.call_name || '').localeCompare(b.call_name || '');
 const registeredNameAsc = (a, b) => (a.registered_name || '').localeCompare(b.registered_name || '');
-const sexAsc = (a, b) => (a.sex || '').localeCompare(b.sex || '');
 const breedAsc = (a, b) => (a.breed || '').localeCompare(b.breed || '');
-const statusAsc = (a, b) => (a.status || '').localeCompare(b.status || '');
 const dispositionAsc = (a, b) => (a.disposition || '').localeCompare(b.disposition || '');
 
 const NOT_BREEDING_STATUSES = ['retired_breeding', 'pet_home', 'deceased'];
@@ -83,7 +81,8 @@ async function init() {
     // is scope-transparent, so the External bucket keeps showing every outside stud
     // and foster dam whichever of your own kennels you are viewing.
     scope: dogInScope,
-    sort: active.sort || null,
+    // All dogs (no bucket): status in DOG_STATUS order, then sex, then name (dogListOrder).
+    sort: active.sort || dogListOrder,
     groupBy: active.groupBy || null,
     search: {
       placeholder: 'Search by name…',
@@ -106,10 +105,10 @@ async function init() {
     columns: [
       { header: 'Call name', sortable: true, sortFn: nameAsc, cell: (d) => `<strong>${esc(d.call_name)}</strong>` },
       { header: 'Registered name', sortable: true, sortFn: registeredNameAsc, collapse: true, cell: (d) => d.registered_name ? esc(d.registered_name) : '<span class="faint">—</span>' },
-      { header: 'Sex', sortable: true, sortFn: sexAsc, cell: (d) => sexBadge(d.sex) },
+      { header: 'Sex', sortable: true, sortFn: dogSexOrder, cell: (d) => sexBadge(d.sex) },
       { header: 'Breed', sortable: true, sortFn: breedAsc, collapse: true, cell: (d) => esc(d.breed || '—') },
       { header: 'DOB', sortable: true, sortFn: dobAscUndatedLast, collapse: true, cell: (d) => d.date_of_birth ? esc(fmtDate(d.date_of_birth)) : '<span class="faint">—</span>' },
-      { header: 'Status', sortable: true, sortFn: statusAsc, cell: (d) => badge(DOG_STATUS, d.status) },
+      { header: 'Status', sortable: true, sortFn: dogStatusOrder, cell: (d) => badge(DOG_STATUS, d.status) },
       { header: 'Disposition', sortable: true, sortFn: dispositionAsc, cell: (d) => d.disposition ? badge(DISPOSITION, d.disposition) : '<span class="faint">—</span>' }
     ],
     onRowClick: (d) => { location.href = `dog.html?id=${encodeURIComponent(d.id)}`; },

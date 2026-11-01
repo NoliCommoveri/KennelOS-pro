@@ -237,7 +237,7 @@ export function heatRows(females, events, today, soonDays = 30) {
 
 // Per dog: its planned tests (Dog.planned_tests) split into logged and missing,
 // matched the way the dog page matches them — each test event's name token(s)
-// (eventRepo.testTokensOf), case-insensitive and trimmed. Advisory, like that page:
+// (eventRepo.testMatchTokensOf: name field or title), case-insensitive and trimmed. Advisory, like that page:
 // a name typed differently reads as missing. `tokensOf(event)` is injected. PURE.
 export function testGapRows(dogs, events, tokensOf) {
   const logged = new Map();

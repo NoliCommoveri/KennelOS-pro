@@ -1,7 +1,7 @@
 // health-gaps-report.js — "Health-Testing Gaps" (Reports plan, phase 3). Per dog: its
 // planned tests (Dog.planned_tests) against the results logged for it, matched by
 // test name exactly as the dog page's Planned Tests panel matches them
-// (eventRepo.testTokensOf, case-insensitive, trimmed) — advisory, so a result typed
+// (eventRepo.testMatchTokensOf: name field or title, case-insensitive, trimmed) — advisory, so a result typed
 // under another name reads as missing. Adult dogs only (no puppies, no deceased).
 import { loadHealthGaps } from '../data/reportSources.js';
 import { createReportView } from '../assets/reportView.js';

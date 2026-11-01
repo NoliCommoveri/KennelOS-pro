@@ -86,6 +86,9 @@ export const PRO_ONLY_STANDALONE = [
   'assets/notificationsUI.js',
   // Kels's "Set up my waitlist" (pages/kels.js imports it on start, only with the waitlist).
   'assets/waitlistSetupUI.js',
+  // Kels's "Review my waitlist" (pages/kels.js imports it on start, only with the
+  // waitlist). Its rules, data/waitlistReview.js, stay shared: Today's nudges use them.
+  'assets/waitlistReviewUI.js',
   // A waitlist application's fields: the Waitlist entry page's and Kels's "Set up my waitlist".
   'assets/waitlistApplicationForm.js',
   // Kels's applicant step (a family put on the waitlist in the chat): Set up my

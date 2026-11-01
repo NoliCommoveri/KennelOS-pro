@@ -119,6 +119,19 @@ export function stepDueDate(step, { sale = null, pickupDate = '', openDays } = {
 export const stepLabel = (charge, step) => `${charge.label}, ${step.percent}%`;
 
 // The sale's extra charges, as the money code reads them.
+// A payment step with its paid date set (YYYY-MM-DD) or cleared ('' / null): the
+// Sale page's "Paid on" box and Kels's Review my waitlist "Paid".
+export function stepWithPaidDate(step, date) {
+  const { paid_date: _old, ...rest } = step;
+  return date ? { ...rest, paid_date: date } : rest;
+}
+
+// A sale's extra_charges with one charge's payment step marked paid on `date`.
+export function chargesWithStepPaid(sale, chargeId, stepId, date) {
+  return saleExtraCharges(sale).map((c) => (c.id !== chargeId || !Array.isArray(c.payments) ? c
+    : { ...c, payments: c.payments.map((st) => (st.id === stepId ? stepWithPaidDate(st, date) : st)) }));
+}
+
 export function saleExtraCharges(sale) {
   return cleanList(sale?.extra_charges);
 }

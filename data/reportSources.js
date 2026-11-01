@@ -12,13 +12,14 @@
 import { dogRepo } from './dogRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { pairingRepo } from './pairingRepo.js';
-import { eventRepo, testTokensOf } from './eventRepo.js';
+import { eventRepo, testMatchTokensOf } from './eventRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
+import { isCareDog } from './dogCare.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { getLitterFinances } from './litterFinances.js';
 import { expectedPricing } from './saleDefaults.js';
@@ -70,14 +71,14 @@ export async function loadPairingSuccess() {
 // Heat Cycles: the in-scope females with heats on record, as of today.
 export async function loadHeatCycles(today) {
   const [dogs, events] = await Promise.all([dogRepo.getAll({ includeArchived: false }), eventRepo.getByType('heat_cycle')]);
-  return { href: 'heat-cycles-report.html', rows: heatRows(dogs.filter((d) => d.sex === 'female' && dogInScope(d)), events, today), dogs };
+  return { href: 'heat-cycles-report.html', rows: heatRows(dogs.filter((d) => d.sex === 'female' && isCareDog(d) && dogInScope(d)), events, today), dogs };
 }
 
 // Health-Testing Gaps: each in-scope adult's planned tests against its logged ones.
 export const HEALTH_TEST_TYPES = ['genetic_test', 'ofa_pennhip', 'breed_specific_test'];
 export async function loadHealthGaps() {
   const [dogs, ...byType] = await Promise.all([dogRepo.getAll({ includeArchived: false }), ...HEALTH_TEST_TYPES.map((t) => eventRepo.getByType(t))]);
-  const rows = testGapRows(dogs.filter((d) => dogInScope(d) && d.status !== 'puppy' && d.status !== 'deceased'), byType.flat(), testTokensOf);
+  const rows = testGapRows(dogs.filter((d) => dogInScope(d) && d.status !== 'puppy' && d.status !== 'deceased'), byType.flat(), testMatchTokensOf);
   return { href: 'health-gaps-report.html', rows, dogs };
 }
 

@@ -17,6 +17,7 @@
 // title from a details field until the user types their own; and
 // `prefill.event_date` seeds a new event's date.
 import { HistoryEvent } from '../data/eventRepo.js';
+import { TEST_TYPE_FIELDS, testResultSuggestions } from '../data/healthTestLog.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
@@ -33,7 +34,8 @@ const TEST_VOCAB_FIELDS = { genetic_test: 'panel_name', breed_specific_test: 'te
 
 // Combobox fields whose suggestions are the distinct values already logged on
 // events of the same type (Show Tracking Spec §2.2: a show's club and judge).
-// Free text either way — the suggestions never constrain what's typed.
+// Free text either way — the suggestions never constrain what's typed. (A test's
+// result field is filled the same way, below, from every test type.)
 const LOGGED_VALUE_FIELDS = { show: ['club', 'judge'] };
 
 // The contact role a type's related contact is tagged with on save (Show
@@ -177,6 +179,12 @@ export async function openEventForm(opts) {
     .flatMap(([type, keys]) => keys.map(async (key) => {
       loggedValues.set(`${type}.${key}`, await HistoryEvent.getDetailValues(type, key));
     })));
+  // A test's result field (Result, or Rating for OFA): the usual results plus every
+  // result she's typed on any test type, the same list on all three.
+  if (types.some((t) => TEST_TYPE_FIELDS[t.value])) {
+    const results = testResultSuggestions(await HistoryEvent.getTestResultValues());
+    for (const [type, f] of Object.entries(TEST_TYPE_FIELDS)) loggedValues.set(`${type}.${f.result}`, results);
+  }
 
   // Working state
   const draft = {

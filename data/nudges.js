@@ -64,6 +64,7 @@ import {
 import { pendingExtraRequests } from './familyExtras.js';
 import { pendingPickupRequests, requestText as pickupRequestText } from './familyPickup.js';
 import { offerSpecs } from './waitlistOutbox.js';
+import { outcomeReport } from './waitlistReview.js';
 import { contractRepo } from './contractRepo.js';
 import { ourStudPairingIds, studParents, pickDue, serviceDate, boardingEndedUpdate } from './studRules.js';
 import { reviewTitle } from './integrationEvents.js';
@@ -906,6 +907,22 @@ async function followUpNudges(today, sales, events, dogsById, kennelsById) {
 }
 
 // --- Waitlist (Waitlist Spec §0/§6.5) -------------------------------------------
+// Today's waitlist nudges on their own, for Kels's Review my waitlist
+// (assets/waitlistReviewUI.js), which works through the same items with the same
+// wording and actions (data/waitlistReview.js reads each key). Scoped like Today.
+export async function waitlistNudgeItems(today = todayYMD()) {
+  if (!editionFlags.waitlist) return [];
+  const [dogs, litters, sales] = await Promise.all([dogRepo.getAll(), litterRepo.getAll({ includeArchived: true }), saleRepo.getAll()]);
+  return waitlistNudges(today, litters, new Map(dogs.map((d) => [d.id, d])), { dogs, sales });
+}
+
+// Today's "extra payment due" nudges for these sales (Review my waitlist step 7).
+export async function extraDueItems(sales, today = todayYMD()) {
+  if (!editionFlags.extraCharges) return [];
+  const [dogs, events, contacts, kennels] = await Promise.all([dogRepo.getAll(), eventRepo.getAll(), contactRepo.getAll({ includeArchived: true }), kennelRepo.getAll({ includeArchived: true })]);
+  return extraDueNudges(today, sales, events, new Map(dogs.map((d) => [d.id, d])), new Map(contacts.map((c) => [c.id, c])), new Map(kennels.map((k) => [k.id, k])));
+}
+
 // W1 has no server, so nothing on the waitlist moves while she's away: these
 // surface what needs a decision, and she confirms with one tap. Scoped like every
 // rule (the waitlist is per kennel, so entries/offers carry kennel_id).
@@ -963,17 +980,10 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
         run: async () => {
           const res = await recordOutcome(o.id, 'no_response');
           const fresh = new Map((await waitlistEntryRepo.getAll({ includeArchived: true })).map((x) => [x.id, x]));
-          const lines = [];
-          if (res.passes) {
-            lines.push(!res.passes.counted ? `This doesn't count as a pass for ${name(e)}.`
-              : res.removed ? `That was ${name(e)}'s pass ${res.passes.used} of ${res.passes.max}, so they've been removed from the list. You can undo this for 7 days.`
-              : `This counts as ${name(e)}'s pass ${res.passes.used} of ${res.passes.max}. They keep their place.`);
-          }
-          lines.push(...describeOfferChanges(res, {
+          const lines = outcomeReport(res, { name: name(e), changes: describeOfferChanges(res, {
             nameOf: (id) => (fresh.get(id) ? name(fresh.get(id)) : 'the next family'),
             litterOf: (id) => (littersById.get(id) ? litterLabel(littersById.get(id), dogsById) : 'A litter')
-          }));
-          if (!res.next && !res.waiting.length) lines.push('Nobody else on the list is eligible for your open litters right now.');
+          }) });
           // `emails`: who to offer an email (Today shows the preview; W2 step 6).
           return { title: 'Recorded', message: lines.join('\n\n'), emails: [
             { entryId: e.id, kind: 'deadline_passed', extra: { litterIds: t.offers.map((x) => x.litter_id), respondBy: t.respond_by_date } },

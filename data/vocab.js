@@ -31,6 +31,27 @@ export const DOG_STATUS = [
   { value: 'external_reference', label: 'External reference', badge: 'badge-gray' }
 ];
 
+// A value's place in a vocab list; a missing or unknown value goes after every
+// known one, so nothing drops off a sorted list.
+const rankIn = (vocab, v) => { const i = vocab.findIndex((o) => o.value === v); return i < 0 ? vocab.length : i; };
+const dogListName = (d) => String(d?.call_name || d?.registered_name || '').trim();
+
+// The All dogs roster's order: status in DOG_STATUS order, then sex in SEX order
+// (Male, Female, Unknown), then name A→Z (call name, else registered name). A
+// missing status, sex or name sorts after the rest at its level.
+export function dogListOrder(a, b) {
+  const byStatus = rankIn(DOG_STATUS, a?.status) - rankIn(DOG_STATUS, b?.status);
+  if (byStatus) return byStatus;
+  const bySex = rankIn(SEX, a?.sex) - rankIn(SEX, b?.sex);
+  if (bySex) return bySex;
+  const an = dogListName(a), bn = dogListName(b);
+  if (!an || !bn) return (an ? 0 : 1) - (bn ? 0 : 1);
+  return an.localeCompare(bn, undefined, { sensitivity: 'base' });
+}
+// The Status and Sex columns sort in vocab order too (unset last).
+export const dogStatusOrder = (a, b) => rankIn(DOG_STATUS, a?.status) - rankIn(DOG_STATUS, b?.status);
+export const dogSexOrder = (a, b) => rankIn(SEX, a?.sex) - rankIn(SEX, b?.sex);
+
 // Disposition — the breeder's intent for a dog, orthogonal to `status`
 // (life-stage). Answers "keeping or selling?" for a puppy before any Sale record
 // exists, so it can't be a `status` value (a puppy can't be both `puppy` and
@@ -236,6 +257,16 @@ export const WAITLIST_READY_NO_ANSWER = [
   { value: 'keep_paused',  label: 'Keep them paused until they answer' },
   { value: 'unpause',      label: 'Unpause them as normal on the date' },
   { value: 'remove_after', label: 'Wait, then remove them from the list' }
+];
+
+// Which of a parent's completed health tests waitlist family pages show:
+// Waitlist settings' `parent_tests` (default 'off'), and Dog.waitlist_tests, one
+// dog's own say over it (null = follow the setting). 'normal' = only results
+// flagged Normal (TEST_OUTCOME); an unflagged result counts as not Normal.
+export const PARENT_TESTS_SHOWN = [
+  { value: 'off',    label: "Don't show" },
+  { value: 'normal', label: 'Normal results only' },
+  { value: 'all',    label: 'All results' }
 ];
 
 export const WAITLIST_PRIORITY = [
@@ -616,6 +647,21 @@ export const VACCINE_GOOD_FOR = [
   { value: 'lifetime', label: 'Lifetime', years: null }
 ];
 
+// A completed test's overall flag (genetic_test / ofa_pennhip / breed_specific_test
+// `outcome`), beside her own wording of the result ("Clear", "Grade 2", "N/N").
+// Optional; stored as the label itself. Waitlist family pages can show only the
+// results flagged Normal (waitlist_config.parent_tests, Dog.waitlist_tests).
+export const TEST_OUTCOME = ['Normal', 'Abnormal'];
+// Suggestions for a test's result (genetic_test / breed_specific_test `result`,
+// ofa_pennhip `rating`), shown with every result she's typed on any of the three
+// (healthTestLog.testResultSuggestions). Free text: suggest, never enforce.
+export const TEST_RESULT_SUGGESTIONS = [
+  'Clear', 'Carrier', 'Affected', 'N/N',
+  'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4',
+  'Grade I', 'Grade II', 'Grade III', 'Grade IV', 'Grade V', 'Grade VI'
+];
+const OUTCOME_FIELD = { key: 'outcome', label: 'Normal or abnormal', type: 'select', options: TEST_OUTCOME };
+
 export const EVENT_TYPES = [
   // Acquisition — an option for the first event on a newly-bought dog's
   // timeline, never auto-created. `source` is a plain free-text field (the
@@ -634,11 +680,11 @@ export const EVENT_TYPES = [
   // union distinct tokens already seen in events) — see eventForm.js's
   // TEST_VOCAB_FIELDS. Suggest-not-enforce, same as boarding_reason below.
   { value: 'genetic_test',       label: 'Genetic test',       badge: 'badge-purple',  subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'panel_name', label: 'Panel', type: 'combobox' }, { key: 'lab', label: 'Lab', type: 'text' }, { key: 'result', label: 'Result', type: 'text' }] },
+    fields: [{ key: 'panel_name', label: 'Panel', type: 'combobox' }, { key: 'lab', label: 'Lab', type: 'text' }, { key: 'result', label: 'Result', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
   { value: 'ofa_pennhip',        label: 'OFA / PennHIP',      badge: 'badge-purple',  subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'joint', label: 'Joint', type: 'combobox' }, { key: 'method', label: 'Method', type: 'text' }, { key: 'rating', label: 'Rating', type: 'text' }] },
+    fields: [{ key: 'joint', label: 'Joint', type: 'combobox' }, { key: 'method', label: 'Method', type: 'text' }, { key: 'rating', label: 'Rating', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
   { value: 'breed_specific_test', label: 'Breed-specific test', badge: 'badge-purple', subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'test_name', label: 'Test', type: 'combobox' }, { key: 'result', label: 'Result', type: 'text' }] },
+    fields: [{ key: 'test_name', label: 'Test', type: 'combobox' }, { key: 'result', label: 'Result', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
   { value: 'illness',            label: 'Illness',            badge: 'badge-red',     subjects: ['dog'], duration: 'instant',
     fields: [{ key: 'diagnosis', label: 'Diagnosis', type: 'text' }, { key: 'treatment', label: 'Treatment', type: 'textarea' }] },
   // Span (Stage4.5 Addendum §C5): event_date is the start, event_end_date the
@@ -792,6 +838,7 @@ export const EXPENSE_SUBJECT_TYPES = [
 export const DOC_TYPES = [
   { value: 'pedigree',     label: 'Pedigree',     badge: 'badge-green' },
   { value: 'health_test',  label: 'Health test',  badge: 'badge-blue' },
+  { value: 'vet_summary',  label: 'Vet summary',  badge: 'badge-blue' }, // a visit summary, medical record or vaccine history from the vet
   { value: 'registration', label: 'Registration', badge: 'badge-neutral' },
   { value: 'contract',     label: 'Contract',     badge: 'badge-purple' },
   { value: 'other',        label: 'Other',        badge: 'badge-gray' }
@@ -802,6 +849,7 @@ export const DOC_TYPES = [
 const DOC_FIELDS_BY_TYPE = {
   pedigree:     ['issuer_or_lab', 'registry', 'registration_number'],
   health_test:  ['issuer_or_lab', 'result'],
+  vet_summary:  ['issuer_or_lab'],
   registration: ['issuer_or_lab', 'registry', 'registration_number'],
   contract:     ['issuer_or_lab'],
   other:        ['issuer_or_lab']
@@ -816,6 +864,7 @@ export function documentFieldsFor(docType) {
 const DOC_TYPE_ICON = {
   pedigree: '🌳',
   health_test: '🩺',
+  vet_summary: '🏥',
   registration: '📜',
   contract: '✍️',
   other: '📄'

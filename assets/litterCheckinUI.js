@@ -598,7 +598,7 @@ export function careForm(chat, kind, pups, today) {
   const k = C.CARE_KINDS[kind];
   const type = descriptor(EVENT_TYPES, k.eventType);
   const span = type.duration === 'span';
-  const fields = (type.fields || []).map((f) => careInput(f, f.key === k.nameKey)).join('');
+  const fields = (type.fields || []).map((f) => eventFieldInput(f, f.key === k.nameKey)).join('');
   const boxes = pups.map((p, i) => `<label class="ck-check"><input type="checkbox" id="ck-pup-${i}" checked> ${pupLine(p)}</label>`).join('');
   return chat.form({
     title: `<strong>${esc(k.ask)}</strong>`,
@@ -656,13 +656,18 @@ export function field(labelText, inputHtml, hint = '') {
   return `<div class="field gl-field"><label>${esc(labelText)}</label>${inputHtml}${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</div>`;
 }
 
-// One details field of a care event type (vocab EVENT_TYPES), as an input.
-function careInput(f, isName) {
+// One details field of an event type (vocab EVENT_TYPES), as an input whose id is
+// `ck-f-<key>` (read back the same way). The litter check-in's care forms and the
+// dog check-in's "Any other events to log?" both use it. A combobox with options
+// suggests them (free text); a select's `default` starts selected.
+export function eventFieldInput(f, isName = false) {
   const id = `ck-f-${f.key}`;
   const label = f.contactFallback ? `${f.label} (name)` : f.label;
+  const opt = (o) => (typeof o === 'string' ? { value: o, label: o } : o);
   let input;
   if (f.type === 'textarea') input = `<textarea id="${id}" rows="2"></textarea>`;
-  else if (f.type === 'select') input = `<select id="${id}"><option value="">—</option>${(f.options || []).map((o) => (typeof o === 'string' ? { value: o, label: o } : o)).map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select>`;
+  else if (f.type === 'combobox' && (f.options || []).length) input = `<input id="${id}" type="text" list="${id}-dl" autocomplete="off"><datalist id="${id}-dl">${f.options.map(opt).map((o) => `<option value="${esc(o.value)}"></option>`).join('')}</datalist>`;
+  else if (f.type === 'select') input = `<select id="${id}"><option value="">—</option>${(f.options || []).map(opt).map((o) => `<option value="${esc(o.value)}"${f.default === o.value ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
   else input = `<input id="${id}" type="${f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : 'text'}"${f.step ? ` step="${esc(f.step)}"` : ''}${isName ? ' autocomplete="off"' : ''}>`;
   return field(label, input);
 }

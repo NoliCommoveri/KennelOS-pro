@@ -2,7 +2,7 @@
 // several pups in one file (?dogs=<id>,<id>…), each record in its own section
 // starting a new page, optionally after a cover page for the breeder (&cover=1,
 // Kels's Pups are going home and the Sales picker). For each pup it resolves the
-// puppy, its sire/dam (with genetic + breed-specific test results), its
+// puppy, its sire/dam (with their genetic, OFA and breed-specific test results), its
 // health-history events (a vet visit's or surgery's with its vet's contact
 // details), and the buyer contact off the Sale, then renders a
 // print-ready record — "download" is the browser's own Print → Save as PDF,
@@ -12,7 +12,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
-import { eventRepo } from '../data/eventRepo.js';
+import { eventRepo, testTokensOf } from '../data/eventRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { getActiveKennel } from '../data/kennelScope.js';
 import { descriptor, SEX, EVENT_TYPES } from '../data/vocab.js';
@@ -130,20 +130,22 @@ function columnedRows(rowsHtml, size = 5) {
   return `<div class="pr-info-columns">${columns.map((c) => `<div class="pr-info-col">${c.join('')}</div>`).join('')}</div>`;
 }
 
-// Genetic + breed-specific test results for a dog, as a single pipe-separated
-// line ("Panel: Result | Test: Result"). Empty string when none exist, so the
-// caller can omit the line entirely.
+// Genetic, OFA / PennHIP and breed-specific test results for a dog, as a single
+// pipe-separated line ("Panel: Result | OFA Patella: Grade 1"), newest first.
+// Only results with a result/rating; the name is the test's name field (OFA:
+// Method + Joint), else the title. Empty string when none, so the caller can
+// omit the line entirely.
+const TEST_RESULT_FIELD = { genetic_test: 'result', ofa_pennhip: 'rating', breed_specific_test: 'result' };
 async function testsLine(dogId) {
   if (!dogId) return '';
   const events = await eventRepo.getForSubject('dog', dogId);
   const parts = [];
   for (const e of events) {
-    const d = e.details || {};
-    if (e.event_type === 'genetic_test' && d.result) {
-      parts.push(`${esc(d.panel_name || 'Genetic test')}: ${esc(d.result)}`);
-    } else if (e.event_type === 'breed_specific_test' && d.result) {
-      parts.push(`${esc(d.test_name || 'Test')}: ${esc(d.result)}`);
-    }
+    const field = TEST_RESULT_FIELD[e.event_type];
+    const result = field && String((e.details || {})[field] ?? '').trim();
+    if (!result) continue;
+    const name = testTokensOf(e)[0] || String(e.title ?? '').trim() || descriptor(EVENT_TYPES, e.event_type).label;
+    parts.push(`${esc(name)}: ${esc(result)}`);
   }
   return parts.join(' | ');
 }

@@ -40,6 +40,18 @@ export function testTokensOf(e) {
   return [];
 }
 
+// The names a planned test can match on (Dog.planned_tests → "logged"): the
+// test-name token(s) above plus the event's title, so a result filed as
+// "OFA Patella" moves its planned test out of Planned even when Joint says just
+// "Patella". Matching only — getTestTokens' vocabulary stays testTokensOf.
+export function testMatchTokensOf(e) {
+  const tokens = testTokensOf(e);
+  if (!TEST_EVENT_TYPES.includes(e.event_type)) return tokens;
+  const title = String(e.title ?? '').trim();
+  if (title && !tokens.some((t) => t.toLowerCase() === title.toLowerCase())) tokens.push(title);
+  return tokens;
+}
+
 function validateEvent(candidate) {
   for (const f of REQUIRED_FIELDS) {
     if (candidate[f] == null || candidate[f] === '') {
@@ -246,6 +258,15 @@ export const HistoryEvent = {
       out.push(v);
     }
     return out.sort((a, b) => a.localeCompare(b));
+  },
+
+  // Every result she's typed on a test event, whichever type: genetic_test /
+  // breed_specific_test `result` and ofa_pennhip `rating` (healthTestLog
+  // TEST_TYPE_FIELDS). Feed to healthTestLog.testResultSuggestions.
+  async getTestResultValues() {
+    const lists = await Promise.all([['genetic_test', 'result'], ['breed_specific_test', 'result'], ['ofa_pennhip', 'rating']]
+      .map(([type, key]) => this.getDetailValues(type, key)));
+    return lists.flat();
   }
 };
 

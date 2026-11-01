@@ -23,7 +23,7 @@ import { findDogMatches, matchReason, breedChoices } from '../data/dogSearch.js'
 import { fmt } from '../data/guidedLitter.js';
 import { esc, todayYMD } from './ui.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
-import { StepConversation, tile, field, input, options, val, plural, pagesPrefix, kennelPicker, wireKennelPicker, readKennelPicker, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
+import { StepConversation, tile, field, input, options, val, plural, pagesPrefix, filePicker, wireFilePicker, kennelPicker, wireKennelPicker, readKennelPicker, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
 
 // --- The data the screens read ----------------------------------------------------
 
@@ -657,33 +657,18 @@ class DogsConversation extends StepConversation {
   }
 
   async documentForm(dog, { storeDocumentFile, createDocument }) {
-    let pending = null;
+    let pending = () => null;
     const extraField = { issuer_or_lab: 'Registry, vet or lab', result: 'Result', registry: 'Registry', registration_number: 'Registration number' };
     const extrasHtml = (type) => documentFieldsFor(type).map((f) => field(`${extraField[f]} (optional)`, input(`gd-doc-${f}`, f === 'registration_number' && type === 'registration' ? dog.registration_number : ''))).join('');
     const res = await this.chat.form({
       title: `<strong>What are you filing for ${esc(dogName(dog))}?</strong><span class="kels-lead">A PDF, or photos of the pages (I'll turn them into one PDF).</span>`,
       html: `${field('What is it?', `<select id="gd-doc-type">${options(DOC_TYPES, 'registration')}</select>`)}
-        <div class="field gl-field"><label>The file</label>
-          <div class="pill-row">
-            <label class="btn">📄 Choose a PDF<input type="file" id="gd-doc-pdf" accept="application/pdf" hidden></label>
-            <label class="btn">📷 Take photos<input type="file" id="gd-doc-camera" accept="image/*" capture="environment" multiple hidden></label>
-            <label class="btn">🖼 Choose photos<input type="file" id="gd-doc-photos" accept="image/*" multiple hidden></label>
-          </div>
-          <span class="field-hint" id="gd-doc-picked">Nothing chosen yet.</span>
-        </div>
+        ${filePicker('gd-doc')}
         ${field('Title (optional)', input('gd-doc-title', '', { placeholder: `e.g. ${dogName(dog)}'s registration` }))}
         ${field('Date (optional)', input('gd-doc-date', '', { type: 'date' }))}
         <div id="gd-doc-extras">${extrasHtml('registration')}</div>`,
       wire: (root) => {
-        const picked = root.querySelector('#gd-doc-picked');
-        const take = (kind, el) => {
-          pending = el.files.length ? { kind, files: [...el.files].slice(0, kind === 'pdf' ? 1 : undefined) } : null;
-          picked.textContent = !pending ? 'Nothing chosen yet.'
-            : kind === 'pdf' ? `📎 ${pending.files[0].name}` : `🖼 ${plural(pending.files.length, 'photo', 'photos')}`;
-        };
-        root.querySelector('#gd-doc-pdf').addEventListener('change', (e) => take('pdf', e.target));
-        root.querySelector('#gd-doc-camera').addEventListener('change', (e) => take('photo', e.target));
-        root.querySelector('#gd-doc-photos').addEventListener('change', (e) => take('photo', e.target));
+        pending = wireFilePicker(root, 'gd-doc');
         root.querySelector('#gd-doc-type').addEventListener('change', (e) => {
           root.querySelector('#gd-doc-extras').innerHTML = extrasHtml(e.target.value);
         });
@@ -691,11 +676,11 @@ class DogsConversation extends StepConversation {
       submitLabel: 'File it',
       cancelLabel: 'Skip this one',
       submit: async (root) => {
-        if (!pending) return 'Choose a PDF or photos first.';
+        if (!pending()) return 'Choose a PDF or photos first.';
         const docType = val(root, 'gd-doc-type');
         const title = val(root, 'gd-doc-title');
         const extras = Object.fromEntries(documentFieldsFor(docType).map((f) => [f, val(root, `gd-doc-${f}`)]));
-        const fileId = await storeDocumentFile(pending, { title: title || docType });
+        const fileId = await storeDocumentFile(pending(), { title: title || docType });
         await createDocument({ dog_id: dog.id, doc_type: docType, title, doc_date: val(root, 'gd-doc-date'), notes: '', file_id: fileId, ...extras });
         return { docType, title };
       },

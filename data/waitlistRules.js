@@ -36,6 +36,7 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   no_response_counts_as_pass: true,
   color_matching: false,
   turn_prices: true, // a family's turn shows each litter's expected prices (males / females, full registration apart)
+  parent_tests: 'off', // family pages show each parent's completed health tests (name + result): PARENT_TESTS_SHOWN 'off' | 'normal' | 'all'; Dog.waitlist_tests overrides per dog
   open_days: null, // the weekdays she does business (0 = Sunday … 6 = Saturday); deadlines count only these. null = every day
   closed_dates: [], // her blackout dates (YYYY-MM-DD), skipped like a closed weekday; dropped 7 days after they pass
   checkin_months: 6,

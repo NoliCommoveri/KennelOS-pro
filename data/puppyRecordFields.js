@@ -40,7 +40,7 @@ export const PUPPY_RECORD_FIELD_GROUPS = [
     { key: 'parentCallName', label: 'Call name' },
     { key: 'parentBreed', label: 'Breed' },
     { key: 'parentRegistrationNumber', label: 'Registration #' },
-    { key: 'parentTests', label: 'Genetic & breed test results' }
+    { key: 'parentTests', label: 'Health test results' }
   ] },
   { key: 'health', label: 'Health History', fields: [
     ...PUPPY_RECORD_HEALTH_TYPES.map((type) => ({ key: healthKey(type), label: descriptor(EVENT_TYPES, type).label })),

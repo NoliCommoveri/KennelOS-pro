@@ -33,6 +33,7 @@ import { accountRepo } from '../accountRepo.js';
 import { todayYMD } from '../dateUtils.js';
 import { waitlistConfig, kennelBreeds, readyCheckLapsed, onlineConfig } from '../waitlistRules.js';
 import { buildProjection } from '../waitlistProjection.js';
+import { TEST_TYPES } from '../healthTestLog.js';
 import { formQuestions } from '../waitlistForm.js';
 import { generateFormKey, currentFormKey, rotateFormKeys, openSealed } from '../waitlistCrypto.js';
 import { applicationToEntry } from '../waitlistInbox.js';
@@ -443,9 +444,10 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
     dogRepo.getAll({ includeArchived: true }),
     saleRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
-    // Parents' earned titles, for the pairings and early litters she shows, and
-    // her planned (future-dated) heats, published as the month only (§16.4).
-    Promise.all([eventRepo.getByType('title_earned'), eventRepo.getByType('heat_cycle')]).then(([a, b]) => [...a, ...b]),
+    // Parents' earned titles, for the pairings and early litters she shows, her
+    // planned (future-dated) heats, published as the month only (§16.4), and the
+    // parents' completed health tests (shown only where she lets them).
+    Promise.all(['title_earned', 'heat_cycle', ...TEST_TYPES].map((t) => eventRepo.getByType(t))).then((lists) => lists.flat()),
     // Her referral links marked "Share with families" (Integrations plan §3).
     editionFlags.accounts ? accountRepo.getAll() : []
   ]);

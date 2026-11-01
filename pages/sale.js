@@ -9,7 +9,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { saleExtraCharges, readExtraCharges, kennelChargeList, kennelChargeGroups, groupedChargeList, newExtraCharge, depositFeeChargeBack, chargeRules, planSteps, cleanSteps } from '../data/extraCharges.js';
+import { saleExtraCharges, readExtraCharges, kennelChargeList, kennelChargeGroups, groupedChargeList, newExtraCharge, depositFeeChargeBack, chargeRules, planSteps, cleanSteps, stepWithPaidDate } from '../data/extraCharges.js';
 import { depositPaid } from '../data/incomeView.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
 import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
@@ -371,9 +371,7 @@ function readExtraChargeRows() {
     if (box && Array.isArray(row.payments)) {
       row.payments = row.payments.map((st) => {
         const input = box.querySelector(`.xc-paid[data-step="${CSS.escape(st.id)}"]`);
-        if (!input) return st;
-        const { paid_date: _old, ...rest } = st;
-        return input.value ? { ...rest, paid_date: input.value } : rest;
+        return input ? stepWithPaidDate(st, input.value) : st;
       });
     }
     return row;

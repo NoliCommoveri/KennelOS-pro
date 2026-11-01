@@ -36,7 +36,8 @@ import { EVENT_TYPES } from './vocab.js';
 export const IMPLICIT_CLOUD_FIELDS = Object.freeze(['id', 'is_archived', 'created_at', 'updated_at']);
 
 // Documents whose rows (and files) go to the cloud. contract/other stay local.
-export const CLOUD_DOC_TYPES = Object.freeze(['health_test', 'pedigree', 'registration']);
+// vet_summary goes (owner decision 2026-11-01: a vet's records, like a health test).
+export const CLOUD_DOC_TYPES = Object.freeze(['health_test', 'vet_summary', 'pedigree', 'registration']);
 
 const ALL = 'all';
 const NONE = 'none';
@@ -52,6 +53,7 @@ export const SYNC_REGISTRY = Object.freeze({
       'color_markings', 'registry', 'registration_number', 'microchip_id', 'url',
       'planned_tests', 'disposition', 'dob_is_estimated', 'recorded_coi',
       'intended_registration', // Waitlist Spec §9
+      'waitlist_tests', // its say over its health tests on waitlist family pages; a display choice, read by whichever device publishes
       'pedigree_only' // without it a cloud restore would turn every ancestor into a kennel dog
     ],
     private: ['notes'],
