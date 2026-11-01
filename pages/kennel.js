@@ -558,7 +558,7 @@ function upcomingSwitches(c) {
   const show = showUpcoming(c);
   const box = (stage, where) => `<label class="check-inline"><input type="checkbox" data-wl-show="${esc(stage)}:${where}"${show[stage][where] ? ' checked' : ''}> ${where === 'public' ? 'Public list' : 'Family pages'}</label>`;
   return `<div class="field field-wide"><label>Show online before picks open</label>
-      <span class="field-hint">Each with the parents' call names and titles, and your dates: a pairing's expected whelp date; a litter's whelp date and "Picks expected to open" (its accept-deposits date). Family pages also show whether it's one they're waiting for, their place for a born litter, and "Not this litter".</span>
+      <span class="field-hint">Each with the parents' call names and titles, and your dates: a pairing's expected whelp date; a litter's whelp date and "Picks expected to open" (its accept-deposits date); a planned heat (a future-dated heat on an active breeding female) as "estimated around" its month and year, never the day. Family pages also show whether it's one they're waiting for, their place for a born litter, and "Not this litter".</span>
       ${UPCOMING_STAGES.map((st) => `<div style="margin-top:6px;"><strong style="font-size:0.95em;">${esc(st.label)}</strong><div class="pill-row">${box(st.value, 'public')}${box(st.value, 'family')}</div></div>`).join('')}
       <div class="inline-warn"><strong>The public list is open to anyone with its link:</strong> ticking "Public list" makes those breeding plans public.</div>
     </div>`;

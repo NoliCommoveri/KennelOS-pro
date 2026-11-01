@@ -443,8 +443,9 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
     dogRepo.getAll({ includeArchived: true }),
     saleRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
-    // Parents' earned titles, for the pairings and early litters she shows (§16.4).
-    eventRepo.getByType('title_earned'),
+    // Parents' earned titles, for the pairings and early litters she shows, and
+    // her planned (future-dated) heats, published as the month only (§16.4).
+    Promise.all([eventRepo.getByType('title_earned'), eventRepo.getByType('heat_cycle')]).then(([a, b]) => [...a, ...b]),
     // Her referral links marked "Share with families" (Integrations plan §3).
     editionFlags.accounts ? accountRepo.getAll() : []
   ]);

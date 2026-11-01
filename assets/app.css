@@ -408,6 +408,21 @@ table.data tbody tr.row-review { background: var(--warn-soft); }
 table.data tbody tr.row-review td { border-bottom-color: #e6d5ad; }
 
 /* --- Sortable columns (clickable headers) -------------------------------- */
+/* The CSV import guide's column table (importHelp.js): names wrap at their
+   underscores; on a phone each column is one block, its name and need on one
+   line and what goes in it full width below, so the whole guide fits on screen. */
+table.ih-cols td.ih-name { font-size: 13px; overflow-wrap: normal; min-width: 7em; }
+table.ih-cols td.ih-need .badge { white-space: nowrap; }
+@media (max-width: 640px) {
+  table.ih-cols thead { display: none; }
+  table.ih-cols, table.ih-cols tbody { display: block; }
+  table.ih-cols tr { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.ih-cols tbody tr:last-child { border-bottom: none; }
+  /* table.data's phone padding would double the row's: none on these cells. */
+  table.data.ih-cols td { display: block; padding: 0; border: 0; }
+  table.ih-cols td.ih-name { font-weight: 600; min-width: 0; }
+  table.ih-cols td.ih-text { flex: 1 1 100%; font-size: 14px; line-height: 1.4; }
+}
 table.data th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 table.data th.sortable:hover { background: var(--border); color: var(--text); }
 

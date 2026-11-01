@@ -28,6 +28,7 @@ import { runUnderstandTask } from '../assets/kelsUnderstandUI.js';
 import { runLitterTask, pendingLitterDraft, discardGuidedLitterDraft } from '../assets/guidedLitterUI.js';
 import { runCheckinTask, checkinState } from '../assets/litterCheckinUI.js';
 import { runDogCheckinTask, dogCheckinState } from '../assets/dogCheckinUI.js';
+import { runHealthTestsTask, healthTestsState } from '../assets/healthTestsUI.js';
 import { runTidyTask } from '../assets/tidyUpUI.js';
 import { runPrepTask, prepState } from '../assets/prepPupsUI.js';
 import { runHealthTask } from '../assets/accountHealthUI.js';
@@ -140,6 +141,17 @@ const TASKS = [
     // Up near the top while a heat is coming (or late) or a dog is missing this month's preventative.
     priority: (s) => (s.dogs.heatsDue || s.dogs.missing ? 55 : 30),
     run: (opts) => runDogCheckinTask(chat, opts)
+  },
+  {
+    id: 'health-tests',
+    label: () => 'Log health test results',
+    sub: 'Completed OFA, genetic and breed tests, ticked off each dog\'s plan',
+    keywords: ['health test', 'health tests', 'test result', 'test results', 'results', 'ofa', 'pennhip', 'hips', 'elbows', 'patella',
+      'genetic', 'dna', 'embark', 'panel', 'clearance', 'clearances', 'cardiac', 'heart', 'eye exam', 'caer', 'baer', 'hearing', 'completed test', 'planned tests'],
+    available: (s) => s.tests.dogs > 0,
+    // Higher while a dog has planned tests with no result yet.
+    priority: (s) => (s.tests.missing ? 42 : 28),
+    run: (opts) => runHealthTestsTask(chat, opts)
   },
   {
     id: 'record-litter',
@@ -310,12 +322,12 @@ const TASKS = [
 const taskById = (id) => TASKS.find((t) => t.id === id);
 
 async function state() {
-  const [litters, prep, dogs, dogCare] = await Promise.all([checkinState(), prepState(), dogRepo.getAll({ includeArchived: true }), dogCheckinState()]);
+  const [litters, prep, dogs, dogCare, tests] = await Promise.all([checkinState(), prepState(), dogRepo.getAll({ includeArchived: true }), dogCheckinState(), healthTestsState()]);
   return {
     pendingLitter: pendingLitterDraft(), pendingDogs: pendingDogsDraft(),
     pendingPeople: editionFlags.contactsSection ? pendingPeopleDraft(getGuidedPeopleDraft()) : null,
     pendingForm: editionFlags.waitlist ? pendingFormDraft(getGuidedFormDraft()) : null,
-    litters, prep, setup: { dogs }, dogs: dogCare
+    litters, prep, setup: { dogs }, dogs: dogCare, tests
   };
 }
 

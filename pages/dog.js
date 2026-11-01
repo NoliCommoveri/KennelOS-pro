@@ -11,6 +11,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { kennelRepo, seedTestsKennel } from '../data/kennelRepo.js';
 import { breedChoices } from '../data/dogSearch.js';
 import { eventRepo, testTokensOf } from '../data/eventRepo.js';
+import { TEST_TYPES, testTypeFor, testPrefill } from '../data/healthTestLog.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { pickPupDefaults } from '../data/studRules.js';
@@ -1190,7 +1191,10 @@ async function renderPlannedTestsSection(eventsP = null) {
     ? `<ul class="linked-list" style="margin:14px 0 0; padding:0; list-style:none;">` + unlogged.map((t) => {
         return `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
           <span>${esc(t)} <span class="badge badge-amber">Planned</span></span>
-          <button class="btn btn-sm" data-act="pt-remove" data-token="${esc(t)}" aria-label="Remove ${esc(t)}" title="Remove">✕</button>
+          <span class="pill-row" style="flex-wrap:nowrap;">
+            <button class="btn btn-sm" data-act="pt-log" data-token="${esc(t)}" title="Log a completed ${esc(t)} with the test filled in">Log result</button>
+            <button class="btn btn-sm" data-act="pt-remove" data-token="${esc(t)}" aria-label="Remove ${esc(t)}" title="Remove">✕</button>
+          </span>
         </li>`;
       }).join('') + `</ul>`
     : `<p class="muted" style="margin:14px 0 0;">${planned.length ? 'All planned tests logged.' : 'No tests planned yet.'}</p>`;
@@ -1249,6 +1253,19 @@ async function renderPlannedTestsSection(eventsP = null) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     addTest();
+  });
+  // "Log result": the event form with the test filled in (its usual type, the
+  // test's name, today), so once saved it no longer reads as planned.
+  els.plannedTests.querySelectorAll('[data-act="pt-log"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const name = btn.dataset.token;
+      const tests = (await Promise.all(TEST_TYPES.map((t) => eventRepo.getByType(t)))).flat();
+      const type = testTypeFor(name, tests, testTokensOf);
+      openEventForm({
+        subjectType: 'dog', subjectId: d.id, prefill: testPrefill(name, type, todayYMD()),
+        onSaved: () => { afterEventSaved(); renderPlannedTestsSection(); renderHealthTestsSection(); }
+      });
+    });
   });
   els.plannedTests.querySelectorAll('[data-act="pt-remove"]').forEach((btn) => {
     btn.addEventListener('click', async () => {

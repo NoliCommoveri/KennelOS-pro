@@ -25,7 +25,7 @@ import {
 
 export const NEED_LABELS = {
   required: 'Required',
-  new: 'Required for new records',
+  new: 'New records',
   optional: 'Optional'
 };
 

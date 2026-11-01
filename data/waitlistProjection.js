@@ -21,9 +21,9 @@
 // message stay on her device: the page shows what was asked, never the note.
 import { expectedPricing } from './saleDefaults.js';
 import {
-  waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, overallPositions, litterQueue, isPupAvailable, passesUsed,
+  waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, publicWantsMore, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
-  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
+  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink, embedOrigins
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
@@ -208,7 +208,8 @@ function entryView(entry, ctx) {
       : null,
     // Each item she shows on family pages (§16.4): whether they're waiting for it
     // (listen-only) and, for a born litter, whether they match its available pups.
-    upcoming: entry.status === 'active' ? Object.fromEntries(ctx.upcoming.filter((u) => u.family).map((u) => [u.id, {
+    // A planned heat is no litter yet: nothing to wait for or say "Not this litter" to.
+    upcoming: entry.status === 'active' ? Object.fromEntries(ctx.upcoming.filter((u) => u.family && u.kind !== 'planned_heat').map((u) => [u.id, {
       waiting: isListeningFor(entry, u),
       ...(u.kind === 'early_litter' ? { match: Boolean(ctx.matches.get(entry.id)?.has(u.litter_id)) } : {})
     }])) : {},
@@ -292,19 +293,23 @@ export function titlesByDog(events = []) {
 // switched on, each saying where it shows (`public`, `family`). A parent is its
 // call name and titles, nothing else; dates are hers to publish (Q32): a pairing's
 // expected whelp date, a whelped litter's whelp date and "picks expected to open"
-// (its accept-deposits date). Internal `sire_id`/`dam_id`/`litter_id` are kept
-// for the per-family view and stripped by toUpcomingView.
+// (its accept-deposits date). A planned heat is its dam and the month only
+// (`expected_month`, YYYY-MM): never its day, which never leaves her device.
+// Internal `sire_id`/`dam_id`/`litter_id` are kept for the per-family view and
+// stripped by toUpcomingView.
 // A parent as family pages show one (Coming up, Available Puppies, Review Your
 // Preferences): call name and earned titles. And a litter's breed: the dam's, else
 // the sire's.
 const parentView = (dogsById, titles, id) => ({ name: dogsById.get(id)?.call_name || 'Unknown', titles: [...(titles.get(id) || [])] });
 const breedOf = (dogsById, damId, sireId) => orNull(dogsById.get(damId)?.breed || dogsById.get(sireId)?.breed);
 
-function upcomingSection(kennel, config, { litters, pairings, dogsById, titles }) {
+function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, today }) {
   const show = showUpcoming(config);
   const parent = (id) => parentView(dogsById, titles, id);
-  return upcomingItems(kennel, { litters, pairings })
-    .filter((u) => show[u.stage].public || show[u.stage].family)
+  const where = (u) => ({ public: show[u.stage].public, family: show[u.stage].family });
+  const shown = (u) => show[u.stage].public || show[u.stage].family;
+  const litterItems = upcomingItems(kennel, { litters, pairings })
+    .filter(shown)
     .map((u) => ({
       ...u,
       label: u.litter?.nickname || `${parent(u.dam_id).name} × ${parent(u.sire_id).name}`,
@@ -314,15 +319,29 @@ function upcomingSection(kennel, config, { litters, pairings, dogsById, titles }
       expected_whelp_date: u.kind === 'early_litter' ? null : orNull(u.pairing?.expected_due_date),
       whelp_date: u.kind === 'early_litter' ? orNull(u.litter.whelp_date) : null,
       picks_expected_date: u.kind === 'early_litter' ? orNull(u.litter.accept_deposits_date) : null,
-      public: show[u.stage].public,
-      family: show[u.stage].family
+      expected_month: null,
+      ...where(u)
     }));
+  const heatItems = plannedHeats(kennel, { dogs, events, today })
+    .filter(shown)
+    .map((u) => ({
+      ...u,
+      pairing_id: null, litter_id: null, sire_id: null,
+      label: parent(u.dam_id).name,
+      sire: null,
+      dam: parent(u.dam_id),
+      breed: breedOf(dogsById, u.dam_id, null),
+      expected_whelp_date: null, whelp_date: null, picks_expected_date: null,
+      expected_month: u.month,
+      ...where(u)
+    }));
+  return [...litterItems, ...heatItems];
 }
 
 const toUpcomingView = (u) => ({
   id: u.id, kind: u.kind, label: u.label, pairing_id: u.pairing_id, litter_id: u.litter_id,
   sire: u.sire, dam: u.dam, breed: u.breed, expected_whelp_date: u.expected_whelp_date, whelp_date: u.whelp_date,
-  picks_expected_date: u.picks_expected_date, public: u.public, family: u.family
+  picks_expected_date: u.picks_expected_date, expected_month: u.expected_month, public: u.public, family: u.family
 });
 
 const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by, answer: rc.answer } : null);
@@ -411,7 +430,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   }
 
   const hidden = new Map(live.map((e) => [e.id, placeHidden(e, kennelOffers)]));
-  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogsById, titles });
+  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, today });
   const ctx = {
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
@@ -528,7 +547,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
     // the page is served (publicList, familyPages.listView).
     public_list: publicList(live, kennel.id, programsById, {
-      today, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)), config
+      today, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)), config,
+      wantsMore: (e) => publicWantsMore(e, { config, breeds: kennelBreeds(kennel, dogs), dogsById })
     }),
     entries: entryViews,
     litters: litterViews,

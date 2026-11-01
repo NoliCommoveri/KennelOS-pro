@@ -9,8 +9,9 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
+import { dogRepo } from '../data/dogRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { waitlistConfig, entryName, publicList, publicListText, placeHidden, PUBLIC_INTRO_DEFAULT, PUBLIC_INTRO_MAX } from '../data/waitlistRules.js';
+import { waitlistConfig, entryName, publicList, publicListText, publicWantsMore, kennelBreeds, placeHidden, PUBLIC_INTRO_DEFAULT, PUBLIC_INTRO_MAX } from '../data/waitlistRules.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { esc, fmtDate, param, todayYMD } from '../assets/ui.js';
@@ -72,16 +73,22 @@ function mountIntro(kennel) {
 
 // The public list as text (Spec §15.3), the same families and fields as online.
 async function renderText(kennel) {
-  const [entries, offers, programs, contacts] = await Promise.all([
+  const [entries, offers, programs, contacts, dogs] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
     waitlistOfferRepo.getByKennel(kennel.id),
     waitlistProgramRepo.getMapForKennel(kennel.id),
-    contactRepo.getAll({ includeArchived: true })
+    contactRepo.getAll({ includeArchived: true }),
+    dogRepo.getAll({ includeArchived: true })
   ]);
   const today = todayYMD();
+  const config = waitlistConfig(kennel);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
+  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  const breeds = kennelBreeds(kennel, dogs);
   const rows = publicList(entries, kennel.id, programs, {
-    today, config: waitlistConfig(kennel), nameOf: (e) => entryName(e, contactsById.get(e.contact_id)),
+    today, config, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)),
+    // Same as online: what else they narrowed, after the sex.
+    wantsMore: (e) => publicWantsMore(e, { config, breeds, dogsById }),
     // Same as online: the family holding a turn shows as "Currently deciding".
     deciding: (e) => Boolean(placeHidden(e, offers))
   });
@@ -91,7 +98,7 @@ async function renderText(kennel) {
       <h2 style="margin:0;">Copy the list as text</h2>
       <span class="pill-row"><span class="field-hint" id="pub-copied"></span><button class="btn btn-primary btn-sm" id="pub-copy">Copy</button></span>
     </div>
-    <p class="field-hint">Paste this on Facebook or your website. It shows first names with a last initial, sex preference and the date each family was added. Contact details and programs are left out${waitlistConfig(kennel).public_show_paused ? '. Paused families show "Skipped until" the date their pause ends' : ', and so are paused families (Waitlist settings can show them)'}. A family holding a turn shows as "Currently deciding" in their place. It's a snapshot: copy it again after the list changes.</p>
+    <p class="field-hint">Paste this on Facebook or your website. It shows first names with a last initial and what each family wants: the sex, and only what they narrowed (their breed when you have more than one, Full registration, colors with color matching on, the sires and dams they're waiting for). Contact details and programs are left out${waitlistConfig(kennel).public_show_paused ? '. Paused families show "Skipped until" the date their pause ends' : ', and so are paused families (Waitlist settings can show them)'}. A family holding a turn shows as "Currently deciding" in their place. It's a snapshot: copy it again after the list changes.</p>
     <textarea id="pub-text-body" readonly style="width:100%;min-height:220px;font-family:inherit;">${esc(text)}</textarea>`;
   els.text.querySelector('#pub-copy').addEventListener('click', async () => {
     const ta = els.text.querySelector('#pub-text-body');

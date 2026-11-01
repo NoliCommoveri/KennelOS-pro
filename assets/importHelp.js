@@ -3,19 +3,23 @@
 // what goes in it, other header names that work, accepted values), the rules
 // that hold for every import, and a blank template download. The words live in
 // data/csvImportHelp.js; this only renders them.
-import { importHelp, GENERAL_RULES, templateCsv } from '../data/csvImportHelp.js';
+import { importHelp, GENERAL_RULES, NEED_LABELS, templateCsv } from '../data/csvImportHelp.js';
 import { esc } from './ui.js';
 
 const NEED_BADGE = { required: 'badge-red', new: 'badge-amber', optional: 'badge-gray' };
+
+// A column name that may wrap after each underscore (sire_registered_name breaks
+// as sire_ / registered_ / name), so a long one never widens the table.
+const wrapName = (name) => esc(name).replace(/_/g, '_<wbr>');
 
 // Returns the guide's HTML. Call wireImportHelp(mount, entity) after inserting it.
 export function importHelpHtml(entity) {
   const help = importHelp(entity);
   const rows = help.columns.map((c) => `
     <tr>
-      <td class="mono" style="white-space:nowrap;">${esc(c.name)}</td>
-      <td><span class="badge ${NEED_BADGE[c.need]}">${esc(c.needLabel)}</span></td>
-      <td>${esc(c.text)}
+      <td class="mono ih-name">${wrapName(c.name)}</td>
+      <td class="ih-need"><span class="badge ${NEED_BADGE[c.need]}">${esc(c.needLabel)}</span></td>
+      <td class="ih-text">${esc(c.text)}
         ${c.values ? `<div class="muted" style="font-size:13px; margin-top:4px;">Accepts: ${c.values.map(esc).join(' · ')}</div>` : ''}
         ${c.aliases.length ? `<div class="faint" style="font-size:12px; margin-top:2px;">Also read from a column named: ${c.aliases.map((a) => `<span class="mono">${esc(a)}</span>`).join(', ')}</div>` : ''}
       </td>
@@ -25,14 +29,14 @@ export function importHelpHtml(entity) {
       <summary style="cursor:pointer; font-weight:600;">What should my file look like?</summary>
       <p style="margin-top:10px;">${esc(help.match)}</p>
       <div style="overflow-x:auto;">
-        <table class="data">
-          <thead><tr><th>Column</th><th>Needed?</th><th>What goes in it</th></tr></thead>
+        <table class="data ih-cols">
+          <thead><tr><th>Column</th><th>Need</th><th>What goes in it</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
       ${help.footnote ? `<p class="muted">${esc(help.footnote)}</p>` : ''}
       <p class="muted" style="margin-bottom:4px;"><span class="badge ${NEED_BADGE.required}">Required</span> a row without it can't be matched or created, so it's held for review.
-        <span class="badge ${NEED_BADGE.new}">Required for new records</span> needed to add a new record; a row that updates an existing one can leave it blank.</p>
+        <span class="badge ${NEED_BADGE.new}">${esc(NEED_LABELS.new)}</span> needed to add a new record; a row that updates an existing one can leave it blank.</p>
       <ul class="muted" style="font-size:13px;">${GENERAL_RULES.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
       <button type="button" class="btn" data-role="import-template">Download a blank template</button>
     </details>`;
