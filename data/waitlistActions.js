@@ -35,6 +35,12 @@ import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { saleRepo } from './saleRepo.js';
+import { familySale, pupBirthDate, withExtraRequest } from './familyExtras.js';
+import { withPickupRequest, pickupFrom } from './familyPickup.js';
+import { pickupLocations, timeRange, ruleFor, standardBoarding } from './pickupSlots.js';
+import { pickupFor, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE } from './goHome.js';
+import { eventRepo } from './eventRepo.js';
+import { kennelChargeList, kennelChargeGroups, chargeRules, planSteps, saleExtraCharges } from './extraCharges.js';
 import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
 import { RELEASED_SALE_STATUSES, SALE_END_REASON, registrationsForPurposes, descriptor } from './vocab.js';
@@ -1005,6 +1011,10 @@ export async function applyFamilyPlan(entryId, plan) {
       case 'listen_request': await waitlistEntryRepo.update(entryId, { listen_change_request: plan.request }); break;
       case 'pref_request': await waitlistEntryRepo.update(entryId, { pref_change_request: plan.request }); break;
       case 'companion_request': await waitlistEntryRepo.update(entryId, { companion_request: plan.request }); break;
+      case 'extra_request': await addExtraRequest(entryId, plan.request); break;
+      case 'pickup_request': await addPickupRequest(entryId, plan.request); break;
+      case 'home_location': await setHomeLocation(entryId, { place: plan.place, miles: plan.miles, date }); break;
+      case 'back_out_request': await waitlistEntryRepo.update(entryId, { back_out_request: plan.request }); break;
       case 'listen_apply': await waitlistEntryRepo.update(entryId, plan.changes); break;
       case 'note': case 'skip': break;
       default: throw new Error(`Unknown plan "${plan.op}".`);
@@ -1083,6 +1093,286 @@ export async function markCompanionLinkSent(entryId, { date = todayYMD() } = {})
 export async function declineCompanionRequest(entryId, { date = todayYMD() } = {}) {
   const entry = await load(entryId);
   return waitlistEntryRepo.update(entryId, { companion_request: decided(loadPending(entry, 'companion_request', 'Companion link'), 'declined', date) });
+}
+
+// --- Extras they ask for or cancel (Family Requests plan §3) ------------------------
+// A request waits on the entry (familyExtras.js) until she approves or declines it.
+
+export async function addExtraRequest(entryId, request) {
+  const entry = await load(entryId);
+  const next = withExtraRequest(entry, request);
+  return next ? waitlistEntryRepo.update(entryId, { extra_requests: next }) : entry;
+}
+
+function loadExtraRequest(entry, requestId) {
+  const req = (entry.extra_requests || []).find((r) => r.id === requestId);
+  if (!req || req.decided) throw new Error('That extras request isn\'t waiting any more.');
+  return req;
+}
+
+const decideExtra = (entry, requestId, decision, date) =>
+  (entry.extra_requests || []).map((r) => (r.id === requestId ? { ...r, decided: decision, decided_date: date } : r));
+
+// Approve: an extra asked for goes on their open sale, its name and price copied
+// from her price list and its payment plan copied as dated steps; a cancellation
+// takes it off (not when part of it is paid: she edits the sale for a refund).
+// → { entry, sale, charge, kind, boardingDays } (charge: the row added or removed).
+export async function approveExtraRequest(entryId, requestId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  const req = loadExtraRequest(entry, requestId);
+  const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
+  const sale = familySale(entry, sales);
+  if (!sale) throw new Error(`${req.name || 'This extra'}: they have no open sale to put it on.`);
+  const charges = saleExtraCharges(sale);
+  let charge = null;
+  let boardingDays = 0;
+  if (req.kind === 'cancel') {
+    charge = charges.find((c) => c.id === req.charge_id) || null;
+    if (charge && (charge.payments || []).some((st) => st.paid_date)) {
+      throw new Error(`Part of ${charge.label} is already paid. Edit the sale if you're taking it off and refunding them.`);
+    }
+    if (charge) await saleRepo.update(sale.id, { extra_charges: (sale.extra_charges || []).filter((c) => c.id !== charge.id) });
+  } else {
+    const kennel = await kennelRepo.getById(sale.kennel_id);
+    const item = kennelChargeList(kennel).find((x) => x.id === req.list_id);
+    if (!item) throw new Error(`${req.name || 'That extra'} is no longer on your price list, so there's no price to copy. Add it to the sale by hand, or decline.`);
+    charge = charges.find((c) => c.list_id === item.id) || null;
+    if (!charge) {
+      const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
+      const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+      const rules = chargeRules(item, kennelChargeGroups(kennel));
+      const payments = planSteps(rules.payment_plan, item.amount, { approvalDate: date, birthDate: pupBirthDate(dog, litter) });
+      charge = { id: crypto.randomUUID(), label: item.label, amount: item.amount, list_id: item.id, ...(item.group ? { group: item.group } : {}),
+        ...(payments ? { payments } : {}), ...(item.boarding_days ? { boarding_days: item.boarding_days } : {}) };
+      await saleRepo.update(sale.id, { extra_charges: [...(sale.extra_charges || []), charge] });
+      boardingDays = item.boarding_days || 0;
+    }
+  }
+  const updated = await waitlistEntryRepo.update(entryId, { extra_requests: decideExtra(entry, requestId, 'approved', date) });
+  return { entry: updated, sale: await saleRepo.getById(sale.id), charge, kind: req.kind, boardingDays };
+}
+
+export async function declineExtraRequest(entryId, requestId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  loadExtraRequest(entry, requestId);
+  return waitlistEntryRepo.update(entryId, { extra_requests: decideExtra(entry, requestId, 'declined', date) });
+}
+
+// --- Pickup (Family Requests plan §4) ---------------------------------------------
+
+export async function addPickupRequest(entryId, request) {
+  const entry = await load(entryId);
+  const next = withPickupRequest(entry, request);
+  return next ? waitlistEntryRepo.update(entryId, { pickup_requests: next }) : entry;
+}
+
+// Where they live, measured once (her device from their application, or the server
+// from their answer on the status page). `miles` null = not measured.
+export async function setHomeLocation(entryId, { place, miles = null, date = todayYMD() }) {
+  return waitlistEntryRepo.update(entryId, { home_place: place || null, home_miles: Number.isFinite(miles) ? miles : null, home_measured_date: date });
+}
+
+// Her choice for this family: true (they may suggest a place), false (listed places
+// only), or null (follow her distance rule).
+export async function setOwnPlaceOverride(entryId, value) {
+  return waitlistEntryRepo.update(entryId, { own_place_override: typeof value === 'boolean' ? value : null });
+}
+
+function loadPickupRequest(entry, requestId) {
+  const req = (entry.pickup_requests || []).find((r) => r.id === requestId);
+  if (!req || req.decided) throw new Error('That pickup request isn\'t waiting any more.');
+  return req;
+}
+
+// Standard boarding from a pickup date (Family Requests plan §4): the stay it logged
+// (`details.pickup_boarding`) and the charge it set (`Sale.boarding_from_pickup`) come
+// off when the family moves to another date or cancels. A charge she typed herself
+// is never touched.
+async function clearPickupBoarding(sale) {
+  for (const e of await eventRepo.getForSubject('dog', sale.dog_id)) {
+    if (e.event_type === 'boarding' && e.details?.pickup_boarding && e.details?.sale_id === sale.id) await eventRepo.archive(e.id);
+  }
+  if (sale.boarding_from_pickup) {
+    await saleRepo.update(sale.id, { deferred_boarding_amount: null, deferred_boarding_frequency: null, deferred_boarding_duration_days: null, boarding_from_pickup: false });
+  }
+}
+
+// Her standard boarding for a pickup on a boarding date: the sale's deferred
+// boarding (her rate, per Day, that many days) marked as set from the pickup, and
+// the stay logged. `b` is pickupSlots.standardBoarding's result.
+export async function applyPickupBoarding(saleId, b, rate) {
+  const sale = await saleRepo.getById(saleId);
+  await saleRepo.update(sale.id, { deferred_boarding_amount: rate, deferred_boarding_frequency: 'Day', deferred_boarding_duration_days: b.days, boarding_from_pickup: true });
+  await eventRepo.create({
+    subject_type: 'dog', subject_id: sale.dog_id, event_type: 'boarding', event_date: b.start, event_end_date: b.end, title: BOARDING_TITLE,
+    details: { boarding_reason: 'Deferred pickup', sale_id: sale.id, pickup_boarding: 'yes' }
+  });
+}
+
+// Take the transport fee off a sale (she said so, after the family moved off their
+// own address).
+export async function clearTransportFee(saleId) {
+  return saleRepo.update(saleId, { transport_fee: null });
+}
+
+// A deferred boarding charge she put on the sale herself (not one a pickup set).
+const ownBoarding = (sale) => Number(sale.deferred_boarding_amount) > 0 && !sale.boarding_from_pickup;
+
+const decidePickup = (entry, requestId, decision, date) =>
+  (entry.pickup_requests || []).map((r) => (r.id === requestId ? { ...r, decided: decision, decided_date: date } : r));
+
+// Approve: a time becomes the pup's pickup event (Local pickup, the time and place,
+// `details.pickup_slot_id`); their own address becomes a drop-off with the date,
+// time, method and transport fee she gives (`opts`); a cancel archives the pickup.
+// Any other pickup still to come for this family is archived first, so a change
+// leaves one booking. Nothing she typed on the sale is replaced without her say:
+// a boarding charge of her own stays (→ `boardingKept`, the standard boarding she
+// could apply instead with applyPickupBoarding), and a transport fee left on the
+// sale after a time or a cancel is reported (→ `transportFeeLeft`) for her to keep
+// or clear. → { entry, sale, event, boarding, boardingKept, transportFeeLeft }
+export async function approvePickupRequest(entryId, requestId, { date = todayYMD(), when = null, time = '', method = 'Ground transport', fee = null } = {}) {
+  const entry = await load(entryId);
+  const req = loadPickupRequest(entry, requestId);
+  const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
+  const sale = familySale(entry, sales);
+  if (!sale?.dog_id) throw new Error('They have no open sale with a pup, so there\'s no pickup to plan.');
+  const upcoming = (await eventRepo.getForSubject('dog', sale.dog_id)).filter((e) => pickupFor(sale)(e) && e.event_date >= date);
+  let event = null;
+  let boarding = null;
+  let boardingKept = null;
+  if (req.kind === 'slot') {
+    const kennel = await kennelRepo.getById(sale.kennel_id);
+    const dog = await dogRepo.getById(sale.dog_id);
+    const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+    const slot = (litter?.pickup_slots || []).find((s) => s.id === req.slot_id);
+    if (!slot) throw new Error('That pickup time isn\'t on the litter any more. Decline it, and they can choose another.');
+    const place = pickupLocations(kennel).find((l) => l.id === slot.location_id);
+    for (const e of upcoming) await eventRepo.archive(e.id);
+    await clearPickupBoarding(sale);
+    // A date where her standard boarding applies: the charge on the sale, the stay logged.
+    if (ruleFor(litter, slot.date)?.boarding) {
+      const rate = Number(waitlistConfig(kennel).boarding_rate);
+      const from = pickupFrom(sale, litter, await eventRepo.getForSubject('dog', sale.dog_id));
+      const b = standardBoarding(from, slot.date, rate);
+      if (b && ownBoarding(await saleRepo.getById(sale.id))) boardingKept = { ...b, rate };
+      else if (b) {
+        await applyPickupBoarding(sale.id, b, rate);
+        boarding = b;
+      }
+    }
+    event = await eventRepo.create({
+      subject_type: 'dog', subject_id: sale.dog_id, event_type: 'placement', event_date: slot.date, title: PICKUP_TITLE,
+      ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
+      details: { dropoff_method: 'Local pickup', placement_time: timeRange(slot), ...(place ? { location: `${place.label}, ${place.address}` } : {}), pickup_slot_id: slot.id }
+    });
+  } else if (req.kind === 'address') {
+    const day = when || req.date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day || '')) throw new Error('Choose the day for the drop-off.');
+    for (const e of upcoming) await eventRepo.archive(e.id);
+    await clearPickupBoarding(sale);
+    event = await eventRepo.create({
+      subject_type: 'dog', subject_id: sale.dog_id, event_type: 'placement', event_date: day, title: method === 'Local pickup' ? PICKUP_TITLE : DROPOFF_TITLE,
+      ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
+      details: { dropoff_method: method, ...(time ? { placement_time: time } : {}), location: req.address }
+    });
+    if (fee != null && fee !== '' && Number.isFinite(Number(fee))) await saleRepo.update(sale.id, { transport_fee: Math.round(Number(fee) * 100) / 100 });
+  } else {
+    for (const e of upcoming) await eventRepo.archive(e.id);
+    await clearPickupBoarding(sale);
+  }
+  const updated = await waitlistEntryRepo.update(entryId, { pickup_requests: decidePickup(entry, requestId, 'approved', date) });
+  const after = await saleRepo.getById(sale.id);
+  const transportFeeLeft = req.kind !== 'address' && Number(after.transport_fee) > 0 ? Number(after.transport_fee) : null;
+  return { entry: updated, sale: after, event, boarding, boardingKept, transportFeeLeft };
+}
+
+export async function declinePickupRequest(entryId, requestId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  loadPickupRequest(entry, requestId);
+  return waitlistEntryRepo.update(entryId, { pickup_requests: decidePickup(entry, requestId, 'declined', date) });
+}
+
+// --- Backing out (Family Requests plan §7) ------------------------------------------
+//
+// Approve with her outcome:
+//  - keep:   the sale is cancelled (a paid deposit stays earned); they leave the list
+//            (withdrawn), and can reapply later as a new application.
+//  - move:   the sale is cancelled; what they'd paid as a deposit is carried to their
+//            next pick (`carried_payment`), and their entry is reopened at the END of
+//            the line (`position_anchor_date` = today), application, fee and history
+//            kept (plan §7.1).
+//  - refund: the sale is voided ("Buyer backed out, refunded"), so the deposit isn't
+//            income; they leave the list.
+// `remove` names what she ticked (backOut.backOutItems): extras taken off the sale
+// (the rest stay, marked `kept_after_cancel`: still owed), stays and pickups
+// archived. The offer that gave them the pup is marked `backed_out_date` (never a
+// pass; that litter isn't offered to them again); a turn still open is closed and the
+// kennel moves on. → { entry, sale, outcome, next, waiting }
+export async function approveBackOut(entryId, { outcome, remove = [], pup = null, date = todayYMD() } = {}) {
+  if (!['keep', 'move', 'refund'].includes(outcome)) throw new Error('Choose what happens to their deposit.');
+  const entry = await load(entryId);
+  const req = entry.back_out_request;
+  if (!pending(req)) throw new Error('There\'s no back-out request waiting for this family.');
+  const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
+  const sale = familySale(entry, sales);
+  if (!sale) throw new Error('They have no open sale to back out of any more.');
+  const why = `${req.reason?.label || 'backed out'}${req.reason?.text ? `: ${req.reason.text}` : ''}`;
+  const removeSet = new Set(remove);
+  const depositIn = Boolean(sale.deposit_date) || ['deposit_paid', 'paid_in_full'].includes(sale.status);
+
+  // What she ticked: extras off the sale (the rest kept, still owed); stays and pickups archived.
+  const charges = (sale.extra_charges || []).filter((c) => !removeSet.has(c.id)).map((c) => (c.fee_for ? c : { ...c, kept_after_cancel: true }));
+  for (const id of removeSet) {
+    const ev = await eventRepo.getById(id);
+    if (ev && !ev.is_archived && ev.subject_id === sale.dog_id) await eventRepo.archive(ev.id);
+  }
+  const note = `Backed out on ${date} (${why}).`;
+  // The pup back to Available (or Health hold), as the Sale page asks when a sale ends,
+  // so it can be offered to the next family.
+  if (pup === 'available' || pup === 'health_hold') {
+    const dog = await dogRepo.getById(sale.dog_id);
+    if (dog && dog.status !== 'deceased') await dogRepo.update(dog.id, { disposition: pup });
+  }
+  await saleRepo.update(sale.id, {
+    extra_charges: charges,
+    ...(outcome === 'refund' ? { status: 'voided', end_reason: 'buyer_backed_out', end_note: note } : { status: 'cancelled' })
+  });
+
+  // The offer that gave them the pup.
+  const offers = await waitlistOfferRepo.getByEntry(entry.id);
+  const result = { entry: null, sale: null, outcome, next: null, waiting: [] };
+  let openTurn = false;
+  for (const o of offers.filter((x) => !x.is_archived && (x.sale_id === sale.id || (x.outcome === 'open' && x.chosen_dog_id === sale.dog_id)))) {
+    if (o.outcome === 'open') {
+      openTurn = true;
+      for (const row of offers.filter((x) => !x.is_archived && x.outcome === 'open' && turnIdOf(x) === turnIdOf(o))) {
+        await waitlistOfferRepo.update(row.id, { outcome: 'voided', outcome_date: date, counts_as_pass: false, backed_out_date: date, notes: appendNote(row.notes, `${note} Not a pass.`) });
+      }
+    } else {
+      await waitlistOfferRepo.update(o.id, { backed_out_date: date, notes: appendNote(o.notes, `${note} Not a pass.`) });
+    }
+  }
+
+  const decided = { ...req, decided: 'approved', decided_date: date, outcome };
+  if (outcome === 'move') {
+    result.entry = await waitlistEntryRepo.update(entry.id, {
+      status: 'active', placed_sale_id: null, position_anchor_date: date, back_out_request: decided,
+      ...(depositIn && Number(sale.deposit_amount) > 0 ? { carried_payment: { amount: Number(sale.deposit_amount), date, from_sale_id: sale.id } } : {}),
+      notes: appendNote(entry.notes, `${note} Their deposit moves to their next pup; back on the list at the end of the line.`)
+    });
+  } else {
+    result.entry = await waitlistEntryRepo.update(entry.id, {
+      status: 'withdrawn', withdrawn_date: date, placed_sale_id: entry.placed_sale_id || null, back_out_request: decided,
+      notes: appendNote(entry.notes, `${note} ${outcome === 'refund' ? 'Deposit refunded.' : 'Deposit kept.'}`)
+    });
+  }
+  result.sale = await saleRepo.getById(sale.id);
+  return openTurn ? finishTurn(result, entry.kennel_id, date, 'left') : result;
+}
+
+export async function declineBackOut(entryId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  return waitlistEntryRepo.update(entryId, { back_out_request: decided(loadPending(entry, 'back_out_request', 'back-out'), 'declined', date) });
 }
 
 // "Not this litter" (Spec §16.2): a pending pass on a litter (or an upcoming

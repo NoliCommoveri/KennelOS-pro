@@ -148,6 +148,10 @@ export const ACCOUNT_TYPE = [
   // Stripe key (Integrations plan §4), and the only one offered as "paid via" for
   // a sale's deposit or balance, or a waitlist application fee.
   { value: 'payment_service', label: 'Payment service', badge: 'badge-green' },
+  // Flight nannies and ground transporters (Family Requests plan D8): shared with
+  // families, they show under "Getting your pup home" on the status page of a
+  // family with a picked pup, never with her recommended products.
+  { value: 'transport',   label: 'Transport (flight nanny, ground)', badge: 'badge-blue' },
   { value: 'other',       label: 'Other',               badge: 'badge-gray' }
 ];
 
@@ -351,6 +355,9 @@ export const SALE_END_REASON = [
   { value: 'failed_health_check', label: 'Failed a health check (can\'t be sold)',  statuses: ['voided'] },
   { value: 'health_problem',      label: 'Health problem (within the guarantee)',  statuses: ['returned'] },
   { value: 'buyer_choice',        label: 'Buyer\'s choice',                         statuses: ['returned'] },
+  // A family who backed out and was refunded (Family Requests plan §7, D13): voided, so
+  // the deposit isn't income, but never "put them back in line" (restoresFamily).
+  { value: 'buyer_backed_out',    label: 'Buyer backed out, refunded',             statuses: ['voided'] },
   { value: 'other',               label: 'Other',                                   statuses: ['voided', 'returned'] }
 ];
 export const saleEndReasonsFor = (status) => SALE_END_REASON.filter((r) => r.statuses.includes(status));
@@ -457,7 +464,7 @@ export function descriptor(vocab, value) {
 // combobox surfaces these as suggestions without blocking free text.
 export const BOARDING_REASON_SUGGESTIONS = [
   'Stud service', 'Co-owner rotation', 'Foster', 'Grow-out', 'Owner travel', 'Whelp assist',
-  'With handler / show circuit', 'Other'
+  'With handler / show circuit', 'Training', 'Other'
 ];
 
 // Suggest-not-enforce starter set for a recorded COI's `method` (Stage 5, Build

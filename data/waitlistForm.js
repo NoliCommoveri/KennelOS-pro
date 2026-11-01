@@ -85,8 +85,15 @@ export const LOCKED_TYPE_LABEL = {
   pref_purposes: 'Pet / Performance / Show / Breeding / Co-own, choose all · mapped to registration (Limited, Full, Co-own), decides which pups they\'re offered',
   pref_colors: 'Colors · notes, or matching if you turn color matching on',
   ready_timing: 'ASAP / 1 month / 3 months / 6+ months · anything but ASAP is on hold that long',
-  public_notice: 'Shown to every applicant · no answer'
+  public_notice: 'Shown to every applicant · no answer',
+  location: 'Short answer, required · where they live, for your transport distance rule'
 };
+
+// City / state while her "families must live at least N miles away" rule is on
+// (Family Requests plan §4.1, D17c): locked and required, so every new application
+// says where they live. Off, it's an ordinary question again.
+export const LOCATION_LOCK = Object.freeze({ id: 'location', key: 'location', label: 'City / state', type: 'short_text', required: true, help: '', options: [] });
+export const locationRuleOn = (config) => Number(config?.transport_min_home_miles) > 0;
 
 const LOCKED_DEFAULTS = DEFAULT_FORM_QUESTIONS.filter((x) => x.key);
 
@@ -121,7 +128,11 @@ export function formQuestions(config) {
   const seenKeys = new Set();
   for (const stale of stored) {
     if (!stale || typeof stale !== 'object') continue;
-    const raw = upgradeLegacy(stale);
+    let raw = upgradeLegacy(stale);
+    // A City / state saved while the distance rule locked it reads as hers again;
+    // the rule (below) locks it afresh while it's on.
+    // Its "required" came from the rule, so it goes back to optional with the lock.
+    if (raw.key === 'location') { const { key: _k, ...rest } = raw; raw = { ...rest, required: false }; }
     const locked = raw.key ? LOCKED_DEFAULTS.find((d) => d.key === raw.key) : null;
     if (raw.key && (!locked || seenKeys.has(raw.key))) continue; // unknown or duplicate lock
     const id = locked ? locked.id : clean(raw.id);
@@ -150,6 +161,11 @@ export function formQuestions(config) {
     const idx = before ? out.findIndex((o) => o.id === before.id) + 1 : 0;
     out.splice(idx, 0, { ...d });
     seenIds.add(d.id);
+  }
+  if (locationRuleOn(config)) {
+    const at = out.findIndex((q) => q.id === 'location');
+    if (at >= 0) out[at] = { ...LOCATION_LOCK, label: out[at].label || LOCATION_LOCK.label, help: out[at].help || '' };
+    else out.splice(Math.max(0, out.findIndex((q) => q.key === 'email') + 1), 0, { ...LOCATION_LOCK });
   }
   return out;
 }

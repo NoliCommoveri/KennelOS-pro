@@ -29,7 +29,7 @@ import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { inScopeOnly } from './kennelScope.js';
 import { ourRole } from './studRules.js';
 import { editionFlags } from './editionConfig.js';
-import { saleExtraCharges } from './extraCharges.js';
+import { saleExtraCharges, stepLabel } from './extraCharges.js';
 import { INCOME_COMPONENTS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
@@ -67,7 +67,10 @@ function balancePaid(s) {
 // sale (Waitlist Spec §5.3) — it was paid toward the price, so it comes off the
 // balance (never below 0).
 function saleComponents(s, feeCredit = 0) {
-  if (isLostSale(s)) return [];
+  // Extras she kept when the family backed out (Family Requests plan §7.2) are still
+  // owed whatever the sale's status: paid parts earned, the rest anticipated.
+  const kept = saleExtraCharges(s).filter((x) => x.kept_after_cancel);
+  if (isLostSale(s)) return keptParts(s, kept);
   const dead = RELEASED_SALE_STATUSES.includes(s.status);
   const price = num(s.price);
   const deposit = num(s.deposit_amount);
@@ -77,12 +80,13 @@ function saleComponents(s, feeCredit = 0) {
     { component: 'balance', amount: balance, paid: balancePaid(s) },
     { component: 'transport', amount: num(s.transport_fee), paid: balancePaid(s) },
     { component: 'boarding', amount: num(s.deferred_boarding_amount) * boardingCount(s), paid: balancePaid(s) },
-    ...saleExtraCharges(s).map((x) => ({ component: 'extra', key: `extra:${x.id}`, label: x.label, amount: x.amount, paid: balancePaid(s) }))
+    ...saleExtraCharges(s).flatMap(extraParts.bind(null, s))
   ];
   const out = [];
+  if (dead && kept.length) return [...deadParts(parts.filter((p) => !(p.key && kept.some((x) => p.key === `extra:${x.id}` || p.key.startsWith(`extra:${x.id}:`))))), ...keptParts(s, kept)];
   for (const p of parts) {
     if (!p.amount) continue;
-    const named = p.key ? { key: p.key, label: p.label } : {};
+    const named = p.key ? { key: p.key, label: p.label, ...(p.paidDate ? { paid_date: p.paidDate } : {}), ...(p.dueDate ? { due_date: p.dueDate } : {}) } : {};
     if (dead) {
       if (p.paid) out.push({ component: p.component, ...named, amount: p.amount, state: 'earned' });
       // unpaid remainder of a dead sale → dropped from both totals
@@ -91,6 +95,31 @@ function saleComponents(s, feeCredit = 0) {
     }
   }
   return out;
+}
+
+// A released sale's parts: only what was paid survives, as earned.
+function deadParts(parts) {
+  return parts.filter((p) => p.amount && p.paid).map((p) => ({ component: p.component, ...(p.key ? { key: p.key, label: p.label, ...(p.paidDate ? { paid_date: p.paidDate } : {}) } : {}), amount: p.amount, state: 'earned' }));
+}
+
+// Kept extras on a released sale: each part earned once paid (its own paid date;
+// the balance doesn't apply any more), else still owed.
+function keptParts(s, kept) {
+  return kept.flatMap((x) => extraParts({ ...s, status: 'deposit_pending', balance_paid_date: null }, x)).filter((p) => p.amount).map((p) => ({
+    component: 'extra', key: p.key, label: p.label, amount: p.amount, state: p.paidDate ? 'earned' : 'anticipated',
+    ...(p.paidDate ? { paid_date: p.paidDate } : {}), ...(p.dueDate ? { due_date: p.dueDate } : {})
+  }));
+}
+
+// An extra charge's parts: one, paid with the balance; or, with a payment plan
+// (Family Requests plan §3.1), one per step, keyed `extra:<id>:<step id>`, each
+// earned on its own paid date or else with the balance.
+function extraParts(s, x) {
+  if (!x.payments) return [{ component: 'extra', key: `extra:${x.id}`, label: x.label, amount: x.amount, paid: balancePaid(s) }];
+  return x.payments.map((st) => ({
+    component: 'extra', key: `extra:${x.id}:${st.id}`, label: stepLabel(x, st), amount: st.amount,
+    paid: Boolean(st.paid_date) || balancePaid(s), paidDate: st.paid_date || null, dueDate: st.due_date || null
+  }));
 }
 
 // The sales channel's processing fee (Sale.processing_fee_amount, Integrations
@@ -152,8 +181,8 @@ function studComponents(s) {
 function saleComponentDate(s, c) {
   const fallback = s.sale_date || s.deposit_date || s.balance_paid_date || '';
   if (c.component === 'deposit') return s.deposit_date || fallback;
-  if (c.state === 'earned') return s.balance_paid_date || fallback;
-  return s.balance_due_date || fallback;
+  if (c.state === 'earned') return c.paid_date || s.balance_paid_date || fallback;
+  return c.due_date || s.balance_due_date || fallback;
 }
 
 function sumBy(components, state) {
@@ -263,7 +292,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null }
     // `due` is only a due date she actually set (the balance's), for Receivables'
     // aging; `when` always has a date, for filing by month.
     const cash = saleComponents(s, feeCredit).map((c) => ({
-      ...c, when: saleComponentDate(s, c), due: c.state === 'anticipated' && c.component !== 'deposit' ? s.balance_due_date || '' : ''
+      ...c, when: saleComponentDate(s, c), due: c.state === 'anticipated' && c.component !== 'deposit' ? c.due_date || s.balance_due_date || '' : ''
     }));
     if (!cash.length) continue; // no money on this sale — nothing to show
     const components = [...cash, ...feeComponents(s, cash, saleGross(s, feeCredit))];

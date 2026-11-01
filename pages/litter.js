@@ -788,16 +788,18 @@ async function renderPicksSection() {
   if (!els.picks) return;
   if (!editionFlags.waitlist || ctx.mode !== 'view' || !ctx.original) { els.picks.innerHTML = ''; return; }
   const { renderWaitlistPicksPanel } = await import('../assets/waitlistPicksPanel.js');
-  await renderWaitlistPicksPanel({
-    mount: els.picks,
-    litter: ctx.original,
-    onChange: async () => {
-      ctx.original = await litterRepo.getById(ctx.original.id);
-      await loadRefs();
-      renderRosterSection();
-      renderPicksSection();
-    }
-  });
+  const onChange = async () => {
+    ctx.original = await litterRepo.getById(ctx.original.id);
+    await loadRefs();
+    renderRosterSection();
+    renderPicksSection();
+  };
+  await renderWaitlistPicksPanel({ mount: els.picks, litter: ctx.original, onChange });
+  // Pickup times (Family Requests plan §4), under the picks.
+  const times = document.createElement('div');
+  els.picks.appendChild(times);
+  const { renderPickupTimesPanel } = await import('../assets/pickupTimesPanel.js');
+  await renderPickupTimesPanel({ mount: times, litter: ctx.original, onChange });
 }
 
 // After adding puppies the roster (and dog names cached in ctx) may have changed.

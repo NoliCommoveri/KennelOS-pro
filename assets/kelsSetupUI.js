@@ -34,7 +34,7 @@ import { editionFlags, edition } from '../data/editionConfig.js';
 import { isProOnlyPage } from '../data/proPages.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { setupParts, logoUses, listWords, settingsToCopy, newKennelNameProblem, possessive, accountLine, FEE_ACCOUNT_TYPES, SETUP_HOW, ACCOUNTS_HOW } from '../data/kelsSetup.js';
-import { kennelChargeList, readExtraCharges } from '../data/extraCharges.js';
+import { kennelChargeList, readPriceList } from '../data/extraCharges.js';
 import { paymentLink } from '../data/paymentLinks.js';
 import { EXPORT_MAX_DAYS } from '../data/accountHealth.js';
 import { getLastBackupDate, setFureverSettings } from '../data/settings.js';
@@ -341,7 +341,9 @@ class Setup {
         const rows = [...root.querySelectorAll('#xc-list .xc-row')].map((el) => ({
           id: el.dataset.xcId || null, label: el.querySelector('.xc-label').value, amount: el.querySelector('.xc-amount').value
         }));
-        const { list: next, error } = readExtraCharges(rows);
+        // Only names and prices here: readPriceList keeps each extra's group,
+        // rules and plan from the Kennel page.
+        const { list: next, error } = readPriceList(rows, this.kennel.extra_charge_list);
         if (error) return error;
         await kennelRepo.update(this.kennel.id, { extra_charge_list: next });
         return next;

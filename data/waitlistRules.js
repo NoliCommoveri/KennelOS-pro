@@ -50,8 +50,27 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   facebook_button: false, // "Message us on Facebook" on status pages (Spec §11, W2 step 8); needs facebook_page
   facebook_page: '', // her Facebook Page link, as she typed it (facebook.com/… or m.me/…)
   embed: false, // her own website may show the form and list in a frame (Integrations plan §1)
-  embed_origins: [] // …only these sites (embedOrigin form, at most EMBED_ORIGINS_MAX); none = any site
+  embed_origins: [], // …only these sites (embedOrigin form, at most EMBED_ORIGINS_MAX); none = any site
+  extras_info_url: '', // her own page with the extras' details and prices (Family Requests plan §3); https only
+  extras_intro_text: '', // her message above the extras on a family's status page; blank = EXTRAS_INTRO_DEFAULT
+  // Pickup and transport (Family Requests plan §4–§5; transportFee.js):
+  mileage_rate: null, // fee per mile for a family's own meetup address; blank = no fee worked out
+  mileage_basis: 'round_trip', // 'one_way' | 'round_trip'
+  mileage_free_under: 0, // a trip under this many miles (after round trip doubles it) is free
+  transport_far_miles: 150, // over this, "she'll be in touch" (and the transport options email)
+  transport_min_home_miles: 0, // families may suggest their own place only living this far away; 0 = any family
+  pickup_change_days: 2, // a family may change or cancel their pickup time until this many days before
+  boarding_rate: null, // her standard boarding, $ per day, for a pickup date marked "standard boarding applies"
+  // Backing out (Family Requests plan §7; backOut.js):
+  back_out_reasons: null, // [{ id, label }]; null = BACK_OUT_REASONS_DEFAULT ("Something else" always added)
+  back_out_policy: [], // [{ reason_id, from_weeks?, until_weeks?, outcome: 'keep' | 'move' }]; first row that fits suggests
+  back_out_policy_text: '' // what families read before sending; blank = BACK_OUT_POLICY_TEXT_DEFAULT
 });
+
+// The default message above the extras on a family's status page (the owner's wording).
+export const EXTRAS_INTRO_DEFAULT = 'We offer several paid extras to our families. Please click the link below to see the details before making your selection below.';
+// Her extras page link, when it's a usable https address; else ''.
+export const extrasInfoLink = (v) => (/^https:\/\/[^\s"'<>]{1,500}$/i.test(String(v || '').trim()) ? String(v).trim() : '');
 
 // What's wrong with a kennel's waitlist settings, or '' (Waitlist settings card and
 // Kels's "Set up my waitlist" both check with this before saving).
@@ -65,6 +84,12 @@ export function waitlistConfigProblem(c) {
   if (Array.isArray(c.pass_reasons) && !c.pass_reasons.length && c.pass_other === false) return 'Keep at least one reason for passing, or tick "Other".';
   if (c.facebook_button && !String(c.facebook_page || '').trim()) return 'Add your Page link first.';
   if (String(c.facebook_page || '').trim() && !messengerLink(c.facebook_page)) return 'That link isn\'t a Facebook Page. Use a facebook.com or m.me address.';
+  if (String(c.extras_info_url || '').trim() && !extrasInfoLink(c.extras_info_url)) return 'The extras page link has to be a web address starting with https://.';
+  const atLeast0 = (v) => v == null || v === '' || (Number.isFinite(Number(v)) && Number(v) >= 0);
+  if (!atLeast0(c.mileage_rate)) return 'The fee per mile can\'t be negative.';
+  if (!atLeast0(c.boarding_rate)) return 'The boarding rate can\'t be negative.';
+  if (!atLeast0(c.mileage_free_under) || !atLeast0(c.transport_far_miles) || !atLeast0(c.transport_min_home_miles)) return 'Miles can\'t be negative.';
+  if (!atLeast0(c.pickup_change_days)) return 'Days before pickup can\'t be negative.';
   return '';
 }
 
@@ -413,7 +438,8 @@ export function isPupAvailable(dog, sales = []) {
 // home) or RETURNED for a health problem within the guarantee. Never a cancelled
 // sale or a buyer's-choice return: the family backed out themselves.
 export function restoresFamily(sale) {
-  return isLostSale(sale) && !sale.is_archived;
+  // A family who backed out and was refunded isn't put back in line by this.
+  return isLostSale(sale) && !sale.is_archived && sale.end_reason !== 'buyer_backed_out';
 }
 
 // The waitlist family a lost sale belongs to, or null:
@@ -771,6 +797,10 @@ export function litterQueue(entries, litter, pups, sales, { today, config = WAIT
 // Offers that have already used a family's turn on a litter. A voided offer
 // doesn't (she cancelled it), so that family can be offered again.
 const SPENT_OUTCOMES = ['open', 'accepted', 'passed', 'no_response'];
+// A turn on a litter is spent by those outcomes, or by backing out of the pup it gave
+// them (Family Requests plan §7): never a pass, but that litter isn't offered again
+// unless she offers it by hand.
+const spentOffer = (o) => SPENT_OUTCOMES.includes(o.outcome) || Boolean(o.backed_out_date);
 
 export function hasOpenOffer(offers, litterId) {
   return offers.some((o) => !o.is_archived && o.litter_id === litterId && o.outcome === 'open');
@@ -822,13 +852,13 @@ export function undoPassBlocker(offer, entry, today) {
 // against them — they simply aren't in the queue.
 // Has this family already used its turn on this litter (an offer that wasn't voided)?
 export function turnSpent(offers, litterId, entryId) {
-  return offers.some((o) => !o.is_archived && o.litter_id === litterId && o.entry_id === entryId && SPENT_OUTCOMES.includes(o.outcome));
+  return offers.some((o) => !o.is_archived && o.litter_id === litterId && o.entry_id === entryId && spentOffer(o));
 }
 
 export function nextFamilyForLitter(entries, offers, litter, pups, sales, opts = {}) {
   if (hasOpenOffer(offers, litter.id)) return null;
   const spent = new Set(
-    offers.filter((o) => !o.is_archived && o.litter_id === litter.id && SPENT_OUTCOMES.includes(o.outcome)).map((o) => o.entry_id)
+    offers.filter((o) => !o.is_archived && o.litter_id === litter.id && spentOffer(o)).map((o) => o.entry_id)
   );
   return litterQueue(entries, litter, pups, sales, opts).find((q) => !spent.has(q.entry.id)) || null;
 }

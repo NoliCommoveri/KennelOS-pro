@@ -24,6 +24,9 @@ import { eventTypesFor, descriptor, EVENT_TYPES, EXPENSE_CATEGORIES, defaultExpe
 import { esc, todayYMD, param, confirmModal } from './ui.js';
 import { attachNewContactButton } from './contactPicker.js';
 
+// Detail keys that link an event to another record and aren't form fields.
+const LINK_DETAIL_KEYS = ['sale_id', 'extra_charge_id', 'pickup_slot_id', 'pickup_boarding'];
+
 // Which combobox field on each test-bearing type draws from the shared test
 // vocabulary rather than a static options list (Test Planning Addendum §3).
 const TEST_VOCAB_FIELDS = { genetic_test: 'panel_name', breed_specific_test: 'test_name', ofa_pennhip: 'joint' };
@@ -430,7 +433,10 @@ export async function openEventForm(opts) {
     // while no contact is linked (a linked vet replaces the typed name).
     const fb = fallbackKey(descriptor(EVENT_TYPES, draft.event_type));
     const fallbackName = fb ? draft.details[fb] : undefined;
-    draft.details = {};
+    // A training stay's link to its sale and extra (Family Requests plan §6) isn't
+    // an input either: it rides through an edit unchanged.
+    const links = Object.fromEntries(LINK_DETAIL_KEYS.filter((k) => draft.details[k]).map((k) => [k, draft.details[k]]));
+    draft.details = { ...links };
     if (fallbackName && !draft.related_contact_id) draft.details[fb] = fallbackName;
     modal.querySelectorAll('[data-detail]').forEach((el) => {
       const val = el.value.trim();

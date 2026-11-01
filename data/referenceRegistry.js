@@ -22,7 +22,8 @@
 //     multiEntry?:   true if `field` is a Dexie multi-entry (*) index,
 //     compoundIndex? + discriminatorValue?:  for the polymorphic Event, match
 //       only rows of the right subject_type via the [subject_type+subject_id]
-//       compound index }
+//       compound index,
+//     scan?: true when `field` is an unindexed dotted path (every row is read) }
 import { db, existingTableNames } from './db.js';
 
 // --- Dog: what can point at a Dog (Data Model v3 §10) -----------------------
@@ -126,7 +127,10 @@ export const KENNEL_REFERENCES = [
 export const SALE_REFERENCES = [
   { table: 'contracts', field: 'related_sale_id', label: 'documented by a contract' },
   { table: 'waitlist_entries', field: 'placed_sale_id', label: 'placement of a waitlist family' },
-  { table: 'waitlist_offers', field: 'sale_id', label: 'a waitlist family\'s pick' }
+  { table: 'waitlist_offers', field: 'sale_id', label: 'a waitlist family\'s pick' },
+  // A training stay booked with its extra (Family Requests plan §6): the link lives
+  // in the boarding event's details, which isn't indexed, so it's a scan.
+  { table: 'events', field: 'details.sale_id', label: 'a training stay booked with one of its extras', scan: true }
 ];
 
 // --- StudService: what can point at a StudService (Stage 4) ----------------
@@ -196,6 +200,11 @@ async function countReferences(ref, id) {
     // Polymorphic reference (Event): match [discriminatorValue, id] on the
     // compound index so we only count events whose subject_type is right.
     return table.where(ref.compoundIndex).equals([ref.discriminatorValue, id]).count();
+  }
+  // An unindexed path (`scan`): every row is read. Only for rare deletes.
+  if (ref.scan) {
+    const path = ref.field.split('.');
+    return table.filter((row) => path.reduce((v, k) => (v == null ? v : v[k]), row) === id).count();
   }
   // Both single-field and multi-entry (*) indexes answer .where(field).equals(id).
   return table.where(ref.field).equals(id).count();

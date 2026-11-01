@@ -206,7 +206,7 @@ export async function openInvoiceGenerator({ preselect = null, onClose = null } 
     st.record = record;
     st.order = items.map((it) => it.key);
     st.lines = {};
-    for (const it of items) st.lines[it.key] = { base: it.amount, label: it.invoiceLabel, include: true, mode: 'full', collected: '', dueDate: soonest };
+    for (const it of items) st.lines[it.key] = { base: it.amount, label: it.invoiceLabel, include: true, mode: 'full', collected: '', dueDate: it.due_date || soonest };
     st.number = record.invoice_number || '';
     st.notes = record.invoice_notes || '';
     st.payMethod = record.payment_method || '';

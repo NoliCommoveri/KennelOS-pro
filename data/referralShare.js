@@ -23,17 +23,38 @@ export function safeLink(raw) {
   return /^https?:\/\/[^\s"'<>]+$/i.test(t) ? t : '';
 }
 
-// The accounts to show families: switched on, not archived, carrying a link or a
-// code. → [{ name, link, code, instructions }], by name. Copied field by field.
+const isTransport = (a) => a.account_type === 'transport';
+const shared = (a) => a && a.share_with_families === true && !a.is_archived;
+
+// The products to show families: switched on, not archived, not transport (those
+// are sharedTransport's), carrying a link or a code. → [{ name, link, code,
+// instructions }], by name. Copied field by field.
 export function sharedReferrals(accounts) {
   return (accounts || [])
-    .filter((a) => a && a.share_with_families === true && !a.is_archived && (safeLink(a.referral_link) || text(a.referral_code)))
+    .filter((a) => shared(a) && !isTransport(a) && (safeLink(a.referral_link) || text(a.referral_code)))
     .map((a) => ({
       name: text(a.name),
       link: safeLink(a.referral_link),
       code: text(a.referral_code),
       instructions: text(a.referral_instructions)
     }))
+    .sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
+}
+
+// Her transport suggestions (flight nannies, ground transport; Family Requests
+// plan D8): Transport accounts switched on to share, not archived, with a web link
+// (their referral link, else their website) or notes. → [{ name, link, notes }],
+// by name. Shown on the status page of a family with a picked pup, and pulled
+// into the transport options email (plan §5.1).
+export function sharedTransport(accounts) {
+  return (accounts || [])
+    .filter((a) => shared(a) && isTransport(a))
+    .map((a) => ({
+      name: text(a.name),
+      link: safeLink(a.referral_link) || safeLink(a.website) || safeLink(/^[\w.-]+\.[a-z]{2,}(\/\S*)?$/i.test(text(a.website)) ? `https://${text(a.website)}` : ''),
+      notes: text(a.referral_instructions)
+    }))
+    .filter((t) => t.name && (t.link || t.notes))
     .sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
 }
 

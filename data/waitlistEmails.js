@@ -16,6 +16,8 @@
 export const EMAIL_KINDS = Object.freeze([
   'approved', 'on_list', 'declined', 'offer', 'pass_recorded', 'deadline_passed', 'almost_turn', 'review_prefs', 'litter_born',
   'request_approved', 'request_declined', 'status_link', 'note',
+  // Getting their pup home (Family Requests plan §5.1): she sends it, never the server.
+  'transport_options',
   // Sent by the server itself while her phone is off (W2 step 7).
   'offer_reminder', 'fee_reminder', 'ready_check'
 ]);
@@ -36,7 +38,9 @@ export const EMAIL_PLACEHOLDERS = Object.freeze([
   { key: '[Respond by]', hint: 'the last day to choose and pay the deposit' },
   { key: '[Position]', hint: 'their place in line, like #4' },
   { key: '[Pay by]', hint: '" by <date>" when the fee has a due date, else nothing' },
-  { key: '[Request]', hint: 'what they asked for' }
+  { key: '[Request]', hint: 'what they asked for' },
+  { key: '[Distance]', hint: '" You\'re about 340 miles from us." when they gave their address, else nothing' },
+  { key: '[Transport Options]', hint: 'your Transport accounts shared with families: name, link, notes' }
 ]);
 
 // The emails she can reword, in the order the settings editor shows them.
@@ -52,12 +56,17 @@ export const EMAIL_TEMPLATE_KINDS = Object.freeze([
   { kind: 'request_approved', label: 'Their request approved' },
   { kind: 'request_declined', label: 'Their request declined' },
   { kind: 'status_link', label: 'Their status page link' },
+  { kind: 'transport_options', label: 'Transport options (getting their pup home)' },
   { kind: 'offer_reminder', label: 'Reminder: their turn ends soon (sent by KennelOS)' },
   { kind: 'fee_reminder', label: 'Reminder: the fee is due tomorrow (sent by KennelOS)' },
   { kind: 'ready_check', label: '"Ready now?" (sent by KennelOS)' }
 ]);
 
 export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
+  transport_options: {
+    subject: 'Getting your puppy home from [Kennel Name]',
+    body: 'Hi [Family],\n\nThanks for letting us know where you are.[Distance] We\'ll be in touch soon about whether we can bring your puppy to you or you\'ll need a flight nanny. In the meantime, here are the transport options our families have used:\n\n[Transport Options]\n\n[Kennel Name]'
+  },
   approved: {
     subject: 'You\'re approved for [Kennel Name]\'s waitlist',
     body: 'Hi [Family],\n\nGood news: your application to [Kennel Name] is approved. To join our waitlist, please pay the application fee[Pay by]. The amount and how to pay are on your status page.\n\nYour place in line is set by the day we receive your fee.\n\n[Kennel Name]'
@@ -147,7 +156,7 @@ export function emailTemplate(config, kind) {
 }
 
 // The placeholder values a set of facts fills in. Dates come as YYYY-MM-DD.
-export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, position = null, payBy = null, request = '' } = {}) {
+export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, position = null, payBy = null, request = '', distance = null, transport = [] } = {}) {
   return {
     'kennel name': kennelName || 'Our kennel',
     family: family || 'there',
@@ -155,7 +164,11 @@ export function placeholderValues({ kennelName = '', family = '', litters = [], 
     'respond by': respondBy ? longDate(respondBy) : 'the date on your status page',
     position: position ? `#${position}` : 'on the list',
     'pay by': payBy ? ` by ${longDate(payBy)}` : '',
-    request: request || ''
+    request: request || '',
+    distance: Number.isFinite(distance) ? ` You're about ${Math.round(distance).toLocaleString('en-US')} miles from us.` : '',
+    'transport options': transport.length
+      ? transport.map((t) => [`- ${t.name}${t.link ? `: ${t.link}` : ''}`, t.notes ? `  ${t.notes}` : ''].filter(Boolean).join('\n')).join('\n')
+      : '(Ask us for our current recommendations.)'
   };
 }
 
@@ -186,6 +199,15 @@ export function requestPhrase(field, request) {
   if (field === 'pause_request') return request && request.until ? `to pause your place until ${longDate(request.until)}` : 'to pause your place';
   if (field === 'listen_change_request') return 'to change which litters you wait for';
   if (field === 'pref_change_request') return 'to change your preferences';
+  // One of their extras requests (Family Requests plan §3): { kind, name }.
+  if (field === 'back_out_request') return 'to back out of your puppy';
+  // A pickup request (Family Requests plan §4): { kind, date, address }.
+  if (field === 'pickup_request') {
+    if (request?.kind === 'cancel') return 'to cancel your pickup time';
+    if (request?.kind === 'address') return `to meet at ${request.address || 'your address'}`;
+    return request?.date ? `for a pickup time on ${longDate(request.date)}` : 'for a pickup time';
+  }
+  if (field === 'extra_request') return request && request.kind === 'cancel' ? `to cancel ${request.name || 'an extra'}` : `for ${request?.name || 'an extra'}`;
   return '';
 }
 

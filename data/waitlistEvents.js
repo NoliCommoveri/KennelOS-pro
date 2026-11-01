@@ -35,8 +35,10 @@
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
+import { backOutReasons, BACK_OUT_OTHER } from './backOut.js';
 
-export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready', 'companion_request'];
+export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready', 'companion_request', 'extra_request', 'extra_cancel',
+  'pickup_book', 'pickup_cancel', 'pickup_address', 'home_location', 'back_out'];
 export const NOTE_MAX = 500;
 
 const clean = (v) => String(v ?? '').trim().slice(0, NOTE_MAX);
@@ -64,6 +66,10 @@ export const activityId = (event) => `event-${event.seq}`;
 //   op 'unprepass'      { target }   → taken back
 //   op 'ready'          { answer, until, reason } → "Ready now?" answered (§16.7)
 //   op 'companion_request' { request } → entry.companion_request
+//   op 'extra_request'  { request }  → added to entry.extra_requests (familyExtras.js)
+//   op 'pickup_request' { request }  → added to entry.pickup_requests (familyPickup.js)
+//   op 'home_location'  { place, miles } → where they live, on the entry
+//   op 'back_out_request' { request } → entry.back_out_request (backOut.js)
 // `date` is the day the family acted, in the kennel's time zone; `activity` the
 // line for their entry's activity ({ id, at, body }), or null.
 export function planFamilyEvent(event, ctx) {
@@ -178,6 +184,63 @@ export function planFamilyEvent(event, ctx) {
         return note(`Asked for their Companion link, but they have no open sale now, so there's no family link to send.${why ? ` They said: "${why}"` : ''}`);
       }
       return { op: 'companion_request', date, activity: null, request: { requested_date: date, note: why } };
+    }
+    case 'extra_request':
+    case 'extra_cancel': {
+      // An extra asked for or cancelled (Family Requests plan §3): only while they
+      // have an open sale; it waits for her either way (plan D2).
+      const cancel = event.kind === 'extra_cancel';
+      const name = clean(p.name).slice(0, 120) || 'an extra';
+      const why = clean(p.note);
+      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+        return note(`Asked ${cancel ? `to cancel ${name}` : `for ${name}`}, but they have no open sale now, so there's nothing to ${cancel ? 'take it off' : 'put it on'}.${why ? ` They said: "${why}"` : ''}`);
+      }
+      if (cancel ? typeof p.charge_id !== 'string' || !p.charge_id : typeof p.list_id !== 'string' || !p.list_id) return skip('bad_payload');
+      return { op: 'extra_request', date, activity: null, request: {
+        id: activityId(event), kind: cancel ? 'cancel' : 'add', list_id: typeof p.list_id === 'string' ? p.list_id : null,
+        ...(cancel ? { charge_id: p.charge_id } : {}), name, note: why, requested_date: date
+      } };
+    }
+    case 'pickup_book':
+    case 'pickup_cancel':
+    case 'pickup_address': {
+      // A pickup time, a cancel, or their own address (Family Requests plan §4):
+      // only with an open sale; it waits for her (plan D2).
+      const what = event.kind === 'pickup_cancel' ? 'to cancel their pickup time' : event.kind === 'pickup_address' ? 'to meet at their own address' : 'for a pickup time';
+      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+        return note(`Asked ${what}, but they have no open sale now, so there's no pickup to plan.`);
+      }
+      const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? '')) ? v : null);
+      const base = { id: activityId(event), note: clean(p.note), requested_date: date };
+      if (event.kind === 'pickup_cancel') return { op: 'pickup_request', date, activity: null, request: { ...base, kind: 'cancel' } };
+      if (event.kind === 'pickup_address') {
+        const address = clean(p.address).slice(0, 300);
+        if (!address) return skip('bad_payload');
+        return { op: 'pickup_request', date, activity: null, request: { ...base, kind: 'address', address, date: ymd(p.date),
+          ...(Number.isFinite(p.miles) ? { miles: p.miles } : {}), ...(Number.isFinite(p.minutes) ? { minutes: p.minutes } : {}), far: p.far === true } };
+      }
+      if (typeof p.slot_id !== 'string' || !p.slot_id) return skip('bad_payload');
+      return { op: 'pickup_request', date, activity: null, request: { ...base, kind: 'slot', slot_id: p.slot_id, date: ymd(p.date),
+        start_time: clean(p.start_time).slice(0, 5), end_time: clean(p.end_time).slice(0, 5), place: clean(p.place).slice(0, 80) } };
+    }
+    case 'back_out': {
+      // Backing out (Family Requests plan §7): only with an open sale; nothing changes
+      // until she decides. Their reason as her list says it now.
+      const why = clean(p.note);
+      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+        return note(`Asked to back out, but they have no open sale now, so there's nothing to back out of.${why ? ` They said: "${why}"` : ''}`);
+      }
+      const reasons = backOutReasons(config);
+      const r = reasons.find((x) => x.id === p.reason_id) || BACK_OUT_OTHER;
+      return { op: 'back_out_request', date, activity: null, request: {
+        requested_date: date, reason: { id: r.id, label: r.label, text: clean(p.reason_text).slice(0, 200) }, note: why
+      } };
+    }
+    case 'home_location': {
+      const place = clean(p.place).slice(0, 120);
+      if (!place) return skip('bad_payload');
+      return { op: 'home_location', date, place, miles: Number.isFinite(p.miles) ? p.miles : null,
+        activity: line(`Said they live in ${place}${Number.isFinite(p.miles) ? `, about ${Math.round(p.miles)} miles from your standard location` : ''}, on their status page.`) };
     }
     case 'pref_change': {
       if (!open) return skip('not_on_list');

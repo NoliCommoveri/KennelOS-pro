@@ -6,7 +6,7 @@
 // and whether she wants to log any, future dates included (a heat she knows is
 // coming), one female at a time. Then the month's preventatives: the active
 // breeding dogs with no preventative (deworming, heartworm, flea & tick) dated
-// this month, logged for the ones she ticks in one form. Each thing is saved as
+// this month, one form per product, repeated until she says that's all. Each thing is saved as
 // soon as she approves it, through the repos, so there's no draft.
 import { dogRepo } from '../data/dogRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
@@ -17,7 +17,7 @@ import { field } from './litterCheckinUI.js';
 import { DOG_STATUS, descriptor } from '../data/vocab.js';
 import { esc, fmtDate, todayYMD } from './ui.js';
 
-const HOW = 'I\'ll show you when each of your girls is expected to come into heat and help you log any you know about, then we\'ll catch up on this month\'s dewormer and heartworm preventative. Sound good?';
+const HOW = 'I\'ll show you when each of your girls is expected to come into heat and help you log any you know about, then we\'ll log this month\'s preventatives (heartworm, flea & tick, dewormer), as many as you need. Sound good?';
 const dogName = (d) => d.call_name || d.registered_name || 'Unnamed';
 const listText = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
@@ -120,23 +120,58 @@ async function heats(chat, today) {
 }
 
 // --- 2. This month's preventatives ---------------------------------------------------
+// One form per product (heartworm, flea & tick, dewormer...), then "Any other
+// preventatives to log?" until she says that's all. The first form ticks the
+// active breeding dogs still missing one; each later form ticks the dogs she
+// picked last time, since the same dogs usually get the next product too.
 
 async function preventatives(chat, today) {
   const { dogs, events } = await load();
   const month = monthName(today).split(' ')[0];
   const gaps = preventativeGaps(dogs, events, today);
-  if (!gaps.length) {
-    await chat.say(`Everyone's had a preventative logged for ${esc(month)}. Nice!`);
-    return;
+  let ticked;
+  if (gaps.length) {
+    await chat.say(`${gaps.length === 1 ? 'This dog doesn\'t' : 'These dogs don\'t'} have a dewormer, heartworm or flea & tick preventative logged for ${esc(month)} yet: ${esc(listText(gaps.map(dogName)))}.`);
+    ticked = new Set(gaps.map((d) => d.id));
+  } else {
+    await chat.say(`Everyone's had a preventative logged for ${esc(month)}. Any others to log, like flea & tick?`);
+    if ((await chat.choose([{ label: 'Yes, log one', value: 'log' }, { label: 'No thanks', value: '__done', primary: true }])) === '__done') return;
+    ticked = new Set(breedingDogs(dogs).map((d) => d.id));
   }
-  await chat.say(`${gaps.length === 1 ? 'This dog doesn\'t' : 'These dogs don\'t'} have a dewormer or heartworm preventative logged for ${esc(month)} yet: ${esc(listText(gaps.map(dogName)))}.`);
-  // Her other dogs at home are listed too, unticked: only active breeding dogs start ticked.
-  const gapIds = new Set(gaps.map((d) => d.id));
-  const listed = [...gaps, ...homeDogs(dogs).filter((d) => d.status !== 'active_breeding')];
-  const boxes = listed.map((d, i) => `<label class="ck-check"><input type="checkbox" id="dc-dog-${i}"${gapIds.has(d.id) ? ' checked' : ''}> <strong>${esc(dogName(d))}</strong>${gapIds.has(d.id) ? '' : ` <span class="faint">${esc(descriptor(DOG_STATUS, d.status).label)}</span>`}</label>`).join('');
-  const res = await chat.form({
-    title: '<strong>Which preventative did they get?</strong>',
-    html: `${field('Product', '<input id="dc-product" type="text" autocomplete="off" placeholder="e.g. Heartgard Plus, Panacur">')}
+  let first = true;
+  let hadGaps = gaps.length > 0;
+  for (;;) {
+    const res = await preventativeForm(chat, dogs, ticked, today, first);
+    if (!res.done) {
+      if (first && gaps.length) await chat.say('No problem. Today will remind you until they\'re logged.');
+      return;
+    }
+    ticked = res.result.ids;
+    const left = preventativeGaps(dogs, (await load()).events, today);
+    let msg = 'Logged.';
+    if (left.length) msg = `Logged. Still to do for ${esc(month)}: ${esc(listText(left.map(dogName)))}.`;
+    else if (hadGaps) msg = `Logged. Everyone has one for ${esc(month)}!`;
+    hadGaps = left.length > 0;
+    first = false;
+    await chat.say(msg);
+    await chat.say('Any other preventatives to log?');
+    const pick = await chat.choose([{ label: 'Log another', value: 'log' }, { label: 'No, that\'s all', value: '__done', primary: true }]);
+    if (pick === '__done') {
+      if (left.length) await chat.say('Today will keep reminding you about the rest.');
+      return;
+    }
+  }
+}
+
+// One product for the dogs she ticks → one `preventative` event each.
+async function preventativeForm(chat, dogs, ticked, today, first) {
+  // Active breeding dogs first, then her other dogs at home.
+  const breeding = breedingDogs(dogs).sort((a, b) => dogName(a).localeCompare(dogName(b)));
+  const listed = [...breeding, ...homeDogs(dogs).filter((d) => d.status !== 'active_breeding')];
+  const boxes = listed.map((d, i) => `<label class="ck-check"><input type="checkbox" id="dc-dog-${i}"${ticked.has(d.id) ? ' checked' : ''}> <strong>${esc(dogName(d))}</strong>${d.status === 'active_breeding' ? '' : ` <span class="faint">${esc(descriptor(DOG_STATUS, d.status).label)}</span>`}</label>`).join('');
+  return chat.form({
+    title: first ? '<strong>Which preventative did they get?</strong>' : '<strong>Which one this time?</strong>',
+    html: `${field('Product', '<input id="dc-product" type="text" autocomplete="off" placeholder="e.g. Heartgard Plus, NexGard, Panacur">')}
       <div class="ck-inline">
         ${field('Dose (optional)', '<input id="dc-dose" type="text" autocomplete="off">')}
         ${field('Date', `<input id="dc-date" type="date" value="${esc(today)}">`)}
@@ -144,7 +179,7 @@ async function preventatives(chat, today) {
       <p class="gl-q">Which dogs?</p>
       <div class="ck-checks">${boxes}</div>`,
     submitLabel: 'Log it',
-    cancelLabel: 'Not now',
+    cancelLabel: first ? 'Not now' : 'That\'s all',
     submit: async (root) => {
       const product = root.querySelector('#dc-product').value.trim();
       const dose = root.querySelector('#dc-dose').value.trim();
@@ -159,16 +194,8 @@ async function preventatives(chat, today) {
           event_date: date, details: { product, ...(dose ? { dose } : {}) }
         });
       }
-      return { count: picked.length, product };
+      return { count: picked.length, product, ids: new Set(picked.map((d) => d.id)) };
     },
     reply: (r) => `${r.product} for ${r.count === 1 ? '1 dog' : `${r.count} dogs`}`
   });
-  if (!res.done) {
-    await chat.say('No problem. Today will remind you until they\'re logged.');
-    return;
-  }
-  const left = preventativeGaps(dogs, (await load()).events, today);
-  await chat.say(left.length
-    ? `Logged. Still to do for ${esc(month)}: ${esc(listText(left.map(dogName)))}. Today will keep reminding you.`
-    : `Logged. Everyone's done for ${esc(month)}!`);
 }

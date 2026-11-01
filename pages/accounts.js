@@ -24,7 +24,7 @@ import { expenseRepo } from '../data/expenseRepo.js';
 import { ACCOUNT_TYPE, CONTRACT_FORM_TYPE } from '../data/vocab.js';
 import { cleanForms, formLink, PREFILL_FIELDS } from '../data/contractForms.js';
 import { feeRate, rateLabel } from '../data/processingFees.js';
-import { sharedReferrals } from '../data/referralShare.js';
+import { sharedReferrals, sharedTransport } from '../data/referralShare.js';
 import { paymentLink } from '../data/paymentLinks.js';
 import { JOTFORM_REGIONS, jotformConnection, connectJotform, disconnectJotform, listJotformForms, matchJotformForm } from '../data/jotformConnect.js';
 import { factsFor, guessFormType, matchWarnings } from '../data/jotformMatch.js';
@@ -109,7 +109,7 @@ function cardHtml(a) {
       ${a.account_type ? badge(ACCOUNT_TYPE, a.account_type) : ''}
     </div>
     ${login ? `<div class="acct-section"><div class="acct-section-title">Your login</div>${login}</div>` : ''}
-    ${referral || a.referral_instructions ? `<div class="acct-section"><div class="acct-section-title">Referral — to share${sharedReferrals([a]).length ? ' <span class="badge badge-green">Shown to families</span>' : ''}</div>${referral}
+    ${referral || a.referral_instructions || sharedTransport([a]).length ? `<div class="acct-section"><div class="acct-section-title">${a.account_type === 'transport' ? 'For families' : 'Referral — to share'}${sharedReferrals([a]).length || sharedTransport([a]).length ? ` <span class="badge badge-green">${a.account_type === 'transport' ? 'Shown to families with a picked pup' : 'Shown to families'}</span>` : ''}</div>${referral}
       ${a.referral_instructions ? `<div class="acct-instructions">${esc(a.referral_instructions)}</div>` : ''}</div>` : ''}
     ${a.notes ? `<div class="acct-section"><div class="acct-instructions">${esc(a.notes)}</div></div>` : ''}
     ${payHtml(a)}
@@ -263,6 +263,15 @@ function pickJotformModal(accountId, takenIds) {
 
 // Charging the fee back (guide §21.2) only works through a deposit's "paid via",
 // which lists Payment services, and only with editionFlags.extraCharges.
+// What "Share with families" does for this type of account: a Transport account
+// (a flight nanny, a ground transporter) is a suggestion for getting a pup home,
+// not a product (Family Requests plan D8).
+function shareHint(type) {
+  return type === 'transport'
+    ? 'Shows them under "Getting your pup home" on the waitlist status page of each family whose pup is picked: the name, the link (or the website above) and the instructions as notes, e.g. their phone number and the airports they fly from.'
+    : 'Shows the link, code and instructions as "Recommended for your puppy" on a family\'s Companion page and their waitlist status page, and in the follow-up note a week after a pup goes home.';
+}
+
 const chargesBack = (a) => editionFlags.extraCharges && a.account_type === 'payment_service' && !!a.fee_charge_back;
 
 // A sales channel's fee (Good Dog, Stripe…): the rate, whether she usually passes
@@ -402,7 +411,7 @@ function openForm(existing = null) {
       ${field('Referral code', `<input id="af-ref-code" type="text" value="${esc(a.referral_code)}">`)}
       ${field('Instructions for whoever uses it', `<textarea id="af-ref-instructions" placeholder="e.g. Use code at checkout for 30% off your first Autoship order.">${esc(a.referral_instructions)}</textarea>`, { wide: true, hint: 'Written for the families you\'ll share this with.' })}
       <div class="field field-wide"><label class="check-inline"><input id="af-ref-share" type="checkbox"${a.share_with_families ? ' checked' : ''}> Share with families</label>
-        <span class="field-hint">Shows the link, code and instructions as "Recommended for your puppy" on a family's Companion page and their waitlist status page, and in the follow-up note a week after a pup goes home.</span></div>
+        <span class="field-hint" id="af-share-hint">${shareHint(a.account_type)}</span></div>
     </div>
     <div id="af-pay-section"${a.account_type === 'payment_service' ? '' : ' hidden'}>
     <h3 style="font-size:15px; margin:14px 0 4px;">Payment link — if buyers pay you through it</h3>
@@ -449,6 +458,7 @@ function openForm(existing = null) {
   const isFormService = () => $('#af-type').value === 'form_service';
   const isPaymentService = () => $('#af-type').value === 'payment_service';
   $('#af-type').addEventListener('change', () => {
+    $('#af-share-hint').textContent = shareHint($('#af-type').value);
     $('#af-forms-section').hidden = !isFormService();
     $('#af-pay-section').hidden = !isPaymentService();
     const chargeBack = $('#af-chargeback-field');

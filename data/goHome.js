@@ -104,6 +104,38 @@ export const boardingEvent = (pup, start, end = '') => ({
   ...(end ? { event_end_date: end } : {}), title: BOARDING_TITLE, details: { boarding_reason: 'Deferred pickup' }
 });
 
+// --- Training stays (Family Requests plan §6) ----------------------------------------
+// An extra that needs the pup to stay (a training package: `boarding_days` on the
+// sale's charge) is a boarding event on the pup, reason Training, linked by
+// `details.sale_id` and `details.extra_charge_id` (the link is stored on the event
+// only; the sale finds its stays by query).
+export const TRAINING_REASON = 'Training';
+
+// The pup's stays linked to this charge (not archived).
+export const trainingStaysFor = (sale, charge, events) => events.filter((e) => !e.is_archived && e.event_type === 'boarding'
+  && e.details?.sale_id === sale.id && e.details?.extra_charge_id === charge.id);
+
+// The stay to log: from `start`, the charge's days long.
+export function trainingStayEvent(pup, sale, charge, start) {
+  const days = Math.max(1, Math.round(Number(charge.boarding_days) || 1));
+  return {
+    subject_type: 'dog', subject_id: pup.id, event_type: 'boarding', event_date: start,
+    event_end_date: addDaysToYMD(start, days - 1), title: charge.label,
+    details: { boarding_reason: TRAINING_REASON, sale_id: sale.id, extra_charge_id: charge.id }
+  };
+}
+
+// Linked stays whose charge is gone from its sale (or the sale is): still on the
+// calendar, to remove or keep. `salesById`: every sale. → [{ event, sale }]
+export function orphanTrainingStays(events, salesById, today) {
+  return events.filter((e) => !e.is_archived && e.event_type === 'boarding' && e.details?.extra_charge_id
+    && (e.event_end_date || e.event_date) >= today).map((event) => {
+    const sale = salesById.get(event.details.sale_id) || null;
+    const live = sale && !sale.is_archived && (sale.extra_charges || []).some((c) => c.id === event.details.extra_charge_id);
+    return live ? null : { event, sale };
+  }).filter(Boolean);
+}
+
 // The sold dog's changes when its sale is Delivered and she says how it leaves her
 // roster (Pro, `externalOwnership`): 'external' (the family owns it now: External,
 // status external_reference, owner = `ownerId` when given) or 'co_owned' (she keeps

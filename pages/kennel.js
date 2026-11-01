@@ -28,9 +28,13 @@ import { getIncomeRows, summarize } from '../data/incomeView.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { kennelChargeList, readExtraCharges } from '../data/extraCharges.js';
+import { kennelChargeList, readPriceList, readChargeGroups } from '../data/extraCharges.js';
+import { priceListHtml, wirePriceList, readPriceListForm } from '../assets/priceListEditor.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
-import { waitlistConfig, waitlistConfigProblem, SOON_NOTICE_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
+import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
+import { MILEAGE_BASIS } from '../data/transportFee.js';
+import { backOutReasons, backOutPolicy, BACK_OUT_OUTCOMES, BACK_OUT_POLICY_TEXT_DEFAULT } from '../data/backOut.js';
+import { waitlistConfig, waitlistConfigProblem, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
 import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
@@ -92,6 +96,7 @@ const SECTIONS = [
   { key: 'tests', label: 'Preferred tests', when: (k) => k.is_own_kennel },
   { key: 'puppy-record', label: 'Puppy Record fields', when: (k) => k.is_own_kennel && editionFlags.puppyRecord },
   { key: 'placements', label: 'Recent placements', when: (k) => k.is_own_kennel },
+  { key: 'pickup', label: 'Pickup & transport', when: (k) => k.is_own_kennel && editionFlags.waitlist },
   { key: 'roster', label: 'Roster', when: (k) => k.is_own_kennel },
   { key: 'waitlist-settings', label: 'Waitlist settings', when: (k) => k.is_own_kennel && editionFlags.waitlist }
 ].sort((a, b) => a.label.localeCompare(b.label));
@@ -372,7 +377,7 @@ async function renderOverview() {
 function renderConfig() {
   if (!kennel.is_own_kennel) { els.config.innerHTML = ''; return; }
   // The waitlist online's card moved to the waitlist's Publish list page (2026-10-08).
-  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + waitlistCard(kennel);
+  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + waitlistCard(kennel) + pickupCard(kennel);
   wireConfig();
 }
 
@@ -424,7 +429,7 @@ function waitlistCard(k) {
           <div class="pill-row" style="margin-top:6px;"><button type="button" class="btn btn-sm" data-act="add-reason">Add a reason</button></div>
           <label class="check-inline" style="margin-top:6px;"><input id="wl-pass-other" type="checkbox"${c.pass_other !== false ? ' checked' : ''}> Also offer "Other", with a box for their own words</label>
         </div>
-        ${isWaitlistOnlineOffered() ? readySettings(c) + upcomingSwitches(c) + emailTemplateSettings(c) + facebookSettings(c) : ''}
+        ${isWaitlistOnlineOffered() ? readySettings(c) + upcomingSwitches(c) + emailTemplateSettings(c) + facebookSettings(c) + extrasSettings(c) + backOutSettings(c) : ''}
       </div>
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
     </section>`;
@@ -462,6 +467,49 @@ function facebookSettings(c) {
       <input id="wl-fb-page" type="url" inputmode="url" autocomplete="url" value="${esc(c.facebook_page || '')}" placeholder="facebook.com/yourkennel">
       <span class="field-hint">A facebook.com or m.me address.</span>
       <span class="field-hint">Messages sent there stay in Messenger. They aren't added to the family's entry, and they don't count as a reply to an offer.</span>
+    </div>`;
+}
+
+// Extras on a family's status page (Family Requests plan §3): her message above
+// them and her own page with the details and prices. The extras themselves, and
+// which ones families can ask for, are on the Extra charges price list.
+function extrasSettings(c) {
+  return `<div class="field field-wide">
+      <label for="wl-extras-intro">Extras: your message to families</label>
+      <textarea id="wl-extras-intro" rows="3" placeholder="${esc(EXTRAS_INTRO_DEFAULT)}">${esc(c.extras_intro_text || '')}</textarea>
+      <label for="wl-extras-url" style="margin-top:6px;">Your page with the extras' details and prices</label>
+      <input id="wl-extras-url" type="url" inputmode="url" autocomplete="url" value="${esc(c.extras_info_url || '')}" placeholder="https://yourkennel.com/extras">
+      <span class="field-hint">Families whose pup is picked see your message, a <strong>See our extras and prices</strong> button that opens this page in a new tab, then the extras they can ask for, by name. Prices never show on their page. Choose which extras they can ask for on the Extra charges price list.</span>
+    </div>`;
+}
+
+// Backing out (Family Requests plan §7): her reasons (one per line; "Something else"
+// is always offered), her deposit policy (rows: a reason or any, an optional age,
+// keep or move), and what families read before they send.
+function policyRowHtml(row, reasons) {
+  const r = row || { reason_id: 'any', from_weeks: null, until_weeks: null, outcome: 'keep' };
+  return `<div class="bo-row" style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px;">
+      <select class="bo-reason" style="width:auto; max-width:100%;"><option value="any">Any reason</option>${reasons.map((x) => `<option value="${esc(x.id)}"${x.id === r.reason_id ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}</select>
+      <span style="display:inline-flex; gap:4px; align-items:center;">from <input class="bo-from" type="number" min="0" step="1" value="${esc(r.from_weeks ?? '')}" style="width:4.5em;"> to <input class="bo-until" type="number" min="0" step="1" value="${esc(r.until_weeks ?? '')}" style="width:4.5em;"> weeks</span>
+      <select class="bo-outcome" style="width:auto;">${BACK_OUT_OUTCOMES.map((o) => `<option value="${o.value}"${o.value === r.outcome ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>
+      <button type="button" class="btn btn-sm" data-act="bo-remove" aria-label="Remove">✕</button>
+    </div>`;
+}
+
+function backOutSettings(c) {
+  const reasons = backOutReasons(c);
+  const mine = reasons.filter((r) => r.id !== 'other');
+  return `<div class="field field-wide" data-bo>
+      <label for="wl-bo-reasons">Backing out: the reasons families choose from</label>
+      <textarea id="wl-bo-reasons" rows="4">${esc(mine.map((r) => r.label).join('\n'))}</textarea>
+      <span class="field-hint">One per line. "Something else" (with a few words) is always offered too.</span>
+      <label style="margin-top:8px;">Your deposit policy</label>
+      <div id="bo-rows">${backOutPolicy(c).map((row) => policyRowHtml(row, reasons)).join('')}</div>
+      <button type="button" class="btn btn-sm" data-act="bo-add">+ Add a rule</button>
+      <span class="field-hint">When a family asks to back out, the first rule that fits their reason and the puppy's age (leave the weeks blank for any age) is suggested; you always choose. With none, keeping the deposit is suggested. A refund is never suggested.</span>
+      <label for="wl-bo-text" style="margin-top:8px;">What every family reads before they send</label>
+      <textarea id="wl-bo-text" rows="6">${esc(c.back_out_policy_text || BACK_OUT_POLICY_TEXT_DEFAULT)}</textarea>
+      <span class="field-hint">[Kennel Name] is filled in. Your deposit policy above is never shown to families; it only suggests an outcome to you.</span>
     </div>`;
 }
 
@@ -539,6 +587,33 @@ async function onSaveWaitlist() {
     waitlist_config.facebook_button = on;
     waitlist_config.facebook_page = page;
   }
+  if (q('#wl-bo-reasons')) {
+    const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'reason';
+    const lines = q('#wl-bo-reasons').value.split('\n').map((t) => t.trim()).filter(Boolean);
+    const before = backOutReasons(kennel.waitlist_config || {});
+    // A reason keeps its id while its wording stays, so her policy rows still point at it.
+    const used = new Set();
+    const reasons = lines.map((label) => {
+      const same = before.find((r) => r.label === label && r.id !== 'other');
+      let id = same ? same.id : slug(label);
+      while (used.has(id) || id === 'other' || id === 'any') id = `${id}_2`;
+      used.add(id);
+      return { id, label };
+    });
+    waitlist_config.back_out_reasons = reasons.length ? reasons : null;
+    waitlist_config.back_out_policy = [...els.config.querySelectorAll('.bo-row')].map((row) => ({
+      reason_id: row.querySelector('.bo-reason').value, outcome: row.querySelector('.bo-outcome').value,
+      from_weeks: row.querySelector('.bo-from').value === '' ? null : Number(row.querySelector('.bo-from').value),
+      until_weeks: row.querySelector('.bo-until').value === '' ? null : Number(row.querySelector('.bo-until').value)
+    }));
+    const text = q('#wl-bo-text').value.trim();
+    waitlist_config.back_out_policy_text = text === BACK_OUT_POLICY_TEXT_DEFAULT ? '' : text;
+  }
+  if (q('#wl-extras-intro')) {
+    const intro = q('#wl-extras-intro').value.trim();
+    waitlist_config.extras_intro_text = intro === EXTRAS_INTRO_DEFAULT ? '' : intro;
+    waitlist_config.extras_info_url = q('#wl-extras-url').value.trim();
+  }
   if (q('#wl-ready-rule')) {
     waitlist_config.ready_no_answer = q('#wl-ready-rule').value;
     waitlist_config.ready_answer_days = num('#wl-ready-days');
@@ -607,27 +682,20 @@ async function onSavePuppyRecord() {
   } catch (err) { showError(err.message || String(err)); }
 }
 
-// Extra charges price list (guide §21.2): her usual extras (photo and video
-// packages…), each a name and a price. Stored as Kennel.extra_charge_list so it
-// rides the backup; a sale's "Add an extra charge" picks from it and copies the
-// name and price, so changing a price here never rewrites an old sale.
-function chargeRow(x = { id: '', label: '', amount: '' }) {
-  return `<div class="xc-row" data-xc-id="${esc(x.id)}" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-    <input class="xc-label" type="text" value="${esc(x.label)}" placeholder="e.g. Gold photo package" style="flex:2; min-width:120px;">
-    <input class="xc-amount" type="number" min="0" step="0.01" value="${esc(x.amount)}" placeholder="$" style="flex:1; min-width:80px;">
-    <button type="button" class="btn btn-sm" data-act="remove-charge" aria-label="Remove">✕</button>
-  </div>`;
-}
-
+// Extra charges price list (guide §21.2): her usual extras (photo and training
+// packages…) in groups, each a name and a price with optional details, and each
+// group's defaults (assets/priceListEditor.js). Stored as Kennel.extra_charge_list
+// and Kennel.extra_charge_groups so they ride the backup; a sale's "Add an extra
+// charge" picks from the list and copies the name and price, so changing a price
+// here never rewrites an old sale.
 function extraChargesCard(k) {
   if (!editionFlags.extraCharges) return '';
   return `
     <section class="card" data-ks="extra-charges">
       <h2 style="margin-top:0;">Extra charges price list</h2>
-      <p class="field-hint">What you offer on top of a puppy, such as photo or video packages. On a sale, <strong>Add an extra charge</strong> picks from this list, and each one prints as its own line on the invoice.</p>
-      <div class="field" id="xc-list">${kennelChargeList(k).map(chargeRow).join('')}</div>
+      <p class="field-hint">What you offer on top of a puppy, such as photo or training packages. On a sale, <strong>Add an extra charge</strong> picks from this list, and each one prints as its own line on the invoice. Group them (Photo packages, Training…) and set rules once for a whole group.</p>
+      ${priceListHtml(k, { familyRequests: editionFlags.waitlist })}
       <div class="form-actions">
-        <button class="btn btn-sm" data-act="add-charge">+ Add one</button>
         <button class="btn btn-primary btn-sm" data-act="save-charges">Save</button>
       </div>
     </section>`;
@@ -635,15 +703,16 @@ function extraChargesCard(k) {
 
 async function onSaveCharges() {
   clearError();
-  const rows = [...els.config.querySelectorAll('#xc-list .xc-row')].map((el) => ({
-    id: el.dataset.xcId || null,
-    label: el.querySelector('.xc-label').value,
-    amount: el.querySelector('.xc-amount').value
-  }));
-  const { list, error } = readExtraCharges(rows);
+  const opts = { familyRequests: editionFlags.waitlist };
+  const card = els.config.querySelector('[data-ks="extra-charges"]');
+  const form = readPriceListForm(card, opts);
+  if (form.error) { showError(form.error); return; }
+  const { list, error } = readPriceList(form.rows, kennelChargeList(kennel));
   if (error) { showError(error); return; }
+  const { groups, error: groupError } = readChargeGroups(form.groups);
+  if (groupError) { showError(groupError); return; }
   try {
-    await kennelRepo.update(kennel.id, { extra_charge_list: list });
+    await kennelRepo.update(kennel.id, { extra_charge_list: list, extra_charge_groups: groups });
     await reloadKennel();
     renderConfig();
   } catch (err) { showError(err.message || String(err)); }
@@ -735,21 +804,110 @@ function applyToDogsPanel() {
   </div>`;
 }
 
+// Pickup & transport (Family Requests plan §4–§5): her pickup places (one is her
+// standard location, the start of every mileage figure: a public place near her,
+// never her house), and the settings that work out a transport fee and decide who
+// may suggest their own meetup place. Pickup times are set per litter.
+function placeRow(l = { id: '', label: '', address: '', notes: '', is_standard: false, show_to_families: true }) {
+  return `<div class="pl-row" data-pl-id="${esc(l.id)}" style="border-top:1px solid var(--border); padding:8px 0;">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input class="pl-label" type="text" value="${esc(l.label)}" placeholder="e.g. Library parking lot" aria-label="Name" style="flex:1; min-width:0;">
+        <button type="button" class="btn btn-sm" data-pl="remove" aria-label="Remove">✕</button>
+      </div>
+      <input class="pl-address" type="text" value="${esc(l.address)}" placeholder="Street, city, state" aria-label="Address" style="margin-top:6px; width:100%;">
+      <input class="pl-notes" type="text" value="${esc(l.notes)}" placeholder="Notes for families (optional), e.g. by the north entrance" aria-label="Notes" style="margin-top:6px; width:100%;">
+      <div style="display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:6px;">
+        <label class="check-inline"><input type="radio" name="pl-standard" class="pl-standard"${l.is_standard ? ' checked' : ''}> Standard location</label>
+        <label class="check-inline"><input type="checkbox" class="pl-show"${l.show_to_families ? ' checked' : ''}> Show to families</label>
+      </div>
+    </div>`;
+}
+
+function pickupCard(k) {
+  if (!editionFlags.waitlist) return '';
+  const c = waitlistConfig(k);
+  const places = pickupLocations(k);
+  const n = (id, v, label, unit, hint = '') => `<div class="field"><label for="${id}">${label}</label>
+      <span style="display:inline-flex; align-items:center; gap:6px;"><input id="${id}" type="number" min="0" step="any" inputmode="decimal" value="${esc(v ?? '')}" style="width:7em;"> ${esc(unit)}</span>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
+  return `
+    <section class="card" data-ks="pickup">
+      <h2 style="margin-top:0;">Pickup places</h2>
+      <p class="field-hint">Where families pick up their puppies. Your <strong>standard location</strong> is where every mileage figure starts: use a public place near you, not your home address. Set pickup times on each litter's page.</p>
+      <div id="pl-list">${(places.length ? places : [{ id: '', label: '', address: '', notes: '', is_standard: true, show_to_families: true }]).map(placeRow).join('')}</div>
+      <button type="button" class="btn btn-sm" data-pl="add">+ Add a place</button>
+      <h2>Transport fee</h2>
+      <p class="field-hint">For a family's own meetup address: KennelOS measures the driving miles from your standard location and suggests the fee, which you can change before approving.</p>
+      <div class="form-grid">
+        ${n('tr-rate', c.mileage_rate, 'Fee per mile', '$ per mile')}
+        <div class="field"><label>Calculate from</label>
+          <span style="display:flex; gap:16px;">${MILEAGE_BASIS.map((b) => `<label class="check-inline"><input type="radio" name="tr-basis" value="${b.value}"${c.mileage_basis === b.value ? ' checked' : ''}> ${esc(b.label)}</label>`).join('')}</span>
+          <span class="field-hint">Round trip doubles the miles before the fee per mile.</span></div>
+        ${n('tr-free', c.mileage_free_under || '', 'No charge under', 'miles', 'A shorter trip is free; at or over it, every mile is charged.')}
+        ${n('tr-far', c.transport_far_miles, 'Farther than this, you\'ll be in touch', 'miles', 'Families farther away are told you\'ll contact them about driving or a flight nanny.')}
+        ${n('tr-home', c.transport_min_home_miles || '', 'Families can suggest their own place only if they live at least', 'miles away', 'Blank or 0: any family can. Above 0, City / state becomes a required question on your application form.')}
+        ${n('tr-change', c.pickup_change_days, 'Families can change their pickup time until', 'days before')}
+        ${n('tr-board', c.boarding_rate, 'Standard boarding rate', '$ per day', 'For a pickup date you mark "standard boarding applies" on a litter: charged from when the pup could go home until that day, and logged as a stay.')}
+      </div>
+      <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-pickup">Save</button></div>
+    </section>`;
+}
+
+async function onSavePickup() {
+  clearError();
+  const card = els.config.querySelector('[data-ks="pickup"]');
+  const rows = [...card.querySelectorAll('.pl-row')].map((el) => ({
+    id: el.dataset.plId || crypto.randomUUID(), label: el.querySelector('.pl-label').value, address: el.querySelector('.pl-address').value,
+    notes: el.querySelector('.pl-notes').value, is_standard: el.querySelector('.pl-standard').checked, show_to_families: el.querySelector('.pl-show').checked
+  }));
+  const problem = locationsProblem(rows);
+  if (problem) { showError(problem); return; }
+  const q = (sel) => card.querySelector(sel).value.trim();
+  const val = (sel) => (q(sel) === '' ? null : Number(q(sel)));
+  const waitlist_config = {
+    ...(kennel.waitlist_config || {}),
+    mileage_rate: val('#tr-rate'), mileage_basis: card.querySelector('input[name="tr-basis"]:checked')?.value || 'round_trip',
+    mileage_free_under: val('#tr-free') || 0, transport_far_miles: val('#tr-far'), transport_min_home_miles: val('#tr-home') || 0,
+    pickup_change_days: val('#tr-change') ?? 2, boarding_rate: val('#tr-board')
+  };
+  const configProblem = waitlistConfigProblem(waitlist_config);
+  if (configProblem) { showError(configProblem); return; }
+  try {
+    await kennelRepo.update(kennel.id, { pickup_locations: pickupLocations({ pickup_locations: rows }), waitlist_config });
+    await reloadKennel();
+    renderConfig();
+  } catch (err) { showError(err.message || String(err)); }
+}
+
+function wirePickup() {
+  const card = els.config.querySelector('[data-ks="pickup"]');
+  if (!card) return;
+  card.querySelector('[data-act="save-pickup"]').addEventListener('click', onSavePickup);
+  card.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-pl]');
+    if (!b) return;
+    if (b.dataset.pl === 'remove') b.closest('.pl-row').remove();
+    if (b.dataset.pl === 'add') {
+      const list = card.querySelector('#pl-list');
+      list.insertAdjacentHTML('beforeend', placeRow({ id: '', label: '', address: '', notes: '', is_standard: !list.querySelector('.pl-standard:checked'), show_to_families: true }));
+      list.lastElementChild.querySelector('.pl-label').focus();
+    }
+  });
+}
+
 function wireConfig() {
+  wirePickup();
   const saveNudges = els.config.querySelector('[data-act="save-nudges"]');
   if (saveNudges) saveNudges.addEventListener('click', onSaveNudges);
   els.config.querySelector('[data-act="save-puppy-record"]')?.addEventListener('click', onSavePuppyRecord);
   els.config.querySelector('[data-act="save-charges"]')?.addEventListener('click', onSaveCharges);
-  els.config.querySelector('[data-act="add-charge"]')?.addEventListener('click', () => {
-    const list = els.config.querySelector('#xc-list');
-    list.insertAdjacentHTML('beforeend', chargeRow());
-    list.lastElementChild.querySelector('.xc-label').focus();
-  });
-  els.config.querySelector('#xc-list')?.addEventListener('click', (ev) => {
-    if (ev.target.closest('[data-act="remove-charge"]')) ev.target.closest('.xc-row').remove();
-  });
+  const chargesCard = els.config.querySelector('[data-ks="extra-charges"]');
+  if (chargesCard) wirePriceList(chargesCard, { familyRequests: editionFlags.waitlist });
   els.config.querySelector('[data-act="puppy-record-all"]')?.addEventListener('click', () => tickAllPuppyRecordFields(els.config));
   wirePuppyRecordFields(els.config);
+  els.config.querySelector('[data-act="bo-add"]')?.addEventListener('click', () => {
+    els.config.querySelector('#bo-rows').insertAdjacentHTML('beforeend', policyRowHtml(null, backOutReasons(kennel.waitlist_config || {})));
+  });
+  els.config.querySelector('#bo-rows')?.addEventListener('click', (ev) => { if (ev.target.closest('[data-act="bo-remove"]')) ev.target.closest('.bo-row').remove(); });
   const saveWaitlist = els.config.querySelector('[data-act="save-waitlist"]');
   if (saveWaitlist) saveWaitlist.addEventListener('click', onSaveWaitlist);
   els.config.querySelector('[data-act="add-reason"]')?.addEventListener('click', () => {

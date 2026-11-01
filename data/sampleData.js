@@ -96,8 +96,15 @@ export async function seedSampleData() {
     promote_nudge_enabled: true, promote_age_male_months: 14, promote_age_female_months: 11,
     // Her usual extras (guide §21.2): what a sale's "Add an extra charge" offers.
     extra_charge_list: [
-      { id: crypto.randomUUID(), label: 'Gold photo package', amount: 150 },
-      { id: crypto.randomUUID(), label: 'Birth-to-8-weeks video', amount: 75 }
+      { id: crypto.randomUUID(), label: 'Gold photo package', amount: 150, group: 'Photo packages' },
+      { id: crypto.randomUUID(), label: 'Birth-to-8-weeks video', amount: 75, group: 'Photo packages' },
+      { id: crypto.randomUUID(), label: 'Puppy training (2 weeks)', amount: 600, group: 'Training', boarding_days: 14,
+        description: 'Crate, potty and leash basics before going home', family_can_request: true }
+    ],
+    extra_charge_groups: [
+      { name: 'Photo packages', request_until_weeks: 6, cancel_until_weeks: 5 },
+      { name: 'Training', request_from_weeks: 7, cancel_until_weeks: 8,
+        payment_plan: [{ percent: 50, due: 'at_weeks', n: 8 }, { percent: 50, due: 'with_balance' }] }
     ]
   });
   const meadowRidge = await kennelRepo.create({

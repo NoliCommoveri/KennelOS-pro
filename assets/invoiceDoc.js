@@ -111,6 +111,8 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
   // Keyed by line key: the component, or `extra:<id>` for each extra charge.
   const baseByKey = new Map(items.map((it) => [it.key || it.component, it.amount]));
   const labelByKey = new Map(items.map((it) => [it.key || it.component, it.invoiceLabel]));
+  // A payment-plan step's own due date (Family Requests plan §3.1), where it has one.
+  const dueByKey = new Map(items.filter((it) => it.due_date).map((it) => [it.key, it.due_date]));
 
   // The record's own due date, read now: a sale's balance due / pickup date, a
   // fee's pay-by date. A line with no dueDate of its own (the default, or a
@@ -162,7 +164,7 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
       subtotal += amount;
       // Deposits are always due immediately; the calculated due date (expected
       // pickup / nine-weeks-of-age, or a fee's pay-by date) applies to the rest.
-      const dueDate = line.dueDate == null ? liveDue : line.dueDate;
+      const dueDate = line.dueDate == null ? (dueByKey.get(line.key) || liveDue) : line.dueDate;
       const due = line.key === 'deposit' ? 'Immediately' : (dueDate ? fmtDateMDY(dueDate) : '');
       rows.push({ label, marker, due, amount });
     }

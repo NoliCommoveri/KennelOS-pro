@@ -133,7 +133,7 @@ const TASKS = [
   {
     id: 'dog-checkin',
     label: () => 'Check in on my dogs',
-    sub: 'Upcoming heats, and this month\'s dewormer and heartworm preventative',
+    sub: 'Upcoming heats, and this month\'s preventatives (heartworm, flea & tick, dewormer)',
     keywords: ['heat', 'heats', 'season', 'cycle', 'in heat', 'deworm', 'dewormer', 'heartworm', 'flea', 'tick', 'preventative', 'monthly meds',
       'breeding dogs', 'females', 'girls', 'dams'],
     available: (s) => s.dogs.breeding > 0,

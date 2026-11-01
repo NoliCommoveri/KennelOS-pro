@@ -9,7 +9,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { saleExtraCharges, readExtraCharges, kennelChargeList, newExtraCharge, depositFeeChargeBack } from '../data/extraCharges.js';
+import { saleExtraCharges, readExtraCharges, kennelChargeList, kennelChargeGroups, groupedChargeList, newExtraCharge, depositFeeChargeBack, chargeRules, planSteps, cleanSteps } from '../data/extraCharges.js';
 import { depositPaid } from '../data/incomeView.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
 import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
@@ -304,9 +304,13 @@ function wireFeeFields() {
 // Photo packages, a payment fee charged back…: one invoice line each, paid with
 // the balance. The price list is the sale's kennel's (the dog's, for a new sale);
 // with neither known, every own kennel's.
-function priceList(draft = ctx.draft) {
+function priceKennel(draft = ctx.draft) {
   const own = (id) => ctx.kennels.find((k) => k.id === id);
-  const kennel = own(draft.kennel_id) || own(ctx.dogsById.get(draft.dog_id)?.kennel_id);
+  return own(draft.kennel_id) || own(ctx.dogsById.get(draft.dog_id)?.kennel_id) || null;
+}
+
+function priceList(draft = ctx.draft) {
+  const kennel = priceKennel(draft);
   if (kennel) return kennelChargeList(kennel);
   const seen = new Set();
   return ctx.kennels.flatMap(kennelChargeList).filter((x) => {
@@ -321,29 +325,59 @@ function extraChargesField(s) {
     <div class="xc-row" data-xc-id="${esc(x.id)}" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
       <input class="xc-label" type="text" value="${esc(x.label)}" placeholder="e.g. Gold photo package" style="flex:2; min-width:120px;">
       <input class="xc-amount" type="number" min="0" step="0.01" value="${esc(x.amount)}" placeholder="$" style="flex:1; min-width:80px;">
+      <label class="check-inline" style="gap:4px; white-space:nowrap;" title="The work is finished (a backed-out family still owes it)"><input type="checkbox" class="xc-done"${x.completed_date ? ' checked' : ''}> Done</label>
       <button type="button" class="btn btn-sm" data-xc-remove aria-label="Remove">✕</button>
-    </div>`).join('');
+    </div>${stepsHtml(x)}`).join('');
   const presets = priceList(s);
   return `<div class="field field-wide">
       <label>Extra charges</label>
       <div id="xc-rows">${rows}</div>
       <select id="xc-add" style="max-width:320px;">
         <option value="">+ Add an extra charge…</option>
-        ${presets.map((p) => `<option value="${esc(p.id)}">${esc(p.label)} (${esc(fmtMoney(p.amount))})</option>`).join('')}
+        ${groupedChargeList(presets).map(({ group, items }) => {
+          const opts = items.map((p) => `<option value="${esc(p.id)}">${esc(p.label)} (${esc(fmtMoney(p.amount))})</option>`).join('');
+          return group ? `<optgroup label="${esc(group)}">${opts}</optgroup>` : opts;
+        }).join('')}
         <option value="custom">Something else…</option>
       </select>
-      <span class="field-hint">Each prints as its own line on the invoice, paid with the balance. Keep your usual ones on the Kennel page's Extra charges price list.</span>
+      <span class="field-hint">Each prints as its own line on the invoice, paid with the balance unless it has a payment plan (set on the Kennel page's Extra charges price list, where you keep your usual ones). Changing an amount rescales its payments.</span>
     </div>`;
+}
+
+// An extra's payment plan steps (Family Requests plan §3.1): each with its share,
+// when it's due and the day it was paid. A step's date she leaves blank reads live
+// (before pickup, with the balance).
+function stepsHtml(x) {
+  if (!Array.isArray(x.payments) || !x.payments.length) return '';
+  const steps = cleanSteps(x.payments, Number(x.amount) || 0) || [];
+  const when = (st) => st.due_date ? `due ${fmtDate(st.due_date)}` : st.due === 'before_pickup' ? `due ${st.n || 0} day${st.n === 1 ? '' : 's'} before pickup` : 'due with the balance';
+  return `<div class="xc-steps" data-xc-for="${esc(x.id)}" style="margin:-2px 0 8px 12px; font-size:0.92em;">
+    ${steps.map((st) => `<div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:4px;">
+      <span>${esc(`${st.percent}% · ${fmtMoney(st.amount)} · ${when(st)}`)}</span>
+      <label class="check-inline" style="gap:4px; white-space:nowrap;">Paid on <input type="date" class="xc-paid" data-step="${esc(st.id)}" value="${esc(st.paid_date || '')}"></label>
+    </div>`).join('')}
+  </div>`;
 }
 
 function readExtraChargeRows() {
   const prior = new Map((Array.isArray(ctx.draft.extra_charges) ? ctx.draft.extra_charges : []).map((x) => [x.id, x]));
-  return [...document.querySelectorAll('#xc-rows .xc-row')].map((el) => ({
-    ...prior.get(el.dataset.xcId),
-    id: el.dataset.xcId,
-    label: el.querySelector('.xc-label').value,
-    amount: el.querySelector('.xc-amount').value
-  }));
+  return [...document.querySelectorAll('#xc-rows .xc-row')].map((el) => {
+    const row = { ...prior.get(el.dataset.xcId), id: el.dataset.xcId, label: el.querySelector('.xc-label').value, amount: el.querySelector('.xc-amount').value };
+    // Done (Family Requests plan §7.2): the day she ticked it, kept while it stays ticked.
+    const done = el.querySelector('.xc-done')?.checked;
+    if (done) row.completed_date = row.completed_date || todayYMD();
+    else delete row.completed_date;
+    const box = document.querySelector(`#xc-rows .xc-steps[data-xc-for="${CSS.escape(el.dataset.xcId)}"]`);
+    if (box && Array.isArray(row.payments)) {
+      row.payments = row.payments.map((st) => {
+        const input = box.querySelector(`.xc-paid[data-step="${CSS.escape(st.id)}"]`);
+        if (!input) return st;
+        const { paid_date: _old, ...rest } = st;
+        return input.value ? { ...rest, paid_date: input.value } : rest;
+      });
+    }
+    return row;
+  });
 }
 
 function wireExtraCharges() {
@@ -352,7 +386,15 @@ function wireExtraCharges() {
     if (!choice) return;
     ctx.draft = readForm();
     const preset = priceList().find((p) => p.id === choice) || null;
-    ctx.draft.extra_charges = [...ctx.draft.extra_charges, newExtraCharge(preset)];
+    const charge = newExtraCharge(preset);
+    // From the price list: where it came from, and its payment plan as dated steps.
+    if (preset) {
+      const kennel = priceKennel();
+      const dog = ctx.dogsById.get(ctx.draft.dog_id);
+      const payments = planSteps(chargeRules(preset, kennelChargeGroups(kennel)).payment_plan, preset.amount, { approvalDate: todayYMD(), birthDate: dog?.date_of_birth || null });
+      Object.assign(charge, { list_id: preset.id, ...(preset.group ? { group: preset.group } : {}), ...(payments ? { payments } : {}), ...(preset.boarding_days ? { boarding_days: preset.boarding_days } : {}) });
+    }
+    ctx.draft.extra_charges = [...ctx.draft.extra_charges, charge];
     renderEdit();
     const labels = document.querySelectorAll('#xc-rows .xc-label');
     if (!preset) labels[labels.length - 1]?.focus();
@@ -418,7 +460,7 @@ function renderView() {
       ${row('Deposit amount', esc(money(s.deposit_amount)))}
       ${row('Transport fee', esc(money(s.transport_fee)))}
       ${row('Deferred pickup boarding', s.deferred_boarding_amount != null && s.deferred_boarding_amount !== '' ? `${esc(money(s.deferred_boarding_amount))}${s.deferred_boarding_frequency ? ` per ${esc(s.deferred_boarding_frequency)}` : ''}${s.deferred_boarding_duration_days ? ` × ${esc(s.deferred_boarding_duration_days)}` : ''}` : '')}
-      ${saleExtraCharges(s).length ? row('Extra charges', saleExtraCharges(s).map((x) => `${esc(x.label)} <span class="muted">${esc(money(x.amount))}</span>`).join('<br>')) : ''}
+      ${saleExtraCharges(s).length ? row('Extra charges', saleExtraCharges(s).map((x) => `${esc(x.label)} <span class="muted">${esc(money(x.amount))}</span>${(x.payments || []).map((st) => `<br><span class="faint" style="margin-left:12px;">${esc(`${st.percent}% · ${money(st.amount)}`)} · ${st.paid_date ? `paid ${esc(fmtDate(st.paid_date))}` : st.due_date ? `due ${esc(fmtDate(st.due_date))}` : st.due === 'before_pickup' ? `due ${st.n || 0} days before pickup` : 'due with the balance'}</span>`).join('')}`).join('<br>')) : ''}
       ${row('Sale date', s.sale_date ? esc(fmtDate(s.sale_date)) : '')}
       ${row('Deposit date', s.deposit_date ? esc(fmtDate(s.deposit_date)) : '')}
       ${row('Balance due date', s.balance_due_date ? esc(fmtDate(s.balance_due_date)) : '')}

@@ -94,8 +94,11 @@ export const SYNC_REGISTRY = Object.freeze({
     // Her application form's key pairs (W2 Plan §7): the private halves open every
     // online application, so they ride the private vault and file backups only.
     private: ['waitlist_form_keys',
-      // Her extra charges price list (guide §21.2): prices, private like a sale's.
-      'extra_charge_list'],
+      // Her extra charges price list (guide §21.2): prices, private like a sale's,
+      // and its groups' rules and payment plans.
+      'extra_charge_list', 'extra_charge_groups',
+      // Her pickup places (Family Requests plan §4): addresses, private.
+      'pickup_locations'],
     pending: []
   },
 
@@ -133,7 +136,11 @@ export const SYNC_REGISTRY = Object.freeze({
       'expected_deposit_female', 'full_reg_surcharge_male', 'full_reg_surcharge_female',
       'foster_comp_model', 'foster_our_share_pct',
       'foster_split_basis', 'foster_flat_fee_per_pup', 'foster_split_notes',
-      'feeding_schedule_override', 'notes'
+      'feeding_schedule_override', 'notes',
+      // Her pickup times for the litter (Family Requests plan §4): private like her
+      // pickup places, which they point at; and each date's rule (a package needed
+      // first, or her standard boarding).
+      'pickup_slots', 'pickup_date_rules'
     ],
     pending: []
   },
@@ -157,6 +164,9 @@ export const SYNC_REGISTRY = Object.freeze({
     private: [
       'price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount',
       'deferred_boarding_frequency', 'deferred_boarding_duration_days',
+      // Set by a pickup date's standard boarding (Family Requests plan §4), so it
+      // can come off again; money-adjacent, private like the charge.
+      'boarding_from_pickup',
       'invoice_number', 'invoice_notes', 'payment_method', 'payment_reference',
       'lead_source', 'referred_by_contact_id', 'notes',
       // Why a voided/returned sale ended, and her note on it (decided 2026-10-08):
@@ -334,7 +344,16 @@ export const SYNC_REGISTRY = Object.freeze({
       'carried_payment',
       // Their ask, on the application, to list privately (Spec §15.3): private
       // like pause_request. What she decided rides private_listing.
-      'private_request'
+      'private_request',
+      // Extras they asked for or to cancel on their status page (Family Requests
+      // plan §3), with their notes: private like pause_request.
+      'extra_requests',
+      // Pickup (Family Requests plan §4): their pickup requests (an address among
+      // them), where they live and how far, and her choice for them: private.
+      'pickup_requests', 'home_place', 'home_miles', 'home_measured_date', 'own_place_override',
+      // Their request to back out (Family Requests plan §7), with their reason and
+      // note: private like a pass reason.
+      'back_out_request'
     ],
     pending: []
   },
@@ -348,7 +367,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'turn_id', // the turn the row belongs to (Spec §16.1): how the list ran, like outcome
       // When she sent the family their deposit request (Integrations plan §2.6, D20):
       // a date, like picked_date.
-      'deposit_request_sent_date'
+      'deposit_request_sent_date',
+      // When the family backed out of the pup this offer placed (Family Requests
+      // plan §7): a date, like outcome_date.
+      'backed_out_date'
     ],
     // pass_reason: the family's own reason for a pass (Spec §16.5, decided private:
     // it can name money or health).

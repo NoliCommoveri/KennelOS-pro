@@ -281,6 +281,10 @@ export const readWaitlistProjection = (token, publicId) =>
 export const unpublishWaitlist = (token, publicId) =>
   getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { method: 'DELETE', token });
 // An email to one family, in the kennel's name (W2 step 6). → { status: 'sent' | 'failed', sentAt }
+// Driving miles between two addresses (Family Requests plan §5): → { miles, minutes }.
+// 503 geo_off when the server has no map key.
+export const getDistance = (token, from, to) => getJson('/geo/distance', { method: 'POST', token, json: { from, to } });
+
 export const sendWaitlistEmail = (token, { id, publicId, entryId, kind, subject, body }) =>
   getJson('/waitlist/messages', { method: 'POST', token, json: { id, public_id: publicId, entry_id: entryId, kind, subject, body } });
 

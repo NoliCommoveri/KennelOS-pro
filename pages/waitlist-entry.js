@@ -24,6 +24,16 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import * as actions from '../data/waitlistActions.js';
+import { kennelChargeList, kennelChargeGroups, chargeRules, planText } from '../data/extraCharges.js';
+import { pendingExtraRequests, familySale, pupBirthDate } from '../data/familyExtras.js';
+import { suggestOutcome, policyRowText, backOutReasons, ageWeeks, backOutItems, backOutSummary, BACK_OUT_OUTCOMES } from '../data/backOut.js';
+import { pendingPickupRequests, requestText as pickupRequestText, ownPlaceAllowed } from '../data/familyPickup.js';
+import { standardLocation } from '../data/pickupSlots.js';
+import { transportQuote, mapsLink } from '../data/transportFee.js';
+import { locationRuleOn } from '../data/waitlistForm.js';
+import { PLACEMENT_METHODS } from '../data/vocab.js';
+import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf, boardingChargeText } from '../data/goHome.js';
+import { eventRepo } from '../data/eventRepo.js';
 import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmailUI.js';
 import { offerSpecs, retryEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
@@ -278,6 +288,8 @@ function emailChoices(e) {
   const out = [{ kind: 'status_link', label: 'Their status page link' }, { kind: 'note', label: 'A note from you' }];
   if (e.status === 'approved') out.push({ kind: 'approved', label: 'Application approved (fee request)' });
   if (e.status === 'active') out.push({ kind: 'on_list', label: 'You\'re on the list' });
+  // Getting their pup home (Family Requests plan §5.1): once they have an open sale.
+  if (familySale(e, ctx.sales)) out.push({ kind: 'transport_options', label: 'Transport options (getting their pup home)' });
   const open = ctx.offers.filter((o) => o.outcome === 'open' && !o.is_archived && !o.chosen_dog_id);
   if (open.length) {
     out.push({ kind: 'offer', label: 'It\'s your turn (send again)', extra: { litterIds: open.map((o) => o.litter_id), respondBy: open.map((o) => o.respond_by_date).filter(Boolean).sort().pop() } });
@@ -339,6 +351,53 @@ function pendingRequests(e) {
       hint: 'Send it from the Companion page (Current families), then mark it sent so their status page says so.',
       buttons: '<a class="btn btn-sm" href="companion.html?type=family">Open Companion</a><button class="btn btn-sm btn-primary" data-req="companion:sent">Mark sent</button><button class="btn btn-sm" data-req="companion:decline">Decline</button>' });
   }
+  // Extras asked for or cancelled (Family Requests plan §3): Approve puts it on (or
+  // takes it off) their open sale.
+  const list = kennelChargeList(ctx.kennel);
+  for (const r of pendingExtraRequests(e)) {
+    const item = list.find((x) => x.id === r.list_id);
+    const price = item ? ` (${esc(fmtMoney(item.amount))}; ${esc(planText(chargeRules(item, kennelChargeGroups(ctx.kennel)).payment_plan).toLowerCase())})` : '';
+    out.push({ kind: `extra|${r.id}`, note: r.note,
+      text: r.kind === 'cancel'
+        ? `Asked ${esc(fmtDate(r.requested_date))} to cancel <strong>${esc(r.name)}</strong>.`
+        : `Asked ${esc(fmtDate(r.requested_date))} for <strong>${esc(r.name)}</strong>${price}.`,
+      hint: r.kind === 'cancel' ? 'Approve takes it off their sale.' : item ? 'Approve adds it to their sale at your price-list price, with its payment plan.' : 'It\'s no longer on your price list: add it to the sale by hand, or decline.' });
+  }
+  // Backing out (Family Requests plan §7): her policy's suggestion; she chooses, then
+  // ticks what comes off in the confirm.
+  if (actions.hasPendingRequest(e, 'back_out_request')) {
+    const r = e.back_out_request;
+    const sale = familySale(e, ctx.sales);
+    const pup = sale ? ctx.dogsById.get(sale.dog_id) : null;
+    const litter = pup ? ctx.litters.find((l) => l.id === pup.litter_id) : null;
+    const s = suggestOutcome(ctx.config, r.reason?.id, ageWeeks(pupBirthDate(pup, litter), r.requested_date));
+    ctx.backOut = { pupName: pup?.call_name || '' };
+    out.push({ kind: 'backout', note: r.note,
+      text: `Asked ${esc(fmtDate(r.requested_date))} to <strong>back out</strong>${ctx.backOut?.pupName ? ` of ${esc(ctx.backOut.pupName)}` : ''}. Their reason: ${esc(r.reason?.label || '')}${r.reason?.text ? `: "${esc(r.reason.text)}"` : ''}.`,
+      hint: s ? `Your policy suggests: ${BACK_OUT_OUTCOMES.find((o) => o.value === s.outcome).label.toLowerCase()}${s.row ? ` (${policyRowText(s.row, backOutReasons(ctx.config))})` : ' (no rule fits)'}.` : '',
+      buttons: `<button class="btn btn-sm${s?.outcome === 'keep' ? ' btn-primary' : ''}" data-req="backout:keep">Keep the deposit</button>
+        <button class="btn btn-sm${s?.outcome === 'move' ? ' btn-primary' : ''}" data-req="backout:move">Move the deposit</button>
+        <button class="btn btn-sm" data-req="backout:more">More options…</button>
+        <button class="btn btn-sm" data-req="backout:decline">Decline</button>` });
+  }
+  // Pickup (Family Requests plan §4): a time, a cancel, or their own address.
+  const from = standardLocation(ctx.kennel)?.address || '';
+  for (const r of pendingPickupRequests(e)) {
+    const kind = `pickup|${r.id}`;
+    if (r.kind !== 'address') {
+      out.push({ kind, note: r.note, text: `Asked ${esc(fmtDate(r.requested_date))} ${esc(pickupRequestText(r))}.`,
+        hint: r.kind === 'cancel' ? 'Approve takes their pickup off the pup\'s calendar.' : 'Approve puts it on the pup\'s calendar as their pickup (any other one still to come is replaced).' });
+      continue;
+    }
+    const q = Number.isFinite(r.miles) ? transportQuote(r.miles, ctx.config) : null;
+    out.push({ kind, note: r.note,
+      text: `Asked ${esc(fmtDate(r.requested_date))} to meet at <strong>${esc(r.address)}</strong>${r.date ? ` on ${esc(fmtDate(r.date))}` : ''}.`,
+      hint: q ? `${q.text}${q.far ? ' · Farther than your limit: they were told you\'ll be in touch.' : ''}` : 'Not measured yet.',
+      buttons: `<a class="btn btn-sm" href="${esc(mapsLink(from, r.address))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>
+        <button class="btn btn-sm" data-req="${kind}:transport">Send transport options</button>
+        <button class="btn btn-sm btn-primary" data-req="${kind}:approve">Approve…</button>
+        <button class="btn btn-sm" data-req="${kind}:decline">Decline</button>` });
+  }
   return out;
 }
 
@@ -356,10 +415,25 @@ function emailItemHtml(m) {
 }
 
 // Their status-page requests (Interact, top): each waits for her Approve / Decline.
+// Where they live (Family Requests plan §4.1), when her distance rule is on or she
+// knows: the place, the miles, and her choice of whether they may suggest their own
+// meetup place.
+function homeHtml(e) {
+  if (!locationRuleOn(ctx.config) && !e.home_place && typeof e.own_place_override !== 'boolean') return '';
+  const allowed = ownPlaceAllowed(e, ctx.config);
+  const where = e.home_place
+    ? `Lives in <strong>${esc(e.home_place)}</strong>${Number.isFinite(e.home_miles) ? `, about ${Math.round(e.home_miles)} miles from your standard location` : ' (not measured)'}.`
+    : 'Where they live isn\'t known yet; their status page asks once their pup is picked.';
+  const state = typeof e.own_place_override === 'boolean' ? ' (your choice)' : ' (your distance rule)';
+  return `<section class="card"><h2 style="margin-top:0;">Pickup</h2><p style="margin:0;">${where}</p>
+    <p class="field-hint">${allowed === true ? 'They can suggest their own meetup place' : allowed === false ? 'They choose from your listed places and times' : 'Waiting to hear where they live'}${allowed === null ? '' : state}.</p>
+    <span class="pill-row"><button class="btn btn-sm" data-own="true">Allow their own place</button><button class="btn btn-sm" data-own="false">Listed places only</button>${typeof e.own_place_override === 'boolean' ? '<button class="btn btn-sm" data-own="">Follow my rule</button>' : ''}</span></section>`;
+}
+
 function requestsHtml(e) {
   const requests = pendingRequests(e);
-  if (!requests.length) return '';
-  return `<section class="card"><h2 style="margin-top:0;">Waiting for you <span class="badge badge-amber">${requests.length}</span></h2>
+  if (!requests.length) return homeHtml(e);
+  return `${homeHtml(e)}<section class="card"><h2 style="margin-top:0;">Waiting for you <span class="badge badge-amber">${requests.length}</span></h2>
     ${requests.map((r) => `<div class="row-between" style="gap:8px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
       <div><p style="margin:0;">${r.text}</p>${r.note ? `<p class="faint" style="margin:2px 0 0;">They said: "${esc(r.note)}"</p>` : ''}<p class="field-hint" style="margin:2px 0 0;">${esc(r.hint)}</p></div>
       <span class="pill-row">${r.buttons || `<button class="btn btn-sm btn-primary" data-req="${r.kind}:approve">Approve</button><button class="btn btn-sm" data-req="${r.kind}:decline">Decline</button>`}</span>
@@ -382,7 +456,197 @@ function wireRequests(root) {
     'listen:approve': decide('listen_change_request', actions.approveListenChange, true), 'listen:decline': decide('listen_change_request', actions.declineListenChange, false),
     'companion:sent': () => actions.markCompanionLinkSent(e.id), 'companion:decline': () => actions.declineCompanionRequest(e.id)
   };
-  root.querySelectorAll('[data-req]').forEach((btn) => btn.addEventListener('click', () => run(handlers[btn.dataset.req])));
+  // An extras request (data-req "extra|<request id>:approve"), then the email saying so.
+  const extra = (requestId, approved) => async () => {
+    const request = (e.extra_requests || []).find((r) => r.id === requestId);
+    // A cancel takes the extra off: its training stay, if one is logged, is offered for removal.
+    const before = approved && request?.kind === 'cancel' ? await linkedStays(request.charge_id) : [];
+    const res = approved ? await actions.approveExtraRequest(e.id, requestId) : await actions.declineExtraRequest(e.id, requestId);
+    if (approved) await afterTrainingApproval(res, before);
+    await afterAction();
+    await emailThem(approved ? 'request_approved' : 'request_declined', { request: { field: 'extra_request', request } });
+  };
+  root.querySelectorAll('[data-own]').forEach((btn) => btn.addEventListener('click', () => run(() => actions.setOwnPlaceOverride(e.id, btn.dataset.own === '' ? null : btn.dataset.own === 'true'))));
+  // A pickup request (data-req "pickup|<request id>:approve|decline|transport").
+  const pickup = (requestId, decision) => async () => {
+    const request = (e.pickup_requests || []).find((r) => r.id === requestId);
+    if (decision === 'transport') return emailThem('transport_options', Number.isFinite(request?.miles) ? { distance: request.miles } : {});
+    if (decision === 'decline') { await actions.declinePickupRequest(e.id, requestId); await afterAction(); return emailThem('request_declined', { request: { field: 'pickup_request', request } }); }
+    if (request.kind === 'address') { if (await approveAddress(request)) await emailThem('request_approved', { request: { field: 'pickup_request', request } }); return; }
+    const res = await actions.approvePickupRequest(e.id, requestId);
+    await afterPickupApproval(res);
+    await afterAction();
+    return emailThem('request_approved', { request: { field: 'pickup_request', request } });
+  };
+  root.querySelectorAll('[data-req]').forEach((btn) => btn.addEventListener('click', () => {
+    const [kind, decision] = btn.dataset.req.split(':');
+    if (kind.startsWith('extra|')) return run(extra(kind.slice(6), decision === 'approve'));
+    if (kind.startsWith('pickup|')) return run(pickup(kind.slice(7), decision));
+    if (kind === 'backout') return run(() => onBackOut(decision));
+    return run(handlers[btn.dataset.req]);
+  }));
+}
+
+// Backing out (Family Requests plan §7.2): the confirm lists what comes off with the
+// sale, each ticked or not by default (paid or finished extras start kept: she's owed
+// them), and ends with the one-line summary. A refund (More options…) needs REFUND
+// typed, since she doesn't plan to use it.
+async function onBackOut(decision) {
+  const e = ctx.entry;
+  const request = e.back_out_request;
+  if (decision === 'decline') {
+    if (!(await confirmModal({ title: 'Decline their request?', message: 'Nothing changes: their sale stays as it is. Let them know why.', confirmLabel: 'Decline' }))) return;
+    await actions.declineBackOut(e.id);
+    await afterAction();
+    return emailThem('request_declined', { request: { field: 'back_out_request', request } });
+  }
+  let outcome = decision === 'more' ? 'refund' : decision;
+  const sale = familySale(e, ctx.sales);
+  if (!sale) throw new Error('They have no open sale to back out of any more.');
+  const events = sale.dog_id ? await eventRepo.getForSubject('dog', sale.dog_id) : [];
+  const items = backOutItems({ sale, events, today: todayYMD() });
+  const deposit = Number(sale.deposit_amount) || 0;
+  const titles = { keep: 'Cancel the sale, keep the deposit', move: 'Cancel the sale, move the deposit', refund: 'Refund their deposit' };
+  const ok = await formModal({
+    title: titles[outcome], confirmLabel: outcome === 'refund' ? 'Refund' : 'Approve', danger: outcome === 'refund',
+    bodyHtml: `${outcome === 'refund' ? `<p style="margin-top:0;">The sale is voided ("Buyer backed out, refunded"), so ${deposit ? `their ${esc(fmtMoney(deposit))} deposit` : 'their deposit'} won't count as income. Record that you refunded it?</p>` : ''}
+      ${outcome === 'move' ? '<p style="margin-top:0;">They go back on your list at the end of the line, with their application, fee and history. What they paid as a deposit goes toward their next pup.</p>' : ''}
+      ${items.length ? `<p class="field-hint" style="margin:0 0 4px;">Tick what comes off with the sale. Extras you leave unticked stay on it, still owed.</p>
+        ${items.map((it, i) => `<label class="check-inline" style="display:block; margin:4px 0;"><input type="checkbox" class="bo-item" data-i="${i}"${it.remove ? ' checked' : ''}> <strong>${esc(it.label)}</strong> <span class="faint">${esc(it.kind === 'charge' ? `extra, ${it.detail}` : it.detail)}</span></label>`).join('')}` : ''}
+      <label class="check-inline" style="display:block; margin:8px 0 4px;"><input type="checkbox" id="bo-pup" checked> Put ${esc(ctx.dogsById.get(sale.dog_id)?.call_name || 'the pup')} back to
+        <select id="bo-pup-to" style="width:auto;"><option value="available"${request.reason?.id === 'pup' ? '' : ' selected'}>Available</option><option value="health_hold"${request.reason?.id === 'pup' ? ' selected' : ''}>Health hold</option></select></label>
+      <p class="field-hint" id="bo-summary" style="margin-top:8px;"></p>
+      ${outcome === 'refund' ? '<div class="field"><label for="bo-type">Type REFUND to confirm</label><input id="bo-type" type="text" autocomplete="off"></div>' : ''}`,
+    onConfirm: async (o) => {
+      const remove = [...o.querySelectorAll('.bo-item:checked')].map((c) => items[Number(c.dataset.i)].id);
+      const pup = o.querySelector('#bo-pup').checked ? o.querySelector('#bo-pup-to').value : null;
+      await actions.approveBackOut(e.id, { outcome, remove, pup });
+      await afterAction();
+    }
+  }, (o) => {
+    const confirm = o.querySelector('[data-fm-confirm]');
+    const summary = () => {
+      const picked = items.map((it, i) => ({ ...it, remove: o.querySelector(`.bo-item[data-i="${i}"]`).checked }));
+      o.querySelector('#bo-summary').textContent = `${backOutSummary(outcome, { deposit, items: picked, money: fmtMoney })}.`;
+    };
+    o.querySelectorAll('.bo-item').forEach((c) => c.addEventListener('change', summary));
+    summary();
+    const typed = o.querySelector('#bo-type');
+    if (typed) {
+      confirm.disabled = true;
+      typed.addEventListener('input', () => { confirm.disabled = typed.value.trim() !== 'REFUND'; });
+    }
+  });
+  if (ok) await emailThem('request_approved', { request: { field: 'back_out_request', request } });
+}
+
+// After approving a time or a cancel: nothing she typed on the sale changes without
+// her say. Her own boarding charge was kept: replace it with standard boarding?
+// A transport fee is still on the sale: remove it?
+async function afterPickupApproval(res) {
+  const b = res.boardingKept;
+  if (b && await confirmModal({
+    title: 'Replace your boarding charge?',
+    message: `This pickup date has standard boarding: ${b.days} day${b.days === 1 ? '' : 's'} at ${fmtMoney(b.rate)} = ${fmtMoney(b.amount)}. The sale already has your own boarding charge (${boardingChargeText(res.sale, fmtMoney)}), so it was kept.`,
+    confirmLabel: 'Use standard boarding', cancelLabel: 'Keep mine'
+  })) await actions.applyPickupBoarding(res.sale.id, b, b.rate);
+  if (res.transportFeeLeft && await confirmModal({
+    title: 'Remove the transport fee?',
+    message: `Their sale still has a ${fmtMoney(res.transportFeeLeft)} transport fee from an earlier drop-off plan.`,
+    confirmLabel: 'Remove it', cancelLabel: 'Keep it'
+  })) await actions.clearTransportFee(res.sale.id);
+}
+
+// Approving a family's own address (Family Requests plan §4): the day, time, how
+// (Ground transport, Flight nanny…) and the transport fee, suggested from the miles
+// (Get driving miles when they weren't measured). → true once approved.
+async function approveAddress(request) {
+  const e = ctx.entry;
+  const from = standardLocation(ctx.kennel)?.address || '';
+  let miles = Number.isFinite(request.miles) ? request.miles : null;
+  const sales = e.contact_id ? await saleRepo.getByBuyer(e.contact_id) : [];
+  const sale = familySale(e, sales);
+  const quote = () => (miles != null ? transportQuote(miles, ctx.config) : null);
+  // A fee already on the sale starts in the box: replacing it is her choice.
+  const current = Number(sale?.transport_fee) > 0 ? Number(sale.transport_fee) : null;
+  return formModal({
+    title: 'Approve their meetup place',
+    confirmLabel: 'Approve',
+    bodyHtml: `<p style="margin-top:0;">${esc(request.address)} <a href="${esc(mapsLink(from, request.address))}" target="_blank" rel="noopener noreferrer">Open in Maps</a></p>
+      <div class="form-grid">
+        <div class="field"><label for="pa-date">Day</label><input id="pa-date" type="date" value="${esc(request.date || '')}"></div>
+        <div class="field"><label for="pa-time">Time</label><input id="pa-time" type="text" placeholder="e.g. 2:00 PM"></div>
+        <div class="field"><label for="pa-method">How</label><select id="pa-method">${PLACEMENT_METHODS.map((m) => `<option${m === 'Ground transport' ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
+        <div class="field"><label for="pa-miles">Miles, one way</label><span style="display:inline-flex; gap:6px; align-items:center;"><input id="pa-miles" type="number" min="0" step="0.1" value="${miles ?? ''}" style="width:7em;">${from ? '<button type="button" class="btn btn-sm" id="pa-measure">Get driving miles</button>' : ''}</span></div>
+        <div class="field"><label for="pa-fee">Transport fee</label>
+          <span style="display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap;"><input id="pa-fee" type="number" min="0" step="0.01" value="${current != null ? current : (quote()?.fee ?? '')}" style="width:9em;"><button type="button" class="btn btn-sm" id="pa-use"${quote()?.fee != null ? '' : ' hidden'}>Use ${esc(fmtMoney(quote()?.fee ?? 0))}</button></span>
+          ${current != null ? `<span class="field-hint">On the sale now: ${esc(fmtMoney(current))}. Approving saves what's in the box.</span>` : ''}
+          <span class="field-hint" id="pa-working">${esc(quote()?.text || '')}</span></div>
+      </div>
+      <p class="field-hint">Approving puts the drop-off on the pup's calendar (any other pickup still to come is replaced) and the fee on their sale.</p>`,
+    onConfirm: async (o) => {
+      await actions.approvePickupRequest(e.id, request.id, {
+        when: o.querySelector('#pa-date').value, time: o.querySelector('#pa-time').value.trim(),
+        method: o.querySelector('#pa-method').value, fee: o.querySelector('#pa-fee').value
+      });
+      await afterAction();
+    }
+  }, (o) => {
+    const use = o.querySelector('#pa-use');
+    const refresh = () => {
+      const v = o.querySelector('#pa-miles').value;
+      miles = v === '' ? null : Number(v);
+      const q = quote();
+      o.querySelector('#pa-working').textContent = q?.text || '';
+      use.hidden = q?.fee == null;
+      if (q?.fee != null) use.textContent = `Use ${fmtMoney(q.fee)}`;
+      // With nothing on the sale yet, the suggestion fills the box; otherwise she taps Use.
+      if (current == null && q?.fee != null) o.querySelector('#pa-fee').value = q.fee;
+    };
+    use.addEventListener('click', () => { const q = quote(); if (q?.fee != null) o.querySelector('#pa-fee').value = q.fee; });
+    o.querySelector('#pa-miles').addEventListener('change', refresh);
+    o.querySelector('#pa-measure')?.addEventListener('click', async (ev) => {
+      ev.target.disabled = true;
+      try {
+        const { drivingMiles } = await import('../data/cloud/cloudWaitlist.js');
+        const d = await drivingMiles(from, request.address);
+        o.querySelector('#pa-miles').value = d.miles;
+        refresh();
+      } catch (err) {
+        o.querySelector('#pa-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'miles aren\'t switched on for KennelOS yet' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
+      }
+      ev.target.disabled = false;
+    });
+  });
+}
+
+// Training stays (Family Requests plan §6): a package the pup stays for is offered
+// as a boarding stay once it's approved; cancelling it offers to remove the stay.
+async function linkedStays(chargeId) {
+  if (!chargeId) return [];
+  const sales = ctx.entry.contact_id ? await saleRepo.getByBuyer(ctx.entry.contact_id) : [];
+  const sale = sales.find((x) => (x.extra_charges || []).some((c) => c.id === chargeId));
+  if (!sale?.dog_id) return [];
+  const charge = sale.extra_charges.find((c) => c.id === chargeId);
+  return trainingStaysFor(sale, charge, await eventRepo.getForSubject('dog', sale.dog_id));
+}
+
+async function afterTrainingApproval(res, staysBefore) {
+  if (res.kind === 'cancel') {
+    for (const stay of staysBefore) {
+      if (await confirmModal({ title: 'Remove the training stay?', message: `${stay.title || 'The stay'} (${fmtDate(stay.event_date)}${stay.event_end_date ? ` to ${fmtDate(stay.event_end_date)}` : ''}) is still on the pup's calendar.`, confirmLabel: 'Remove the stay', cancelLabel: 'Keep it' })) {
+        await eventRepo.archive(stay.id);
+      }
+    }
+    return;
+  }
+  if (!res.boardingDays || !res.sale?.dog_id || !res.charge) return;
+  const dog = await dogRepo.getById(res.sale.dog_id);
+  const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+  const stay = trainingStayEvent(dog, res.sale, res.charge, defaultStart(readyDateOf(litter), todayYMD()));
+  if (await confirmModal({ title: 'Log the training stay?', message: `${res.charge.label} needs ${dog.call_name || 'the pup'} to stay ${res.boardingDays} days. Log it as boarding (Training), ${fmtDate(stay.event_date)} to ${fmtDate(stay.event_end_date)}? You can change the dates on ${dog.call_name || 'the pup'}'s page.`, confirmLabel: 'Log the stay', cancelLabel: 'Not now' })) {
+    await eventRepo.create(stay);
+  }
 }
 
 // Their messages, their status-page activity and the emails she sent (History),

@@ -17,6 +17,8 @@ import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { dogRepo } from './dogRepo.js';
+import { accountRepo } from './accountRepo.js';
+import { sharedTransport } from './referralShare.js';
 import { waitlistConfig, entryName, overallPositions } from './waitlistRules.js';
 import { entryEmail } from './waitlistProjection.js';
 import { draftEmail, requestPhrase, emailProblem, EMAIL_KINDS, EMAIL_SUBJECT_MAX, EMAIL_BODY_MAX } from './waitlistEmails.js';
@@ -62,6 +64,13 @@ export async function draftFor(entryId, kind, extra = {}) {
   }
   if (extra.respondBy) facts.respondBy = extra.respondBy;
   if (extra.request) facts.request = requestPhrase(extra.request.field, extra.request.request);
+  // Transport options (Family Requests plan §5.1): their latest address's miles, and
+  // her Transport accounts shared with families.
+  if (kind === 'transport_options') {
+    const last = [...(entry.pickup_requests || [])].reverse().find((r) => r.kind === 'address' && Number.isFinite(r.miles));
+    facts.distance = Number.isFinite(extra.distance) ? extra.distance : last ? last.miles : null;
+    facts.transport = editionFlags.accounts ? sharedTransport(await accountRepo.getAll()) : [];
+  }
   if (entry.status === 'active') {
     const [entries, programs] = await Promise.all([waitlistEntryRepo.getByKennel(kennel.id), waitlistProgramRepo.getMapForKennel(kennel.id)]);
     facts.position = overallPositions(entries, kennel.id, programs).get(entry.id) || null;

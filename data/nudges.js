@@ -35,7 +35,7 @@ import { dogRepo } from './dogRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { pairingRepo } from './pairingRepo.js';
 import { litterSoldDue, litterReopenDue, litterCloseDue } from './litterCheckin.js';
-import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boardingChargeText, PICKUP_TITLE, BOARDING_TITLE } from './goHome.js';
+import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boardingChargeText, PICKUP_TITLE, BOARDING_TITLE, readyDateOf, trainingStaysFor, trainingStayEvent, orphanTrainingStays } from './goHome.js';
 import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
@@ -49,6 +49,7 @@ import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { goHomeDate, daysBetween, followUpMessage, sharedReferrals, FOLLOW_UP_DAYS, FOLLOW_UP_WINDOW_DAYS } from './referralShare.js';
+import { saleExtraCharges, stepDueDate, stepLabel } from './extraCharges.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import {
   overdueTurns, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, autoOffers, closingTrigger,
@@ -58,8 +59,10 @@ import {
 import {
   recordOutcome, markFeeExpired, openPicks, recordReadyAnswer, undoRemoval, hasPendingRequest, markMessagesRead,
   approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange,
-  markCompanionLinkSent, declineCompanionRequest
+  markCompanionLinkSent, declineCompanionRequest, approveExtraRequest, declineExtraRequest, approvePickupRequest, declinePickupRequest
 } from './waitlistActions.js';
+import { pendingExtraRequests } from './familyExtras.js';
+import { pendingPickupRequests, requestText as pickupRequestText } from './familyPickup.js';
 import { offerSpecs } from './waitlistOutbox.js';
 import { contractRepo } from './contractRepo.js';
 import { ourStudPairingIds, studParents, pickDue, serviceDate, boardingEndedUpdate } from './studRules.js';
@@ -637,6 +640,46 @@ export async function computeNudges() {
 
   }
 
+  // Training stays (Family Requests plan §6): an extra on an open sale that needs
+  // the pup to stay (boarding_days) with no stay logged → log it (one tap, from the
+  // ready date, its days long, linked to the sale and the extra); a linked stay
+  // still to come whose extra was taken off its sale → remove it, or keep it.
+  if (editionFlags.extraCharges) {
+    const littersById = new Map(litters.map((l) => [l.id, l]));
+    const dogEvents = events.filter((e) => e.subject_type === 'dog' && e.event_type === 'boarding');
+    for (const sale of inScopeOnly(sales).filter((x) => !x.is_archived && isOpenSale(x))) {
+      const pup = dogsById.get(sale.dog_id);
+      if (!pup) continue;
+      for (const charge of saleExtraCharges(sale).filter((c) => c.boarding_days)) {
+        if (trainingStaysFor(sale, charge, dogEvents).length) continue;
+        const start = defaultStart(readyDateOf(littersById.get(pup.litter_id)), today);
+        const stay = trainingStayEvent(pup, sale, charge, start);
+        const name = pup.call_name || 'The pup';
+        nudges.push({
+          key: `training-stay:${sale.id}:${charge.id}`,
+          title: `${name}'s ${charge.label} needs a ${charge.boarding_days}-day stay. Log it?`,
+          detail: `It goes on ${name}'s calendar as boarding (Training), ${stay.event_date} to ${stay.event_end_date}, linked to the sale. Change the dates on ${name}'s page afterwards if you need to.`,
+          subjectHref: `sale.html?id=${encodeURIComponent(sale.id)}`,
+          actions: [{ label: 'Log the stay', run: async () => {
+            await eventRepo.create(stay);
+            return { title: 'Stay logged', message: `${name} stays with you ${stay.event_date} to ${stay.event_end_date} for ${charge.label}.` };
+          } }]
+        });
+      }
+    }
+    const salesById = new Map(sales.map((x) => [x.id, x]));
+    for (const { event, sale } of orphanTrainingStays(dogEvents, salesById, today)) {
+      const name = dogsById.get(event.subject_id)?.call_name || 'the pup';
+      nudges.push({
+        key: `training-stay-orphan:${event.id}`,
+        title: `${event.title || 'A training stay'} for ${name} is still on the calendar, but its extra is off ${sale ? 'the sale' : 'a sale that\'s gone'}`,
+        detail: `${event.event_date}${event.event_end_date ? ` to ${event.event_end_date}` : ''}. Remove the stay, or keep it (dismiss this).`,
+        subjectHref: `dog.html?id=${encodeURIComponent(event.subject_id)}`,
+        actions: [{ label: 'Remove the stay', run: async () => { await eventRepo.archive(event.id); return { title: 'Removed', message: `The stay is off ${name}'s calendar.` }; } }]
+      });
+    }
+  }
+
   // A sold puppy's way home (data/goHome.js, decided 2026-10-15): from a week
   // before the ready date, a sale in progress with no pickup or boarding on the
   // calendar → schedule the pickup; a pickup date that passed with the sale not
@@ -742,6 +785,10 @@ export async function computeNudges() {
   if (editionFlags.waitlist) nudges.push(...(await waitlistNudges(today, litters, dogsById, { dogs, sales })));
   if (editionFlags.accounts) nudges.push(...(await followUpNudges(today, inScopeOnly(sales), events, dogsById, kennelsById)));
   if (editionFlags.accounts) nudges.push(...(await integrationReviewNudges(inScopeOnly(sales))));
+  if (editionFlags.extraCharges && sales.some((s) => saleExtraCharges(s).some((x) => x.payments))) {
+    const contactsById = new Map((await contactRepo.getAll({ includeArchived: true })).map((c) => [c.id, c]));
+    nudges.push(...extraDueNudges(today, inScopeOnly(sales), events, dogsById, contactsById));
+  }
 
   return nudges;
 }
@@ -779,6 +826,39 @@ async function integrationReviewNudges(sales) {
   };
   for (const s of sales) add(s, saleRepo, `sale.html?id=${encodeURIComponent(s.id)}`, 'a sale');
   for (const c of contracts) add(c, contractRepo, `contract.html?id=${encodeURIComponent(c.id)}`, c.title || 'a contract');
+  return out;
+}
+
+// A part of an extra's payment plan coming due (Family Requests plan §3.1): from
+// EXTRA_DUE_DAYS before its due date until it's paid (a paid date on the step, or
+// the balance paid). Steps due before pickup read the pup's latest pickup date.
+export const EXTRA_DUE_DAYS = 7;
+export function extraDueNudges(today, sales, events, dogsById, contactsById) {
+  const out = [];
+  const pickup = new Map();
+  for (const e of events) {
+    if (e.event_type !== 'placement' || e.subject_type !== 'dog' || !e.event_date || e.is_archived) continue;
+    if (!pickup.has(e.subject_id) || e.event_date > pickup.get(e.subject_id)) pickup.set(e.subject_id, e.event_date);
+  }
+  for (const s of sales) {
+    if (s.is_archived || !isOpenSale(s) || s.balance_paid_date) continue;
+    for (const x of saleExtraCharges(s)) {
+      for (const st of x.payments || []) {
+        if (st.paid_date) continue;
+        const due = stepDueDate(st, { sale: s, pickupDate: pickup.get(s.dog_id) || '' });
+        if (!due || due > addDaysToYMD(today, EXTRA_DUE_DAYS)) continue;
+        const who = contactsById?.get(s.buyer_contact_id)?.name || 'The buyer';
+        const pup = dogsById.get(s.dog_id)?.call_name || 'their pup';
+        out.push({
+          key: `extra-due:${s.id}:${x.id}:${st.id}`,
+          title: `${who}'s ${stepLabel(x, st)} for ${pup} ${due < today ? `was due ${due}` : due === today ? 'is due today' : `is due ${due}`}`,
+          detail: `${st.amount ? `$${st.amount.toFixed(2)}. ` : ''}Make the invoice from the sale (it has its own line), and put the day it's paid on the sale.`,
+          subjectHref: `sale.html?id=${encodeURIComponent(s.id)}`,
+          actions: [{ label: 'Open the sale', run: async () => { location.href = `sale.html?id=${encodeURIComponent(s.id)}`; } }]
+        });
+      }
+    }
+  }
   return out;
 }
 
@@ -1064,6 +1144,65 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
           { label: 'Mark sent', run: async () => { await markCompanionLinkSent(e.id, { date: today }); return { title: 'Marked sent', message: `${name(e)}'s status page now says their link was sent.` }; } },
           { label: 'Decline', run: async () => { await declineCompanionRequest(e.id, { date: today }); return { title: 'Declined', message: 'Their status page says you didn\'t send one. Let them know why.' }; } }
         ]
+      });
+    }
+    // Extras asked for or cancelled (Family Requests plan §3): each waits for her.
+    for (const r of pendingExtraRequests(e)) {
+      const emails = (kind) => [{ entryId: e.id, kind, extra: { request: { field: 'extra_request', request: r } } }];
+      const cancel = r.kind === 'cancel';
+      out.push({
+        key: `waitlist-extra-request:${e.id}:${r.id}`,
+        title: cancel ? `${name(e)} asked to cancel ${r.name}` : `${name(e)} asked for ${r.name}`,
+        detail: `${cancel ? 'Approve takes it off their sale.' : 'Approve adds it to their sale at your price-list price, with its payment plan.'}${said(r.note)}`,
+        subjectHref: href(e),
+        actions: [
+          { label: 'Approve', run: async () => {
+            const res = await approveExtraRequest(e.id, r.id, { date: today });
+            return { title: 'Approved', message: cancel ? `${r.name} is off their sale. Let them know.` : `${r.name} is on their sale${res.charge?.payments ? ', with its payment plan' : ''}. Let them know.`, emails: emails('request_approved') };
+          } },
+          { label: 'Decline', run: async () => { await declineExtraRequest(e.id, r.id, { date: today }); return { title: 'Declined', message: 'Nothing changed on their sale. Let them know.', emails: emails('request_declined') }; } },
+          { label: 'Open', run: async () => { location.href = href(e); } }
+        ]
+      });
+    }
+    // Backing out (Family Requests plan §7): she decides on their page, where she
+    // chooses the outcome and ticks what comes off with the sale.
+    if (hasPendingRequest(e, 'back_out_request')) {
+      const r = e.back_out_request;
+      out.push({
+        key: `waitlist-back-out:${e.id}:${r.requested_date}`,
+        title: `${name(e)} asked to back out`,
+        detail: `Their reason: ${r.reason?.label || ''}${r.reason?.text ? `: "${r.reason.text}"` : ''}. Nothing changes until you decide on their page: keep the deposit or move it to another pup.${said(r.note)}`,
+        subjectHref: href(e),
+        actions: [{ label: 'Open', run: async () => { location.href = href(e); } }]
+      });
+    }
+    // Pickup requests (Family Requests plan §4): a time or a cancel is decided here;
+    // their own address needs a day, time and fee, so it opens their page.
+    for (const r of pendingPickupRequests(e)) {
+      const emails = (kind, extra = {}) => [{ entryId: e.id, kind, extra: { request: { field: 'pickup_request', request: r }, ...extra } }];
+      const actions = r.kind === 'address'
+        ? [
+            { label: 'Open', run: async () => { location.href = href(e); } },
+            ...(r.far ? [{ label: 'Send transport options', run: async () => ({ title: 'Transport options', message: 'Edit the email, then send it.', emails: [{ entryId: e.id, kind: 'transport_options', extra: Number.isFinite(r.miles) ? { distance: r.miles } : {} }] }) }] : [])
+          ]
+        : [
+            { label: 'Approve', run: async () => {
+              const res = await approvePickupRequest(e.id, r.id, { date: today });
+              const money = (v) => `$${Number(v).toFixed(2)}`;
+              const board = res.boarding ? ` Standard boarding applies: ${res.boarding.days} day${res.boarding.days === 1 ? '' : 's'}, ${money(res.boarding.amount)}, on their sale and logged as a stay.`
+                : res.boardingKept ? ` This date has standard boarding (${res.boardingKept.days} days, ${money(res.boardingKept.amount)}), but the sale already has your own boarding charge, so it was kept; change it on their entry or the sale if you like.` : '';
+              const fee = res.transportFeeLeft ? ` Their ${money(res.transportFeeLeft)} transport fee is still on the sale; take it off there if it no longer applies.` : '';
+              return { title: 'Approved', message: `${r.kind === 'cancel' ? 'Their pickup is off the calendar.' : `It's on the pup's calendar as their pickup.`}${board}${fee} Let them know.`, emails: emails('request_approved') };
+            } },
+            { label: 'Decline', run: async () => { await declinePickupRequest(e.id, r.id, { date: today }); return { title: 'Declined', message: 'Nothing changed. Let them know.', emails: emails('request_declined') }; } }
+          ];
+      out.push({
+        key: `waitlist-pickup-request:${e.id}:${r.id}`,
+        title: `${name(e)} asked ${pickupRequestText(r)}`,
+        detail: `${r.kind === 'address' ? (r.far ? 'Farther than your limit: they were told you\'ll be in touch about driving or a flight nanny. ' : 'Approve on their page with the day, time and transport fee. ') : ''}${said(r.note)}`.trim(),
+        subjectHref: href(e),
+        actions
       });
     }
     const unread = (e.messages || []).filter((m) => !m.read);

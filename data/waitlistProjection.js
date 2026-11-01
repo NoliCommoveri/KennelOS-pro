@@ -29,8 +29,13 @@ import { addDaysToYMD } from './dateUtils.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
-import { sharedReferrals } from './referralShare.js';
+import { sharedReferrals, sharedTransport } from './referralShare.js';
 import { feePay, withClientRef } from './waitlistFeePay.js';
+import { familySale, familyExtrasView, pupBirthDate } from './familyExtras.js';
+import { familyPickupView } from './familyPickup.js';
+import { backOutReasons, backOutPolicyText } from './backOut.js';
+import { standardLocation } from './pickupSlots.js';
+import { EXTRAS_INTRO_DEFAULT, extrasInfoLink } from './waitlistRules.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -96,6 +101,19 @@ function entryView(entry, ctx) {
   if (entry.status_token) view.status_token = entry.status_token;
   const companion = companionView(entry, ctx);
   if (companion) view.companion = companion; // absent without an open sale
+  // Extras they may ask for or cancel (Family Requests plan §3): names only, never
+  // a price; absent without an open sale or anything to show.
+  const extras = companion ? ctx.extrasFor(entry) : null;
+  if (extras) view.extras = extras;
+  // Pickup (Family Requests plan §4): their times, booking, requests, and whether
+  // they may suggest their own place; absent without an open sale.
+  const pickup = companion ? ctx.pickupFor(entry) : null;
+  if (pickup) view.pickup = pickup;
+  // Backing out (Family Requests plan §7): with an open sale they can tell her; their
+  // request as their page shows it (her reason list and policy text are the kennel's).
+  if (companion) {
+    view.back_out = { available: true, request: requestView(entry.back_out_request, ctx.today, (r) => ({ reason: r.reason?.label || '', outcome: r.outcome || null })) };
+  }
   if (!WAITLIST_OPEN_STATUSES.includes(entry.status)) return view;
 
   const program = ctx.programsById.get(entry.waitlist_program_id) || null;
@@ -282,7 +300,7 @@ const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by,
 // PUBLIC half seals applications and family messages); `eventsThrough` the last
 // family event her device has applied (the server lets go of picked pups' holds
 // up to there, W2 step 5).
-export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0 }) {
+export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0, pickupEvents = [] }) {
   if (!kennel || !kennel.public_id) throw new Error('This kennel has no public identity yet.');
   if (!today) throw new Error('buildProjection needs today.');
   const config = waitlistConfig(kennel);
@@ -365,6 +383,14 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
     positions: overallPositions(live, kennel.id, programsById), prefPlaces: prefPlaces(live, kennel.id, programsById, config), matches, litterLabels, hidden, notes,
     openSaleBuyers: new Set(sales.filter((x) => x.buyer_contact_id && isOpenSale(x)).map((x) => x.buyer_contact_id)),
+    pickupFor: (entry) => familyPickupView({ entry, sales, dogsById, litters, kennel, config, entries: live, events: pickupEvents, today }),
+    extrasFor: (entry) => {
+      const sale = familySale(entry, sales);
+      if (!sale) return null;
+      const dog = dogsById.get(sale.dog_id) || null;
+      const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) : null;
+      return familyExtrasView({ entry, sale, kennel, birthDate: pupBirthDate(dog, litter), today });
+    },
     // A family's own Pay link for a fee of `fee` (Integrations plan §4), or null.
     feePayFor: (fee, entryId) => {
       const pay = feePay(kennel, accounts, fee);
@@ -408,6 +434,22 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       // Her referral links marked "Share with families" (Integrations plan §3), for
       // every family's status page: name, link, code, instructions; none = absent.
       ...(sharedReferrals(accounts).length ? { recommended: sharedReferrals(accounts) } : {}),
+      // Her Transport accounts marked "Share with families" (Family Requests plan
+      // D8): name, link, notes. The server shows them only to a family with an
+      // open sale (entry.companion); none = absent.
+      ...(sharedTransport(accounts).length ? { transport: sharedTransport(accounts) } : {}),
+      // Above the extras on a family's page (Family Requests plan §3): her message
+      // and her own page with the details and prices (opened in a new tab).
+      // Backing out: her reasons and what families read first, while any family can.
+      ...(Object.values(entryViews).some((v) => v.back_out) ? {
+        back_out_reasons: backOutReasons(config).map((r) => ({ id: r.id, label: r.label })),
+        back_out_policy_text: backOutPolicyText(config, kennel.kennel_name)
+      } : {}),
+      // Only while some family has extras to see.
+      ...(Object.values(entryViews).some((v) => v.extras) ? {
+        extras_intro: (config.extras_intro_text || '').trim() || EXTRAS_INTRO_DEFAULT,
+        ...(extrasInfoLink(config.extras_info_url) ? { extras_info_url: extrasInfoLink(config.extras_info_url) } : {})
+      } : {}),
       ...(applyPay ? { fee_pay: { url: applyPay.url, amount: applyPay.amount, ref_param: applyPay.stripe, instructions: config.payment_instructions || '' } } : {})
     },
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
@@ -419,6 +461,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     litters: litterViews,
     upcoming: upcoming.map(toUpcomingView),
     turn_queue: turnQueue,
-    events_through: Number.isInteger(eventsThrough) && eventsThrough > 0 ? eventsThrough : 0
+    events_through: Number.isInteger(eventsThrough) && eventsThrough > 0 ? eventsThrough : 0,
+    // For the server only, never in a family's view: her standard location (a public
+    // place near her, Family Requests plan §5), where it measures a family's miles from.
+    ...(standardLocation(kennel) ? { server: { geo_from: standardLocation(kennel).address } } : {})
   };
 }

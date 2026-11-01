@@ -39,6 +39,10 @@ import { applicationToEntry } from '../waitlistInbox.js';
 import { planFamilyEvent, activityId } from '../waitlistEvents.js';
 import { applyFamilyPlan, addFamilyActivity, removeForNoReadyAnswer, MESSAGE_MAX } from '../waitlistActions.js';
 import { queuedEmails, setEmailStatus } from '../waitlistOutbox.js';
+import { setHomeLocation } from '../waitlistActions.js';
+import { locationRuleOn } from '../waitlistForm.js';
+import { standardLocation } from '../pickupSlots.js';
+import { familySale } from '../familyExtras.js';
 
 export const WAITLIST_ONLINE_EVENT = 'kennelos:waitlistonline';
 // After a change, wait this long for more before publishing (one publish per burst).
@@ -381,6 +385,47 @@ export async function sendQueuedEmails(token, kennels, { claim = serverWorkClaim
   return counts;
 }
 
+// Where families live, for her "must live at least N miles away" rule (Family
+// Requests plan §4.1): once per family with an open sale, from their application's
+// City / state or their contact's address, measured from her standard location.
+// Only the miles are kept (and the place she already has). No map key on the server,
+// or a place it can't find: left for their status page to ask.
+export async function measureHomes(token, kennels) {
+  let measured = 0;
+  for (const kennel of kennels) {
+    const config = waitlistConfig(kennel);
+    const from = standardLocation(kennel)?.address;
+    if (!locationRuleOn(config) || !from) continue;
+    const entries = (await waitlistEntryRepo.getByKennel(kennel.id)).filter((e) => !e.is_archived && e.contact_id && !e.home_measured_date && typeof e.own_place_override !== 'boolean');
+    for (const entry of entries) {
+      const sales = await saleRepo.getByBuyer(entry.contact_id);
+      if (!familySale(entry, sales)) continue;
+      const contact = await contactRepo.getById(entry.contact_id);
+      const place = String(entry.application?.location || contact?.address || '').trim();
+      if (!place) continue;
+      try {
+        const d = await api.getDistance(token, from, place);
+        await setHomeLocation(entry.id, { place, miles: d.miles });
+        measured++;
+      } catch (err) {
+        // A place it can't find is remembered as unmeasured (their page asks); any
+        // other trouble (no map key, offline) stops until the next sync.
+        if (err?.status !== 422) return measured;
+        await setHomeLocation(entry.id, { place, miles: null });
+      }
+    }
+  }
+  return measured;
+}
+
+// Driving miles between two addresses, for her (Get driving miles on a request).
+// → { miles, minutes }; throws when signed out or the server has no map key.
+export async function drivingMiles(from, to) {
+  const token = sessionToken();
+  if (!token) throw new Error('Sign in to cloud backup to measure miles.');
+  return api.getDistance(token, from, to);
+}
+
 // The projection for one kennel, from the database.
 export async function projectionFor(kennel, { today = todayYMD() } = {}) {
   const [entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, accounts] = await Promise.all([
@@ -397,8 +442,11 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
     // Her referral links marked "Share with families" (Integrations plan §3).
     editionFlags.accounts ? accountRepo.getAll() : []
   ]);
+  // Pickups and stays (Family Requests plan §4): a family's booking, and a training
+  // stay their times start after.
+  const pickupEvents = [...(await eventRepo.getByType('placement')), ...(await eventRepo.getByType('boarding'))];
   return buildProjection({
-    kennel, entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, accounts, today,
+    kennel, entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, accounts, today, pickupEvents,
     formKey: currentFormKey(kennel.waitlist_form_keys), eventsThrough: getWaitlistOnlineState().eventsCursor || 0
   });
 }
@@ -463,6 +511,7 @@ async function syncNow({ force }) {
     if (wanted.length) inbox = await takeInApplications(token, wanted, { claim });
     if (wanted.length) events = await applyFamilyEvents(token, kennels, { claim });
     if (wanted.length) await sweepReadyChecks(token, kennels, { claim });
+    if (wanted.length) await measureHomes(token, wanted);
     for (const [kennelId, s] of stale) {
       await claim();
       await api.unpublishWaitlist(token, s.publicId);
