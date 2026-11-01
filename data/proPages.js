@@ -86,6 +86,7 @@ export const PRO_ONLY_STANDALONE = [
   'assets/notificationsUI.js',
   // Kels's "Set up my waitlist" (pages/kels.js imports it on start, only with the waitlist).
   'assets/waitlistSetupUI.js',
+  'assets/pickupTransportStep.js',
   // Kels's "Review my waitlist" (pages/kels.js imports it on start, only with the
   // waitlist). Its rules, data/waitlistReview.js, stay shared: Today's nudges use them.
   'assets/waitlistReviewUI.js',

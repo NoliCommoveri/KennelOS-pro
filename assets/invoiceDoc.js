@@ -18,7 +18,7 @@ import { eventRepo } from '../data/eventRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { getActiveKennel } from '../data/kennelScope.js';
-import { incomeLineItems, getSaleFeeCredit } from '../data/incomeView.js';
+import { incomeLineItems, getSaleFeeCredit, getCreditedByLine, feeCreditSplit } from '../data/incomeView.js';
 import { getMyContactId, getInvoiceDefaults } from '../data/settings.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { waitlistConfig, entryName } from '../data/waitlistRules.js';
@@ -121,12 +121,17 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
   const liveDue = isSale ? await saleDueDate(record) : (isFee ? (record.fee_due_date || '') : '');
 
   // Config — from the generator, or a full-line default (every cash line, full,
-  // nothing collected, the record's due date).
+  // nothing collected but what the family's credit for funds already received paid,
+  // the record's due date).
   if (!cfg) {
+    const credited = await getCreditedByLine(source, id);
     cfg = {
       number: isFee ? '' : (record.invoice_number || '').trim(),
       notes: isFee ? '' : (record.invoice_notes || '').trim(),
-      lines: [...baseByKey.keys()].map((key) => ({ key, mode: 'full', collected: 0 })),
+      lines: [...baseByKey.keys()].map((key) => {
+        const c = Math.min(credited[key] || 0, baseByKey.get(key));
+        return { key, mode: 'full', collected: c, ...(c > 0 ? { credit: c } : {}) };
+      }),
       methods: getInvoiceDefaults().acceptedMethods,
       payMethod: isFee ? (record.fee_payment_method || '') : (record.payment_method || ''),
       payReference: isFee ? (record.fee_payment_reference || '') : (record.payment_reference || '')
@@ -138,29 +143,38 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
   let subtotal = 0;       // invoice: sum of printed line amounts
   let collectedFull = 0;  // invoice: already-collected on full lines (reduces balance)
   let paidTotal = 0;      // receipt: sum of amounts received
+  let creditTotal = 0;    // both: the family's credit for funds already received, on full lines
 
   for (const line of (cfg.lines || [])) {
     const base = baseByKey.get(line.key);
     if (base == null || base <= 0) continue;
     const collected = numOf(line.collected);
     const partial = line.mode === 'partial';
+    // `credit`: the part of `collected` that is the family's credit for funds already
+    // received. It prints as its own line in the totals; the rest of `collected` is
+    // money collected before, as always. Full lines only.
+    const credit = partial ? 0 : Math.min(numOf(line.credit), collected);
+    const before = collected - credit;
+    creditTotal += credit;
     let label = line.key === 'application_fee' ? 'Waitlist application fee' : (labelByKey.get(line.key) || INVOICE_LINE_LABELS[line.key] || line.key);
-    if (line.key === 'balance' && feeCredit > 0) label += ` (after ${money(feeCredit)} application fee credit)`;
+    const feeSplit = isSale ? feeCreditSplit(record, feeCredit) : { deposit: 0, balance: 0 };
+    if (line.key === 'balance' && feeSplit.balance > 0) label += ` (after ${money(feeSplit.balance)} application fee credit)`;
+    if (line.key === 'deposit' && feeSplit.deposit > 0) label += ` (after ${money(feeSplit.deposit)} application fee credit)`;
     const marker = isSale && !isReceipt ? (FOOTNOTE[line.key] || '') : '';
     if (marker) markersUsed.add(marker);
 
     if (isReceipt) {
-      const amount = partial ? collected : Math.max(base - collected, 0);
+      const amount = partial ? collected : Math.max(base - before, 0);
       // Partial → "(partial)". Full but with a prior partial payment already
       // collected → this line is the remaining balance, so print "(balance)".
       if (partial) label += ' (partial)';
-      else if (collected > 0) label += ' (balance)';
+      else if (before > 0) label += ' (balance)';
       paidTotal += amount;
       rows.push({ label, marker: '', due: '', amount });
     } else {
       const amount = partial ? collected : base;
       if (partial) label += ' (partial)';
-      if (!partial) collectedFull += collected;
+      if (!partial) collectedFull += before;
       subtotal += amount;
       // Deposits are always due immediately; the calculated due date (expected
       // pickup / nine-weeks-of-age, or a fee's pay-by date) applies to the rest.
@@ -170,11 +184,15 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
     }
   }
 
-  const balance = Math.max(subtotal - collectedFull, 0);
+  const balance = Math.max(subtotal - collectedFull - creditTotal, 0);
+  const creditRow = creditTotal > 0 ? [{ label: 'Less credit for funds already received', amount: -creditTotal }] : [];
   const totals = isReceipt
-    ? [{ label: 'Total paid', amount: paidTotal, total: true }]
+    ? (creditRow.length
+        ? [{ label: 'Subtotal', amount: paidTotal }, ...creditRow, { label: 'Total paid', amount: Math.max(paidTotal - creditTotal, 0), total: true }]
+        : [{ label: 'Total paid', amount: paidTotal, total: true }])
     : [
         { label: 'Subtotal', amount: subtotal },
+        ...creditRow,
         ...(collectedFull > 0 ? [{ label: 'Less amount already collected', amount: -collectedFull }] : []),
         { label: 'Balance', amount: balance, total: true }
       ];

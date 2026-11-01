@@ -26,7 +26,7 @@
 // formats it. Bundle evolution is additive; COMPANION_BUNDLE_VERSION bumps only
 // on a breaking shape change.
 import { dogRepo } from './dogRepo.js';
-import { getSaleFeeCredit } from './incomeView.js';
+import { getSaleCredits, feeCreditSplit } from './incomeView.js';
 import { saleExtraCharges } from './extraCharges.js';
 import { saleRepo } from './saleRepo.js';
 import { contractRepo } from './contractRepo.js';
@@ -360,11 +360,14 @@ export async function buildFamilyBundle(contact) {
       // Remaining balance is COMPUTED here, never stored: price + transport fee +
       // deferred boarding + extra charges − deposit − a credited waitlist
       // application fee already paid toward the price (Waitlist Spec §5.3; the same
-      // credit the Financials ledger and the invoice apply). Absent components
-      // count as 0.
-      const feeCredit = await getSaleFeeCredit(sale.id);
+      // credit the Financials ledger and the invoice apply; only its part toward the
+      // balance, since a part toward the deposit is inside the deposit) − what the family's
+      // credit for funds already received paid beyond the deposit (receivedCredits.js;
+      // its share of the deposit is inside the deposit). Absent components count as 0.
+      const { feeCredit, credit } = await getSaleCredits(sale.id);
+      const pastDeposit = Object.entries(credit?.received.byKey || {}).reduce((t, [k, v]) => (k === 'deposit' ? t : t + v), 0);
       const remainingBalance = price != null
-        ? Number(price) + Number(transportFee || 0) + deferredTotal + extrasTotal - Number(deposit || 0) - feeCredit
+        ? Number(price) + Number(transportFee || 0) + deferredTotal + extrasTotal - Number(deposit || 0) - feeCreditSplit(sale, feeCredit).balance - pastDeposit
         : null;
 
       // Deferred Pickup Boarding section — pinned to the top of the event history,

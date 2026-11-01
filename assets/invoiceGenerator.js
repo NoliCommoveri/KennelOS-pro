@@ -6,7 +6,7 @@
 // dynamically, and it's in PRO_ONLY_STANDALONE so the Lite build leaves it out.
 import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
-import { getIncomeRows, incomeLineItems } from '../data/incomeView.js';
+import { getIncomeRows, incomeLineItems, getCreditedByLine } from '../data/incomeView.js';
 import { getInvoiceDefaults, setInvoiceDefaults } from '../data/settings.js';
 import { PAYMENT_METHODS, INVOICE_LINE_LABELS } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney } from './ui.js';
@@ -135,6 +135,7 @@ export async function openInvoiceGenerator({ preselect = null, onClose = null } 
         <label class="check-inline" style="gap:4px;">Already collected <input type="number" class="ln-collected" min="0" step="0.01" value="${esc(ln.collected || '')}" style="width:100px;"></label>
         ${dueField}
       </div>
+      ${ln.credited > 0 ? `<p class="field-hint" style="margin:4px 0 0 24px;">Includes ${esc(fmtMoney(ln.credited))} from their credit for funds already received.</p>` : ''}
     </div>`;
   }
 
@@ -206,7 +207,12 @@ export async function openInvoiceGenerator({ preselect = null, onClose = null } 
     st.record = record;
     st.order = items.map((it) => it.key);
     st.lines = {};
-    for (const it of items) st.lines[it.key] = { base: it.amount, label: it.invoiceLabel, include: true, mode: 'full', collected: '', dueDate: it.due_date || soonest };
+    // What the family's credit for funds already received paid starts as collected.
+    const credited = await getCreditedByLine(row.source_type, row.source_id);
+    for (const it of items) {
+      const c = Math.min(credited[it.key] || 0, it.amount);
+      st.lines[it.key] = { base: it.amount, label: it.invoiceLabel, include: true, mode: 'full', collected: c > 0 ? String(c) : '', dueDate: it.due_date || soonest, credited: c };
+    }
     st.number = record.invoice_number || '';
     st.notes = record.invoice_notes || '';
     st.payMethod = record.payment_method || '';
@@ -243,6 +249,8 @@ export async function openInvoiceGenerator({ preselect = null, onClose = null } 
       // (balance due date, pickup) shows on the next view/PDF. Only a date she
       // changed (or cleared) here is carried.
       const line = { key: k, mode: ln.mode === 'partial' ? 'partial' : 'full', collected: num(ln.collected) };
+      // The credit's share of "already collected" prints as its own line.
+      if (line.mode === 'full' && ln.credited > 0) line.credit = Math.min(ln.credited, line.collected);
       if ((ln.dueDate || '') !== (st.soonest || '')) line.dueDate = ln.dueDate || '';
       return line;
     });

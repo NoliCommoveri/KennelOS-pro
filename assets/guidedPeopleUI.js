@@ -476,7 +476,21 @@ class PeopleConversation extends StepConversation {
       return approved.status === 'active' ? approved : A.feeReceived(entry.id, { date: today, amount: null });
     }
     const who = esc(contact.name);
-    await this.chat.say(`Has ${who} already paid the ${esc(fmtMoney(fee))} application fee?`, { typing: 300 });
+    // Money they'd already paid her (a credit for funds already received, entered with
+    // their application) pays the fee first.
+    const { creditsOf, feeCharge, allocateCredits } = await import('../data/receivedCredits.js');
+    const credits = creditsOf(entry);
+    const covered = allocateCredits(credits, feeCharge({ ...entry, fee_amount: fee, fee_received_date: null })).byKey.fee || 0;
+    if (covered >= fee) {
+      const from = credits[0].date || today;
+      await this.chat.say(`The ${esc(fmtMoney(covered))} ${who} already paid you covers the ${esc(fmtMoney(fee))} application fee. Put them on the list from ${esc(fmtDate(from))}, when you received it?`, { typing: 300 });
+      const ok = await this.chat.choose([{ label: `Yes, from ${fmtDate(from)}`, value: 'yes', primary: true }, { label: 'Not yet', value: '' }]);
+      await A.approve(entry.id, { date: today, contactId: contact.id });
+      if (!ok) return waitlistEntryRepo.getById(entry.id);
+      return A.feeReceived(entry.id, { date: from, amount: fee, method: credits[0].method || '' });
+    }
+    if (covered > 0) await this.chat.say(`${esc(fmtMoney(covered))} of it is covered by what ${who} already paid you, so ${esc(fmtMoney(fee - covered))} is left.`, { typing: 300 });
+    await this.chat.say(covered > 0 ? `Has ${who} paid the other ${esc(fmtMoney(fee - covered))}?` : `Has ${who} already paid the ${esc(fmtMoney(fee))} application fee?`, { typing: 300 });
     const pick = await this.chat.choose([
       { label: 'Yes, they paid', value: 'paid', primary: true },
       { label: 'Not yet', value: 'due' },

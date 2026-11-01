@@ -5,6 +5,7 @@
 // waitlist family's page ("End the sale…", waitlistUI.endSaleDialog), so the two
 // always do the same thing. The Sale page also uses promptDisposition on a new sale.
 import { dogRepo } from '../data/dogRepo.js';
+import { offerKeeperTests } from './keeperTests.js';
 import { SALE_STATUS, DISPOSITION, DOG_STATUS, REGISTRATION_TYPE, descriptor } from '../data/vocab.js';
 import { todayYMD, fmtMoney, selectModal, promptModal, confirmModal } from './ui.js';
 
@@ -22,7 +23,10 @@ export async function promptDisposition(sale, { title, message, defaultValue }) 
     title, message, label: 'Disposition',
     options: DISPOSITION, defaultValue, confirmLabel: 'Update', cancelLabel: 'Skip'
   });
-  if (choice && choice !== dog.disposition) await dogRepo.update(dog.id, { disposition: choice });
+  if (choice && choice !== dog.disposition) {
+    const saved = await dogRepo.update(dog.id, { disposition: choice });
+    await offerKeeperTests(saved);
+  }
 }
 
 // The pup of a sale that just ended without it staying placed. Pup died → offer to
@@ -88,7 +92,7 @@ async function promptBackAsPuppy(sale, health, onError) {
   const changes = { status: 'puppy', disposition: choice };
   if (dog.ownership_type === 'external') Object.assign(changes, { ownership_type: 'owned', owner_contact_id: null });
   try {
-    await dogRepo.update(dog.id, changes);
+    await offerKeeperTests(await dogRepo.update(dog.id, changes));
   } catch (e) {
     onError(`${dog.call_name} wasn't updated: ${e.message || e} Change it on the dog's page.`);
   }

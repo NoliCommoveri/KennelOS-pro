@@ -52,12 +52,15 @@ import {
   WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, RELEASED_SALE_STATUSES, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
+import { getEntryCredit } from '../data/incomeView.js';
+import { creditsOf } from '../data/receivedCredits.js';
+import { CREDIT_USES } from '../data/vocab.js';
 import { applicationFields, answerField, prefField as prefFieldHtml, privateField, readAnswers, readPrefs } from '../assets/waitlistApplicationForm.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
-  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, statusLinkFor, copyLink
+  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, statusLinkFor, copyLink, creditDialog
 } from '../assets/waitlistUI.js';
 
 const els = {
@@ -137,6 +140,7 @@ async function reload() {
   await loadKennelContext(ctx.entry.kennel_id);
   ctx.contact = ctx.contacts.find((c) => c.id === ctx.entry.contact_id) || null;
   ctx.offers = await waitlistOfferRepo.getByEntry(ctx.entry.id);
+  ctx.credit = (await getEntryCredit(ctx.entry.id)).credit;
 }
 
 // --- Status card + actions --------------------------------------------------------
@@ -215,6 +219,8 @@ function statusLines(e) {
   } else if (e.status === 'approved') {
     const fee = e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : 'no fee set';
     lines.push(`Approved ${esc(fmtDate(e.approved_date))}. Fee due: <strong>${fee}</strong>${e.fee_due_date ? ` by ${esc(fmtDate(e.fee_due_date))}` : ''}.`);
+    const feeCredit = ctx.credit?.byKey.fee || 0;
+    if (feeCredit > 0) lines.push(`Their credit for funds already received covers ${esc(fmtMoney(feeCredit))} of it${feeCredit >= Number(e.fee_amount) ? ': use <strong>Fee received</strong> to put them on the list' : `, so they're asked for ${esc(fmtMoney(Number(e.fee_amount) - feeCredit))}`}.`);
     if (e.fee_due_date && e.fee_due_date < today) lines.push('<span class="badge badge-red">The pay-by date has passed</span>');
     if (ctx.config.payment_instructions) lines.push(`<span class="faint">Your payment instructions: ${esc(ctx.config.payment_instructions)}</span>`);
   } else if (e.status === 'active') {
@@ -890,16 +896,24 @@ async function onFeeReceived() {
   const e = ctx.entry;
   const noFee = e.fee_amount == null;
   const methodOpts = `<option value="">—</option>` + PAYMENT_METHODS.map((m) => `<option>${esc(m)}</option>`).join('');
+  // Their credit for funds already received pays this much of the fee; covering it
+  // all, the credit's date is the day it came in.
+  const creditPart = noFee ? 0 : ctx.credit?.byKey.fee || 0;
+  const covered = creditPart > 0 && creditPart >= Number(e.fee_amount);
+  const creditDate = creditsOf(e)[0]?.date || todayYMD();
+  const creditHint = creditPart > 0
+    ? `<p class="field-hint">${esc(fmtMoney(creditPart))} of the fee is paid by their credit for funds already received${covered ? `, all of it (received ${esc(fmtDate(creditDate))})` : `; the other ${esc(fmtMoney(Number(e.fee_amount) - creditPart))} is what they send`}. Enter the whole fee.</p>` : '';
   await formModal({
     title: noFee ? `Add ${entryName(e, ctx.contact)} to the list?` : 'Fee received',
     confirmLabel: noFee ? 'Add to the list' : 'Fee received',
     bodyHtml: `<div class="form-grid">
-        <div class="field"><label>${noFee ? 'Date' : 'Date received'}</label><input id="fr-date" type="date" value="${esc(todayYMD())}"></div>
+        <div class="field"><label>${noFee ? 'Date' : 'Date received'}</label><input id="fr-date" type="date" value="${esc(covered ? creditDate : todayYMD())}"></div>
         ${noFee ? '' : `
         <div class="field"><label>Amount</label><input id="fr-amount" type="number" min="0" step="0.01" value="${esc(e.fee_amount)}"></div>
         <div class="field"><label>Method</label><select id="fr-method">${methodOpts}</select></div>
         <div class="field"><label>Reference</label><input id="fr-ref" type="text"></div>`}
       </div>
+      ${creditHint}
       <p class="field-hint">This date sets their place in line. ${emailHint()}</p>`,
     onConfirm: async (o) => {
       await actions.feeReceived(e.id, noFee
@@ -908,7 +922,8 @@ async function onFeeReceived() {
             date: o.querySelector('#fr-date').value || todayYMD(),
             amount: o.querySelector('#fr-amount').value,
             method: o.querySelector('#fr-method').value,
-            reference: o.querySelector('#fr-ref').value.trim()
+            reference: o.querySelector('#fr-ref').value.trim(),
+            creditAmount: creditPart
           });
     }
   }) && (await afterAction(), await emailThem('on_list'), await reportNextInLine());
@@ -1017,6 +1032,41 @@ function publicListNameHtml(e) {
       : ' <span class="badge badge-blue">Asked to list privately — you decide when you approve</span>')
     : '';
   return `${esc(listedName(e, entryName(e, ctx.contact)))}${e.private_listing ? ' <span class="faint">(private)</span>' : ''}${asked}`;
+}
+
+// Credits for funds already received (receivedCredits.js): each one, what it can pay
+// toward, and how much of it is used; Add / Edit / Remove.
+function creditsHtml(e) {
+  const list = creditsOf(e);
+  const a = ctx.credit;
+  const usesText = (c) => (c.applies_to.length === CREDIT_USES.length ? 'Anything they owe'
+    : CREDIT_USES.filter((u) => c.applies_to.includes(u.value)).map((u) => u.label).join(', '));
+  const usedOn = a ? CREDIT_USES.map((u) => [u, Object.entries(a.byKey).filter(([k]) => ({ fee: 'fee', deposit: 'deposit', balance: 'price' }[k] || 'extras') === u.value).reduce((t, [, v]) => t + v, 0)])
+    .filter(([, v]) => v > 0).map(([u, v]) => `${esc(u.label.toLowerCase())} ${esc(fmtMoney(v))}`) : [];
+  const rows = list.map((c) => `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border); align-items:flex-start;">
+      <div><strong>${esc(fmtMoney(c.amount))}</strong> received ${esc(fmtDate(c.date))}${c.method ? ` <span class="faint">${esc(c.method)}</span>` : ''}
+        ${c.note ? `<div class="muted" style="font-size:13px;">${esc(c.note)}</div>` : ''}
+        <div class="faint" style="font-size:13px;">Pays toward: ${esc(usesText(c))} · used ${esc(fmtMoney(a?.perCredit[c.id] || 0))}</div></div>
+      <div class="pill-row"><button class="btn btn-sm" data-credit-edit="${esc(c.id)}">Edit</button><button class="btn btn-sm" data-credit-remove="${esc(c.id)}">Remove</button></div>
+    </li>`).join('');
+  return `<section class="card">
+      <div class="row-between"><h2 style="margin:0;">Credits</h2><button class="btn btn-sm" data-act="credit-add">+ Add a credit</button></div>
+      ${list.length ? `<p style="margin:8px 0 4px;"><strong>${esc(fmtMoney(a?.remaining ?? 0))}</strong> credit remaining of ${esc(fmtMoney(a?.total ?? 0))}.${usedOn.length ? ` <span class="faint">Used on: ${usedOn.join(', ')}.</span>` : ''}</p>
+        <ul style="margin:0; padding:0; list-style:none;">${rows}</ul>`
+        : '<p class="muted" style="margin:8px 0 0;">Money you\'ve already received from them, like a deposit collected before the litter was born. It comes off what they\'re asked to pay.</p>'}
+    </section>`;
+}
+
+async function onAddCredit(credit = null) {
+  const saved = await creditDialog({ entry: ctx.entry, name: entryName(ctx.entry, ctx.contact), credit });
+  if (saved) await afterAction();
+}
+
+async function onRemoveCredit(id) {
+  const c = creditsOf(ctx.entry).find((x) => x.id === id);
+  if (!c || !(await confirmModal({ title: `Remove the ${fmtMoney(c.amount)} credit?`, message: 'It no longer comes off what they\'re asked to pay. Anything already marked paid stays as it is.', confirmLabel: 'Remove', danger: true }))) return;
+  await actions.removeCredit(ctx.entry.id, id);
+  await afterAction();
 }
 
 // Who they are and what they asked for (Details tab).
@@ -1757,12 +1807,17 @@ function renderDetails() {
       <h2 style="margin:0 0 6px;">${badge(WAITLIST_ENTRY_STATUS, e.status)}</h2>
       ${statusLines(e).map((l) => `<p style="margin:4px 0;">${l}</p>`).join('')}
     </section>
+    ${creditsHtml(e)}
     <section class="card">
       <div class="row-between"><h2 style="margin:0;">Their details</h2><button class="btn btn-sm" data-act="edit">Edit</button></div>
       ${detailsDlHtml()}
       ${leave}
     </section>`;
   pane.querySelector('[data-act="edit"]').addEventListener('click', startEdit);
+  const fail = (err) => showError(err.message || String(err));
+  pane.querySelector('[data-act="credit-add"]').addEventListener('click', () => onAddCredit().catch(fail));
+  pane.querySelectorAll('[data-credit-edit]').forEach((b) => b.addEventListener('click', () => onAddCredit(creditsOf(ctx.entry).find((c) => c.id === b.dataset.creditEdit)).catch(fail)));
+  pane.querySelectorAll('[data-credit-remove]').forEach((b) => b.addEventListener('click', () => onRemoveCredit(b.dataset.creditRemove).catch(fail)));
   pane.querySelector('[data-act="leave"]')?.addEventListener('click', () => onLeave().catch((err) => showError(err.message || String(err))));
   // "Ready now?" answered for them (they told her by phone or message).
   pane.querySelector('[data-ready="yes"]')?.addEventListener('click', () => actions.recordReadyAnswer(e.id, { answer: 'yes', by: 'breeder' })

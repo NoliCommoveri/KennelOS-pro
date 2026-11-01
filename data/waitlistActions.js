@@ -28,6 +28,8 @@
 // makes the offer `accepted`, places the family, and moves the turn on. No deposit
 // by the deadline = no response: the Sale is cancelled and the pup is free again.
 import { kennelRepo } from './kennelRepo.js';
+import { creditsOf, feeCharge, allocateCredits } from './receivedCredits.js';
+import { familyCredit } from './incomeView.js';
 import { contactRepo } from './contactRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
@@ -139,20 +141,43 @@ export async function decline(entryId, { date = todayYMD() } = {}) {
 // Fee received — this fixes the family's place in line (fee_received_date is the
 // position anchor, §6.1; fee_received_at, the moment she recorded it, orders two
 // families who paid on the same day). Also used with a null fee ("Add to the list").
-export async function feeReceived(entryId, { date = todayYMD(), amount, method = '', reference = '' } = {}) {
+// `creditAmount`: the part of the fee their credit for funds already received paid
+// (receivedCredits.feeCharge reads it back, so that share stays used). Left out,
+// it's what their credits cover of the fee (the fee is the first thing a credit
+// pays); 0 when they paid it all some other way (online).
+export async function feeReceived(entryId, { date = todayYMD(), amount, method = '', reference = '', creditAmount } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['approved'], 'mark the fee received for');
+  if (creditAmount === undefined) {
+    const fee = amount === undefined ? entry.fee_amount : amount;
+    creditAmount = allocateCredits(creditsOf(entry), feeCharge({ ...entry, fee_amount: fee, fee_received_date: null })).byKey.fee || 0;
+  }
   const changes = {
     status: 'active',
     fee_received_date: date,
     fee_received_at: nowISO(),
     fee_payment_method: method,
-    fee_payment_reference: reference
+    fee_payment_reference: reference,
+    ...(Number(creditAmount) > 0 ? { fee_credit_amount: Number(creditAmount) } : {})
   };
   if (amount !== undefined) changes.fee_amount = amount === '' || amount == null ? null : Number(amount);
   // No offer is made here, even if they're now next on a litter with open picks:
   // the page tells her, and she offers it (see the header note).
   return waitlistEntryRepo.update(entryId, changes);
+}
+
+// A credit for funds she'd already received from them (receivedCredits.js): added,
+// or one of theirs replaced by id. `credit` comes from receivedCredits.newCredit.
+export async function saveCredit(entryId, credit) {
+  const entry = await load(entryId);
+  const list = Array.isArray(entry.received_credits) ? entry.received_credits : [];
+  const next = list.some((c) => c.id === credit.id) ? list.map((c) => (c.id === credit.id ? credit : c)) : [...list, credit];
+  return waitlistEntryRepo.update(entryId, { received_credits: next });
+}
+
+export async function removeCredit(entryId, creditId) {
+  const entry = await load(entryId);
+  return waitlistEntryRepo.update(entryId, { received_credits: (entry.received_credits || []).filter((c) => c.id !== creditId) });
 }
 
 export async function markFeeExpired(entryId) {
@@ -1356,6 +1381,9 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
   const why = `${req.reason?.label || 'backed out'}${req.reason?.text ? `: ${req.reason.text}` : ''}`;
   const removeSet = new Set(remove);
   const depositIn = Boolean(sale.deposit_date) || ['deposit_paid', 'paid_in_full'].includes(sale.status);
+  // The deposit that moves to their next pup: what they paid beyond their credit
+  // for funds already received (that part stays on their entry as credit).
+  const movedDeposit = Math.max(0, Number(sale.deposit_amount || 0) - (familyCredit(entry, sale)?.byKey.deposit || 0));
 
   // What she ticked: extras off the sale (the rest kept, still owed); stays and pickups archived.
   const charges = (sale.extra_charges || []).filter((c) => !removeSet.has(c.id)).map((c) => (c.fee_for ? c : { ...c, kept_after_cancel: true }));
@@ -1394,7 +1422,7 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
   if (outcome === 'move') {
     result.entry = await waitlistEntryRepo.update(entry.id, {
       status: 'active', placed_sale_id: null, position_anchor_date: date, back_out_request: decided,
-      ...(depositIn && Number(sale.deposit_amount) > 0 ? { carried_payment: { amount: Number(sale.deposit_amount), date, from_sale_id: sale.id } } : {}),
+      ...(depositIn && movedDeposit > 0 ? { carried_payment: { amount: movedDeposit, date, from_sale_id: sale.id } } : {}),
       notes: appendNote(entry.notes, `${note} Their deposit moves to their next pup; back on the list at the end of the line.`)
     });
   } else {

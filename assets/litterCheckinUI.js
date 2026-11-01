@@ -27,6 +27,7 @@ import * as H from '../data/goHome.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
+import { askKeeperTests } from './keeperTests.js';
 
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const litterHref = (l) => `${pagesPrefix()}litter.html?id=${encodeURIComponent(l.id)}`;
@@ -502,20 +503,23 @@ class Checkin {
       html: rows,
       submitLabel: 'Save plans',
       submit: async (root) => {
+        const kept = [];
         let changed = 0;
         for (const [i, p] of pups.entries()) {
           const v = root.querySelector(`#ck-plan-${i}`)?.value;
           if (!v || v === (p.disposition || 'undecided')) continue;
-          await dogRepo.update(p.id, { disposition: v });
+          const saved = await dogRepo.update(p.id, { disposition: v });
+          if (v === 'keeping') kept.push(saved);
           changed++;
         }
-        return changed;
+        return { changed, kept };
       },
-      reply: (n) => (n ? `Update ${C.plural(n, 'puppy', 'puppies')}` : 'Keep them as they are')
+      reply: ({ changed }) => (changed ? `Update ${C.plural(changed, 'puppy', 'puppies')}` : 'Keep them as they are')
     });
     if (!res.done) return;
-    if (res.result) this.didSomething = true;
-    await this.chat.say(res.result ? 'Done. Their plans are updated.' : 'Okay, nothing changed.');
+    if (res.result.changed) this.didSomething = true;
+    await this.chat.say(res.result.changed ? 'Done. Their plans are updated.' : 'Okay, nothing changed.');
+    await askKeeperTests(this.chat, res.result.kept);
   }
 
   // --- Microchips ---------------------------------------------------------------

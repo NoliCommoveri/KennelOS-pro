@@ -8,6 +8,7 @@ import { CapExceededError } from '../data/repoBase.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
+import { offerKeeperTests } from '../assets/keeperTests.js';
 import { kennelRepo, seedTestsKennel } from '../data/kennelRepo.js';
 import { breedChoices } from '../data/dogSearch.js';
 import { eventRepo, testTokensOf, testMatchTokensOf } from '../data/eventRepo.js';
@@ -728,6 +729,7 @@ async function doSave() {
     }
     const prevRegistration = ctx.original.intended_registration || null;
     const prevStatus = ctx.original.status;
+    const becameKeeper = ctx.original.disposition !== 'keeping' && candidate.disposition === 'keeping';
     const becameDeceased = prevStatus !== 'deceased' && candidate.status === 'deceased';
     saved = await dogRepo.update(ctx.original.id, candidate);
     if (saved.status === 'puppy' && saved.intended_registration && saved.intended_registration !== prevRegistration) {
@@ -739,6 +741,11 @@ async function doSave() {
     await loadRefs(); // names/breeds may have changed
     ctx.original = await dogRepo.getById(saved.id);
     renderAll();
+    // Marked Keeping: offer her kennel's planned tests for the breed.
+    if (becameKeeper && await offerKeeperTests(ctx.original)) {
+      ctx.original = await dogRepo.getById(saved.id);
+      renderAll();
+    }
     if (becameDeceased && await promptDeceasedFollowUps(ctx.original, { wasPuppy: prevStatus === 'puppy' })) {
       ctx.original = await dogRepo.getById(saved.id);
       // Lite's departure leaves the page, as "Remove from program" does.

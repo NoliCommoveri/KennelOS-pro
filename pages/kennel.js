@@ -26,7 +26,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { getIncomeRows, summarize } from '../data/incomeView.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
-import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER, PARENT_TESTS_SHOWN } from '../data/vocab.js';
+import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, FEE_CREDIT_TOWARD, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER, PARENT_TESTS_SHOWN } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { kennelChargeList, readPriceList, readChargeGroups } from '../data/extraCharges.js';
 import { priceListHtml, wirePriceList, readPriceListForm } from '../assets/priceListEditor.js';
@@ -409,6 +409,8 @@ ${body}        </div>
 ${group('fees', 'Fees & payment', 'Application fee, when it is due, how families pay', `
         <div class="field"><label>Application fee</label><input id="wl-fee" type="number" min="0" step="0.01" value="${esc(c.fee_amount ?? '')}" placeholder="No fee"></div>
         <div class="field"><label>The fee is</label><select id="wl-policy">${policyOpts}</select></div>
+        <div class="field"><label>A credited fee counts toward</label><select id="wl-credit-toward">${FEE_CREDIT_TOWARD.map((o) => `<option value="${esc(o.value)}"${o.value === c.fee_credit_toward ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>
+          <span class="field-hint">When the fee is credited to the purchase price. The deposit: families send the deposit less their fee.</span></div>
         <div class="field"><label>Days to pay after approval</label><input id="wl-fee-days" type="number" min="1" step="1" value="${esc(c.fee_due_days ?? '')}" placeholder="No deadline">
           <span class="field-hint">Blank = no pay-by date, so nothing ever expires.</span></div>
         <div class="field field-wide"><label>Payment instructions</label><textarea id="wl-instructions" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions)}</textarea>
@@ -599,6 +601,7 @@ async function onSaveWaitlist() {
     ...(kennel.waitlist_config || {}),
     fee_amount: num('#wl-fee'),
     fee_credit_policy: q('#wl-policy').value,
+    fee_credit_toward: q('#wl-credit-toward').value,
     fee_due_days: num('#wl-fee-days'),
     respond_days: num('#wl-respond'),
     max_passes: num('#wl-passes'),

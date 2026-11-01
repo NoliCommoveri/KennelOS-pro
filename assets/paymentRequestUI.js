@@ -19,7 +19,7 @@ import { accountRepo } from '../data/accountRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { incomeLineItems, getSaleFeeCredit } from '../data/incomeView.js';
+import { incomeLineItems, getSaleFeeCredit, getCreditedByLine } from '../data/incomeView.js';
 import { saleFeeEstimate } from '../data/processingFees.js';
 import { splitName } from '../data/contractForms.js';
 import { paymentAccounts, salePaidVia, paidViaField, paymentOptions, paymentLink, paymentRequestMessage } from '../data/paymentLinks.js';
@@ -135,13 +135,17 @@ export async function openPaymentRequest({ saleId }) {
   for (const a of all) if ((stripeIds.has(a.id) || own.has(a.id)) && !accounts.some((x) => x.id === a.id)) accounts.push(a);
   if (!accounts.length) return noAccountsModal();
 
-  const [dog, buyer, kennel, feeCredit] = await Promise.all([
+  const [dog, buyer, kennel, feeCredit, credited] = await Promise.all([
     sale.dog_id ? dogRepo.getById(sale.dog_id) : null,
     sale.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null,
     sale.kennel_id ? kennelRepo.getById(sale.kennel_id) : null,
-    getSaleFeeCredit(sale.id)
+    getSaleFeeCredit(sale.id),
+    getCreditedByLine('sale', sale.id)
   ]);
-  const options = paymentOptions(incomeLineItems('sale', sale, { feeCredit }));
+  // What's still owed, less what the family's credit for funds already received paid.
+  const owed = incomeLineItems('sale', sale, { feeCredit }).map((x) => (x.state === 'anticipated' && credited[x.key]
+    ? { ...x, amount: Math.max(0, Math.round((x.amount - credited[x.key]) * 100) / 100) } : x));
+  const options = paymentOptions(owed);
   const pupName = dog?.call_name || dog?.registered_name || '';
   const picked = await chooseModal({
     title: `Send payment link${pupName ? `: ${pupName}` : ''}`,

@@ -10,7 +10,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { waitlistConfig, waitlistConfigProblem } from '../data/waitlistRules.js';
 import { paymentLink } from '../data/paymentLinks.js';
-import { FEE_CREDIT_POLICY } from '../data/vocab.js';
+import { FEE_CREDIT_POLICY, FEE_CREDIT_TOWARD } from '../data/vocab.js';
 import { field } from './kelsSteps.js';
 import { esc, fmtMoney } from './ui.js';
 
@@ -49,6 +49,7 @@ export async function askWaitlistFee(chat, kennel, { resumeTask = '', title = ''
     html: `<div class="ck-inline">
         ${field('Application fee', `<input id="ws-fee" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(c.fee_amount ?? '')}" placeholder="No fee">`)}
         ${field('The fee is', `<select id="ws-policy">${FEE_CREDIT_POLICY.map((o) => opt(o.value, o.label, o.value === c.fee_credit_policy)).join('')}</select>`)}
+        ${field('A credited fee counts toward', `<select id="ws-credit-toward">${FEE_CREDIT_TOWARD.map((o) => opt(o.value, o.label, o.value === c.fee_credit_toward)).join('')}</select>`)}
       </div>
       ${field('Days to pay after you approve them', `<input id="ws-fee-days" type="number" min="1" step="1" value="${esc(c.fee_due_days ?? '')}" placeholder="No deadline">`, 'Blank means no pay-by date.')}
       ${field('How families pay you', `<textarea id="ws-instructions" rows="2" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions || '')}</textarea>`)}
@@ -66,6 +67,7 @@ export async function askWaitlistFee(chat, kennel, { resumeTask = '', title = ''
       const changes = {
         fee_amount: numOrNull(q('#ws-fee').value),
         fee_credit_policy: q('#ws-policy').value,
+        fee_credit_toward: q('#ws-credit-toward').value,
         fee_due_days: numOrNull(q('#ws-fee-days').value),
         payment_instructions: q('#ws-instructions').value.trim(),
         ...(q('#ws-fee-when') ? { fee_link_when: q('#ws-fee-when').value } : {})

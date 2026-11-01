@@ -344,6 +344,10 @@ export const SYNC_REGISTRY = Object.freeze({
       // What they'd paid on a pup they lost, kept for their next one (Spec
       // §16.11): money, private like fee_amount.
       'carried_payment',
+      // Credits for funds she'd already received from them outside the app, and
+      // the part of their fee a credit paid (receivedCredits.js): money, private
+      // like fee_amount.
+      'received_credits', 'fee_credit_amount',
       // Their ask, on the application, to list privately (Spec §15.3): private
       // like pause_request. What she decided rides private_listing.
       'private_request',

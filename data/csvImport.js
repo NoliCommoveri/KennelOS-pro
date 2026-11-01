@@ -14,7 +14,8 @@ import Papa from '../vendor/papaparse.min.mjs';
 import { dogRepo } from './dogRepo.js';
 import { resolveKennelIdForWrite, SCOPED_OWNERSHIP, ownKennels } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
-import { kennelRepo } from './kennelRepo.js';
+import { kennelRepo, withSeededTests } from './kennelRepo.js';
+import { newCredit } from './receivedCredits.js';
 import { pairingRepo } from './pairingRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
@@ -25,6 +26,7 @@ import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { formQuestions, isAnswerQuestion, snapshotQuestions, columnsFor, IMPORT_ALIASES } from './waitlistForm.js';
 import { waitlistConfig, kennelBreeds, resolveBreed } from './waitlistRules.js';
+import { todayYMD } from './dateUtils.js';
 import { normReg } from './pedigreeImport.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
@@ -215,9 +217,16 @@ const DOG_MAPPING = {
       contactRepo.getAll({ includeArchived: true })
     ]);
     this._kennels = buildKennelNameIndex(kennels);
+    this._allKennels = kennels;
     this._contactByName = new Map();
     for (const c of contacts) if (c.name) this._contactByName.set(c.name.trim().toLowerCase(), c);
     return dogs;
+  },
+
+  // A new dog starts with her kennel's planned tests for its breed, as on the
+  // Dog page (the kennels loadExisting read for the preview).
+  seedRecord(record) {
+    return this._allKennels ? withSeededTests(record, this._allKennels) : record;
   },
 
   buildIndex(existing) {
@@ -1615,7 +1624,7 @@ const WAITLIST_MAPPING = {
   entity: 'waitlist',
   label: 'Waitlist applications',
   links: ['kennel', 'dog'],
-  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing', 'program', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'notes'],
+  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing', 'program', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'already_paid', 'already_paid_date', 'notes'],
   requiredForCreate: ['name', 'email'],
 
   async loadExisting() {
@@ -1733,6 +1742,18 @@ const WAITLIST_MAPPING = {
     if (colors.length) record.pref_colors = colors;
     const notes = col(row, 'notes');
     if (notes) record.notes = notes;
+
+    // Money they'd already paid her (an early deposit): a credit for funds already
+    // received (receivedCredits.js), every use ticked. New applications only.
+    const paidRaw = col(row, 'already_paid', 'amount_paid', 'deposit_paid', 'paid');
+    if (paidRaw) {
+      const amount = parseMoney(paidRaw);
+      const dateRaw = col(row, 'already_paid_date', 'paid_date', 'deposit_date');
+      const date = dateRaw ? normDate(dateRaw) : (record.applied_date || todayYMD());
+      if (!(amount > 0)) reasons.push(`Unrecognized already_paid "${paidRaw}" (left out).`);
+      else if (!date) reasons.push(`Unrecognized already_paid_date "${dateRaw}" (the amount is left out).`);
+      else record.received_credits = [newCredit({ amount, date, note: 'Already paid (imported)' })];
+    }
 
     // Program by name, on that kennel only (unresolved → flagged, never invented).
     const progName = col(row, 'program');
@@ -1877,7 +1898,7 @@ export async function commitPlan(entity, plan) {
       if (mapping.prepareRecord) await mapping.prepareRecord(r);
       if (r.decision === 'create') {
         await stampKennelScope(entity, r.record);
-        const saved = await mapping.repo.create(r.record);
+        const saved = await mapping.repo.create(mapping.seedRecord ? mapping.seedRecord(r.record) : r.record);
         written.set(r.index, saved.id);
         result.created++;
       } else if (r.decision === 'update') {

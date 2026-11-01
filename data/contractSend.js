@@ -10,7 +10,7 @@ import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { accountRepo } from './accountRepo.js';
-import { incomeLineItems, paidOnSale, getSaleFeeCredit } from './incomeView.js';
+import { incomeLineItems, paidOnSale, getSaleCredits } from './incomeView.js';
 import { allForms, prefillValues, prefillUrl, formProvider, mapValues } from './contractForms.js';
 import { todayYMD } from './dateUtils.js';
 
@@ -23,10 +23,11 @@ export async function loadContractForms() {
 }
 
 // What's still owed on a sale, read the way the ledger reads it.
+// The family's credits for funds already received count as paid.
 export async function balanceDueOn(sale) {
-  const feeCredit = await getSaleFeeCredit(sale.id);
+  const { feeCredit, credit } = await getSaleCredits(sale.id);
   const total = incomeLineItems('sale', sale, { feeCredit }).reduce((t, x) => t + x.amount, 0);
-  return Math.max(0, total - paidOnSale(sale, { feeCredit }));
+  return Math.max(0, total - paidOnSale(sale, { feeCredit, received: credit?.received || null }));
 }
 
 const get = (repo, id) => (id ? repo.getById(id) : null);

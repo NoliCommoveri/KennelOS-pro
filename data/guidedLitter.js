@@ -28,7 +28,7 @@ import { dogRepo } from './dogRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { pairingRepo } from './pairingRepo.js';
 import { contactRepo } from './contactRepo.js';
-import { kennelRepo } from './kennelRepo.js';
+import { kennelRepo, withSeededTests } from './kennelRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { baseFromLitter } from './puppyDefaults.js';
@@ -561,7 +561,9 @@ async function createParent(spec, role, s, ownKennelId, step) {
     return spec.bringInId;
   };
   if (spec.mine) {
-    made.dogId = await write({ ...base, ownership_type: 'owned', kennel_id: ownKennelId });
+    // A new dog of hers starts with her kennel's planned tests, as on the Dog page.
+    const own = { ...base, ownership_type: 'owned', kennel_id: ownKennelId };
+    made.dogId = await write(spec.bringInId ? own : withSeededTests(own, await kennelRepo.getAll()));
     await step();
     return made.dogId;
   }

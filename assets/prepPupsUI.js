@@ -43,6 +43,7 @@ import { balanceDueOn } from '../data/contractSend.js';
 import * as C from '../data/litterCheckin.js';
 import * as P from '../data/prepPups.js';
 import { chipsForm, careForm, pickupsForm, field, pupName, pupLine } from './litterCheckinUI.js';
+import { askKeeperTests } from './keeperTests.js';
 import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
 
 // A few ways she moves on, so the walk-through doesn't read like a checklist.
@@ -243,18 +244,22 @@ class Prep {
       submitLabel: 'Save plans',
       cancelLabel: 'Not now',
       submit: async (root) => {
+        const kept = [];
         let n = 0;
         for (const [i, r] of rows.entries()) {
           const v = root.querySelector(`#pp-plan-${i}`).value;
           if (v === r.pup.disposition) continue;
-          await dogRepo.update(r.pup.id, { disposition: v });
+          const saved = await dogRepo.update(r.pup.id, { disposition: v });
+          if (v === 'keeping') kept.push(saved);
           n++;
         }
-        return n;
+        return { n, kept };
       },
-      reply: (n) => (n ? `Update ${C.plural(n, 'puppy', 'puppies')}` : 'Keep them as they are')
+      reply: ({ n }) => (n ? `Update ${C.plural(n, 'puppy', 'puppies')}` : 'Keep them as they are')
     });
-    if (res.done) await this.chat.say(res.result ? 'Done, their plans are updated.' : 'Okay, nothing changed.');
+    if (!res.done) return;
+    await this.chat.say(res.result.n ? 'Done, their plans are updated.' : 'Okay, nothing changed.');
+    await askKeeperTests(this.chat, res.result.kept);
   }
 
   // One pup's sale, in the chat: the family (one she has, or a new one), how far

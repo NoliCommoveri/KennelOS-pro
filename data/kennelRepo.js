@@ -72,6 +72,29 @@ export function seedTestsKennel(candidate, kennels) {
   return owned.length === 1 ? owned[0] : null;
 }
 
+// The tests a new dog's plan starts with: the seeding kennel's panel for the
+// dog's breed, or [] when no kennel seeds it. Every way a dog is added (the Dog
+// page, Kels, CSV import) seeds through this.
+export function seedTestsFor(candidate, kennels) {
+  const k = seedTestsKennel(candidate, kennels);
+  return k ? kennelRepo.testsForBreed(k, candidate.breed) : [];
+}
+
+// A new dog's fields with its seeded plan, unless the fields already carry one
+// or the dog is pedigree-only.
+export function withSeededTests(fields, kennels) {
+  if (fields.pedigree_only || (fields.planned_tests || []).length) return fields;
+  const tests = seedTestsFor(fields, kennels);
+  return tests.length ? { ...fields, planned_tests: tests } : fields;
+}
+
+// The seeding tests a dog on file doesn't have planned yet (a pup just marked
+// Keeping is offered these).
+export function testsToPlan(dog, kennels) {
+  const have = new Set((dog.planned_tests || []).map(testKey));
+  return seedTestsFor(dog, kennels).filter((t) => !have.has(testKey(t)));
+}
+
 export const kennelRepo = {
   ...base,
 

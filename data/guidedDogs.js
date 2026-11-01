@@ -20,7 +20,7 @@
 // rest aren't added (the UI shows the upgrade notice).
 import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
-import { kennelRepo, seedTestsKennel } from './kennelRepo.js';
+import { kennelRepo, withSeededTests } from './kennelRepo.js';
 import { resolveKennelIdForWrite, SCOPED_OWNERSHIP } from './kennelScope.js';
 import { getMyContactId } from './settings.js';
 import { CapExceededError } from './repoBase.js';
@@ -501,9 +501,7 @@ export async function saveGuidedDogs(draft, { onProgress = () => {} } = {}) {
         d.id = d.match;
       } else if (!d.id) {
         // The Dog page's seeding: her kennel's planned tests for this breed.
-        const seed = seedTestsKennel(fields, kennels);
-        if (seed) fields.planned_tests = kennelRepo.testsForBreed(seed, fields.breed);
-        const made = await dogRepo.create(fields);
+        const made = await dogRepo.create(withSeededTests(fields, kennels));
         d.id = made.id;
       } else {
         await dogRepo.update(d.id, fields);

@@ -7,6 +7,7 @@
 // registration are offered too (applied to all on the bulk form). Everything
 // else is edited later on Dog Detail.
 import { dogRepo } from '../data/dogRepo.js';
+import { offerKeeperTests } from './keeperTests.js';
 import { baseFromLitter } from '../data/puppyDefaults.js';
 import { SEX, DISPOSITION, REGISTRATION_TYPE } from '../data/vocab.js';
 import { esc, fmtDate } from './ui.js';
@@ -104,6 +105,7 @@ export function openAddPuppyForm({ litter, dam, onSaved }) {
     try {
       const puppy = await dogRepo.create({ ...base, call_name, sex, disposition, intended_registration });
       close();
+      await offerKeeperTests(puppy);
       if (openAfter) { location.href = `dog.html?id=${encodeURIComponent(puppy.id)}`; return; }
       onSaved?.(puppy);
     } catch (e) {
@@ -175,10 +177,12 @@ export function openAddPuppiesForm({ litter, dam, existingCount = 0, onSaved }) 
     btn.disabled = true;
     try {
       // Number the placeholders continuing past any puppies already on the roster.
+      const made = [];
       for (let i = 0; i < sexes.length; i++) {
-        await dogRepo.create({ ...base, call_name: `Puppy ${existingCount + i + 1}`, sex: sexes[i], disposition, intended_registration });
+        made.push(await dogRepo.create({ ...base, call_name: `Puppy ${existingCount + i + 1}`, sex: sexes[i], disposition, intended_registration }));
       }
       close();
+      await offerKeeperTests(made);
       onSaved?.();
     } catch (e) {
       modal.querySelector('#pf-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;

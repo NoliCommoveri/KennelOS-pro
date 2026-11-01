@@ -33,7 +33,8 @@ import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './wai
 import { serverEmailTemplates } from './waitlistEmails.js';
 import { sharedReferrals, sharedTransport } from './referralShare.js';
 import { feePay, withClientRef } from './waitlistFeePay.js';
-import { familySale, familyExtrasView, pupBirthDate } from './familyExtras.js';
+import { familySale, familyExtrasView, pupBirthDate, creditSale } from './familyExtras.js';
+import { familyCredit, feeCreditSplit } from './incomeView.js';
 import { familyPickupView } from './familyPickup.js';
 import { backOutReasons, backOutPolicyText } from './backOut.js';
 import { standardLocation } from './pickupSlots.js';
@@ -201,11 +202,17 @@ function entryView(entry, ctx) {
     // What to pay and how: only while approved and unpaid (Spec §5.3, §8.1). With
     // her fee's Payment service set, their own Pay link (and what it charges, with
     // a passed-on card fee) too (Integrations plan §4).
+    // Their credit for funds already received comes off it (`credit`, what it
+    // covers); a Pay link charges the whole fee, so it's left off then.
     fee_due: entry.status === 'approved' && !entry.fee_received_date && fee !== null && fee > 0
-      ? {
-          amount: fee, due_date: orNull(entry.fee_due_date), instructions: ctx.config.payment_instructions || '', credit_policy: ctx.config.fee_credit_policy,
-          ...(ctx.feePayFor(fee, entry.id) || {})
-        }
+      ? (() => {
+          const credit = Math.min(ctx.creditFor(entry)?.byKey.fee || 0, fee);
+          return {
+            amount: Math.round((fee - credit) * 100) / 100, due_date: orNull(entry.fee_due_date), instructions: ctx.config.payment_instructions || '', credit_policy: ctx.config.fee_credit_policy,
+            ...(ctx.config.fee_credit_policy === 'credited_to_purchase' && ctx.config.fee_credit_toward === 'deposit' ? { credit_toward: 'deposit' } : {}),
+            ...(credit > 0 ? { credit } : (ctx.feePayFor(fee, entry.id) || {}))
+          };
+        })()
       : null,
     // Each item she shows on family pages (§16.4): whether they're waiting for it
     // (listen-only) and, for a born litter, whether they match its available pups.
@@ -235,7 +242,11 @@ function entryView(entry, ctx) {
         deposit_instructions: ctx.config.payment_instructions || '',
         // Their pick as a family may see it (it's no longer among the litter's
         // available pups, so it comes with the offer).
-        ...(o.chosen_dog_id ? { deposit_amount: ctx.depositFor(o), picked_pup: ctx.pickedPup(o.chosen_dog_id) } : {})
+        ...(o.chosen_dog_id ? { deposit_amount: ctx.depositFor(o), picked_pup: ctx.pickedPup(o.chosen_dog_id) } : {}),
+        // What their credit for funds already received covers of that deposit, and
+        // what their application fee does when she credits it toward the deposit.
+        ...(o.chosen_dog_id && o.sale_id && ctx.creditFor(entry)?.byKey.deposit ? { deposit_credit: ctx.creditFor(entry).byKey.deposit } : {}),
+        ...(o.chosen_dog_id && o.sale_id && ctx.feeDepositFor(entry, o) > 0 ? { deposit_fee_credit: ctx.feeDepositFor(entry, o) } : {})
       }))
   });
   return view;
@@ -458,6 +469,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
 
   const hidden = new Map(live.map((e) => [e.id, placeHidden(e, kennelOffers)]));
   const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today });
+  const creditMemo = new Map();
   const ctx = {
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
@@ -504,6 +516,19 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       const dog = dogsById.get(sale.dog_id) || null;
       const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) : null;
       return familyExtrasView({ entry, sale, kennel, birthDate: pupBirthDate(dog, litter), today });
+    },
+    // How a family's credits for funds already received are used (incomeView.familyCredit).
+    // Their received application fee when it's credited toward the deposit (her
+    // setting fee_credit_toward), as incomeView.feeCreditOf reads it; else none.
+    feeCreditFor: (entry) => (entry.fee_received_date && Number(entry.fee_amount) > 0 && entry.fee_credit_policy === 'credited_to_purchase'
+      ? { amount: Number(entry.fee_amount), toward: config.fee_credit_toward === 'deposit' ? 'deposit' : 'balance' } : 0),
+    creditFor: (entry) => {
+      if (!creditMemo.has(entry.id)) creditMemo.set(entry.id, familyCredit(entry, creditSale(entry, sales, kennelOffers, live), ctx.feeCreditFor(entry)));
+      return creditMemo.get(entry.id);
+    },
+    feeDepositFor: (entry, o) => {
+      const sale = sales.find((x) => x.id === o.sale_id);
+      return sale ? feeCreditSplit(sale, ctx.feeCreditFor(entry)).deposit : 0;
     },
     // A family's own Pay link for a fee of `fee` (Integrations plan §4), or null.
     feePayFor: (fee, entryId) => {

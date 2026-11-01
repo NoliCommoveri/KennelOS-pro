@@ -74,7 +74,7 @@ export async function checkFeePayments() {
         if (entry && entry.kennel_id !== kennel.id) { counts.skipped++; continue; }
         const plan = planFeePayment(entry, paid.payload, kennel.waitlist_fee_account_id);
         if (plan.op === 'received') {
-          await feeReceived(entry.id, { date: plan.paidOnline.date, method: plan.paidOnline.method, reference: plan.paidOnline.reference });
+          await feeReceived(entry.id, { date: plan.paidOnline.date, method: plan.paidOnline.method, reference: plan.paidOnline.reference, creditAmount: 0 });
           await waitlistEntryRepo.update(entry.id, plan.changes);
           counts.received++;
         } else if (plan.op === 'prepaid') {

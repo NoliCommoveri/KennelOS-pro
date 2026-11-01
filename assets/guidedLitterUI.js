@@ -27,6 +27,7 @@ import {
   DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_STATUS, PAIRING_STATUS, LITTER_DELIVERY_TYPE, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
+import { askKeeperTests } from './keeperTests.js';
 import * as G from '../data/guidedLitter.js';
 import { findDogMatches, matchReason, breedChoices } from '../data/dogSearch.js';
 import { esc, todayYMD } from './ui.js';
@@ -671,6 +672,8 @@ class LitterConversation extends StepConversation {
     const name = this.draft.label || 'The litter';
     const litterHref = `${pagesPrefix()}litter.html?id=${encodeURIComponent(litter.id)}`;
     await this.chat.say(`Done! ✓ I built ${esc(name)}${pups.length ? ` with ${plural(pups.length, 'puppy', 'puppies')}` : ''}.`, { typing: 1100 });
+    // Pups she's keeping: offer her kennel's planned tests for them.
+    await askKeeperTests(this.chat, pups);
 
     const finish = async () => {
       await this.chat.say(`All set. When you're ready to offer pups to families on your waitlist, use <strong>Open picks</strong> on <a href="${esc(litterHref)}">the litter's page</a>.`);

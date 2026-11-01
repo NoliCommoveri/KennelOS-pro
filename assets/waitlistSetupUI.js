@@ -6,6 +6,10 @@
 //      connected right here, assets/vendorKeyUI.js);
 //   2. offers: days to answer, passes, and the on/off rules (no response = a pass,
 //      color matching, each automatic-offer moment);
+//   2b. pickup and transport: her standard pickup location, the fee per mile, one
+//      way or round trip, free under, how far a family must live to suggest their
+//      own meetup place, "you'll be in touch" distance, pickup changes, boarding
+//      (assets/pickupTransportStep.js);
 //   3. going online (only where isWaitlistOnlineOffered): needs cloud backup on this
 //      device, so Kels offers to turn it on first (cloudBackupUI.turnOnFlow); then the
 //      list, applications, reminder emails, what shows before picks open, "Ready
@@ -30,6 +34,8 @@ import { field } from './litterCheckinUI.js';
 import { askApplicant } from './kelsApplicant.js';
 import { offerCloudBackup, CLOUD_OFF_FORM } from './kelsBackupSteps.js';
 import { askWaitlistFee } from './waitlistFeeStep.js';
+import { askPickupTransport } from './pickupTransportStep.js';
+import { standardLocation } from '../data/pickupSlots.js';
 import { esc, fmtMoney } from './ui.js';
 
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
@@ -126,7 +132,7 @@ class Setup {
     if (waitlistIsSetUp(this.kennel)) return this.changeMenu(true);
 
     await this.chat.say(`Let's build ${esc(this.kennel.kennel_name || 'your kennel')}'s waitlist. It's a few short screens, and you can change any of it later.`, { typing: 700 });
-    for (const step of ['fee', 'offers', 'online', 'programs', ...(this.within ? [] : ['families'])]) {
+    for (const step of ['fee', 'offers', 'transport', 'online', 'programs', ...(this.within ? [] : ['families'])]) {
       const r = await this.runSection(step, { walk: true });
       if (r === 'left') return null;
       if (r === 'stop') break;
@@ -137,7 +143,7 @@ class Setup {
   // An existing setup: what's set, then what to change, until she's done.
   async changeMenu(first) {
     if (first) {
-      const lines = waitlistSummaryLines(this.config, { programs: this.programs, online: this.onlineOffered, fmtMoney });
+      const lines = waitlistSummaryLines(this.config, { programs: this.programs, online: this.onlineOffered, fmtMoney, pickup: standardLocation(this.kennel) });
       await this.chat.say(`${esc(this.kennel.kennel_name || 'Your kennel')}'s waitlist is already set up. Here's what's set:<br>${lines.map(esc).join('<br>')}`, { typing: 900 });
     }
     for (;;) {
@@ -146,6 +152,7 @@ class Setup {
       const pick = await this.chat.choose([
         { label: 'The fee', sub: 'Amount, refunds, how families pay', value: 'fee' },
         { label: 'Offers and turns', sub: 'Days to answer, passes, automatic offers', value: 'offers' },
+        { label: 'Pickup and transport', sub: 'Pickup place, fee per mile, who can suggest their own meetup place', value: 'transport' },
         ...(this.onlineOffered ? [{ label: 'Going online', sub: 'Your list, applications, emails, your website', value: 'online' }] : []),
         { label: 'Programs', sub: this.programs.length ? this.programs.map((p) => p.name).join(', ') : 'Special terms for some families', value: 'programs' },
         { label: 'Families I already have', value: 'families' },
@@ -159,6 +166,7 @@ class Setup {
   runSection(step, opts) {
     if (step === 'fee') return this.fee(opts);
     if (step === 'offers') return this.offers(opts);
+    if (step === 'transport') return this.transport(opts);
     if (step === 'online') return this.onlineOffered ? this.online(opts) : null;
     if (step === 'programs') return this.programsStep(opts);
     if (step === 'families') return this.families(opts);
@@ -206,6 +214,14 @@ class Setup {
     });
     if (!res.done) return null;
     await this.chat.say('Got it. That\'s fair to families and to you.', { typing: 400 });
+    return null;
+  }
+
+  // --- 2b. Pickup and transport ------------------------------------------------------------
+
+  async transport() {
+    if (await askPickupTransport(this.chat, this.kennel)) this.saved++;
+    await this.reload();
     return null;
   }
 
@@ -383,7 +399,7 @@ class Setup {
 
   async wrapUp({ leaving = false } = {}) {
     await this.reload();
-    const lines = waitlistSummaryLines(this.config, { programs: this.programs, online: this.onlineOffered, fmtMoney });
+    const lines = waitlistSummaryLines(this.config, { programs: this.programs, online: this.onlineOffered, fmtMoney, pickup: standardLocation(this.kennel) });
     await this.chat.say(`${this.saved ? 'Your waitlist is ready, and it looks great!' : 'Nothing changed, and that\'s fine.'} Here's where it stands:<br>${lines.map(esc).join('<br>')}`
       + `<br><span class="kels-lead">Your emails and pass reasons use our standard wording. You can change them in your kennel's Waitlist settings.</span>`);
     if (leaving) return;

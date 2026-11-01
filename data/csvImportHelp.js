@@ -218,6 +218,8 @@ const HELP = {
       experience: { need: 'optional', aliases: ['breed_experience', 'dog_experience'], text: 'Their experience with dogs or the breed.' },
       about: { need: 'optional', aliases: ['about_your_family', 'anything_else'], text: 'Anything else they told you.' },
       kennel_name: { need: 'optional', aliases: ['kennel'], text: 'Which of your kennels\' lists this goes on. Blank uses the kennel picked above.' },
+      already_paid: { need: 'optional', aliases: ['amount_paid', 'deposit_paid', 'paid'], text: 'Money they\'ve already paid you, like an early deposit. It becomes their credit for funds already received and comes off what they\'re asked to pay (the fee, then the deposit, then the rest). New applications only.' },
+      already_paid_date: { need: 'optional', aliases: ['paid_date', 'deposit_date'], text: 'When you received it. Blank uses the applied date.' },
       notes: { need: 'optional', text: 'Your own notes.' }
     }
   }

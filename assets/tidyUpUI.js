@@ -16,7 +16,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
-import { kennelRepo } from '../data/kennelRepo.js';
+import { kennelRepo, withSeededTests } from '../data/kennelRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { inScopeOnly, dogsInScope, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -403,9 +403,10 @@ class Tidy extends FindingsTask {
     }
     const base = { call_name: v.call, registered_name: v.reg, registration_number: v.num, sex: R.sex, breed: dog.breed };
     try {
+      // Her own new dog starts with her kennel's planned tests, as on the Dog page.
       const made = v.mine
-        ? await dogRepo.create({ ...base, ownership_type: 'owned', status: v.status,
-          kennel_id: ['owned', 'co_owned'].includes(dog.ownership_type) ? dog.kennel_id : await resolveKennelIdForWrite() })
+        ? await dogRepo.create(withSeededTests({ ...base, ownership_type: 'owned', status: v.status,
+          kennel_id: ['owned', 'co_owned'].includes(dog.ownership_type) ? dog.kennel_id : await resolveKennelIdForWrite() }, await kennelRepo.getAll()))
         : await dogRepo.createPedigreeOnly(base);
       this.dogsById.set(made.id, made);
       return made.id;

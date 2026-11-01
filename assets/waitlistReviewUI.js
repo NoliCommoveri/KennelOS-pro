@@ -21,6 +21,7 @@
 // waitlistRules), or a shared dialog (offerEmails for every "email the family",
 // communicateDialog, pickDialog / depositDialog, salePrompts, restoreLostPupDialog).
 import { kennelRepo } from '../data/kennelRepo.js';
+import { getEntryCredit } from '../data/incomeView.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -444,6 +445,16 @@ class Review {
         await actions.declinePickupRequest(e.id, r.id, { date: this.today });
         await this.chat.say('Declined. Nothing changed.');
         return this.emails(emails('request_declined'));
+      }
+      // No standard pickup location or fee per mile yet: set them up first, so the
+      // miles and the fee can be worked out (Set up my waitlist's same screen).
+      if (!standardLocation(this.kennel) || !(Number(this.config.mileage_rate) > 0)) {
+        await this.chat.say(`${standardLocation(this.kennel) ? 'You haven\'t set a fee per mile' : 'You haven\'t set your standard pickup location (where the miles start)'} yet. Set up pickup and transport now?`);
+        if ((await this.chat.choose([{ label: 'Set it up', value: 'yes', primary: true }, { label: 'Not now, I\'ll type the fee', value: '' }])) === 'yes') {
+          const { askPickupTransport } = await import('./pickupTransportStep.js');
+          await askPickupTransport(this.chat, this.kennel);
+          await this.load();
+        }
       }
       const res = await this.addressForm(e, r);
       if (!res.done) { this.skipped++; return; }
@@ -994,8 +1005,11 @@ class Review {
         await this.chat.say('Their application is closed. They can re-apply later.');
         continue;
       }
+      // Their credit for funds already received pays this much of it.
+      const feeCredit = (await getEntryCredit(e.id)).credit?.byKey.fee || 0;
+      const creditLead = feeCredit > 0 ? ` ${esc(fmtMoney(feeCredit))} of it is paid by their credit for funds already received.` : '';
       const res = await this.chat.form({
-        title: `<strong>${esc(this.name(e))}'s fee</strong><span class="kels-lead">The date sets their place in line.</span>`,
+        title: `<strong>${esc(this.name(e))}'s fee</strong><span class="kels-lead">The date sets their place in line.${creditLead}</span>`,
         html: `<div class="ck-inline">
             ${field('Date received', `<input id="wr-fr-date" type="date" value="${esc(this.today)}">`)}
             ${e.fee_amount != null ? field('Amount', `<input id="wr-fr-amt" type="number" min="0" step="0.01" value="${esc(e.fee_amount)}">`) : ''}

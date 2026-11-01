@@ -24,7 +24,10 @@ import { contactRepo } from '../data/contactRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
-import { paidOnSale, getSaleFeeCredit } from '../data/incomeView.js';
+import { paidBesidesCredits, getSaleFeeCredit, getSaleCredits, getEntryCredit, feeCreditAmount, feeCreditSplit } from '../data/incomeView.js';
+import { newCredit, CREDIT_USE_VALUES } from '../data/receivedCredits.js';
+import { CREDIT_USES, PAYMENT_METHODS } from '../data/vocab.js';
+import { saveCredit } from '../data/waitlistActions.js';
 import { DemoModeError } from '../data/demoMode.js';
 import { kennelEmailsOn, queueEmail } from '../data/waitlistOutbox.js';
 
@@ -330,6 +333,8 @@ const pupOptions = (pups, pupLabel) => pups.map((p) => `<option value="${esc(p.i
 export async function pickDialog({ offer, name, pups, pupLabel, carried = null }) {
   let out = null;
   const carriedHint = carried ? `<p class="field-hint">${esc(fmtMoney(carried.amount))} they paid on a pup they lost (${esc(fmtDate(carried.date))}) is their deposit on this one.</p>` : '';
+  const credit = (await getEntryCredit(offer.entry_id)).credit;
+  const creditHint = credit?.remaining > 0 ? `<p class="field-hint">They have ${esc(fmtMoney(credit.remaining))} credit for funds already received. It comes off what they're asked to pay for this pup, starting with the deposit.</p>` : '';
   const ok = await formModal({
     title: `${name} picked a pup`,
     confirmLabel: 'Record their pick',
@@ -340,7 +345,7 @@ export async function pickDialog({ offer, name, pups, pupLabel, carried = null }
         <div class="field"><label>Deposit received</label><input id="pk-dep-date" type="date" value="${esc(carried?.date || todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="pk-dep-amount" type="number" min="0" step="0.01" placeholder="The litter's expected deposit" value="${esc(carried?.amount ?? '')}"></div>
       </div>
-      ${carriedHint}
+      ${carriedHint}${creditHint}
       <p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(fmtDate(offer.respond_by_date))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`,
     onConfirm: async (o) => {
       const chosenDogId = o.querySelector('#pk-dog').value;
@@ -368,6 +373,18 @@ export async function pickDialog({ offer, name, pups, pupLabel, carried = null }
 // lost, which the held Sale took as its deposit — prefills the date it was paid.
 export async function depositDialog({ offer, name, pupName, sale, carried = null }) {
   let res = null;
+  // Their credit for funds already received pays part (or all) of the deposit.
+  const sc = sale ? await getSaleCredits(sale.id) : null;
+  const credited = sc?.credit?.byKey.deposit || 0;
+  // Her setting can put a credited application fee toward the deposit too.
+  const feePart = sale ? feeCreditSplit(sale, sc.feeCredit).deposit : 0;
+  const parts = [feePart > 0 ? `${fmtMoney(feePart)} is their application fee` : '', credited > 0 ? `${fmtMoney(credited)} is covered by their credit for funds already received` : ''].filter(Boolean);
+  const creditHint = parts.length
+    ? (() => {
+        const left = sale?.deposit_amount != null ? Math.max(0, Number(sale.deposit_amount) - feePart - credited) : null;
+        const send = left == null ? '' : left > 0 ? `, so ${esc(fmtMoney(left))} is what they send` : ', so there\'s nothing more for them to send';
+        return ` Of it, ${esc(parts.join(' and '))}${send}. Enter the whole deposit.`;
+      })() : '';
   const ok = await formModal({
     title: `${name}'s deposit received`,
     confirmLabel: 'Deposit received',
@@ -376,7 +393,7 @@ export async function depositDialog({ offer, name, pupName, sale, carried = null
         <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || carried?.date || todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
       </div>
-      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${carried ? ` ${esc(fmtMoney(carried.amount))} of it is what they paid on a pup they lost (${esc(fmtDate(carried.date))}).` : ''}</p>`,
+      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${carried ? ` ${esc(fmtMoney(carried.amount))} of it is what they paid on a pup they lost (${esc(fmtDate(carried.date))}).` : ''}${creditHint}</p>`,
     onConfirm: async (o) => {
       res = await confirmDeposit(offer.id, { date: o.querySelector('#dp-date').value || todayYMD(), amount: o.querySelector('#dp-amount').value });
     }
@@ -440,7 +457,9 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
   const config = waitlistConfig(kennel);
   const name = entryName(entry, contact);
   const pupName = pup?.call_name || 'their pup';
-  const paid = paidOnSale(sale, { feeCredit, asStatus });
+  // Their credit for funds already received stays theirs (on their entry), so only
+  // what they paid beyond it is carried.
+  const paid = paidBesidesCredits(sale, entry, { feeCredit, asStatus });
   const asActive = kennelEntries.map((e) => (e.id === entry.id ? { ...e, status: 'active' } : e));
   const pos = overallPositions(asActive, entry.kennel_id, programsById).get(entry.id);
   const total = overallPositions(asActive, entry.kennel_id, programsById).size;
@@ -452,8 +471,8 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
       ? 'Automatic offers are on for this, so if nobody holds a turn the next one is offered now (to them, if they\'re next).'
       : 'Nobody is offered automatically; you\'ll be told who\'s next.')
     : '';
-  const credit = feeCredit > 0 && kind === 'placed'
-    ? `<p class="field-hint">Their ${esc(fmtMoney(feeCredit))} application fee stays credited toward their next pup.</p>` : '';
+  const credit = feeCreditAmount(feeCredit) > 0 && kind === 'placed'
+    ? `<p class="field-hint">Their ${esc(fmtMoney(feeCreditAmount(feeCredit)))} application fee stays credited toward their next pup.</p>` : '';
   const money = paid > 0 ? `
       <p style="margin-bottom:4px;">They've paid <strong>${esc(fmtMoney(paid))}</strong> on ${esc(pupName)}'s sale.</p>
       <label class="check-inline" style="display:block;"><input type="radio" name="lp-money" value="carry" checked> Carry it to their next pup</label>
@@ -577,3 +596,39 @@ export function wireMessageVia(o, phone) {
     try { await navigator.share({ text: box.value }); } catch (e) { if (e?.name !== 'AbortError') note('Sharing didn\'t work here. Use Copy message instead.'); }
   });
 }
+
+// --- Credits for funds already received (receivedCredits.js) -----------------------
+
+// Add or edit one of a family's credits: the amount and date she received it, how
+// it was paid, a note, and what it can pay toward (every use ticked on a new one).
+// Resolves the saved entry, or null.
+export async function creditDialog({ entry, name, credit = null }) {
+  let saved = null;
+  const uses = credit?.applies_to || CREDIT_USE_VALUES;
+  const methodOpts = `<option value="">—</option>` + PAYMENT_METHODS.map((m) => `<option${m === credit?.method ? ' selected' : ''}>${esc(m)}</option>`).join('');
+  const ok = await formModal({
+    title: credit ? `Edit ${name}'s credit` : `Credit for funds already received from ${name}`,
+    confirmLabel: credit ? 'Save credit' : 'Add credit',
+    bodyHtml: `<div class="form-grid">
+        <div class="field"><label>Amount received</label><input id="cr-amount" type="number" min="0" step="0.01" value="${esc(credit?.amount ?? '')}"></div>
+        <div class="field"><label>Date received</label><input id="cr-date" type="date" value="${esc(credit?.date || todayYMD())}"></div>
+        <div class="field"><label>Method</label><select id="cr-method">${methodOpts}</select></div>
+        <div class="field"><label>Note</label><input id="cr-note" type="text" value="${esc(credit?.note || '')}" placeholder="e.g. Early deposit, spring litter"></div>
+      </div>
+      <p style="margin:10px 0 4px;"><strong>It can pay toward</strong></p>
+      ${CREDIT_USES.map((u) => `<label class="check-inline" style="display:block;"><input type="checkbox" data-use="${esc(u.value)}"${uses.includes(u.value) ? ' checked' : ''}> ${esc(u.label)}</label>`).join('')}
+      <p class="field-hint">Money you've already received from them. It comes off what they're asked to pay, in this order, wherever you show them an amount: their status page, invoices and payment requests. Whatever isn't used yet stays as their credit.</p>`,
+    onConfirm: async (o) => {
+      const made = newCredit({
+        amount: o.querySelector('#cr-amount').value,
+        date: o.querySelector('#cr-date').value,
+        method: o.querySelector('#cr-method').value,
+        note: o.querySelector('#cr-note').value.trim(),
+        applies_to: [...o.querySelectorAll('[data-use]:checked')].map((x) => x.dataset.use)
+      });
+      saved = await saveCredit(entry.id, credit ? { ...made, id: credit.id } : made);
+    }
+  });
+  return ok ? saved : null;
+}
+

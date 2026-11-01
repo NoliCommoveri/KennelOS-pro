@@ -11,7 +11,7 @@
 //   id     = <record id>
 //   doc    = 'invoice' | 'receipt'  (default 'invoice')
 //   cfg    = URL-encoded JSON built by the Financials generator modal:
-//            { number, notes, lines:[{key,mode:'full'|'partial',collected,dueDate?}],
+//            { number, notes, lines:[{key,mode:'full'|'partial',collected,credit?,dueDate?}],
 //              (dueDate only when she changed it from the record's own date —
 //              absent = read the record's due date live, invoiceDoc.saleDueDate)
 //              methods:[…]  (invoice: accepted methods),
@@ -23,6 +23,9 @@
 //   • Full → the line prints at the record's full amount; on an invoice the
 //     collected number is subtracted in the totals, on a receipt the line shows
 //     the remaining (base − collected) and the collected is not printed.
+//   • credit (full lines) → the part of "collected" that is the family's credit
+//     for funds already received: it prints as "Less credit for funds already
+//     received" in the totals, on invoices and receipts alike.
 // Line base amounts always come from incomeView.incomeLineItems so they stay
 // truthful to the record; cfg only carries the per-line choices.
 import { buildInvoiceDoc, fmtDateMDY, money } from '../assets/invoiceDoc.js';

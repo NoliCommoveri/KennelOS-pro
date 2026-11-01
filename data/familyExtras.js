@@ -8,7 +8,7 @@
 // note, requested_date, decided?, decided_date? }], newest last; approving it
 // (waitlistActions.approveExtraRequest) changes the sale.
 import { kennelChargeList, kennelChargeGroups, requestWindow, chargeRules, saleExtraCharges, WINDOW_FIELDS } from './extraCharges.js';
-import { isOpenSale } from './vocab.js';
+import { isOpenSale, RELEASED_SALE_STATUSES } from './vocab.js';
 import { addDaysToYMD } from './dateUtils.js';
 
 export const EXTRA_REQUESTS_KEPT = 50;
@@ -26,9 +26,11 @@ export const EXTRA_REQUEST_SHOWN_DAYS = 30; // a decided request stays on their 
 //     active), else the newest. With one record, that's the record.
 // `offers`: the kennel's offers (or at least this family's); `entries`: the
 // kennel's records (or at least this family's). null = none.
-export function familySale(entry, sales, offers = [], entries = []) {
+// `keep` picks the sales that can count (open ones; a family's credit also counts
+// a delivered sale: creditSale below).
+export function familySale(entry, sales, offers = [], entries = [], keep = isOpenSale) {
   if (!entry) return null;
-  const list = (sales || []).filter((s) => s && !s.is_archived && isOpenSale(s));
+  const list = (sales || []).filter((s) => s && !s.is_archived && keep(s));
   const newest = (xs) => xs.sort((a, b) => String(b.sale_date || b.created_at || '').localeCompare(String(a.sale_date || a.created_at || '')))[0] || null;
   const claims = (e) => new Set([
     ...(e.placed_sale_id ? [e.placed_sale_id] : []),
@@ -48,6 +50,12 @@ export function familySale(entry, sales, offers = [], entries = []) {
   return newest(list.filter((s) => s.buyer_contact_id === entry.contact_id && !claimed.has(s.id)
     && (!entry.kennel_id || !s.kennel_id || s.kennel_id === entry.kennel_id)));
 }
+
+// The sale a family's credits for funds received go toward (receivedCredits.js):
+// their sale as familySale finds it, a delivered one included; never a sale that
+// was returned, cancelled or voided (its credit is theirs again).
+export const creditSale = (entry, sales, offers = [], entries = []) =>
+  familySale(entry, sales, offers, entries, (s) => !!s.status && !RELEASED_SALE_STATUSES.includes(s.status));
 
 // The pup's birth date: its own, else its litter's.
 export const pupBirthDate = (dog, litter) => dog?.date_of_birth || litter?.whelp_date || litter?.birth_date || null;
