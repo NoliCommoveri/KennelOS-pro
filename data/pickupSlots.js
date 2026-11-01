@@ -8,7 +8,7 @@
 // litter rather than in a table of their own). A booking is a `placement` event on
 // the pup with `details.pickup_slot_id`; a family's request waits on their entry
 // (`pickup_requests`) until she approves it.
-import { addDaysToYMD } from './dateUtils.js';
+import { addDaysToYMD, addOpenDays } from './dateUtils.js';
 
 const text = (v) => String(v ?? '').trim();
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -146,4 +146,4 @@ export function standardBoarding(from, date, rate) {
 }
 
 // The last day a family may change or cancel a booking for `date` themselves.
-export const changeUntil = (date, days) => addDaysToYMD(date, -Math.max(0, Math.round(Number(days) || 0)));
+export const changeUntil = (date, days, openDays) => addOpenDays(date, -Math.max(0, Math.round(Number(days) || 0)), openDays);

@@ -291,6 +291,8 @@ async function openAddEntries() {
     onCreated: (c) => { ctx.contacts.push(c); ctx.contactsById.set(c.id, c); }
   });
   modal.querySelectorAll('[data-act="cancel"]').forEach((b) => b.addEventListener('click', close));
+  // Backdrop tap (and Escape, via ui.js) = Cancel.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.querySelector('[data-act="cancel"]')?.click(); });
 
   let saving = false;
   $('#ae-save').addEventListener('click', async () => {

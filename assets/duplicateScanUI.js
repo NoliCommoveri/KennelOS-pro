@@ -175,6 +175,8 @@ export function mountDuplicateScan(root, { flash = () => {} } = {}) {
         conflicts.forEach((c, i) => { overlay.querySelector(`input[name="dup-c${i}"][value="${el.value}"]`).checked = true; });
       }));
       overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => done(null));
+      // Backdrop tap (and Escape, via ui.js) = Cancel.
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.querySelector('[data-act="cancel"]')?.click(); });
       overlay.querySelector('[data-act="ok"]').addEventListener('click', () => {
         const side = overlay.querySelector('input[name="dup-keep"]:checked').value;
         const [keep, drop] = side === 'a' ? [f.a, f.b] : [f.b, f.a];

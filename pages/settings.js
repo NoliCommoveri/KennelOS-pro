@@ -4,7 +4,9 @@
 import { downloadBackup } from '../data/importExport.js';
 import { getLastBackupDate, getProLicense } from '../data/settings.js';
 import { isLicenseGated, releaseThisDevice } from '../data/license.js';
-import { getMyKennelName } from '../data/kennelSetup.js';
+import { getMyKennelName, resolveMyKennelId } from '../data/kennelSetup.js';
+import { edition } from '../data/editionConfig.js';
+import { isProOnlyPage } from '../data/proPages.js';
 import { showKennelSetupModal } from '../assets/kennelSetupUI.js';
 import { isTourAvailable, restartWizard } from '../data/wizardState.js';
 import { runWizardStep } from '../assets/wizardUI.js';
@@ -64,6 +66,13 @@ async function renderKennelSetupStatus() {
     ? `Your kennel is set to "${name}".`
     : 'Not set up yet — dogs won’t prefill an owner until this is done.';
   btn.textContent = name ? 'Change kennel / owner' : 'Set up your kennel';
+  // Straight to the kennel's own page (logo, waitlist, pickup, nudges, …), so
+  // it isn't only reachable through People → Kennels. Only where that page
+  // ships (same test as Kels's Set up my kennel).
+  const link = document.getElementById('link-kennel-settings');
+  const id = name && !(edition === 'lite' && isProOnlyPage('kennel.html')) ? await resolveMyKennelId() : null;
+  link.hidden = !id;
+  if (id) link.href = `kennel.html?id=${encodeURIComponent(id)}`;
 }
 
 document.getElementById('btn-kennel-setup').addEventListener('click', () => {

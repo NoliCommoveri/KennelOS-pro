@@ -34,9 +34,9 @@ import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
 import { MILEAGE_BASIS } from '../data/transportFee.js';
 import { backOutReasons, backOutPolicy, BACK_OUT_OUTCOMES, BACK_OUT_POLICY_TEXT_DEFAULT } from '../data/backOut.js';
-import { waitlistConfig, waitlistConfigProblem, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
+import { waitlistConfig, waitlistConfigProblem, openDays, closedDates, liveClosedDates, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
-import { esc, badge, fmtDate, fmtMoney, param } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, param, todayYMD } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { renderKennelCardSection } from '../assets/kennelCardUI.js';
 import {
@@ -376,10 +376,15 @@ async function renderOverview() {
 // same gating both panels carried on the old Kennels-list rows.
 function renderConfig() {
   if (!kennel.is_own_kennel) { els.config.innerHTML = ''; return; }
+  openWaitlistGroups = new Set([...els.config.querySelectorAll('details[data-wl-group][open]')].map((d) => d.dataset.wlGroup));
   // The waitlist online's card moved to the waitlist's Publish list page (2026-10-08).
   els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + waitlistCard(kennel) + pickupCard(kennel);
   wireConfig();
 }
+
+// Which Waitlist settings groups are open, kept across a re-render (Save redraws
+// the config cards).
+let openWaitlistGroups = new Set();
 
 // Waitlist settings (Waitlist Spec §4.6) — stored as one Kennel.waitlist_config
 // object so they ride the JSON backup (never settings.js/localStorage). One list
@@ -387,19 +392,25 @@ function renderConfig() {
 function waitlistCard(k) {
   if (!editionFlags.waitlist) return '';
   const c = waitlistConfig(k);
+  const online = isWaitlistOnlineOffered();
   const policyOpts = FEE_CREDIT_POLICY.map((o) => `<option value="${esc(o.value)}"${o.value === c.fee_credit_policy ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+  // Folded groups, all closed at first; one Save for the lot. A group only the
+  // online list uses is left out until the list can go online.
+  const group = (key, title, hint, body) => `
+      <details class="settings-group" data-wl-group="${key}"${openWaitlistGroups.has(key) ? ' open' : ''}>
+        <summary><strong>${esc(title)}</strong><span class="field-hint">${esc(hint)}</span></summary>
+        <div class="form-grid">
+${body}        </div>
+      </details>`;
   return `
     <section class="card" id="waitlist-settings" data-ks="waitlist-settings">
       <div class="row-between"><h2 style="margin:0;">Waitlist settings</h2><span class="pill-row"><a class="btn btn-sm" href="waitlist-form.html?kennel=${encodeURIComponent(k.id)}">Application form →</a><a class="btn btn-sm" href="waitlist.html?kennel=${encodeURIComponent(k.id)}">Open waitlist →</a></span></div>
-      <p class="field-hint">How ${esc(k.kennel_name)}'s waitlist works. Programs can change the fee and response window for particular families.</p>
-      <div class="form-grid">
+      <p class="field-hint">How ${esc(k.kennel_name)}'s waitlist works. Programs can change the fee and response window for particular families. Open a group to see or change it.</p>
+${group('fees', 'Fees & payment', 'Application fee, when it is due, how families pay', `
         <div class="field"><label>Application fee</label><input id="wl-fee" type="number" min="0" step="0.01" value="${esc(c.fee_amount ?? '')}" placeholder="No fee"></div>
         <div class="field"><label>The fee is</label><select id="wl-policy">${policyOpts}</select></div>
         <div class="field"><label>Days to pay after approval</label><input id="wl-fee-days" type="number" min="1" step="1" value="${esc(c.fee_due_days ?? '')}" placeholder="No deadline">
           <span class="field-hint">Blank = no pay-by date, so nothing ever expires.</span></div>
-        <div class="field"><label>Days to accept and pay the deposit</label><input id="wl-respond" type="number" min="1" step="1" value="${esc(c.respond_days)}">
-          <span class="field-hint">From the offer. A pup they pick is held until then; no deposit in time counts as no response.</span></div>
-        <div class="field"><label>Passes before removal</label><input id="wl-passes" type="number" min="1" step="1" value="${esc(c.max_passes)}"></div>
         <div class="field field-wide"><label>Payment instructions</label><textarea id="wl-instructions" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions)}</textarea>
           <span class="field-hint">What you tell approved families about paying the fee.</span></div>
         ${editionFlags.accounts ? `<div class="field"><label>Fee paid online via</label><select id="wl-fee-account"><option value="">— not online —</option>${paymentServices
@@ -410,27 +421,49 @@ function waitlistCard(k) {
             <option value="apply"${c.fee_link_when !== 'approved' ? ' selected' : ''}>At the end of the online application</option>
             <option value="approved"${c.fee_link_when === 'approved' ? ' selected' : ''}>Once I approve them</option></select>
           <span class="field-hint">Paid before you approve them: approving puts them on the list from the day they paid.</span></div>` : ''}
+`)}
+${group('turns', 'Turns & offers', 'Time to respond, passes, color matching, automatic offers', `
+        <div class="field field-wide"><label>Days you do business</label>
+          <div class="pill-row">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, n) => `<label class="check-inline"><input type="checkbox" data-wl-open="${n}"${openDays(c).includes(n) ? ' checked' : ''}> ${d}</label>`).join('')}</div>
+          <span class="field-hint">Deadlines count only these days, so one never lands on a day you're closed: the days to accept and pay the deposit, to pay the application fee, to answer "Ready now?", to change a pickup time, and extras payment plans. Closed Saturdays: offered on a Friday with 3 days, it's due Tuesday.</span></div>
+        <div class="field field-wide"><label for="wl-closed-new">Closed dates</label>
+          <div id="wl-closed" class="pill-row">${closedDateChips(liveClosedDates(closedDates(c), todayYMD()))}</div>
+          <div class="pill-row" style="margin-top:6px;align-items:center;"><input id="wl-closed-new" type="date" style="width:auto;"><button type="button" class="btn btn-sm" data-act="closed-add">Add date</button></div>
+          <span class="field-hint">Any day you're closed, for any reason: skipped like a closed weekday. A date drops off the list by itself a week after it passes.</span></div>
+        <div class="field"><label>Days to accept and pay the deposit</label><input id="wl-respond" type="number" min="1" step="1" value="${esc(c.respond_days)}">
+          <span class="field-hint">From the offer. A pup they pick is held until then; no deposit in time counts as no response.</span></div>
+        <div class="field"><label>Passes before removal</label><input id="wl-passes" type="number" min="1" step="1" value="${esc(c.max_passes)}"></div>
         <div class="field field-wide">
           <label class="check-inline"><input id="wl-noresp" type="checkbox"${c.no_response_counts_as_pass ? ' checked' : ''}> No response by the deadline counts as a pass</label>
           <label class="check-inline"><input id="wl-colors" type="checkbox"${c.color_matching ? ' checked' : ''}> Match on color (only offer pups in a color the family listed)</label>
-          <label class="check-inline"><input id="wl-show-paused" type="checkbox"${c.public_show_paused ? ' checked' : ''}> Show paused families on the public list</label>
-          <span class="field-hint">They keep their number and show "Skipped until" the date their pause ends in place of what they want. Unticked, they're left off and their number is skipped. Applies to the list online and the list copied as text.</span>
+          <label class="check-inline"><input id="wl-turn-prices" type="checkbox"${c.turn_prices !== false ? ' checked' : ''}> Show your expected prices on a family's turn</label>
+          <span class="field-hint">From each litter's expected prices and deposits (Litter page), for males and females; pups planned for Full registration in their own section at their full price. Once a family picks, their page also shows the deposit with your payment instructions.</span>
         </div>
         <div class="field field-wide"><label>Offer the next family automatically when…</label>
           ${WAITLIST_AUTO_OFFER_TRIGGER.map((t) => `<label class="check-inline"><input type="checkbox" data-wl-auto="${esc(t.value)}"${c.auto_offer_on.includes(t.value) ? ' checked' : ''}> ${esc(t.label)}</label>`).join('')}
           <span class="field-hint">Unticked: you make that offer yourself, with "Offer to them" or "Offer a litter…"; the app just tells you who's next.${isWaitlistOnlineOffered() ? ' With your list online, KennelOS also does the ticked ones while your phone is off: a turn whose last day has passed is closed as no response (or no deposit), and a family\'s pass or leaving on their status page moves the turn on; the next family in line is offered and emailed. Your phone records it all at its next update.' : ''}</span>
         </div>
-        <div class="field field-wide"><label for="wl-soon-text">"Almost your turn" message</label>
-          <textarea id="wl-soon-text" style="min-height:130px;">${esc(c.soon_notice_text || SOON_NOTICE_DEFAULT)}</textarea>
-          <span class="field-hint">Sent from the Almost your turn… button to families whose turn is coming up. The first line is the email subject. [Kennel Name] becomes ${esc(k.kennel_name)}. Clear it to go back to the default.</span></div>
+`)}
+${group('passing', 'Passing & readiness', online ? 'Reasons families give, and "Ready now?"' : 'Reasons families give when they pass', `
         <div class="field field-wide"><label>Reasons for passing</label>
           <span class="field-hint">A family passing on their status page (on their turn, or "Not this litter" ahead of time) picks one of these, and sees its message when they send it. Passes you record yourself need no reason.</span>
           <div id="wl-reasons">${passReasons({ ...c, pass_other: false }).map(reasonRow).join('')}</div>
           <div class="pill-row" style="margin-top:6px;"><button type="button" class="btn btn-sm" data-act="add-reason">Add a reason</button></div>
           <label class="check-inline" style="margin-top:6px;"><input id="wl-pass-other" type="checkbox"${c.pass_other !== false ? ' checked' : ''}> Also offer "Other", with a box for their own words</label>
         </div>
-        ${isWaitlistOnlineOffered() ? readySettings(c) + upcomingSwitches(c) + emailTemplateSettings(c) + facebookSettings(c) + extrasSettings(c) + backOutSettings(c) : ''}
-      </div>
+${online ? readySettings(c) : ''}`)}
+      ${group('public', 'Public list & family pages', online ? 'Paused families, upcoming litters, Facebook, extras' : 'Paused families on the public list', `
+        <div class="field field-wide">
+          <label class="check-inline"><input id="wl-show-paused" type="checkbox"${c.public_show_paused ? ' checked' : ''}> Show paused families on the public list</label>
+          <span class="field-hint">They keep their number and show "Skipped until" the date their pause ends in place of what they want. Unticked, they're left off and their number is skipped. Applies to the list online and the list copied as text.</span>
+        </div>
+${online ? upcomingSwitches(c) + facebookSettings(c) + extrasSettings(c) : ''}`)}
+${group('messages', 'Messages to families', online ? '"Almost your turn" and the emails families get' : 'The "Almost your turn" message', `
+        <div class="field field-wide"><label for="wl-soon-text">"Almost your turn" message</label>
+          <textarea id="wl-soon-text" style="min-height:130px;">${esc(c.soon_notice_text || SOON_NOTICE_DEFAULT)}</textarea>
+          <span class="field-hint">Sent from the Almost your turn… button to families whose turn is coming up. The first line is the email subject. [Kennel Name] becomes ${esc(k.kennel_name)}. Clear it to go back to the default.</span></div>
+${online ? emailTemplateSettings(c) : ''}`)}
+      ${online ? group('backout', 'Backing out', 'Reasons, your deposit policy, what families read', backOutSettings(c)) : ''}
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
     </section>`;
 }
@@ -531,6 +564,12 @@ function upcomingSwitches(c) {
     </div>`;
 }
 
+// Her closed dates as removable chips (data-closed holds the date).
+function closedDateChips(dates) {
+  return dates.length ? dates.map((d) => `<span class="badge badge-neutral" data-closed="${esc(d)}" style="margin:2px 4px 2px 0;">${esc(fmtDate(d))} <button type="button" class="btn btn-sm" data-act="closed-remove" aria-label="Remove ${esc(fmtDate(d))}" style="padding:0 6px;margin-left:4px;">✕</button></span>`).join('')
+    : '<span class="faint">None yet.</span>';
+}
+
 // One editable pass reason: its label and the message the family sees.
 function reasonRow(r = { id: '', label: '', message: '' }) {
   return `<div class="card" data-reason-id="${esc(r.id)}" style="margin:6px 0;padding:10px 12px;">
@@ -557,6 +596,9 @@ async function onSaveWaitlist() {
     ...(q('#wl-fee-when') ? { fee_link_when: q('#wl-fee-when').value } : {}),
     no_response_counts_as_pass: q('#wl-noresp').checked,
     color_matching: q('#wl-colors').checked,
+    turn_prices: q('#wl-turn-prices').checked,
+    closed_dates: liveClosedDates([...els.config.querySelectorAll('[data-closed]')].map((x) => x.dataset.closed).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort(), todayYMD()),
+    open_days: (() => { const d = [...els.config.querySelectorAll('[data-wl-open]')].filter((b) => b.checked).map((b) => Number(b.dataset.wlOpen)); return d.length === 7 ? null : d; })(),
     public_show_paused: q('#wl-show-paused').checked,
     auto_offer_on: [...els.config.querySelectorAll('[data-wl-auto]:checked')].map((b) => b.dataset.wlAuto),
     // Stored only when she's changed it, so the default wording stays the default.
@@ -910,6 +952,19 @@ function wireConfig() {
   els.config.querySelector('#bo-rows')?.addEventListener('click', (ev) => { if (ev.target.closest('[data-act="bo-remove"]')) ev.target.closest('.bo-row').remove(); });
   const saveWaitlist = els.config.querySelector('[data-act="save-waitlist"]');
   if (saveWaitlist) saveWaitlist.addEventListener('click', onSaveWaitlist);
+  // Closed dates: added and removed here, saved with the rest.
+  const closedList = () => [...els.config.querySelectorAll('[data-closed]')].map((x) => x.dataset.closed);
+  els.config.querySelector('[data-act="closed-add"]')?.addEventListener('click', () => {
+    const input = els.config.querySelector('#wl-closed-new');
+    if (!input.value) return;
+    els.config.querySelector('#wl-closed').innerHTML = closedDateChips([...new Set([...closedList(), input.value])].sort());
+    input.value = '';
+  });
+  els.config.querySelector('#wl-closed')?.addEventListener('click', (ev) => {
+    const chip = ev.target.closest('[data-act="closed-remove"]')?.closest('[data-closed]');
+    if (!chip) return;
+    els.config.querySelector('#wl-closed').innerHTML = closedDateChips(closedList().filter((d) => d !== chip.dataset.closed));
+  });
   els.config.querySelector('[data-act="add-reason"]')?.addEventListener('click', () => {
     els.config.querySelector('#wl-reasons').insertAdjacentHTML('beforeend', reasonRow());
   });

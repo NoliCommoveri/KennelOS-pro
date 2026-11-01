@@ -45,7 +45,7 @@ import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
 import { RELEASED_SALE_STATUSES, SALE_END_REASON, registrationsForPurposes, descriptor } from './vocab.js';
 import {
-  waitlistConfig, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
+  waitlistConfig, openDays, businessDays, closedDates, liveClosedDates, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
   respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
@@ -903,10 +903,14 @@ export async function restoreAfterLostSale(saleId, { date = todayYMD(), carry = 
   const entryNote = (what) => appendNote(entry.notes, `${what} on ${date}: ${why}.${carried ? ` ${money(carried.amount)} they'd paid is carried to their next pup.` : ''}`);
   const result = { kind, entry: null, offers: [], voided: [], next: null, waiting: [] };
 
+  // What they'd had, kept on the offer for its history (the pick itself is cleared:
+  // a voided or re-opened offer holds no pup).
+  const lost = (o) => ({ restored_date: date, lost_dog_id: o.chosen_dog_id || sale.dog_id || null, lost_picked_date: o.picked_date || null,
+    lost_accepted_date: o.outcome === 'accepted' ? (o.outcome_date || null) : null });
   if (kind === 'placed') {
     if (offer) {
       await waitlistOfferRepo.update(offer.id, {
-        outcome: 'voided', outcome_date: date, counts_as_pass: false,
+        ...lost(offer), outcome: 'voided', outcome_date: date, counts_as_pass: false,
         notes: appendNote(offer.notes, `Voided on ${date}: ${why}. The family is back in line, so this litter can be offered to them again. Not a pass.`)
       });
     }
@@ -925,7 +929,7 @@ export async function restoreAfterLostSale(saleId, { date = todayYMD(), carry = 
     // Never the lost pup itself, even if she hasn't recorded its death or hold yet.
     const eligible = litter && !litter.is_archived
       ? eligiblePupsFor(entry, litter, c.pups, c.sales, { today: date, config: c.config }).filter((d) => d.id !== sale.dog_id) : [];
-    const cleared = o.id === offer.id ? { chosen_dog_id: null, picked_date: null, sale_id: null } : {};
+    const cleared = o.id === offer.id ? { ...lost(o), chosen_dog_id: null, picked_date: null, sale_id: null } : {};
     if (eligible.length) {
       result.offers.push(await waitlistOfferRepo.update(o.id, {
         ...cleared, respond_by_date: respondBy, eligible_dog_ids: eligible.map((d) => d.id),
@@ -1113,6 +1117,13 @@ function loadExtraRequest(entry, requestId) {
 const decideExtra = (entry, requestId, decision, date) =>
   (entry.extra_requests || []).map((r) => (r.id === requestId ? { ...r, decided: decision, decided_date: date } : r));
 
+// This record's own pup's sale (familyExtras.familySale), with the family's other
+// records and the kennel's offers, so a second run never acts on the first's pup.
+async function ownSale(entry, sales) {
+  const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(entry.kennel_id), waitlistOfferRepo.getByKennel(entry.kennel_id)]);
+  return familySale(entry, sales, offers, entries);
+}
+
 // Approve: an extra asked for goes on their open sale, its name and price copied
 // from her price list and its payment plan copied as dated steps; a cancellation
 // takes it off (not when part of it is paid: she edits the sale for a refund).
@@ -1121,7 +1132,7 @@ export async function approveExtraRequest(entryId, requestId, { date = todayYMD(
   const entry = await load(entryId);
   const req = loadExtraRequest(entry, requestId);
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
-  const sale = familySale(entry, sales);
+  const sale = await ownSale(entry, sales);
   if (!sale) throw new Error(`${req.name || 'This extra'}: they have no open sale to put it on.`);
   const charges = saleExtraCharges(sale);
   let charge = null;
@@ -1141,7 +1152,7 @@ export async function approveExtraRequest(entryId, requestId, { date = todayYMD(
       const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
       const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
       const rules = chargeRules(item, kennelChargeGroups(kennel));
-      const payments = planSteps(rules.payment_plan, item.amount, { approvalDate: date, birthDate: pupBirthDate(dog, litter) });
+      const payments = planSteps(rules.payment_plan, item.amount, { approvalDate: date, birthDate: pupBirthDate(dog, litter), openDays: businessDays(waitlistConfig(kennel)) });
       charge = { id: crypto.randomUUID(), label: item.label, amount: item.amount, list_id: item.id, ...(item.group ? { group: item.group } : {}),
         ...(payments ? { payments } : {}), ...(item.boarding_days ? { boarding_days: item.boarding_days } : {}) };
       await saleRepo.update(sale.id, { extra_charges: [...(sale.extra_charges || []), charge] });
@@ -1234,7 +1245,7 @@ export async function approvePickupRequest(entryId, requestId, { date = todayYMD
   const entry = await load(entryId);
   const req = loadPickupRequest(entry, requestId);
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
-  const sale = familySale(entry, sales);
+  const sale = await ownSale(entry, sales);
   if (!sale?.dog_id) throw new Error('They have no open sale with a pup, so there\'s no pickup to plan.');
   const upcoming = (await eventRepo.getForSubject('dog', sale.dog_id)).filter((e) => pickupFor(sale)(e) && e.event_date >= date);
   let event = null;
@@ -1314,7 +1325,7 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
   const req = entry.back_out_request;
   if (!pending(req)) throw new Error('There\'s no back-out request waiting for this family.');
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
-  const sale = familySale(entry, sales);
+  const sale = await ownSale(entry, sales);
   if (!sale) throw new Error('They have no open sale to back out of any more.');
   const why = `${req.reason?.label || 'backed out'}${req.reason?.text ? `: ${req.reason.text}` : ''}`;
   const removeSet = new Set(remove);
@@ -1390,4 +1401,20 @@ export async function removePrepass(entryId, target) {
   const entry = await load(entryId);
   const same = (p) => (target.litter_id ? p.litter_id === target.litter_id : p.pairing_id === target.pairing_id);
   return waitlistEntryRepo.update(entryId, { prepasses: (entry.prepasses || []).filter((p) => !same(p)) });
+}
+
+// Her closed dates more than CLOSED_DATES_KEPT_DAYS (7) past drop off by themselves:
+// run when the app loads (app.js), for each of her kennels with a list. → how many
+// kennels changed.
+export async function tidyClosedDates(today = todayYMD()) {
+  let changed = 0;
+  for (const kennel of await kennelRepo.getAll()) {
+    if (!kennel.is_own_kennel || kennel.is_archived) continue;
+    const dates = closedDates(kennel.waitlist_config || {});
+    const live = liveClosedDates(dates, today);
+    if (live.length === dates.length && (kennel.waitlist_config?.closed_dates || []).length === dates.length) continue;
+    await kennelRepo.update(kennel.id, { waitlist_config: { ...(kennel.waitlist_config || {}), closed_dates: live } });
+    changed++;
+  }
+  return changed;
 }

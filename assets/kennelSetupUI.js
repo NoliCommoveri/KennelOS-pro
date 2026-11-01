@@ -51,6 +51,7 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  if (required) overlay.setAttribute('data-no-dismiss', '');
   overlay.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true" style="max-width:460px;">
       <h2 style="margin-top:0;">🏡 Set up your kennel</h2>

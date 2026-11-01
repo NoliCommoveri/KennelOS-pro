@@ -1273,3 +1273,15 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
 @media (max-width: 520px) { .kels-main { padding: 0; } }
 /* Room under every page's content for the floating button. */
 body:has(> .kels-fab) main { padding-bottom: 104px; }
+
+/* A folded group of settings inside one card (Kennel → Waitlist settings): a
+   bordered row with a chevron, a title and a one-line hint; open, the fields
+   sit inside it. Several groups share the card's single Save. */
+.settings-group { border: 1px solid var(--border); border-radius: var(--radius); margin: 10px 0; background: var(--surface); }
+.settings-group > summary { list-style: none; cursor: pointer; padding: 10px 12px 10px 34px; position: relative; display: flex; flex-direction: column; gap: 2px; }
+.settings-group > summary::-webkit-details-marker { display: none; }
+.settings-group > summary::before { content: '▸'; position: absolute; left: 13px; top: 10px; color: var(--text-muted); transition: transform 0.15s; }
+.settings-group[open] > summary::before { transform: rotate(90deg); }
+.settings-group > summary .field-hint { margin: 0; }
+.settings-group[open] > summary { border-bottom: 1px solid var(--border); }
+.settings-group > .form-grid { padding: 12px; }

@@ -247,8 +247,12 @@ async function eventContext(event, kennel, cache) {
     const moveLitters = new Set((event.payload?.rows || []).map((r) => r.litter_id));
     movePups = [...cache.dogs.values()].filter((d) => litterIds.has(d.litter_id) || moveLitters.has(d.litter_id));
   }
+  // The family's other records and their offers, so a request on one record is
+  // checked against its own pup (waitlistEvents → familyExtras.familySale).
+  const familyEntries = entry.contact_id ? (await waitlistEntryRepo.getByKennel(kennel.id)).filter((e) => e.contact_id === entry.contact_id) : [entry];
+  const familyOffers = (await Promise.all(familyEntries.filter((e) => e.id !== entry.id).map((e) => waitlistOfferRepo.getByEntry(e.id)))).flat();
   return {
-    entry, offers, kennelOffers, pups: movePups, litters: cache.litters, sales: await saleRepo.getAll({ includeArchived: true }), pupName: name, litterLabel,
+    entry, offers, kennelOffers, familyEntries, familyOffers: [...offers, ...familyOffers], pups: movePups, litters: cache.litters, sales: await saleRepo.getAll({ includeArchived: true }), pupName: name, litterLabel,
     timeZone: kennel.time_zone || null, config: waitlistConfig(kennel)
   };
 }
@@ -396,10 +400,12 @@ export async function measureHomes(token, kennels) {
     const config = waitlistConfig(kennel);
     const from = standardLocation(kennel)?.address;
     if (!locationRuleOn(config) || !from) continue;
-    const entries = (await waitlistEntryRepo.getByKennel(kennel.id)).filter((e) => !e.is_archived && e.contact_id && !e.home_measured_date && typeof e.own_place_override !== 'boolean');
+    const kennelEntries = await waitlistEntryRepo.getByKennel(kennel.id);
+    const kennelOffers = await waitlistOfferRepo.getByKennel(kennel.id);
+    const entries = kennelEntries.filter((e) => !e.is_archived && e.contact_id && !e.home_measured_date && typeof e.own_place_override !== 'boolean');
     for (const entry of entries) {
       const sales = await saleRepo.getByBuyer(entry.contact_id);
-      if (!familySale(entry, sales)) continue;
+      if (!familySale(entry, sales, kennelOffers, kennelEntries)) continue;
       const contact = await contactRepo.getById(entry.contact_id);
       const place = String(entry.application?.location || contact?.address || '').trim();
       if (!place) continue;

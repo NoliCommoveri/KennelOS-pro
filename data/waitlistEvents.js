@@ -32,6 +32,7 @@
 // When the server moved the turn on after a family's pass or leave, or its own
 // close, the plan for that event carries `moveOn: false` (cloudWaitlist sets it),
 // so her device doesn't offer a second family.
+import { familySale } from './familyExtras.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
@@ -74,6 +75,9 @@ export const activityId = (event) => `event-${event.seq}`;
 // line for their entry's activity ({ id, at, body }), or null.
 export function planFamilyEvent(event, ctx) {
   const { entry = null, offers = [], pups = [], sales = [], litterLabel = () => 'the litter', pupName = () => 'a pup', timeZone = null, config = null } = ctx;
+  // This record's own pup's open sale (a family back on the list for a second pup
+  // has two records; a request belongs to the one whose pup it's about).
+  const ownSale = () => familySale(entry, sales, ctx.familyOffers || offers, ctx.familyEntries || []);
   // Their reason (§16.5), checked against her list as it is now: { id, label, text } or null.
   const reasonOf = (r) => passReasonOf(config, r);
   const said = (r) => (r ? ` Their reason: ${r.label}${r.text ? `: "${r.text}"` : ''}.` : '');
@@ -180,7 +184,7 @@ export function planFamilyEvent(event, ctx) {
       // Only while they have an open sale (the Companion family package's rule): a
       // sale delivered or cancelled since leaves a line, not a request.
       const why = clean(p.note);
-      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+      if (!ownSale()) {
         return note(`Asked for their Companion link, but they have no open sale now, so there's no family link to send.${why ? ` They said: "${why}"` : ''}`);
       }
       return { op: 'companion_request', date, activity: null, request: { requested_date: date, note: why } };
@@ -192,7 +196,7 @@ export function planFamilyEvent(event, ctx) {
       const cancel = event.kind === 'extra_cancel';
       const name = clean(p.name).slice(0, 120) || 'an extra';
       const why = clean(p.note);
-      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+      if (!ownSale()) {
         return note(`Asked ${cancel ? `to cancel ${name}` : `for ${name}`}, but they have no open sale now, so there's nothing to ${cancel ? 'take it off' : 'put it on'}.${why ? ` They said: "${why}"` : ''}`);
       }
       if (cancel ? typeof p.charge_id !== 'string' || !p.charge_id : typeof p.list_id !== 'string' || !p.list_id) return skip('bad_payload');
@@ -207,7 +211,7 @@ export function planFamilyEvent(event, ctx) {
       // A pickup time, a cancel, or their own address (Family Requests plan §4):
       // only with an open sale; it waits for her (plan D2).
       const what = event.kind === 'pickup_cancel' ? 'to cancel their pickup time' : event.kind === 'pickup_address' ? 'to meet at their own address' : 'for a pickup time';
-      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+      if (!ownSale()) {
         return note(`Asked ${what}, but they have no open sale now, so there's no pickup to plan.`);
       }
       const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? '')) ? v : null);
@@ -227,7 +231,7 @@ export function planFamilyEvent(event, ctx) {
       // Backing out (Family Requests plan §7): only with an open sale; nothing changes
       // until she decides. Their reason as her list says it now.
       const why = clean(p.note);
-      if (!entry.contact_id || !sales.some((x) => x.buyer_contact_id === entry.contact_id && isOpenSale(x))) {
+      if (!ownSale()) {
         return note(`Asked to back out, but they have no open sale now, so there's nothing to back out of.${why ? ` They said: "${why}"` : ''}`);
       }
       const reasons = backOutReasons(config);

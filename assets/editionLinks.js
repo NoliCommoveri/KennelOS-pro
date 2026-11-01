@@ -154,6 +154,8 @@ function cloudUpgradeDialog({ email }) {
       done('continue');
     });
     overlay.querySelector('#ug-cancel').addEventListener('click', () => done('cancel'));
+    // Backdrop tap (and Escape, via ui.js) = Cancel.
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.querySelector('#ug-cancel')?.click(); });
   });
 }
 

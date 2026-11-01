@@ -13,7 +13,7 @@ import { saleExtraCharges, readExtraCharges, kennelChargeList, kennelChargeGroup
 import { depositPaid } from '../data/incomeView.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
 import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
-import { restoresFamily } from '../data/waitlistRules.js';
+import { restoresFamily, businessDays, waitlistConfig } from '../data/waitlistRules.js';
 import { litterCloseDue, litterLabel } from '../data/litterCheckin.js';
 import { promptDisposition, promptReleasedPup, askRegistrationPrice } from '../assets/salePrompts.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
@@ -391,7 +391,7 @@ function wireExtraCharges() {
     if (preset) {
       const kennel = priceKennel();
       const dog = ctx.dogsById.get(ctx.draft.dog_id);
-      const payments = planSteps(chargeRules(preset, kennelChargeGroups(kennel)).payment_plan, preset.amount, { approvalDate: todayYMD(), birthDate: dog?.date_of_birth || null });
+      const payments = planSteps(chargeRules(preset, kennelChargeGroups(kennel)).payment_plan, preset.amount, { approvalDate: todayYMD(), birthDate: dog?.date_of_birth || null, openDays: businessDays(waitlistConfig(kennel)) });
       Object.assign(charge, { list_id: preset.id, ...(preset.group ? { group: preset.group } : {}), ...(payments ? { payments } : {}), ...(preset.boarding_days ? { boarding_days: preset.boarding_days } : {}) });
     }
     ctx.draft.extra_charges = [...ctx.draft.extra_charges, charge];

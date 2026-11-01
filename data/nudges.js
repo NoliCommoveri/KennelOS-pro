@@ -52,7 +52,7 @@ import { goHomeDate, daysBetween, followUpMessage, sharedReferrals, FOLLOW_UP_DA
 import { saleExtraCharges, stepDueDate, stepLabel } from './extraCharges.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import {
-  overdueTurns, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, autoOffers, closingTrigger,
+  overdueTurns, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, businessDays, autoOffers, closingTrigger,
   prefChangeSummary, prefChangeEffect, PREF_FIELD_LABEL, depositsDueLitters,
   readyCheck, readyCheckOverdue
 } from './waitlistRules.js';
@@ -787,7 +787,7 @@ export async function computeNudges() {
   if (editionFlags.accounts) nudges.push(...(await integrationReviewNudges(inScopeOnly(sales))));
   if (editionFlags.extraCharges && sales.some((s) => saleExtraCharges(s).some((x) => x.payments))) {
     const contactsById = new Map((await contactRepo.getAll({ includeArchived: true })).map((c) => [c.id, c]));
-    nudges.push(...extraDueNudges(today, inScopeOnly(sales), events, dogsById, contactsById));
+    nudges.push(...extraDueNudges(today, inScopeOnly(sales), events, dogsById, contactsById, kennelsById));
   }
 
   return nudges;
@@ -833,7 +833,7 @@ async function integrationReviewNudges(sales) {
 // EXTRA_DUE_DAYS before its due date until it's paid (a paid date on the step, or
 // the balance paid). Steps due before pickup read the pup's latest pickup date.
 export const EXTRA_DUE_DAYS = 7;
-export function extraDueNudges(today, sales, events, dogsById, contactsById) {
+export function extraDueNudges(today, sales, events, dogsById, contactsById, kennelsById = new Map()) {
   const out = [];
   const pickup = new Map();
   for (const e of events) {
@@ -845,7 +845,7 @@ export function extraDueNudges(today, sales, events, dogsById, contactsById) {
     for (const x of saleExtraCharges(s)) {
       for (const st of x.payments || []) {
         if (st.paid_date) continue;
-        const due = stepDueDate(st, { sale: s, pickupDate: pickup.get(s.dog_id) || '' });
+        const due = stepDueDate(st, { sale: s, pickupDate: pickup.get(s.dog_id) || '', openDays: businessDays(waitlistConfig(kennelsById.get(s.kennel_id))) });
         if (!due || due > addDaysToYMD(today, EXTRA_DUE_DAYS)) continue;
         const who = contactsById?.get(s.buyer_contact_id)?.name || 'The buyer';
         const pup = dogsById.get(s.dog_id)?.call_name || 'their pup';

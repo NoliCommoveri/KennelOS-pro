@@ -14,14 +14,39 @@ import { addDaysToYMD } from './dateUtils.js';
 export const EXTRA_REQUESTS_KEPT = 50;
 export const EXTRA_REQUEST_SHOWN_DAYS = 30; // a decided request stays on their page this long
 
-// The sale a family's extras go on: the newest open sale to the entry's contact
-// in the entry's kennel (by sale date, then when it was made). null = none.
-export function familySale(entry, sales) {
-  if (!entry || !entry.contact_id) return null;
-  const open = (sales || []).filter((s) => s && !s.is_archived && s.buyer_contact_id === entry.contact_id && isOpenSale(s)
-    && (!entry.kennel_id || !s.kennel_id || s.kennel_id === entry.kennel_id));
-  open.sort((a, b) => String(b.sale_date || b.created_at || '').localeCompare(String(a.sale_date || a.created_at || '')));
-  return open[0] || null;
+// The sale this waitlist record's family requests act on (extras, pickup, backing
+// out, the Companion link): the record's OWN pup, never another run's. A family
+// back on the list for a second pup has two records; each handles its own sale.
+//  1. the sale the record was placed with (`placed_sale_id`), while it's open;
+//  2. else the pick on one of its open offers (a sale awaiting the deposit);
+//  3. else an open sale to its contact in its kennel that no record of theirs
+//     claims (made on the Sale page, not through an offer, or a record placed
+//     before placements were linked), newest first. It goes to ONE of their
+//     records: the one with no claim of its own that's open (applied / approved /
+//     active), else the newest. With one record, that's the record.
+// `offers`: the kennel's offers (or at least this family's); `entries`: the
+// kennel's records (or at least this family's). null = none.
+export function familySale(entry, sales, offers = [], entries = []) {
+  if (!entry) return null;
+  const list = (sales || []).filter((s) => s && !s.is_archived && isOpenSale(s));
+  const newest = (xs) => xs.sort((a, b) => String(b.sale_date || b.created_at || '').localeCompare(String(a.sale_date || a.created_at || '')))[0] || null;
+  const claims = (e) => new Set([
+    ...(e.placed_sale_id ? [e.placed_sale_id] : []),
+    ...(offers || []).filter((o) => o && o.entry_id === e.id && o.outcome === 'open' && o.sale_id && !o.is_archived).map((o) => o.sale_id)
+  ]);
+  if (entry.placed_sale_id) return list.find((s) => s.id === entry.placed_sale_id) || null;
+  const own = claims(entry);
+  if (own.size) return newest(list.filter((s) => own.has(s.id)));
+  if (!entry.contact_id) return null;
+  const family = [entry, ...(entries || []).filter((e) => e && e.id !== entry.id && !e.is_archived && e.contact_id === entry.contact_id && e.kennel_id === entry.kennel_id)];
+  const claimed = new Set(family.flatMap((e) => [...claims(e)]));
+  const unclaimed = family.filter((e) => !claims(e).size);
+  const OPEN = ['applied', 'approved', 'active'];
+  const when = (e) => String(e.applied_date || e.created_at || '');
+  const owner = unclaimed.sort((a, b) => (OPEN.includes(b.status) - OPEN.includes(a.status)) || when(b).localeCompare(when(a)) || String(b.id).localeCompare(String(a.id)))[0];
+  if (owner?.id !== entry.id) return null;
+  return newest(list.filter((s) => s.buyer_contact_id === entry.contact_id && !claimed.has(s.id)
+    && (!entry.kennel_id || !s.kennel_id || s.kennel_id === entry.kennel_id)));
 }
 
 // The pup's birth date: its own, else its litter's.

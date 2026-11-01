@@ -50,7 +50,8 @@ export const DOG_REFERENCES = [
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'dog'
   },
   { table: 'documents', field: 'dog_id', label: 'has a filed document' },
-  { table: 'waitlist_offers', field: 'chosen_dog_id', label: 'pup chosen on a waitlist offer' }
+  { table: 'waitlist_offers', field: 'chosen_dog_id', label: 'pup chosen on a waitlist offer' },
+  { table: 'waitlist_offers', field: 'lost_dog_id', label: 'pup a family lost, on a waitlist offer\'s history' }
 ];
 
 // --- Litter: what can point at a Litter (Data Model v3 §10) -----------------

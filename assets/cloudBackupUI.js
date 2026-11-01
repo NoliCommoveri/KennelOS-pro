@@ -151,6 +151,7 @@ export function openModal(innerHtml, { width = 460, dismissible = true } = {}) {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:${width}px;">${innerHtml}</div>`;
   document.body.appendChild(overlay);
+  if (!dismissible) overlay.setAttribute('data-no-dismiss', '');
   if (!dismissible) overlay.addEventListener('click', (e) => { if (e.target === overlay) e.stopPropagation(); }, true);
   return overlay;
 }

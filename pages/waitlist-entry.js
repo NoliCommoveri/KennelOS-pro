@@ -28,7 +28,7 @@ import { kennelChargeList, kennelChargeGroups, chargeRules, planText } from '../
 import { pendingExtraRequests, familySale, pupBirthDate } from '../data/familyExtras.js';
 import { suggestOutcome, policyRowText, backOutReasons, ageWeeks, backOutItems, backOutSummary, BACK_OUT_OUTCOMES } from '../data/backOut.js';
 import { pendingPickupRequests, requestText as pickupRequestText, ownPlaceAllowed } from '../data/familyPickup.js';
-import { standardLocation } from '../data/pickupSlots.js';
+import { standardLocation, timeRange } from '../data/pickupSlots.js';
 import { transportQuote, mapsLink } from '../data/transportFee.js';
 import { locationRuleOn } from '../data/waitlistForm.js';
 import { PLACEMENT_METHODS } from '../data/vocab.js';
@@ -236,7 +236,8 @@ function statusLines(e) {
     lines.push(`Removed ${esc(fmtDate(e.removed_date))}${e.removed_reason ? ` — ${esc(descriptor(WAITLIST_REMOVED_REASON, e.removed_reason).label.toLowerCase())}` : ''}.`);
     if (canUndoRemoval(e, today)) lines.push(`<span class="badge badge-amber">You can undo this until ${esc(fmtDate(addDaysToYMD(e.removed_date, REMOVAL_UNDO_DAYS)))}</span>`);
   } else if (e.status === 'placed') {
-    lines.push(e.placed_sale_id ? `Placed — <a href="sale.html?id=${encodeURIComponent(e.placed_sale_id)}">open the sale →</a>` : 'Placed.');
+    const placedPup = ctx.sales.find((x) => x.id === e.placed_sale_id)?.dog_id;
+    lines.push(e.placed_sale_id ? `Placed${placedPup ? ` with ${esc(dogName(placedPup))}` : ''} — <a href="sale.html?id=${encodeURIComponent(e.placed_sale_id)}">open the sale →</a>` : 'Placed.');
   } else if (e.status === 'withdrawn') {
     lines.push(`Withdrew${e.withdrawn_date ? ` ${esc(fmtDate(e.withdrawn_date))}` : ''}.`);
   } else if (e.status === 'declined') {
@@ -244,7 +245,24 @@ function statusLines(e) {
   } else if (e.status === 'expired') {
     lines.push('The fee wasn\'t received by the pay-by date.');
   }
+  const others = otherRecordsLine(e);
+  if (others) lines.push(others);
   return lines;
+}
+
+// A family back on the list (a second pup) has a record per time on it. Each record
+// says the others exist and links them, so she always knows which one she's in.
+function recordLabel(x) {
+  const pup = x.placed_sale_id ? ctx.sales.find((s) => s.id === x.placed_sale_id)?.dog_id : null;
+  const status = x.status === 'placed' ? `Placed${pup ? ` with ${dogName(pup)}` : ''}` : descriptor(WAITLIST_ENTRY_STATUS, x.status).label;
+  return `${status}${x.applied_date ? ` (since ${fmtDate(x.applied_date)})` : ''}`;
+}
+function otherRecordsLine(e) {
+  if (!e.contact_id) return '';
+  const others = ctx.kennelEntries.filter((x) => x.id !== e.id && !x.is_archived && x.contact_id === e.contact_id)
+    .sort((a, b) => String(b.applied_date || b.created_at || '').localeCompare(String(a.applied_date || a.created_at || '')));
+  if (!others.length) return '';
+  return `<span class="badge badge-blue">${others.length + 1} records</span> This family has been on your list ${others.length + 1} times. You're viewing: <strong>${esc(recordLabel(e))}</strong>. Also: ${others.map((x) => `<a href="waitlist-entry.html?id=${encodeURIComponent(x.id)}">${esc(recordLabel(x))} →</a>`).join(' · ')}`;
 }
 
 // --- Communicate… (waitlistEmailUI.communicateDialog) ----------------------------------
@@ -289,7 +307,7 @@ function emailChoices(e) {
   if (e.status === 'approved') out.push({ kind: 'approved', label: 'Application approved (fee request)' });
   if (e.status === 'active') out.push({ kind: 'on_list', label: 'You\'re on the list' });
   // Getting their pup home (Family Requests plan §5.1): once they have an open sale.
-  if (familySale(e, ctx.sales)) out.push({ kind: 'transport_options', label: 'Transport options (getting their pup home)' });
+  if (familySale(e, ctx.sales, ctx.kennelOffers, ctx.kennelEntries)) out.push({ kind: 'transport_options', label: 'Transport options (getting their pup home)' });
   const open = ctx.offers.filter((o) => o.outcome === 'open' && !o.is_archived && !o.chosen_dog_id);
   if (open.length) {
     out.push({ kind: 'offer', label: 'It\'s your turn (send again)', extra: { litterIds: open.map((o) => o.litter_id), respondBy: open.map((o) => o.respond_by_date).filter(Boolean).sort().pop() } });
@@ -367,7 +385,7 @@ function pendingRequests(e) {
   // ticks what comes off in the confirm.
   if (actions.hasPendingRequest(e, 'back_out_request')) {
     const r = e.back_out_request;
-    const sale = familySale(e, ctx.sales);
+    const sale = familySale(e, ctx.sales, ctx.kennelOffers, ctx.kennelEntries);
     const pup = sale ? ctx.dogsById.get(sale.dog_id) : null;
     const litter = pup ? ctx.litters.find((l) => l.id === pup.litter_id) : null;
     const s = suggestOutcome(ctx.config, r.reason?.id, ageWeeks(pupBirthDate(pup, litter), r.requested_date));
@@ -420,14 +438,27 @@ function emailItemHtml(m) {
 // meetup place.
 function homeHtml(e) {
   if (!locationRuleOn(ctx.config) && !e.home_place && typeof e.own_place_override !== 'boolean') return '';
-  const allowed = ownPlaceAllowed(e, ctx.config);
   const where = e.home_place
-    ? `Lives in <strong>${esc(e.home_place)}</strong>${Number.isFinite(e.home_miles) ? `, about ${Math.round(e.home_miles)} miles from your standard location` : ' (not measured)'}.`
+    ? `Lives in <strong>${esc(e.home_place)}</strong>${Number.isFinite(e.home_miles) ? `, about ${Math.round(e.home_miles)} miles from your standard location` : ' (distance not measured)'}.`
     : 'Where they live isn\'t known yet; their status page asks once their pup is picked.';
-  const state = typeof e.own_place_override === 'boolean' ? ' (your choice)' : ' (your distance rule)';
+  // What her rule alone says for them, shown under "Use my distance rule".
+  const rule = ownPlaceAllowed({ ...e, own_place_override: null }, ctx.config);
+  const min = Number(ctx.config.transport_min_home_miles) || 0;
+  const ruleSays = !locationRuleOn(ctx.config) ? 'No distance set on Pickup & transport, so any family can suggest a place.'
+    : rule === true ? `They live at least ${min} miles away, so they can suggest a place.`
+      : rule === false ? `They live closer than ${min} miles, so they choose from your pickup times.`
+        : e.home_place ? 'The distance couldn\'t be measured, so for now they choose from your pickup times. Choose for them here if you like.'
+          : `Until you know where they live, they choose from your pickup times (your rule: at least ${min} miles away).`;
+  const current = typeof e.own_place_override === 'boolean' ? String(e.own_place_override) : '';
+  const opt = (value, label) => `<option value="${value}"${value === current ? ' selected' : ''}>${label}</option>`;
   return `<section class="card"><h2 style="margin-top:0;">Pickup</h2><p style="margin:0;">${where}</p>
-    <p class="field-hint">${allowed === true ? 'They can suggest their own meetup place' : allowed === false ? 'They choose from your listed places and times' : 'Waiting to hear where they live'}${allowed === null ? '' : state}.</p>
-    <span class="pill-row"><button class="btn btn-sm" data-own="true">Allow their own place</button><button class="btn btn-sm" data-own="false">Listed places only</button>${typeof e.own_place_override === 'boolean' ? '<button class="btn btn-sm" data-own="">Follow my rule</button>' : ''}</span></section>`;
+    <div class="field" style="margin-top:10px;">
+      <label for="own-place">Can they suggest their own meetup place?</label>
+      <select id="own-place">${opt('', 'Use my distance rule')}${opt('true', 'Let them suggest a place')}${opt('false', 'Only my pickup times')}</select>
+      <span class="field-hint">${current === 'true' ? 'Their status page lets them ask you to meet at an address of their own, whatever your rule says.'
+        : current === 'false' ? 'Their status page shows only your pickup times at your listed places, whatever your rule says.'
+          : ruleSays}</span>
+    </div></section>`;
 }
 
 function requestsHtml(e) {
@@ -466,7 +497,10 @@ function wireRequests(root) {
     await afterAction();
     await emailThem(approved ? 'request_approved' : 'request_declined', { request: { field: 'extra_request', request } });
   };
-  root.querySelectorAll('[data-own]').forEach((btn) => btn.addEventListener('click', () => run(() => actions.setOwnPlaceOverride(e.id, btn.dataset.own === '' ? null : btn.dataset.own === 'true'))));
+  root.querySelector('#own-place')?.addEventListener('change', (ev) => {
+    const v = ev.target.value;
+    run(() => actions.setOwnPlaceOverride(e.id, v === '' ? null : v === 'true'));
+  });
   // A pickup request (data-req "pickup|<request id>:approve|decline|transport").
   const pickup = (requestId, decision) => async () => {
     const request = (e.pickup_requests || []).find((r) => r.id === requestId);
@@ -501,7 +535,7 @@ async function onBackOut(decision) {
     return emailThem('request_declined', { request: { field: 'back_out_request', request } });
   }
   let outcome = decision === 'more' ? 'refund' : decision;
-  const sale = familySale(e, ctx.sales);
+  const sale = familySale(e, ctx.sales, ctx.kennelOffers, ctx.kennelEntries);
   if (!sale) throw new Error('They have no open sale to back out of any more.');
   const events = sale.dog_id ? await eventRepo.getForSubject('dog', sale.dog_id) : [];
   const items = backOutItems({ sale, events, today: todayYMD() });
@@ -565,7 +599,7 @@ async function approveAddress(request) {
   const from = standardLocation(ctx.kennel)?.address || '';
   let miles = Number.isFinite(request.miles) ? request.miles : null;
   const sales = e.contact_id ? await saleRepo.getByBuyer(e.contact_id) : [];
-  const sale = familySale(e, sales);
+  const sale = familySale(e, sales, ctx.kennelOffers, ctx.kennelEntries);
   const quote = () => (miles != null ? transportQuote(miles, ctx.config) : null);
   // A fee already on the sale starts in the box: replacing it is her choice.
   const current = Number(sale?.transport_fee) > 0 ? Number(sale.transport_fee) : null;
@@ -1358,7 +1392,7 @@ function offerStatusHtml(o) {
   const sale = o.sale_id && isAwaitingDeposit(o) ? ` · <a href="sale.html?id=${encodeURIComponent(o.sale_id)}">sale</a>` : '';
   return isAwaitingDeposit(o)
     ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>${o.deposit_request_sent_date ? ` <span class="badge badge-blue">Deposit request sent ${esc(fmtDate(o.deposit_request_sent_date))}</span>` : ''}`
-    : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${o.pass_reason ? ` <span class="faint">${esc(reasonText(o.pass_reason))}</span>` : ''}`;
+    : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${o.pass_reason ? ` <span class="faint">${esc(reasonText(o.pass_reason))}</span>` : ''}${o.restored_date ? ` <span class="faint">${o.lost_accepted_date ? 'had' : 'picked'} ${esc(o.lost_dog_id ? dogName(o.lost_dog_id) : 'a pup')}; back in line ${esc(fmtDate(o.restored_date))}</span>` : ''}`;
 }
 const litterLink = (id) => {
   const l = ctx.litters.find((x) => x.id === id);
@@ -1408,6 +1442,73 @@ function offersHistoryHtml() {
       }</tbody></table></div></section>`;
 }
 
+// The timeline's offer lines: each offer, its pick, the deposit request, how it
+// ended, and a back-out from it. A placement with no offer on this device shows
+// from its sale.
+function offerTimeline(e) {
+  const litter = (id) => { const l = ctx.litters.find((x) => x.id === id); return l ? litterLabel(l) : 'a litter'; };
+  const out = [];
+  for (const o of [...ctx.offers].sort((a, b) => (a.offered_date || '').localeCompare(b.offered_date || ''))) {
+    const from = litter(o.litter_id);
+    out.push([o.offered_date, `Offered ${from}`]);
+    if (o.picked_date && o.chosen_dog_id) out.push([o.picked_date, `Picked ${dogName(o.chosen_dog_id)} from ${from}`]);
+    // A lost pup (restoreAfterLostSale): the pick and acceptance it cleared, then back in line.
+    const lostPup = o.lost_dog_id ? dogName(o.lost_dog_id) : 'their pup';
+    if (o.restored_date && o.lost_picked_date) out.push([o.lost_picked_date, `Picked ${lostPup} from ${from}`]);
+    if (o.deposit_request_sent_date) out.push([o.deposit_request_sent_date, 'Deposit request sent']);
+    if (o.restored_date && o.lost_accepted_date) out.push([o.lost_accepted_date, `Accepted ${lostPup} (deposit received)`]);
+    const ended = {
+      accepted: `Accepted ${o.chosen_dog_id ? dogName(o.chosen_dog_id) : 'a pup'} (deposit received)`,
+      passed: `Passed on ${from}${o.counts_as_pass ? ' (counted as a pass)' : ''}`,
+      no_response: `No response to the ${from} offer${o.counts_as_pass ? ' (counted as a pass)' : ''}`,
+      voided: `The ${from} offer was closed`
+    }[o.outcome];
+    if (o.restored_date) {
+      out.push([o.restored_date, o.lost_accepted_date ? `Back in line in their original place after losing ${lostPup}` : `Their pick of ${lostPup} was cleared after losing ${lostPup}; time to pick another`]);
+      if (o.outcome === 'voided' && o.outcome_date && o.outcome_date !== o.restored_date) out.push([o.outcome_date, ended]);
+      else if (o.outcome !== 'voided' && ended && o.outcome_date) out.push([o.outcome_date, ended]);
+    } else if (ended && o.outcome_date) out.push([o.outcome_date, ended]);
+    if (o.backed_out_date) out.push([o.backed_out_date, `Backed out of ${o.chosen_dog_id ? dogName(o.chosen_dog_id) : 'their pup'}`]);
+  }
+  const sale = e.placed_sale_id ? ctx.sales.find((x) => x.id === e.placed_sale_id) : null;
+  if (sale && !ctx.offers.some((o) => o.outcome === 'accepted' && o.sale_id === sale.id)) {
+    out.push([sale.deposit_date || sale.sale_date || null, `Placed with ${sale.dog_id ? dogName(sale.dog_id) : 'a pup'}`]);
+  }
+  return out;
+}
+
+// The timeline's request lines: what they asked for on their status page, and what
+// she decided. A one-at-a-time request (pause, litters, Companion link, backing out)
+// keeps only its latest; extras and pickups keep each one.
+function requestTimeline(e) {
+  const out = [];
+  const decision = (r, what) => {
+    if (!r.decided || !r.decided_date) return;
+    const outcome = { keep: ' (kept the deposit)', move: ' (moved the deposit)', refund: ' (refunded)' }[r.outcome] || '';
+    out.push([r.decided_date, r.decided === 'sent' ? `You sent ${what}` : `You ${r.decided === 'declined' ? 'declined' : 'approved'} ${what}${outcome}`]);
+  };
+  const one = (r, asked, what) => { if (!r?.requested_date) return; out.push([r.requested_date, asked]); decision(r, what); };
+  one(e.pause_request, e.pause_request?.until ? `Asked to pause until ${fmtDate(e.pause_request.until)}` : 'Asked to pause', 'their pause');
+  one(e.listen_change_request, 'Asked to change which litters they wait for', 'their litters change');
+  one(e.companion_request, 'Asked for their Companion link', 'their Companion link');
+  if (e.pref_change_request?.requested_date) out.push([e.pref_change_request.requested_date, 'Asked to change their answers']);
+  one(e.back_out_request, `Asked to back out${e.back_out_request?.reason?.label ? ` (${e.back_out_request.reason.label})` : ''}`, 'backing out');
+  for (const r of e.extra_requests || []) {
+    if (!r?.requested_date) continue;
+    out.push([r.requested_date, r.kind === 'cancel' ? `Asked to cancel ${r.name}` : `Asked for ${r.name}`]);
+    decision(r, r.kind === 'cancel' ? `cancelling ${r.name}` : r.name);
+  }
+  for (const r of e.pickup_requests || []) {
+    if (!r?.requested_date) continue;
+    const when = r.date ? `${fmtDate(r.date)}${r.start_time ? `, ${timeRange({ start_time: r.start_time, end_time: r.end_time || '' })}` : ''}` : '';
+    out.push([r.requested_date, r.kind === 'cancel' ? 'Asked to cancel their pickup time'
+      : r.kind === 'address' ? `Asked to meet at ${r.address}${when ? ` on ${fmtDate(r.date)}` : ''}`
+        : `Asked for a pickup on ${when}${r.place ? ` at ${r.place}` : ''}`]);
+    decision(r, r.kind === 'cancel' ? 'cancelling their pickup' : r.kind === 'address' ? 'their meetup place' : 'their pickup time');
+  }
+  return out;
+}
+
 // Key dates and her changes to their answers (History): the running log of what
 // happened to this family, newest first.
 function timelineHtml() {
@@ -1420,8 +1521,12 @@ function timelineHtml() {
     [e.declined_date, 'Application declined'],
     [e.withdrawn_date, 'Withdrew'],
     [e.removed_date, `Removed${e.removed_reason ? ` (${descriptor(WAITLIST_REMOVED_REASON, e.removed_reason).label.toLowerCase()})` : ''}`],
+    ...offerTimeline(e),
+    ...requestTimeline(e),
     ...(e.pref_change_log || []).map((x) => [x.date, `${PREF_FIELD_LABEL[x.field] || x.field}: ${prefValueText(x.field, x.from)} → ${prefValueText(x.field, x.to)}${x.declined ? ' (they asked; you declined)' : x.by === 'request' ? ' (they asked)' : ''}`])
-  ].filter(([d]) => d).sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+  ].filter(([d]) => d)
+    // Newest first, and within a day the later step first (items are listed in order).
+    .map((x, i) => [...x, i]).sort((a, b) => String(b[0]).localeCompare(String(a[0])) || b[2] - a[2]);
   if (!items.length) return '';
   return `<section class="card"><h2 style="margin-top:0;">Timeline</h2>
     <ul style="list-style:none;margin:0;padding:0;">${items.map(([d, t], i) => `<li style="padding:5px 0;${i ? 'border-top:1px solid var(--border);' : ''}"><span class="faint">${esc(fmtDate(d))}</span> · ${esc(t)}</li>`).join('')}</ul>

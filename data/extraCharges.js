@@ -24,7 +24,7 @@
 // cancel_until_weeks, payment_plan }] holds each group's defaults, which a row's
 // own value overrides. Pure; no db.
 import { feeRate, isUsableRate, processingFee } from './processingFees.js';
-import { addDaysToYMD } from './dateUtils.js';
+import { addDaysToYMD, addOpenDays } from './dateUtils.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
 const cents = (n) => Math.round(n * 100) / 100;
@@ -95,22 +95,22 @@ export function cleanSteps(payments, amount) {
 // `at_weeks` is dated from the pup's birth date, `on_approval` from the day she
 // approves; `before_pickup` and `with_balance` stay undated and are read live
 // (stepDueDate). → steps, or null for a plan of one "with the balance" step.
-export function planSteps(plan, amount, { approvalDate, birthDate = null } = {}) {
+export function planSteps(plan, amount, { approvalDate, birthDate = null, openDays } = {}) {
   const steps = cleanPlan(plan);
   if (!steps || (steps.length === 1 && steps[0].due === 'with_balance')) return null;
   return cleanSteps(steps.map((st) => {
     const out = { id: crypto.randomUUID(), percent: st.percent, due: st.due, ...(st.n != null ? { n: st.n } : {}) };
     if (st.due === 'at_weeks' && birthDate) out.due_date = addDaysToYMD(birthDate, st.n * 7);
-    if (st.due === 'on_approval' && approvalDate) out.due_date = addDaysToYMD(approvalDate, st.n || 0);
+    if (st.due === 'on_approval' && approvalDate) out.due_date = addOpenDays(approvalDate, st.n || 0, openDays);
     return out;
   }), amount);
 }
 
 // When a step is due: its own date, else read live: before pickup from the pup's
 // pickup date, with the balance from the sale's balance due date. '' = not known.
-export function stepDueDate(step, { sale = null, pickupDate = '' } = {}) {
+export function stepDueDate(step, { sale = null, pickupDate = '', openDays } = {}) {
   if (step.due_date) return step.due_date;
-  if (step.due === 'before_pickup' && pickupDate) return addDaysToYMD(pickupDate, -(step.n || 0));
+  if (step.due === 'before_pickup' && pickupDate) return addOpenDays(pickupDate, -(step.n || 0), openDays);
   if (step.due === 'with_balance') return sale?.balance_due_date || pickupDate || '';
   return '';
 }

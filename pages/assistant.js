@@ -136,6 +136,8 @@ function showAssistantPreviewModal({ generated_at, rows }) {
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => overlay.remove());
+  // Backdrop tap (and Escape, via ui.js) = Cancel.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.querySelector('[data-act="cancel"]')?.click(); });
   overlay.querySelector('#outbox-import').addEventListener('click', async () => {
     try {
       const result = await importAssistantEvents(rows);

@@ -69,6 +69,29 @@ export function param(name) {
 }
 
 // --- Styled modal dialogs -------------------------------------------------
+// The modal rules, for every .modal-overlay in the app:
+//   1. Never window.confirm/alert/prompt — use the helpers below (or a
+//      hand-built .modal-overlay > .modal with the same markup).
+//   2. A backdrop tap dismisses it as cancel/no, unless it can't be dismissed.
+//   3. Escape does whatever a backdrop tap does. That one rule lives here: a
+//      modal with its own Escape handler closes itself first; otherwise the
+//      top visible overlay gets a backdrop click, so its own close logic runs.
+//   4. A modal that must not be dismissed (a running task, a required step)
+//      carries data-no-dismiss, and swallows backdrop clicks itself.
+if (typeof document !== 'undefined' && !globalThis.__kosModalEscape) {
+  globalThis.__kosModalEscape = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    const top = [...document.querySelectorAll('.modal-overlay')]
+      .filter((o) => o.style.display !== 'none' && !o.hidden).pop();
+    if (!top || top.hasAttribute('data-no-dismiss')) return;
+    // After this keydown's other listeners run: if one closed it, leave it be.
+    setTimeout(() => {
+      if (top.isConnected) top.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    }, 0);
+  });
+}
+
 // The app's own dialogs, replacing native window.confirm/alert/prompt. Each
 // appends a .modal-overlay to <body> and returns a promise, removing the
 // overlay when the user resolves it. Backdrop-click dismisses (as cancel/no).

@@ -30,6 +30,8 @@ function formModal({ title, intro, body, confirmLabel, read }) {
     document.body.appendChild(overlay);
     const done = (v) => { overlay.remove(); resolve(v); };
     overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => done(null));
+    // Backdrop tap (and Escape, via ui.js) = Cancel.
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.querySelector('[data-act="cancel"]')?.click(); });
     overlay.querySelector('[data-act="ok"]').addEventListener('click', () => {
       const res = read(overlay);
       if (typeof res === 'string') {

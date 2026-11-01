@@ -236,6 +236,8 @@ async function openLogModal(dog) {
   typeSel.addEventListener('change', applyType);
 
   overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => overlay.remove());
+  // Backdrop tap (and Escape, via ui.js) = Cancel.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.querySelector('[data-act="cancel"]')?.click(); });
   overlay.querySelector('#log-save').addEventListener('click', async () => {
     const details = {};
     for (const el of detailsBox.querySelectorAll('[data-detail]')) {
@@ -317,6 +319,8 @@ function openWeighLitterModal(group) {
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => overlay.remove());
+  // Backdrop tap (and Escape, via ui.js) = Cancel.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.querySelector('[data-act="cancel"]')?.click(); });
 
   overlay.querySelector('#wl-save').addEventListener('click', async () => {
     const event_date = overlay.querySelector('#wl-date').value;

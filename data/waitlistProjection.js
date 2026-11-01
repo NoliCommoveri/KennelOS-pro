@@ -19,8 +19,9 @@
 // choices, requests and message key in step 5, email templates in step 6) here,
 // in the same allow-listed way. A family's own notes on a request and every
 // message stay on her device: the page shows what was asked, never the note.
+import { expectedPricing } from './saleDefaults.js';
 import {
-  waitlistConfig, entryName, publicList, overallPositions, litterQueue, isPupAvailable, passesUsed,
+  waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink, embedOrigins
@@ -85,12 +86,31 @@ function requestsView(entry, today) {
 // 'declined' once she's dealt with it). The link itself never comes through here:
 // she sends it from her device (Companion page), so the server never holds it.
 function companionView(entry, ctx) {
-  if (!entry.contact_id || !ctx.openSaleBuyers.has(entry.contact_id)) return null;
+  if (!ctx.saleFor(entry)) return null;
   return { available: true, request: requestView(entry.companion_request, ctx.today, () => ({})) };
 }
 
 // A pup as a family may see it: call name, sex, color. Nothing else.
-const publicPup = (d) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings) });
+const publicPup = (d) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings), registration: orNull(d.intended_registration) });
+
+// A litter's expected prices as a family on their turn may see them (her setting
+// turn_prices): per registration the pups of it are planned for, the male and
+// female price (saleDefaults.expectedPricing, the price a sale starts at: Full
+// includes her surcharge, never shown apart), and her expected deposit for a male
+// and a female.
+// Her listed prices only: never a sale's amount or anything a family owes. null
+// when she set none.
+function litterPrices(litter, pups) {
+  const regs = [...new Set(pups.map((d) => d.intended_registration || 'limited'))].sort();
+  const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const by = Object.fromEntries(regs.map((reg) => [reg, {
+    male: num(expectedPricing({ sex: 'male' }, litter, reg).price),
+    female: num(expectedPricing({ sex: 'female' }, litter, reg).price)
+  }]));
+  const deposit = { male: num(litter.expected_deposit_male), female: num(litter.expected_deposit_female) };
+  const any = Object.values(by).some((p) => p.male != null || p.female != null) || deposit.male != null || deposit.female != null;
+  return any ? { by_registration: by, deposit } : null;
+}
 
 // One family's status page (Plan §5). A family still in the pipeline gets the
 // detail; one whose time on the list ended (placed, declined, withdrawn, removed,
@@ -99,6 +119,12 @@ function entryView(entry, ctx) {
   const contact = ctx.contactsById.get(entry.contact_id) || null;
   const view = { name: entryName(entry, contact), email: entryEmail(entry, contact), status: entry.status };
   if (entry.status_token) view.status_token = entry.status_token;
+  // Which time on the list this record is, for a family with more than one (the
+  // server links them on each page): when it started, and its own pup's call name.
+  if (entry.applied_date) view.since = entry.applied_date;
+  const pup = ctx.pupFor(entry);
+  if (pup) view.pup = pup;
+  view.record = ctx.recordFor(entry);
   const companion = companionView(entry, ctx);
   if (companion) view.companion = companion; // absent without an open sale
   // Extras they may ask for or cancel (Family Requests plan §3): names only, never
@@ -200,7 +226,14 @@ function entryView(entry, ctx) {
         offered_date: orNull(o.offered_date),
         respond_by_date: orNull(o.respond_by_date),
         eligible_dog_ids: [...(o.eligible_dog_ids || [])],
-        picked_dog_id: orNull(o.chosen_dog_id)
+        picked_dog_id: orNull(o.chosen_dog_id),
+        // Sending the deposit (their turn card, once they pick): her payment
+        // instructions (already on their page for the fee), and the deposit on the
+        // sale their pick made, else her listed deposit for that pup.
+        deposit_instructions: ctx.config.payment_instructions || '',
+        // Their pick as a family may see it (it's no longer among the litter's
+        // available pups, so it comes with the offer).
+        ...(o.chosen_dog_id ? { deposit_amount: ctx.depositFor(o), picked_pup: ctx.pickedPup(o.chosen_dog_id) } : {})
       }))
   });
   return view;
@@ -348,6 +381,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       whelp_date: orNull(litter.whelp_date),
       ready_date: orNull(litter.estimated_ready_date),
       picks_open: Boolean(litter.picks_opened_date),
+      ...(config.turn_prices !== false ? { prices: litterPrices(litter, pups.filter((d) => isPupAvailable(d, sales))) } : {}),
       pairing_id: orNull(litter.pairing_id),
       pups: pups.filter((d) => isPupAvailable(d, sales)).sort(byId).map(publicPup),
       open_offer_entry_id: open ? open.entry_id : null
@@ -382,10 +416,44 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     config, contactsById, programsById, offers: kennelOffers, today, upcoming,
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
     positions: overallPositions(live, kennel.id, programsById), prefPlaces: prefPlaces(live, kennel.id, programsById, config), matches, litterLabels, hidden, notes,
-    openSaleBuyers: new Set(sales.filter((x) => x.buyer_contact_id && isOpenSale(x)).map((x) => x.buyer_contact_id)),
-    pickupFor: (entry) => familyPickupView({ entry, sales, dogsById, litters, kennel, config, entries: live, events: pickupEvents, today }),
+    // Each record's own pup's sale (familySale): a family back on the list for a
+    // second pup gets its first pup's cards only on that pup's record.
+    saleFor: (entry) => familySale(entry, sales, kennelOffers, live),
+    pickedPup: (id) => (dogsById.get(id) ? publicPup(dogsById.get(id)) : null),
+    // The deposit for a family's pick: on its sale, else her listed one for the pup.
+    depositFor: (o) => {
+      const sale = o.sale_id ? sales.find((x) => x.id === o.sale_id) : null;
+      const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+      if (num(sale?.deposit_amount) != null) return num(sale.deposit_amount);
+      const dog = dogsById.get(o.chosen_dog_id);
+      const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) : null;
+      return num(expectedPricing(dog, litter).deposit_amount);
+    },
+    // The pup this record is about: the one it was placed with (even once home),
+    // else its own open sale's (a pick awaiting the deposit). A call name only.
+    // Where this record stands, in the family's terms, for the list of their
+    // records on each status page: { state, until? }. Facts their own page shows.
+    recordFor: (entry) => {
+      const own = kennelOffers.filter((o) => o.entry_id === entry.id && o.outcome === 'open' && !o.is_archived);
+      const placedSale = entry.placed_sale_id ? sales.find((x) => x.id === entry.placed_sale_id) : null;
+      switch (entry.status) {
+        case 'active':
+          if (own.some((o) => o.chosen_dog_id)) return { state: 'picked' };
+          if (own.length) return { state: 'turn' };
+          if (entry.paused_until && entry.paused_until >= today) return { state: 'paused', until: entry.paused_until };
+          return { state: 'waiting' };
+        case 'placed': return { state: placedSale?.status === 'delivered' ? 'home' : 'chose' };
+        case 'withdrawn': return { state: entry.back_out_request?.decided === 'approved' ? 'backed_out' : 'left' };
+        default: return { state: entry.status };
+      }
+    },
+    pupFor: (entry) => {
+      const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, kennelOffers, live);
+      return (sale?.dog_id && dogsById.get(sale.dog_id)?.call_name) || null;
+    },
+    pickupFor: (entry) => familyPickupView({ entry, sales, offers: kennelOffers, dogsById, litters, kennel, config, entries: live, events: pickupEvents, today }),
     extrasFor: (entry) => {
-      const sale = familySale(entry, sales);
+      const sale = familySale(entry, sales, kennelOffers, live);
       if (!sale) return null;
       const dog = dogsById.get(sale.dog_id) || null;
       const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) : null;
@@ -413,6 +481,11 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       intro: publicIntroText(config, kennel.kennel_name || ''),
       time_zone: orNull(kennel.time_zone),
       respond_days: Number(config.respond_days),
+      // The weekdays she does business, so a turn the server offers counts its days
+      // the way her device does (dateUtils.addOpenDays). null = every day.
+      open_days: openDays(config).length === 7 ? null : openDays(config),
+      // …and her closed dates still ahead (or just past), skipped the same way.
+      closed_dates: liveClosedDates(closedDates(config), today),
       max_passes: Number(config.max_passes),
       auto_offer_on: [...config.auto_offer_on],
       // What the server sends by itself while her phone is off (W2 step 7): her

@@ -368,6 +368,11 @@ export const SYNC_REGISTRY = Object.freeze({
       // When she sent the family their deposit request (Integrations plan §2.6, D20):
       // a date, like picked_date.
       'deposit_request_sent_date',
+      // A lost pup's history (restoreAfterLostSale): when the family went back in
+      // line, the pup they'd had and when they picked / were accepted. Like
+      // chosen_dog_id, picked_date and outcome_date, which it keeps after the pick
+      // is cleared.
+      'restored_date', 'lost_dog_id', 'lost_picked_date', 'lost_accepted_date',
       // When the family backed out of the pup this offer placed (Family Requests
       // plan §7): a date, like outcome_date.
       'backed_out_date'

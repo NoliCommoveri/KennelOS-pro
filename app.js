@@ -197,6 +197,10 @@ async function boot() {
     // her device reads the forms' submissions with the key it holds.
     import('./data/jotformSigned.js').then((m) => m.bootJotformCheck()).catch(() => {});
   }
+  // Her waitlist closed dates more than 7 days past drop off by themselves.
+  if (editionFlags.waitlist && !isDemo()) {
+    import('./data/waitlistActions.js').then((m) => m.tidyClosedDates()).catch(() => {});
+  }
   firstRunFlow().finally(() => {
     if (!isCloudAvailable()) return;
     import('./assets/cloudBackupUI.js').then((m) => m.bootCloud()).catch((e) => console.warn('KennelOS: cloud backup', e));

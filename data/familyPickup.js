@@ -15,6 +15,7 @@ import { kennelChargeList, saleExtraCharges } from './extraCharges.js';
 import { readyDateOf, pickupFor } from './goHome.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { locationRuleOn } from './waitlistForm.js';
+import { businessDays } from './waitlistRules.js';
 
 export const PICKUP_REQUESTS_KEPT = 30;
 export const PICKUP_REQUEST_SHOWN_DAYS = 30;
@@ -22,7 +23,8 @@ export const PICKUP_REQUEST_SHOWN_DAYS = 30;
 export const pendingPickupRequests = (entry) => (Array.isArray(entry?.pickup_requests) ? entry.pickup_requests : []).filter((r) => r && !r.decided);
 
 // May this family suggest their own meetup place? true / false, or null when her
-// distance rule is on and where they live isn't known yet (their page asks).
+// distance rule is on and their distance isn't known (their page asks while no
+// place is known at all; with an unmeasured place she decides on their entry).
 export function ownPlaceAllowed(entry, config) {
   if (typeof entry?.own_place_override === 'boolean') return entry.own_place_override;
   if (!locationRuleOn(config)) return true;
@@ -48,8 +50,8 @@ export function pickupFrom(sale, litter, events) {
 
 // → null, or { ready_from, slots, booked, requests, own_place, ask_home, far_miles,
 // min_home_miles } (the last two for the server's checks only; never on their page).
-export function familyPickupView({ entry, sales, dogsById, litters, kennel, config, entries = [], events = [], today }) {
-  const sale = familySale(entry, sales);
+export function familyPickupView({ entry, sales, offers = [], dogsById, litters, kennel, config, entries = [], events = [], today }) {
+  const sale = familySale(entry, sales, offers, entries);
   if (!sale?.dog_id) return null;
   const pup = dogsById.get(sale.dog_id);
   if (!pup) return null;
@@ -73,7 +75,7 @@ export function familyPickupView({ entry, sales, dogsById, litters, kennel, conf
       kind: mine ? 'slot' : 'address', date: pickup.event_date,
       start_time: slot?.start_time || '', end_time: slot?.end_time || '',
       place: loc?.label || '', address: loc?.address || pickup.details?.location || '',
-      change_until: changeUntil(pickup.event_date, days)
+      change_until: changeUntil(pickup.event_date, days, businessDays(config))
     };
   }
   const requests = (Array.isArray(entry.pickup_requests) ? entry.pickup_requests : [])
@@ -89,8 +91,10 @@ export function familyPickupView({ entry, sales, dogsById, litters, kennel, conf
     ? { date: r.date, requires: priceList.find((x) => x.id === r.requires_list_id)?.label || 'a package', has_it: theirs.has(r.requires_list_id) }
     : { date: r.date, boarding: true }));
   const own = ownPlaceAllowed(entry, config);
+  // Asked only while no place is known. A place on file that couldn't be measured
+  // (no map key, or not found) isn't asked again: she chooses on their entry.
   const view = {
-    ready_from: from, slots, dates, booked, requests, own_place: own, ask_home: own === null,
+    ready_from: from, slots, dates, booked, requests, own_place: own, ask_home: own === null && !entry.home_place,
     far_miles: Number(config.transport_far_miles) || 0, min_home_miles: Number(config.transport_min_home_miles) || 0
   };
   return slots.length || booked || requests.length || own !== false ? view : null;
