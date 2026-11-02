@@ -13,7 +13,8 @@
 // picked Poppy, but that offer had already closed"), which Today shows her.
 //
 // What applies by itself and what waits for her (Spec §6.3, §15.7, §15.9):
-//  - pick → recordPick (a deposit-pending Sale holds the pup; the deposit stays her tap)
+//  - pick → recordPick (a deposit-pending Sale holds the pup; the deposit stays her tap,
+//    unless they carry a deposit from a pup they lost: then it's paid and they're placed)
 //  - pass → recordOutcome(…, 'passed'); leave → withdraw
 //  - still interested → a line in their activity
 //  - a pause, a NARROWER listen-only change and any change to a matching answer
@@ -107,7 +108,11 @@ export function planFamilyEvent(event, ctx) {
       if (!(offer.eligible_dog_ids || []).includes(p.dog_id)) return note(`${what}, but that pup wasn't one offered to them, so nothing was recorded.`);
       const dog = pups.find((d) => d.id === p.dog_id);
       if (!dog || !isPupAvailable(dog, sales)) return note(`${what}, but that pup is no longer available, so nothing was recorded. Let them know.`);
-      return { op: 'pick', offerId: offer.id, dogId: dog.id, date, activity: line(`${what}. Their pick is held by a sale with the deposit pending.`) };
+      // Money carried over from a pup they lost is their deposit: the pick places them.
+      const held = entry?.carried_payment
+        ? 'Their pick is held: the deposit they carried over from a pup they lost is in, so they\'re placed.'
+        : 'Their pick is held by a sale with the deposit pending.';
+      return { op: 'pick', offerId: offer.id, dogId: dog.id, date, activity: line(`${what}. ${held}`) };
     }
     case 'pass': {
       // A pass covers their whole turn (Spec §16.1): every litter in it, counted once.

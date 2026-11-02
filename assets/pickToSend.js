@@ -4,7 +4,9 @@
 //   1. Sale: registration, price, deposit, transport, sold through (Good Dog…)
 //      with its processing fee (plan §5), balance due date, notes;
 //   2. Contract: one of her contract forms (§2.1a), its link prefilled;
-//   3. Send: one message with the deposit, how to pay (the payment link and
+//   3. Send: one message with the deposit (or, when it's already in — a carried-over
+//      deposit is recorded as received at the pick — a thank-you for it and no
+//      payment part), how to pay (the payment link and
 //      instructions of the account step 1 says it's paid through, plan §4, then
 //      her waitlist payment instructions), the contract link and the
 //      invoice PDF, which she sends herself: the share sheet (PDF attached, where
@@ -28,6 +30,8 @@ import { depositRequestMessage } from '../data/depositRequest.js';
 import { salePayAccount, salePaidVia } from '../data/paymentLinks.js';
 import { stripeConnection, makeSaleLink } from '../data/stripeLinks.js';
 import { logOwnMessage } from '../data/waitlistOutbox.js';
+import { depositPaid } from '../data/incomeView.js';
+import { photoLink } from '../data/waitlistProjection.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney } from './ui.js';
 import { REGISTRATION_TYPE, CONTRACT_FORM_TYPE, descriptor } from '../data/vocab.js';
@@ -103,7 +107,9 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       shell(`<div class="form-grid">
           ${field('Registration', `<select id="ps-reg">${REGISTRATION_TYPE.map((r) => `<option value="${esc(r.value)}"${r.value === s.registration_type ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select>`, 'Full adds the litter\'s Full-registration surcharge to a price still at its suggested amount.')}
           ${field('Price', `<input id="ps-price" type="number" min="0" step="0.01" value="${esc(s.price ?? '')}">`)}
-          ${field('Deposit', `<input id="ps-deposit" type="number" min="0" step="0.01" value="${esc(s.deposit_amount ?? '')}">`, offer.respond_by_date ? `Due by ${fmtDate(offer.respond_by_date)}, the end of their turn.` : '')}
+          ${field('Deposit', `<input id="ps-deposit" type="number" min="0" step="0.01" value="${esc(s.deposit_amount ?? '')}">`, depositPaid(s)
+            ? `Already received${s.deposit_date ? ` ${fmtDate(s.deposit_date)}` : ''}. The message thanks them for it instead of asking.`
+            : offer.respond_by_date ? `Due by ${fmtDate(offer.respond_by_date)}, the end of their turn.` : '')}
           ${field('Transport fee', `<input id="ps-transport" type="number" min="0" step="0.01" value="${esc(s.transport_fee ?? '')}">`)}
           ${field('Sold through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.')}
           ${field('Deposit paid via', `<select id="ps-deposit-via"><option value="">— not set —</option>${accounts
@@ -261,6 +267,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
     let payAccount = null;
     let stripeNote = '';
     async function paymentAccount() {
+      if (depositPaid(sale)) return null; // nothing to pay now: no link, no Stripe link
       const via = salePaidVia(sale, accounts, 'deposit');
       const deposit = Number(sale.deposit_amount) || 0;
       if (via && deposit > 0 && await stripeConnection(via.id)) {
@@ -281,13 +288,16 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         payAccount = await paymentAccount();
         const balance = await balanceDueOn(sale);
         const rest = Math.max(0, balance - (Number(sale.deposit_amount) || 0));
+        const paid = depositPaid(sale);
         message = depositRequestMessage({
           who, pupName: dog?.call_name || '', litterLabel,
           deposit: sale.deposit_amount != null ? fmtMoney(sale.deposit_amount) : '',
           depositDue: offer.respond_by_date ? fmtDate(offer.respond_by_date) : '',
+          depositPaid: paid ? (sale.deposit_date ? fmtDate(sale.deposit_date) : true) : false,
           payAccount, paymentText,
           contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '',
           invoice: true,
+          pupPhotos: photoLink(dog?.url) || '',
           balance: rest > 0 ? fmtMoney(rest) : '', balanceDue: sale.balance_due_date ? fmtDate(sale.balance_due_date) : '',
           kennelName
         });
@@ -295,11 +305,13 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       let share = false;
       try { share = canShareFile(await invoiceFile()); } catch { share = false; }
       const email = contact?.email || '';
-      const sentLine = offer.deposit_request_sent_date ? `<p class="field-hint">You sent them a deposit request on ${esc(fmtDate(offer.deposit_request_sent_date))}.</p>` : '';
+      const paidNow = depositPaid(sale);
+      const sentLine = offer.deposit_request_sent_date ? `<p class="field-hint">You sent them ${paidNow ? 'this message' : 'a deposit request'} on ${esc(fmtDate(offer.deposit_request_sent_date))}.</p>` : '';
       shell(`<p class="field-hint" style="margin-top:0;">To ${esc(contact?.name || 'them')}${email ? ` · ${esc(email)}` : ' (no email on their contact)'}. Edit anything before it goes.</p>
         ${sentLine}
         ${stripeNote ? `<p class="field-hint">${esc(stripeNote)}</p>` : ''}
-        ${payAccount ? '' : '<p class="field-hint">To put a payment link in the message, set <strong>Deposit paid via</strong> in step 1 (Back) to a Payment service account with a link (Accounts page).</p>'}
+        ${paidNow ? '<p class="field-hint">Their deposit is already in, so the message thanks them for it and asks for nothing now. The invoice shows it as paid.</p>' : ''}
+        ${payAccount || paidNow ? '' : '<p class="field-hint">To put a payment link in the message, set <strong>Deposit paid via</strong> in step 1 (Back) to a Payment service account with a link (Accounts page).</p>'}
         <div class="field"><label for="ps-subject">Subject</label><input id="ps-subject" type="text" value="${esc(message.subject)}"></div>
         <div class="field"><label for="ps-body">Message</label><textarea id="ps-body" rows="14" style="width:100%; font-family:inherit;">${esc(message.body)}</textarea></div>
         <p class="field-hint">${share

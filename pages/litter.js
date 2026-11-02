@@ -41,7 +41,7 @@ const els = {
 };
 
 const blankLitter = () => ({
-  pairing_id: '', dam_id: '', sire_id: '', nickname: '', whelp_date: '', accept_deposits_date: '', estimated_ready_date: '', litter_registration_number: '',
+  pairing_id: '', dam_id: '', sire_id: '', nickname: '', whelp_date: '', accept_deposits_date: '', estimated_ready_date: '', litter_registration_number: '', photos_url: '',
   puppies_born_total: '', puppies_born_alive: '', puppies_born_deceased: '', puppies_born_abnormalities: '', delivery_type: '', status: '', notes: '',
   expected_price_male: '', expected_price_female: '', expected_deposit_male: '', expected_deposit_female: '', full_reg_surcharge_male: '', full_reg_surcharge_female: '',
   foster_direction: '', foster_partner_contact_id: '', foster_comp_model: '',
@@ -204,6 +204,7 @@ function renderView() {
       ${row('Accept deposits date', l.accept_deposits_date ? esc(fmtDate(l.accept_deposits_date)) : '')}
       ${row('Estimated ready date', l.estimated_ready_date ? esc(fmtDate(l.estimated_ready_date)) : '')}
       ${row('Litter registration #', esc(l.litter_registration_number))}
+      ${row('Litter photos', l.photos_url ? `<a href="${esc(l.photos_url)}" target="_blank" rel="noopener noreferrer">${esc(l.photos_url)}</a>` : '')}
       ${row('Puppies born', countsDisplay(l))}
       ${WHELPED_OR_LATER.includes(l.status) ? row('Delivery', l.delivery_type ? badge(LITTER_DELIVERY_TYPE, l.delivery_type) : '') : ''}
       ${row('Status', badge(LITTER_STATUS, l.status))}
@@ -299,6 +300,7 @@ function renderEdit() {
       ${field('Accept deposits date', `<input id="f-accept_deposits_date" type="date" value="${esc(l.accept_deposits_date)}">`, { hint: 'When you begin accepting deposits on this litter. Shown to prospective families when set.' })}
       ${field('Estimated ready date', `<input id="f-estimated_ready_date" type="date" value="${esc(l.estimated_ready_date)}">`, { hint: 'Defaults to 8 weeks (56 days) after the whelp date. Still editable.' })}
       ${field('Litter registration #', `<input id="f-litter_registration_number" type="text" value="${esc(l.litter_registration_number)}">`)}
+      ${field('Litter photos link', `<input id="f-photos_url" type="url" value="${esc(l.photos_url || '')}" placeholder="https://…">`, { hint: 'An album of the whole litter.' + (editionFlags.waitlist ? ' Families see it on this litter\'s card on your waitlist pages.' : ''), wide: true })}
       ${field('Puppies born (total)', `<input id="f-puppies_born_total" type="number" min="0" value="${esc(l.puppies_born_total)}">`)}
       ${field('Born alive', `<input id="f-puppies_born_alive" type="number" min="0" value="${esc(l.puppies_born_alive)}">`)}
       ${field('Born deceased', `<input id="f-puppies_born_deceased" type="number" min="0" value="${esc(l.puppies_born_deceased)}">`)}
@@ -404,6 +406,7 @@ function readForm() {
     accept_deposits_date: val('f-accept_deposits_date'),
     estimated_ready_date: val('f-estimated_ready_date'),
     litter_registration_number: val('f-litter_registration_number').trim(),
+    photos_url: val('f-photos_url').trim(),
     puppies_born_total: val('f-puppies_born_total'),
     puppies_born_alive: val('f-puppies_born_alive'),
     puppies_born_deceased: val('f-puppies_born_deceased'),

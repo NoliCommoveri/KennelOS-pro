@@ -51,7 +51,8 @@ export const DOG_REFERENCES = [
   },
   { table: 'documents', field: 'dog_id', label: 'has a filed document' },
   { table: 'waitlist_offers', field: 'chosen_dog_id', label: 'pup chosen on a waitlist offer' },
-  { table: 'waitlist_offers', field: 'lost_dog_id', label: 'pup a family lost, on a waitlist offer\'s history' }
+  // Not indexed (only a delete asks), so it's a scan: an indexed probe would throw.
+  { table: 'waitlist_offers', field: 'lost_dog_id', label: 'pup a family lost, on a waitlist offer\'s history', scan: true }
 ];
 
 // --- Litter: what can point at a Litter (Data Model v3 §10) -----------------

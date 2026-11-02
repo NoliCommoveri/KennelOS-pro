@@ -57,6 +57,7 @@ async function init() {
       { header: 'Breed', collapse: true, cell: (l) => { const b = damBreed(l); return b ? esc(b) : '<span class="faint">—</span>'; } },
       { header: 'Whelp date', collapse: true, cell: (l) => l.whelp_date ? esc(fmtDate(l.whelp_date)) : '<span class="faint">—</span>' },
       { header: 'Born', collapse: true, cell: (l) => l.puppies_born_total != null && l.puppies_born_total !== '' ? esc(String(l.puppies_born_total)) : '<span class="faint">—</span>' },
+      { header: 'Photos', collapse: true, cell: (l) => l.photos_url ? `<a href="${esc(l.photos_url)}" target="_blank" rel="noopener noreferrer">Photos</a>` : '<span class="faint">—</span>' },
       { header: 'Status', cell: (l) => badge(LITTER_STATUS, l.status) + (l.foster_direction ? ' ' + badge(FOSTER_DIRECTION, l.foster_direction) : '') }
     ],
     onRowClick: (l) => { location.href = `litter.html?id=${encodeURIComponent(l.id)}`; },

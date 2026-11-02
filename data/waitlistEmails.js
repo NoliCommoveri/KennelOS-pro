@@ -181,15 +181,25 @@ export function fillPlaceholders(text, values) {
   });
 }
 
+// The line every email to a family with a sale gets when their pup has a photos
+// link (facts.pupPhotos { name, url }): '' otherwise.
+export function pupPhotosLine(pupPhotos) {
+  const url = String(pupPhotos?.url ?? '').trim();
+  return url ? `Photos of ${String(pupPhotos.name || '').trim() || 'your puppy'}: ${url}` : '';
+}
+
 // A ready-to-preview email: { kind, subject, body }. Subject on one line, both cut
-// to what the server takes.
+// to what the server takes. With `facts.pupPhotos`, the body ends with the pup's
+// photos line, whatever her template says (and it survives the cut).
 export function draftEmail(kind, facts, config) {
   const t = emailTemplate(config, kind);
   const values = placeholderValues(facts);
+  const photos = pupPhotosLine(facts?.pupPhotos);
+  const tail = photos ? `\n\n${photos}` : '';
   return {
     kind,
     subject: fillPlaceholders(t.subject, values).replace(/\s+/g, ' ').trim().slice(0, EMAIL_SUBJECT_MAX),
-    body: fillPlaceholders(t.body, values).replace(/[ \t]+\n/g, '\n').trim().slice(0, EMAIL_BODY_MAX)
+    body: (fillPlaceholders(t.body, values).replace(/[ \t]+\n/g, '\n').trim().slice(0, Math.max(0, EMAIL_BODY_MAX - tail.length)) + tail).trim()
   };
 }
 

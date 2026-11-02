@@ -92,8 +92,21 @@ function companionView(entry, ctx) {
   return { available: true, request: requestView(entry.companion_request, ctx.today, () => ({})) };
 }
 
-// A pup as a family may see it: call name, sex, color. Nothing else.
-const publicPup = (d) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings), registration: orNull(d.intended_registration) });
+// A photos link as family pages may show it: a web address (http/https), at most
+// PHOTO_LINK_MAX characters; else null. A dog's is its `url`, and only when she
+// ticked Dog.photos_online for it; a litter's is Litter.photos_url (setting it is
+// her choice to show it).
+export const PHOTO_LINK_MAX = 500;
+export function photoLink(v) {
+  const s = String(v ?? '').trim();
+  return s.length <= PHOTO_LINK_MAX && /^https?:\/\/[^\s"'<>]+$/i.test(s) ? s : null;
+}
+export const dogPhotosLink = (dog) => (dog && dog.photos_online ? photoLink(dog.url) : null);
+const withPhotos = (url) => (url ? { photos_url: url } : {});
+
+// A pup as a family may see it: call name, sex, color, and its photos link where
+// she shows it. Nothing else.
+const publicPup = (d) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings), registration: orNull(d.intended_registration), ...withPhotos(dogPhotosLink(d)) });
 
 // A litter's expected prices as a family on their turn may see them (her setting
 // turn_prices): per registration the pups of it are planned for, the male and
@@ -312,10 +325,28 @@ export function titlesByDog(events = []) {
 // A parent as family pages show one (Coming up, Available Puppies, Review Your
 // Preferences, a turn): call name and earned titles, and, where she shows them,
 // its completed health tests (`tests`: [{ name, result }], absent when none or
-// hidden). And a litter's breed: the dam's, else the sire's.
-const parentView = (dogsById, titles, id, testsOf = () => []) => {
+// hidden), and its photos link where she shows it (`photos_url`, dogPhotosLink).
+// Its registered name whenever it has one (`registered_name`), and with her
+// setting `parent_pedigree` its own sire's and dam's registered names where known
+// (`pedigree`: { sire, dam }, either null; absent when neither is known). The
+// family pages put those three behind an info bubble by the call name.
+// And a litter's breed: the dam's, else the sire's.
+const regName = (dog) => String(dog?.registered_name ?? '').trim() || null;
+export function parentPedigree(dog, dogsById) {
+  if (!dog) return null;
+  const sire = regName(dogsById.get(dog.sire_id));
+  const dam = regName(dogsById.get(dog.dam_id));
+  return sire || dam ? { sire, dam } : null;
+}
+const parentView = (dogsById, titles, id, testsOf = () => [], { pedigree = false } = {}) => {
+  const dog = dogsById.get(id);
   const tests = testsOf(id);
-  return { name: dogsById.get(id)?.call_name || 'Unknown', titles: [...(titles.get(id) || [])], ...(tests.length ? { tests } : {}) };
+  const reg = regName(dog);
+  const ped = pedigree ? parentPedigree(dog, dogsById) : null;
+  return {
+    name: dog?.call_name || 'Unknown', titles: [...(titles.get(id) || [])], ...(tests.length ? { tests } : {}), ...withPhotos(dogPhotosLink(dog)),
+    ...(reg ? { registered_name: reg } : {}), ...(ped ? { pedigree: ped } : {})
+  };
 };
 
 // Which of a dog's tests family pages show (PARENT_TESTS_SHOWN): its own say
@@ -342,7 +373,7 @@ const breedOf = (dogsById, damId, sireId) => orNull(dogsById.get(damId)?.breed |
 
 function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today }) {
   const show = showUpcoming(config);
-  const parent = (id) => parentView(dogsById, titles, id, testsOf);
+  const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true });
   const where = (u) => ({ public: show[u.stage].public, family: show[u.stage].family });
   const shown = (u) => show[u.stage].public || show[u.stage].family;
   const litterItems = upcomingItems(kennel, { litters, pairings })
@@ -356,6 +387,7 @@ function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogs
       expected_whelp_date: u.kind === 'early_litter' ? null : orNull(u.pairing?.expected_due_date),
       whelp_date: u.kind === 'early_litter' ? orNull(u.litter.whelp_date) : null,
       picks_expected_date: u.kind === 'early_litter' ? orNull(u.litter.accept_deposits_date) : null,
+      ...withPhotos(u.kind === 'early_litter' ? photoLink(u.litter.photos_url) : null),
       expected_month: null,
       ...where(u)
     }));
@@ -378,7 +410,7 @@ function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogs
 const toUpcomingView = (u) => ({
   id: u.id, kind: u.kind, label: u.label, pairing_id: u.pairing_id, litter_id: u.litter_id,
   sire: u.sire, dam: u.dam, breed: u.breed, expected_whelp_date: u.expected_whelp_date, whelp_date: u.whelp_date,
-  picks_expected_date: u.picks_expected_date, expected_month: u.expected_month, public: u.public, family: u.family
+  picks_expected_date: u.picks_expected_date, expected_month: u.expected_month, ...withPhotos(u.photos_url), public: u.public, family: u.family
 });
 
 const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by, answer: rc.answer } : null);
@@ -400,7 +432,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const opts = { today, config, programsById };
   const titles = titlesByDog(events);
   const testsOf = parentTestsOf(dogsById, config, events);
-  const parent = (id) => parentView(dogsById, titles, id, testsOf);
+  const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true });
 
   // Each live litter's queue tells which families match it now (Q13); a family
   // sees only that they match, never their place in it (decided 2026-10-08).
@@ -438,6 +470,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       whelp_date: orNull(litter.whelp_date),
       ready_date: orNull(litter.estimated_ready_date),
       picks_open: Boolean(litter.picks_opened_date),
+      ...withPhotos(photoLink(litter.photos_url)),
       ...(config.turn_prices !== false ? { prices: litterPrices(litter, pups.filter((d) => isPupAvailable(d, sales))) } : {}),
       pairing_id: orNull(litter.pairing_id),
       pups: pups.filter((d) => isPupAvailable(d, sales)).sort(byId).map(publicPup),

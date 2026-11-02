@@ -207,11 +207,14 @@ export async function openInvoiceGenerator({ preselect = null, onClose = null } 
     st.record = record;
     st.order = items.map((it) => it.key);
     st.lines = {};
-    // What the family's credit for funds already received paid starts as collected.
+    // A sale's line already paid (a deposit received, carried-over ones too)
+    // starts as collected in full; otherwise what the family's credit for funds
+    // already received paid does.
     const credited = await getCreditedByLine(row.source_type, row.source_id);
     for (const it of items) {
       const c = Math.min(credited[it.key] || 0, it.amount);
-      st.lines[it.key] = { base: it.amount, label: it.invoiceLabel, include: true, mode: 'full', collected: c > 0 ? String(c) : '', dueDate: it.due_date || soonest, credited: c };
+      const got = row.source_type === 'sale' && it.state === 'earned' ? it.amount : c;
+      st.lines[it.key] = { base: it.amount, label: it.invoiceLabel, include: true, mode: 'full', collected: got > 0 ? String(got) : '', dueDate: it.due_date || soonest, credited: c };
     }
     st.number = record.invoice_number || '';
     st.notes = record.invoice_notes || '';

@@ -65,7 +65,7 @@ const els = {
 const blankDog = () => ({
   call_name: '', registered_name: '', sex: '', date_of_birth: '', dob_is_estimated: false,
   date_of_death: '', breed: '', color_markings: '', registry: '', registration_number: '',
-  microchip_id: '', url: '', sire_id: '', dam_id: '', ownership_type: '', owner_contact_id: '',
+  microchip_id: '', url: '', photos_online: false, sire_id: '', dam_id: '', ownership_type: '', owner_contact_id: '',
   co_owner_contact_ids: [], litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_registration: '', notes: '',
   planned_tests: []
 });
@@ -291,7 +291,7 @@ function renderView() {
       ${row('Registry', esc(d.registry))}
       ${row('Registration #', esc(d.registration_number))}
       ${row('Microchip', esc(d.microchip_id))}
-      ${row('URL', d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a>` : '')}
+      ${row('URL', d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a>${editionFlags.waitlist && d.photos_online ? ' <span class="badge badge-blue">Shown on waitlist pages</span>' : ''}` : '')}
       ${row('Sire', dogLink(d.sire_id))}
       ${row('Dam', dogLink(d.dam_id))}
       ${row('Litter', d.litter_id ? `<a href="litter.html?id=${encodeURIComponent(d.litter_id)}">${esc(litterLabel(d.litter_id) || 'View litter')}</a>` : '')}
@@ -338,7 +338,8 @@ function renderEdit() {
       ${field('Registry', `<input id="f-registry" type="text" value="${esc(d.registry)}">`)}
       ${field('Registration #', `<input id="f-registration_number" type="text" value="${esc(d.registration_number)}">`)}
       ${field('Microchip', `<input id="f-microchip_id" type="text" value="${esc(d.microchip_id)}">`)}
-      ${field('URL', `<input id="f-url" type="url" value="${esc(d.url || '')}" placeholder="https://…">`)}
+      ${field('URL', `<input id="f-url" type="url" value="${esc(d.url || '')}" placeholder="https://…">`, { hint: 'A link to this dog\'s photos (an album, a gallery page).' })}
+      ${editionFlags.waitlist ? field('Photos online', `<label class="check-inline"><input id="f-photos_online" type="checkbox"${d.photos_online ? ' checked' : ''}> Show the URL as a photos link on waitlist pages</label>`, { hint: 'Families see it as a parent of a litter (public list and family pages) and as a pup on their turn or their pick. Off until you tick it.' }) : ''}
       ${field('Ownership', `<select id="f-ownership_type">${vocabOptions(editionFlags.externalOwnership ? OWNERSHIP_TYPE : OWNERSHIP_TYPE.filter((o) => ['owned', 'co_owned'].includes(o.value)), d.ownership_type, 'Select…')}</select>`, { required: true })}
       ${field('Status', `<select id="f-status">${vocabOptions(editionFlags.fullDogStatuses ? DOG_STATUS : DOG_STATUS.filter((o) => ['puppy', 'active_breeding', 'retired_breeding', 'deceased'].includes(o.value)), d.status, 'Select…')}</select>`, { required: true })}
       ${d.status === 'puppy' ? field('Disposition', `<select id="f-disposition">${vocabOptions(DISPOSITION, d.disposition || 'undecided')}</select>`, { hint: 'Keeping this puppy or offering it? Drives the prospective-families view. Puppy-only — clears when Status moves past Puppy.' }) : ''}
@@ -450,6 +451,8 @@ function readForm() {
     registration_number: val('f-registration_number').trim(),
     microchip_id: val('f-microchip_id').trim(),
     url: val('f-url').trim(),
+    // Only read when its field rendered (Pro with the waitlist), else kept.
+    photos_online: document.getElementById('f-photos_online') ? document.getElementById('f-photos_online').checked : Boolean(ctx.draft?.photos_online),
     ownership_type: val('f-ownership_type'),
     status: val('f-status'),
     // Disposition is a puppy-only field (vocab.js): only a `puppy`-status dog

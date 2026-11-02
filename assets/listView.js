@@ -206,7 +206,8 @@ export function createListView(opts) {
   function wireTable(root, rows) {
     if (onRowClick) {
       root.querySelectorAll('tbody tr.list-row').forEach((tr) => {
-        tr.addEventListener('click', () => onRowClick(rows[Number(tr.dataset.idx)]));
+        // A link inside a cell (a photos link) opens itself, not the row.
+        tr.addEventListener('click', (e) => { if (e.target.closest('a')) return; onRowClick(rows[Number(tr.dataset.idx)]); });
       });
     }
     if (hasCollapse) {

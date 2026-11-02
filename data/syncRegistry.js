@@ -54,6 +54,7 @@ export const SYNC_REGISTRY = Object.freeze({
       'planned_tests', 'disposition', 'dob_is_estimated', 'recorded_coi',
       'intended_registration', // Waitlist Spec §9
       'waitlist_tests', // its say over its health tests on waitlist family pages; a display choice, read by whichever device publishes
+      'photos_online', // its say over showing its url as a photos link on waitlist pages; a display choice like waitlist_tests
       'pedigree_only' // without it a cloud restore would turn every ancestor into a kennel dog
     ],
     private: ['notes'],
@@ -129,7 +130,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'litter_registration_number', 'puppies_born_total', 'puppies_born_alive',
       'puppies_born_deceased', 'puppies_born_abnormalities', 'delivery_type', 'foster_direction',
       'foster_partner_contact_id',
-      'picks_opened_date' // a waitlist date: the auto-offer flow needs it after a restore
+      'picks_opened_date', // a waitlist date: the auto-offer flow needs it after a restore
+      'photos_url' // the litter's photos link: like a dog's url, and the publishing device shows it on waitlist pages
     ],
     // Plan §5: "every price/deposit/foster-money field" — the foster comp model
     // and split basis are the terms of that money, so they stay with it.

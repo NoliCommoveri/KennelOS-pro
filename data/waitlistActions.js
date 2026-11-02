@@ -660,7 +660,12 @@ async function openTurnRows(offer) {
 // turn stays OPEN — nothing moves on, the family stays on the list — and the
 // respond-by date is still their deadline, now for the deposit. One pick per turn:
 // a pick from another litter of the same turn is let go first (they switched
-// litters). Returns { offer, sale }.
+// litters). Returns { offer, sale, depositDone: false }.
+// A family carrying money from a pup they lost (entry.carried_payment, §16.11)
+// has their deposit in already: the Sale takes it as its deposit and the pick goes
+// straight on to confirmDeposit (deposit paid on the date they paid it, the pup
+// placed, the family placed, the turn moves on). Returns confirmDeposit's result
+// plus depositDone: true.
 export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {}) {
   const offer = await loadOpenOffer(offerId);
   if (offer.chosen_dog_id) throw new Error('They\'ve already picked a pup. Use "Change pup" to switch.');
@@ -689,15 +694,20 @@ export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {
     sale_date: date,
     lead_source: 'Waitlist',
     ...expectedPricing(dog, c.litter, registration),
-    // What they'd paid on a pup they lost (§16.11) is their deposit on this one;
-    // it's recorded as received with "Deposit received", as any deposit is.
+    // What they'd paid on a pup they lost (§16.11) is their deposit on this one,
+    // received (confirmDeposit below).
     ...(entry.carried_payment ? {
       deposit_amount: Number(entry.carried_payment.amount),
       notes: `Deposit: ${money(entry.carried_payment.amount)} carried over from a pup they lost (paid ${entry.carried_payment.date}).`
     } : {})
   });
   const saved = await waitlistOfferRepo.update(offerId, { chosen_dog_id: dog.id, picked_date: date, sale_id: sale.id });
-  return { offer: saved, sale };
+  if (entry.carried_payment) {
+    const carried = entry.carried_payment;
+    const placed = await confirmDeposit(offerId, { date, amount: carried.amount, paidDate: carried.date || date });
+    return { ...placed, depositDone: true };
+  }
+  return { offer: saved, sale, depositDone: false };
 }
 
 // Switch the pup a family picked (Spec §6.5 — they clicked the wrong one), within
@@ -744,7 +754,9 @@ export async function changePick(offerId, { chosenDogId, date = todayYMD() } = {
 // placed, the offer is accepted, the family is placed and leaves the list (the
 // other litters of their turn, and any other open offer, are voided — never a
 // pass), and the next turn comes up. Returns the same shape as recordOutcome.
-export async function confirmDeposit(offerId, { date = todayYMD(), amount } = {}) {
+// `paidDate` (default `date`): when the money came in, for the sale's
+// deposit_date — earlier than `date` for a deposit carried over from a pup they lost.
+export async function confirmDeposit(offerId, { date = todayYMD(), amount, paidDate = null } = {}) {
   const offer = await loadOpenOffer(offerId);
   if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
   const entry = await load(offer.entry_id);
@@ -752,7 +764,7 @@ export async function confirmDeposit(offerId, { date = todayYMD(), amount } = {}
   if (!sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) {
     throw new Error('The sale holding their pick was cancelled or archived. Void this offer, or open the sale and fix it first.');
   }
-  const saleChanges = { deposit_date: date };
+  const saleChanges = { deposit_date: paidDate || date };
   if (sale.status === 'deposit_pending') saleChanges.status = 'deposit_paid';
   if (amount !== undefined && amount !== null && amount !== '') saleChanges.deposit_amount = Number(amount);
   const result = { offer: null, sale: null, removed: false, passes: null, next: null, voided: [], offered: [], waiting: [] };
@@ -842,8 +854,10 @@ export async function recordOutcome(offerId, outcome, { date = todayYMD(), chose
   const entry = await load(offer.entry_id);
 
   if (outcome === 'accepted') {
-    if (!offer.chosen_dog_id) await recordPick(offerId, { chosenDogId, date });
-    else if (chosenDogId && chosenDogId !== offer.chosen_dog_id) await changePick(offerId, { chosenDogId, date });
+    if (!offer.chosen_dog_id) {
+      const picked = await recordPick(offerId, { chosenDogId, date });
+      if (picked.depositDone) return picked; // a carried-over deposit placed them already
+    } else if (chosenDogId && chosenDogId !== offer.chosen_dog_id) await changePick(offerId, { chosenDogId, date });
     return confirmDeposit(offerId, { date: depositDate || date, amount: depositAmount });
   }
 

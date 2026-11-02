@@ -1327,7 +1327,8 @@ async function onOfferOutcome(offer, outcome) {
   if (outcome === 'pick') {
     const live = litter ? eligiblePupsFor(e, litter, pups, ctx.sales, { today: todayYMD(), config: ctx.config }) : [];
     if (!live.length) { await alertModal({ title: 'No pups available', message: 'None of the pups offered to them is still available.' }); return; }
-    const out = await pickDialog({ offer, name, pups: live, pupLabel, carried: e.carried_payment || null });
+    const carriedAtPick = e.carried_payment || null;
+    const out = await pickDialog({ offer, name, pups: live, pupLabel, carried: carriedAtPick });
     if (!out) return;
     await afterAction();
     if (out.depositDone) await emailFamilies(offerSpecs(out.res));
@@ -1335,6 +1336,14 @@ async function onOfferOutcome(offer, outcome) {
     const message = out.depositDone
       ? [`${name} is placed.`, ...offerChangeLines(out.res)].join('\n\n')
       : `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${fmtDate(offer.respond_by_date)}. Send them the deposit details (the sale's invoice is under Documents on this page). Record "Deposit received" when it arrives.`;
+    // A carried-over deposit placed them at the pick: what's left to send them is
+    // the contract and the invoice (showing the deposit paid).
+    if (out.depositDone && carriedAtPick && canPickToSend()) {
+      if (await confirmModal({ title: `${name} is placed`, message: `${message}\n\nTheir deposit carried over from the pup they lost is recorded as paid. Send them the contract and invoice now?`, confirmLabel: 'Send contract & invoice', cancelLabel: 'Later' })) {
+        await onOfferOutcome(out.res.offer, 'send');
+      }
+      return;
+    }
     if (!out.depositDone && canPickToSend()) {
       if (await confirmModal({ title: 'Pick recorded', message: `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${fmtDate(offer.respond_by_date)}.\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' })) {
         await onOfferOutcome(out.res.offer, 'send');
@@ -1348,10 +1357,24 @@ async function onOfferOutcome(offer, outcome) {
   }
   if (outcome === 'send') {
     const { openPickToSend } = await import('../assets/pickToSend.js');
-    const fresh = (await waitlistOfferRepo.getById(offer.id)) || offer;
+    let fresh = (await waitlistOfferRepo.getById(offer.id)) || offer;
+    // A pick still waiting on a deposit they'd already paid on a pup they lost
+    // (picked before a carried deposit placed them at the pick): record it first,
+    // so the message and invoice don't ask for it again.
+    const carried = e.carried_payment;
+    if (carried && isAwaitingDeposit(fresh) && await confirmModal({
+      title: 'Their deposit is already in',
+      message: `${name} is carrying ${fmtMoney(carried.amount)} they paid on a pup they lost (${fmtDate(carried.date)}). Mark it received as their deposit on ${dogName(fresh.chosen_dog_id)} now?\n\nThat places them and moves the turn on. The message then thanks them for the deposit instead of asking for it.`,
+      confirmLabel: 'Mark deposit received', cancelLabel: 'Not now'
+    })) {
+      const res = await actions.confirmDeposit(fresh.id, { amount: carried.amount, paidDate: carried.date || null });
+      await afterAction();
+      await emailFamilies(offerSpecs(res));
+      fresh = res.offer;
+    }
     const litterFor = ctx.litters.find((l) => l.id === fresh.litter_id);
     if (await openPickToSend({
-      offer: fresh, entry: e, contact: ctx.contact,
+      offer: fresh, entry: ctx.entry, contact: ctx.contact,
       litterLabel: litterFor ? litterLabel(litterFor) : '',
       paymentText: ctx.config.payment_instructions || '',
       kennelName: ctx.kennel?.kennel_name || ''
@@ -1417,6 +1440,15 @@ async function onOfferOutcome(offer, outcome) {
 // "Review sale & send" (Integrations plan §2.6) needs contracts and invoices.
 const canPickToSend = () => editionFlags.contracts && editionFlags.invoicing;
 
+// A placed family's pick whose contract and invoice haven't gone out from here yet
+// (the deposit came in at the pick, as a carried-over one does): she can still
+// send them, while the sale is at deposit paid.
+function canSendPlaced(o) {
+  if (!canPickToSend() || o.outcome !== 'accepted' || !o.sale_id || o.deposit_request_sent_date) return false;
+  if (ctx.entry.placed_sale_id !== o.sale_id) return false;
+  return ctx.sales.find((x) => x.id === o.sale_id)?.status === 'deposit_paid';
+}
+
 // The buttons under one offer: what she can do with it now.
 function offerButtons(o, today) {
   const btn = (oc, label, primary = false, title = '') => `<button class="btn ${primary ? 'btn-primary ' : ''}btn-sm" data-oc="${oc}" data-offer="${esc(o.id)}"${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</button>`;
@@ -1429,8 +1461,11 @@ function offerButtons(o, today) {
     ];
   } else if (o.outcome === 'open') {
     list = [btn('pick', 'Picked a pup…', true), btn('passed', 'Passed'), btn('no_response', 'No response'), btn('voided', 'Void')];
-  } else if (canSwitchAcceptedPick(o, ctx.kennelOffers)) {
-    list = [btn('change', 'Change pup…', false, 'Allowed until the next family is offered a turn')];
+  } else if (o.outcome === 'accepted' && (canSwitchAcceptedPick(o, ctx.kennelOffers) || canSendPlaced(o))) {
+    list = [
+      ...(canSendPlaced(o) ? [btn('send', 'Send contract & invoice…', true, 'Their deposit is in; the message thanks them for it')] : []),
+      ...(canSwitchAcceptedPick(o, ctx.kennelOffers) ? [btn('change', 'Change pup…', false, 'Allowed until the next family is offered a turn')] : [])
+    ];
   } else if (!undoPassBlocker(o, ctx.entry, today)) {
     list = [btn('undo', 'Undo…', false, 'Erase this and give them their turn back')];
   }

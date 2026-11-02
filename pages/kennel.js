@@ -571,8 +571,12 @@ function upcomingSwitches(c) {
 function parentTestsSetting(c) {
   return `<div class="field field-wide"><label for="wl-parent-tests">Parents' health test results</label>
       <select id="wl-parent-tests">${PARENT_TESTS_SHOWN.map((o) => `<option value="${esc(o.value)}"${(c.parent_tests || 'off') === o.value ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>
-      <span class="field-hint">Wherever family pages show a litter's parents (Coming up, Available Puppies, a family's turn), with a "Health testing" line under them: each completed test's name and your result, the latest result when a test was repeated. Never the lab, dates, notes or documents. <strong>Normal results only</strong> shows a test only when its latest result is marked Normal ("Normal or abnormal" on the test's event); a result not marked either way isn't shown. To choose differently for one dog, use "On family pages" on its Health-Test Summary card.</span>
+      <span class="field-hint">Wherever family pages show a litter's parents (Coming up, Available Puppies, a family's turn), in the parent's info bubble (ⓘ by its call name): each completed test's name and your result, the latest result when a test was repeated. Never the lab, dates, notes or documents. <strong>Normal results only</strong> shows a test only when its latest result is marked Normal ("Normal or abnormal" on the test's event); a result not marked either way isn't shown. To choose differently for one dog, use "On family pages" on its Health-Test Summary card.</span>
       <div class="inline-warn"><strong>The public list is open to anyone with its link:</strong> with Coming up or Available Puppies on the public list, these results are public too.</div>
+    </div>
+    <div class="field field-wide">
+      <label class="check-inline"><input id="wl-parent-pedigree" type="checkbox"${c.parent_pedigree ? ' checked' : ''}> Show each parent's pedigree (its own sire and dam)</label>
+      <span class="field-hint">In the parent's info bubble on family pages: its sire's and dam's registered names, where you've recorded them. The parent's own registered name always shows there when it has one.</span>
     </div>`;
 }
 
@@ -674,6 +678,7 @@ async function onSaveWaitlist() {
     waitlist_config.ready_answer_days = num('#wl-ready-days');
   }
   if (q('#wl-parent-tests')) waitlist_config.parent_tests = q('#wl-parent-tests').value;
+  if (q('#wl-parent-pedigree')) waitlist_config.parent_pedigree = q('#wl-parent-pedigree').checked;
   if (els.config.querySelector('[data-wl-show]')) {
     const show = showUpcoming({});
     for (const b of els.config.querySelectorAll('[data-wl-show]')) {

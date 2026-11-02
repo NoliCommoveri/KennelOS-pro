@@ -113,6 +113,10 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
   const labelByKey = new Map(items.map((it) => [it.key || it.component, it.invoiceLabel]));
   // A payment-plan step's own due date (Family Requests plan §3.1), where it has one.
   const dueByKey = new Map(items.filter((it) => it.due_date).map((it) => [it.key, it.due_date]));
+  // A sale's lines already paid (the ledger's earned: a deposit received, which
+  // includes one carried over from a pup they lost, or anything paid with the
+  // balance). They print "Paid" and, by default, count as already collected.
+  const paidKeys = new Set(isSale ? items.filter((it) => it.state === 'earned').map((it) => it.key) : []);
 
   // The record's own due date, read now: a sale's balance due / pickup date, a
   // fee's pay-by date. A line with no dueDate of its own (the default, or a
@@ -121,16 +125,17 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
   const liveDue = isSale ? await saleDueDate(record) : (isFee ? (record.fee_due_date || '') : '');
 
   // Config — from the generator, or a full-line default (every cash line, full,
-  // nothing collected but what the family's credit for funds already received paid,
-  // the record's due date).
+  // collected = what's already paid on it (a sale's paid lines, in full) or else
+  // what the family's credit for funds already received paid, the record's due date).
   if (!cfg) {
     const credited = await getCreditedByLine(source, id);
     cfg = {
       number: isFee ? '' : (record.invoice_number || '').trim(),
       notes: isFee ? '' : (record.invoice_notes || '').trim(),
       lines: [...baseByKey.keys()].map((key) => {
-        const c = Math.min(credited[key] || 0, baseByKey.get(key));
-        return { key, mode: 'full', collected: c, ...(c > 0 ? { credit: c } : {}) };
+        const base = baseByKey.get(key);
+        const c = Math.min(credited[key] || 0, base);
+        return { key, mode: 'full', collected: paidKeys.has(key) ? base : c, ...(c > 0 ? { credit: c } : {}) };
       }),
       methods: getInvoiceDefaults().acceptedMethods,
       payMethod: isFee ? (record.fee_payment_method || '') : (record.payment_method || ''),
@@ -176,10 +181,12 @@ export async function buildInvoiceDoc({ source = 'sale', id, doc = 'invoice', cf
       if (partial) label += ' (partial)';
       if (!partial) collectedFull += before;
       subtotal += amount;
-      // Deposits are always due immediately; the calculated due date (expected
-      // pickup / nine-weeks-of-age, or a fee's pay-by date) applies to the rest.
+      // A line already paid in full says so. Otherwise deposits are always due
+      // immediately; the calculated due date (expected pickup / nine-weeks-of-age,
+      // or a fee's pay-by date) applies to the rest.
       const dueDate = line.dueDate == null ? (dueByKey.get(line.key) || liveDue) : line.dueDate;
-      const due = line.key === 'deposit' ? 'Immediately' : (dueDate ? fmtDateMDY(dueDate) : '');
+      const due = !partial && paidKeys.has(line.key) && collected >= base ? 'Paid'
+        : line.key === 'deposit' ? 'Immediately' : (dueDate ? fmtDateMDY(dueDate) : '');
       rows.push({ label, marker, due, amount });
     }
   }

@@ -20,7 +20,11 @@ import { dogRepo } from './dogRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { sharedTransport } from './referralShare.js';
 import { waitlistConfig, entryName, overallPositions } from './waitlistRules.js';
-import { entryEmail } from './waitlistProjection.js';
+import { entryEmail, photoLink } from './waitlistProjection.js';
+import { saleRepo } from './saleRepo.js';
+import { waitlistOfferRepo } from './waitlistOfferRepo.js';
+import { familySale } from './familyExtras.js';
+import { RELEASED_SALE_STATUSES } from './vocab.js';
 import { draftEmail, requestPhrase, emailProblem, EMAIL_KINDS, EMAIL_SUBJECT_MAX, EMAIL_BODY_MAX } from './waitlistEmails.js';
 import { MESSAGES_KEPT } from './waitlistActions.js';
 import { isWaitlistOnlineOffered } from './cloud/cloudConfig.js';
@@ -37,6 +41,20 @@ export function kennelEmailsOn(kennel) {
 // The family's address (the one their status page is published with), or ''.
 export function familyEmail(entry, contact) {
   return String(entryEmail(entry, contact) || '').trim();
+}
+
+// The pup of the family's sale (any sale not cancelled, voided or returned, so a
+// pup gone home counts) and its photos link (Dog.url), for the line every email
+// to them ends with: { name, url }, or null without a sale or a link.
+export async function salePupPhotos(entry) {
+  if (!entry) return null;
+  const [sales, offers, entries] = await Promise.all([
+    saleRepo.getAll(), waitlistOfferRepo.getByEntry(entry.id), waitlistEntryRepo.getByKennel(entry.kennel_id)
+  ]);
+  const sale = familySale(entry, sales, offers, entries, (s) => !RELEASED_SALE_STATUSES.includes(s.status));
+  const dog = sale?.dog_id ? await dogRepo.getById(sale.dog_id) : null;
+  const url = photoLink(dog?.url);
+  return url ? { name: dog.call_name || '', url } : null;
 }
 
 const litterLabel = (l, dogsById) => l.nickname || `${dogsById.get(l.dam_id)?.call_name || 'Dam'} × ${dogsById.get(l.sire_id)?.call_name || 'Sire'}`;
@@ -57,6 +75,9 @@ export async function draftFor(entryId, kind, extra = {}) {
   if (!email) return null;
   const config = waitlistConfig(kennel);
   const facts = { kennelName: kennel.kennel_name || '', family: entryName(entry, contact), payBy: entry.fee_due_date || null };
+  // Their pup's photos link, when they have a sale and the pup has one.
+  const pupPhotos = await salePupPhotos(entry);
+  if (pupPhotos) facts.pupPhotos = pupPhotos;
   if (extra.litterIds?.length) {
     const dogsById = new Map((await dogRepo.getAll({ includeArchived: true })).map((d) => [d.id, d]));
     const litters = await Promise.all(extra.litterIds.map((id) => litterRepo.getById(id)));

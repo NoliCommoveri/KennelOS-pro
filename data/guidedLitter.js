@@ -120,6 +120,7 @@ export function emptyDraft({ litterId = null } = {}) {
     acceptDepositsDate: '',
     readyDate: '',
     nickname: '',
+    photosUrl: '', // the litter's photos link (Litter.photos_url)
     // Ids of what the save has made so far (see saveGuidedLitter).
     saved: {},
     done: false
@@ -389,6 +390,7 @@ export function applyLitterChoice(draft, litter, dogs = []) {
   draft.acceptDepositsDate = litter.accept_deposits_date || draft.acceptDepositsDate;
   draft.readyDate = litter.estimated_ready_date || draft.readyDate;
   draft.nickname = litter.nickname || draft.nickname;
+  draft.photosUrl = litter.photos_url || draft.photosUrl;
   const pups = dogs.filter((d) => d.litter_id === litter.id && d.status === 'puppy' && !d.is_archived);
   if (pups.length) { draft.pups = pups.map(pupFromDog); draft.alive = String(pups.length); }
   return draft;
@@ -466,6 +468,7 @@ export function reviewSections(draft, ctx = {}) {
   if (!blank(draft.delivery) && draft.delivery !== 'later') birth.push(`Delivery: ${label(LITTER_DELIVERY_TYPE, draft.delivery)}.`);
   if (ctx.kennelName) birth.push(`Kennel: ${ctx.kennelName}.`);
   if (!blank(draft.nickname)) birth.push(`Nickname: ${trimmed(draft.nickname)}.`);
+  if (!blank(draft.photosUrl)) birth.push('A photos link for the litter.');
   sections.push({ title: 'The birth', step: 'born', lines: birth });
 
   if (draft.pups.length) {
@@ -525,6 +528,7 @@ function litterFieldsFromDraft(draft) {
   if (!blank(draft.acceptDepositsDate)) fields.accept_deposits_date = draft.acceptDepositsDate;
   if (!blank(draft.readyDate)) fields.estimated_ready_date = draft.readyDate;
   if (!blank(draft.nickname)) fields.nickname = trimmed(draft.nickname);
+  if (!blank(draft.photosUrl)) fields.photos_url = trimmed(draft.photosUrl);
   return fields;
 }
 

@@ -440,11 +440,13 @@ function screens(draft, data, ctx) {
       title: 'A few extras (optional)',
       html: `<p class="gl-lead">Fill in anything you have now, or tap Next to skip. You can add these later on each puppy's page.</p>
         ${field('Litter nickname', input('gl-nick', draft.nickname, { placeholder: 'e.g. The Flower litter' }))}
+        ${field('Link to photos of the whole litter', input('gl-litter-url', draft.photosUrl, { type: 'url', placeholder: 'https://' }))}
         ${draft.pups.map((p, i) => `<div class="gl-extra-row"><strong>${esc(p.call_name)}</strong>
           ${field('Microchip number', input(`gl-chip-${i}`, p.microchip_id, { inputmode: 'numeric' }))}
           ${field('Link to photos', input(`gl-url-${i}`, p.url, { type: 'url', placeholder: 'https://' }))}</div>`).join('')}`,
       read: (root) => {
         draft.nickname = val(root, 'gl-nick');
+        draft.photosUrl = val(root, 'gl-litter-url');
         draft.pups.forEach((p, i) => { p.microchip_id = val(root, `gl-chip-${i}`); p.url = val(root, `gl-url-${i}`); });
       }
     }),
@@ -548,7 +550,7 @@ function answerFor(stepId, draft, data) {
     case 'dates': return [draft.acceptDepositsDate ? `Deposits from ${G.fmt(draft.acceptDepositsDate)}` : '', draft.readyDate ? `Home ${G.fmt(draft.readyDate)}` : ''].filter(Boolean).join(' · ') || 'Skip';
     case 'extras': {
       const chips = draft.pups.filter((p) => p.microchip_id).length;
-      return [draft.nickname ? `Nickname: ${draft.nickname}` : '', chips ? plural(chips, 'microchip', 'microchips') : ''].filter(Boolean).join(' · ') || 'Skip for now';
+      return [draft.nickname ? `Nickname: ${draft.nickname}` : '', draft.photosUrl ? 'Litter photos link' : '', chips ? plural(chips, 'microchip', 'microchips') : ''].filter(Boolean).join(' · ') || 'Skip for now';
     }
     default: return '';
   }
