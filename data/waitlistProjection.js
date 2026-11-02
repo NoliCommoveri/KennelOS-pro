@@ -611,6 +611,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       // Her own website may show the form and list in a frame (Integrations plan
       // §1): only while she has it on; no sites listed = any site.
       ...(config.embed ? { embed: { origins: embedOrigins(config) } } : {}),
+      // Her KennelPort website may read the public list (/f/site) and draw it in
+      // its own style: only while she has it on. Nothing new is published.
+      ...(config.website_feed ? { website_feed: true } : {}),
       // Her referral links marked "Share with families" (Integrations plan §3), for
       // every family's status page: name, link, code, instructions; none = absent.
       ...(sharedReferrals(accounts).length ? { recommended: sharedReferrals(accounts) } : {}),

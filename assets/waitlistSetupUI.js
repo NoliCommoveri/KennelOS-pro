@@ -268,6 +268,7 @@ class Setup {
         ${group('Facebook', check('ws-fb', 'Show "Message us on Facebook" on status pages', c.facebook_button)
           + field('Your Facebook Page link', `<input id="ws-fb-page" type="url" inputmode="url" value="${esc(c.facebook_page || '')}" placeholder="facebook.com/yourkennel">`))}
         ${group('Your website', check('ws-embed', 'Let my own website show my application form and list', c.embed)
+          + check('ws-feed', 'Let my KennelPort website show my list in its own style', c.website_feed)
           + field(`Its address (optional, up to ${EMBED_ORIGINS_MAX}, one per line)`, `<textarea id="ws-sites" rows="2" placeholder="e.g. thornfieldkennels.com">${esc(embedOrigins(c).join('\n'))}</textarea>`, 'Blank allows any site. On Wix, leave it blank.'))}
         ${field('Message above your public list (optional)', `<textarea id="ws-intro" rows="3" placeholder="${esc(PUBLIC_INTRO_DEFAULT.slice(0, 90))}…">${esc(c.public_intro_text || '')}</textarea>`, 'Blank uses our standard wording.')}
         ${field('Time zone', `<select id="ws-tz">${timeZoneOptions(this.kennel.time_zone).map((z) => opt(z, z.replace(/_/g, ' '), z === zone)).join('')}</select>`, 'Offer deadlines end at 11:59 pm here.')}`,
@@ -293,6 +294,7 @@ class Setup {
           facebook_page: q('#ws-fb-page').value.trim(),
           embed: q('#ws-embed').checked,
           embed_origins: sites,
+          website_feed: q('#ws-feed').checked,
           public_intro_text: q('#ws-intro').value.trim()
         };
         const problem = waitlistConfigProblem(waitlistConfig({ waitlist_config: { ...(this.kennel.waitlist_config || {}), ...changes } }));

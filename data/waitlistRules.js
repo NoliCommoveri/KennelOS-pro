@@ -59,6 +59,7 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   facebook_page: '', // her Facebook Page link, as she typed it (facebook.com/… or m.me/…)
   embed: false, // her own website may show the form and list in a frame (Integrations plan §1)
   embed_origins: [], // …only these sites (embedOrigin form, at most EMBED_ORIGINS_MAX); none = any site
+  website_feed: false, // her KennelPort website may read the public list and draw it in its own style (End-State guide §29)
   extras_info_url: '', // her own page with the extras' details and prices (Family Requests plan §3); https only
   extras_intro_text: '', // her message above the extras on a family's status page; blank = EXTRAS_INTRO_DEFAULT
   // Pickup and transport (Family Requests plan §4–§5; transportFee.js):

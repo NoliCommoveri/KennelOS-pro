@@ -105,6 +105,13 @@ export function publicListLink(publicId) {
   return base && publicId ? `${base}/list/${publicId}` : null;
 }
 
+// Her website feed: the public list as data, for her KennelPort website to draw in its
+// own style (served only while waitlist_config.website_feed is on).
+export function websiteFeedLink(publicId) {
+  const base = familyPagesUrl();
+  return base && publicId ? `${base}/f/site/${publicId}` : null;
+}
+
 // --- On her own website (Integrations plan §1) -------------------------------------
 // What she pastes into her site. The script (cloud/public/family/embed.js) shows the
 // form or list in a frame, which the server allows only while she has embedding on.

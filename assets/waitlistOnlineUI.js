@@ -6,7 +6,7 @@
 import { esc, confirmModal, alertModal } from './ui.js';
 import { waitlistConfig, embedOrigin, embedOrigins, EMBED_ORIGINS_MAX } from '../data/waitlistRules.js';
 import { syncWaitlistOnline, waitlistOnlineStatus, rotateFormKey, saveWaitlistOnline, WAITLIST_ONLINE_EVENT } from '../data/cloud/cloudWaitlist.js';
-import { publicListLink, applyFormLink, embedSnippet, applyButtonSnippet } from '../data/cloud/cloudConfig.js';
+import { publicListLink, applyFormLink, embedSnippet, applyButtonSnippet, websiteFeedLink } from '../data/cloud/cloudConfig.js';
 import { copyLink } from './waitlistUI.js';
 
 // Every IANA zone the browser knows, with the device's own and any saved one.
@@ -94,6 +94,7 @@ function websiteHtml(kennel, st) {
   const snippets = [];
   if (ready && config.embed && st.formOpen) snippets.push(snippet('form', 'Your application form', embedSnippet(kennel.public_id, 'apply'), 'Paste where the form should appear.'));
   if (ready && config.embed) snippets.push(snippet('list', 'Your public list', embedSnippet(kennel.public_id, 'list'), 'Paste where the list should appear.'));
+  if (ready && config.website_feed && websiteFeedLink(kennel.public_id)) snippets.push(snippet('feed', 'Your website feed', websiteFeedLink(kennel.public_id), 'Give this to your KennelPort website (Connect KennelOS waitlist).'));
   if (ready && st.formOpen) snippets.push(snippet('button', 'Or just a button', applyButtonSnippet(kennel.public_id), 'Opens your form in a new tab. Works anywhere you can paste HTML, with or without the switch above.'));
   return `
       <h3 style="font-size:15px; margin:18px 0 4px;">On your website</h3>
@@ -101,6 +102,10 @@ function websiteHtml(kennel, st) {
         <div class="field field-wide">
           <label class="check-inline"><input id="wlo-embed" type="checkbox"${config.embed ? ' checked' : ''}> Let my own website show my application form and list</label>
           <span class="field-hint">They appear on your page in a frame. Everything families type stays on our page, locked to your key, never seen by your website.</span>
+        </div>
+        <div class="field field-wide">
+          <label class="check-inline"><input id="wlo-feed" type="checkbox"${config.website_feed ? ' checked' : ''}> Let my KennelPort website show my list in its own style</label>
+          <span class="field-hint">Your KennelPort site reads the same public list anyone can see and draws it in your site's colours. Signing in and applying still open on our pages.</span>
         </div>
         <div class="field field-wide">
           <label for="wlo-embed-origins">Your website's address <span class="field-hint">(optional, one per line)</span></label>
@@ -113,7 +118,7 @@ function websiteHtml(kennel, st) {
       ${snippets.length ? `<details class="field-hint" style="margin-top:4px;"><summary>Where to paste it</summary>
         <p><strong>WordPress:</strong> add a <em>Custom HTML</em> block. <strong>Wix:</strong> Add → Embed code → Embed HTML, then paste and stretch the box to the page width. <strong>Squarespace:</strong> add a <em>Code</em> block (some plans don't allow scripts; if the form doesn't appear, use the button). <strong>GoDaddy / Weebly:</strong> an HTML or Embed section. <strong>Facebook, Linktree, email:</strong> scripts aren't allowed, so use the button or the plain link.</p>
         <p>After you change the switch or the addresses here, allow about five minutes for your website to show the change.</p>
-      </details>` : (config.embed && !ready ? '<p class="field-hint">The code to paste appears here once the list is published.</p>' : '')}`;
+      </details>` : ((config.embed || config.website_feed) && !ready ? '<p class="field-hint">The code to paste appears here once the list is published.</p>' : '')}`;
 }
 
 export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
@@ -189,7 +194,7 @@ export function mountWaitlistOnline(root, kennel, { onSaved } = {}) {
       await alertModal({ title: 'Too many addresses', message: `List up to ${EMBED_ORIGINS_MAX} website addresses, or leave the box blank to allow any site.` });
       return;
     }
-    const embedSettings = { embed: root.querySelector('#wlo-embed').checked, embed_origins: [...new Set(embedOriginsList)] };
+    const embedSettings = { embed: root.querySelector('#wlo-embed').checked, embed_origins: [...new Set(embedOriginsList)], website_feed: root.querySelector('#wlo-feed').checked };
     kennel = await saveWaitlistOnline(kennel.id, { online, online_form: onlineForm, ...embedSettings }, { timeZone });
     if (onSaved) await onSaved(); else render();
   };
