@@ -435,13 +435,15 @@ export async function drivingMiles(from, to) {
 
 // The projection for one kennel, from the database.
 export async function projectionFor(kennel, { today = todayYMD() } = {}) {
-  const [entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, accounts] = await Promise.all([
+  const [entries, offers, programsById, litters, pairings, dogs, ancestors, sales, contacts, events, accounts] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
     waitlistOfferRepo.getByKennel(kennel.id),
     waitlistProgramRepo.getMapForKennel(kennel.id),
     litterRepo.getAll(),
     pairingRepo.getAll(),
     dogRepo.getAll({ includeArchived: true }),
+    // Pedigree-only dogs: a parent's own sire and dam for its pedigree (her setting).
+    dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }).then((all) => all.filter((d) => d.pedigree_only)),
     saleRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
     // Parents' earned titles, for the pairings and early litters she shows, her
@@ -455,7 +457,7 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
   // stay their times start after.
   const pickupEvents = [...(await eventRepo.getByType('placement')), ...(await eventRepo.getByType('boarding'))];
   return buildProjection({
-    kennel, entries, offers, programsById, litters, pairings, dogs, sales, contacts, events, accounts, today, pickupEvents,
+    kennel, entries, offers, programsById, litters, pairings, dogs, ancestors, sales, contacts, events, accounts, today, pickupEvents,
     formKey: currentFormKey(kennel.waitlist_form_keys), eventsThrough: getWaitlistOnlineState().eventsCursor || 0
   });
 }

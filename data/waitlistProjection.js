@@ -56,7 +56,7 @@ export function entryEmail(entry, contact) {
 
 function litterLabel(litter, dogsById) {
   if (litter.nickname) return litter.nickname;
-  const name = (id) => dogsById.get(id)?.call_name || 'Unknown';
+  const name = (id) => dogsById.get(id)?.call_name || String(dogsById.get(id)?.registered_name ?? '').trim() || 'Unknown';
   return `${name(litter.dam_id)} × ${name(litter.sire_id)}`;
 }
 
@@ -344,7 +344,7 @@ const parentView = (dogsById, titles, id, testsOf = () => [], { pedigree = false
   const reg = regName(dog);
   const ped = pedigree ? parentPedigree(dog, dogsById) : null;
   return {
-    name: dog?.call_name || 'Unknown', titles: [...(titles.get(id) || [])], ...(tests.length ? { tests } : {}), ...withPhotos(dogPhotosLink(dog)),
+    name: dog?.call_name || regName(dog) || 'Unknown', titles: [...(titles.get(id) || [])], ...(tests.length ? { tests } : {}), ...withPhotos(dogPhotosLink(dog)),
     ...(reg ? { registered_name: reg } : {}), ...(ped ? { pedigree: ped } : {})
   };
 };
@@ -421,12 +421,15 @@ const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by,
 // PUBLIC half seals applications and family messages); `eventsThrough` the last
 // family event her device has applied (the server lets go of picked pups' holds
 // up to there, W2 step 5).
-export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0, pickupEvents = [] }) {
+// `ancestors`: her pedigree-only dogs (dogRepo leaves them out of `dogs`). They're
+// only looked up by id: a parent's own sire and dam, or a parent that is itself
+// pedigree-only; never pups, parent choices or breeds.
+export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], ancestors = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0, pickupEvents = [] }) {
   if (!kennel || !kennel.public_id) throw new Error('This kennel has no public identity yet.');
   if (!today) throw new Error('buildProjection needs today.');
   const config = waitlistConfig(kennel);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
-  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  const dogsById = new Map([...ancestors, ...dogs].map((d) => [d.id, d]));
   const live = entries.filter((e) => !e.is_archived && e.kennel_id === kennel.id);
   const kennelOffers = offers.filter((o) => !o.is_archived && o.kennel_id === kennel.id);
   const opts = { today, config, programsById };
