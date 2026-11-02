@@ -31,6 +31,27 @@ export async function resolveMyKennelId() {
   return own[0].id;
 }
 
+// The owner contact ("my contact") id, repaired the same way. Invoices and
+// receipts, owner prefill and Furever read it, but only the setup wizard writes
+// it — so a breeder whose owner contact was deleted or archived, who then made a
+// new contact and linked it to her kennel, was left with none. When the setting
+// doesn't resolve to a live contact and exactly one non-archived contact is
+// linked to her kennel, adopt it. Two or more (a co-owner, staff) is ambiguous:
+// nothing is guessed. Never while sample data is loaded, as above.
+export async function resolveMyContactId() {
+  const current = getMyContactId();
+  const contact = current ? await contactRepo.getById(current) : null;
+  if (contact && !contact.is_archived) return contact.id;
+  const fallback = contact ? contact.id : null;
+  if (hasSampleData()) return fallback;
+  const kennelId = await resolveMyKennelId();
+  if (!kennelId) return fallback;
+  const linked = (await contactRepo.getAll()).filter((c) => c.kennel_id === kennelId);
+  if (linked.length !== 1) return fallback;
+  setMyContactId(linked[0].id);
+  return linked[0].id;
+}
+
 // The MANDATORY first-run gate (Multi-Kennel Scope Spec §3.2). Required, not
 // offered: from the multi-kennel work on, every owned dog carries a required
 // kennel_id, so the app isn't usable until one own kennel exists.
@@ -53,7 +74,7 @@ export async function shouldRequireKennelSetup() {
 // change rather than run for the first time.
 export async function getKennelSetupState() {
   const kennelId = await resolveMyKennelId();
-  const contactId = getMyContactId();
+  const contactId = await resolveMyContactId();
   const [kennel, contact] = await Promise.all([
     kennelId ? kennelRepo.getById(kennelId) : null,
     contactId ? contactRepo.getById(contactId) : null
@@ -81,10 +102,12 @@ export async function completeKennelSetup({ kennelName, ownerName }) {
   let contact = null;
   if (ownerName) {
     const existingContactId = getMyContactId();
-    // No owner setting (a restored backup carries none): reuse the contact of that
+    const stored = existingContactId ? await contactRepo.getById(existingContactId) : null;
+    // No live owner contact — no setting (a restored backup carries none), or one
+    // pointing at a contact since deleted or archived: reuse the contact of that
     // name already linked to this kennel rather than making a duplicate of her.
-    const existingContact = existingContactId
-      ? await contactRepo.getById(existingContactId)
+    const existingContact = stored && !stored.is_archived
+      ? stored
       : await findOwnerContact(kennel.id, ownerName);
     // Link the owner Contact to the kennel just created/updated above — this is
     // definitionally the breeder's own contact at their own kennel, so it should

@@ -19,7 +19,8 @@ import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { getActiveKennel } from '../data/kennelScope.js';
 import { incomeLineItems, getSaleFeeCredit, getCreditedByLine, feeCreditSplit } from '../data/incomeView.js';
-import { getMyContactId, getInvoiceDefaults } from '../data/settings.js';
+import { getInvoiceDefaults } from '../data/settings.js';
+import { resolveMyContactId } from '../data/kennelSetup.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { waitlistConfig, entryName } from '../data/waitlistRules.js';
 import { REGISTRATION_TYPE, FEE_STRUCTURE, INVOICE_LINE_LABELS, FEE_CREDIT_POLICY, descriptor } from '../data/vocab.js';
@@ -53,7 +54,7 @@ async function loadSource(source, id) {
     dogId ? dogRepo.getById(dogId) : null,
     recipientId ? contactRepo.getById(recipientId) : null,
     kennelRepo.getAll({ includeArchived: true }),
-    (() => { const cid = getMyContactId(); return cid ? contactRepo.getById(cid) : null; })(),
+    resolveMyContactId().then((cid) => (cid ? contactRepo.getById(cid) : null)),
     getActiveKennel()
   ]);
   // The record's own kennel wins — a sale/stud service carries a real kennel_id

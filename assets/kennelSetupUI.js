@@ -4,7 +4,7 @@
 // Data, since there's still no dedicated Settings page).
 import {
   shouldRequireKennelSetup, completeKennelSetup, getMyKennelName,
-  getKennelSetupState
+  getKennelSetupState, resolveMyContactId
 } from '../data/kennelSetup.js';
 import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js';
 import { esc } from './ui.js';
@@ -173,6 +173,10 @@ async function signedInToCloud() {
 // looked up — stacked rather than beside it, so a long name never crowds the
 // phone menu button. No-op if no kennel has been set up yet.
 export async function renderKennelBanner() {
+  // Every page runs this, so it's also where a broken owner-contact setting gets
+  // repaired before the sync readers (dog form owner prefill, stud partner list)
+  // need it. A failure here must never cost the banner.
+  resolveMyContactId().catch(() => {});
   const name = await getMyKennelName();
   if (!name) return;
   const text = document.querySelector('.nav-brand .nav-brand-text');

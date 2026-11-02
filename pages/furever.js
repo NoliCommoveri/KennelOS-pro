@@ -17,7 +17,8 @@ import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
-import { getFureverSettings, setFureverSettings, getMyKennelId, getMyContactId } from '../data/settings.js';
+import { getFureverSettings, setFureverSettings, getMyKennelId } from '../data/settings.js';
+import { resolveMyContactId } from '../data/kennelSetup.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { buildSeedPacket, pickupEventFor, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
 import { PICKUP_TITLE } from '../data/goHome.js';
@@ -69,7 +70,7 @@ function vetToFields(v) {
 // Setup manages; vets are any Contact tagged with the 'vet' role.
 async function loadIdentityContext() {
   const kennelId = getMyKennelId();
-  const contactId = getMyContactId();
+  const contactId = await resolveMyContactId();
   const [kennel, owner, allContacts] = await Promise.all([
     kennelId ? kennelRepo.getById(kennelId) : null,
     contactId ? contactRepo.getById(contactId) : null,

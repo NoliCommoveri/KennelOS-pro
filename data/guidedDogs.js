@@ -22,7 +22,7 @@ import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo, withSeededTests } from './kennelRepo.js';
 import { resolveKennelIdForWrite, SCOPED_OWNERSHIP } from './kennelScope.js';
-import { getMyContactId } from './settings.js';
+import { resolveMyContactId } from './kennelSetup.js';
 import { CapExceededError } from './repoBase.js';
 import { eventRepo } from './eventRepo.js';
 import { expenseRepo } from './expenseRepo.js';
@@ -441,7 +441,7 @@ export async function saveGuidedDogs(draft, { onProgress = () => {} } = {}) {
   // A breed typed in another case or spacing takes the spelling her dogs have.
   const breedSpelling = new Map((await dogRepo.getAll({ includePedigreeOnly: true }))
     .filter((x) => !blank(x.breed)).map((x) => [norm(x.breed), trimmed(x.breed)]));
-  const myContactId = getMyContactId();
+  const myContactId = await resolveMyContactId();
   const myContact = myContactId ? await contactRepo.getById(myContactId) : null;
   let capError = null;
 
