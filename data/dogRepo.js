@@ -19,6 +19,22 @@ const OWNER_REQUIRED_TYPES = ['external', 'leased_in'];
 // (a pedigree gives registered names), so it shows its registered name instead.
 export const dogName = (d) => (d && (d.call_name || d.registered_name)) || '';
 
+// Registrations beyond the main one (`registry` + `registration_number`): a dog
+// also registered with UKC, CKC, FCI… Each entry is `{ registry,
+// registration_number, registered_name }` (that registry's name for the dog,
+// blank when it's the same). Trimmed; an entry with neither a registry nor a
+// number is dropped.
+export function normalizeRegistrations(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((r) => ({
+      registry: String(r?.registry ?? '').trim(),
+      registration_number: String(r?.registration_number ?? '').trim(),
+      registered_name: String(r?.registered_name ?? '').trim()
+    }))
+    .filter((r) => r.registry || r.registration_number);
+}
+
 // Walk up from a starting parent id and return the set of all ancestor ids.
 // `dogsById` is a Map of the current dog table so the walk is a pure in-memory
 // graph traversal. A `visited` set guards against pre-existing bad cycles in the
@@ -114,6 +130,13 @@ async function validateDog(candidate, existingId = null) {
 // carry one unless status is 'puppy'. Enforced centrally here so every writer —
 // the dog form, sale-side disposition offers, CSV import — lands the same
 // invariant, and a life-stage change out of 'puppy' clears any lingering value.
+// additional_registrations is normalized on every write that carries it.
+function withRegistrations(record) {
+  return 'additional_registrations' in record
+    ? { ...record, additional_registrations: normalizeRegistrations(record.additional_registrations) }
+    : record;
+}
+
 function nullDispositionIfNotPuppy(record) {
   return record.status !== 'puppy' && record.disposition != null
     ? { ...record, disposition: null }
@@ -144,6 +167,7 @@ export const dogRepo = {
   },
 
   async create(data) {
+    data = withRegistrations(data);
     await validateDog(data);
     // Edition cap hook (§3/§4 of the cap spec). Default (Pro/shared) is a no-op;
     // Lite throws CapExceededError here when adding a new counting dog at the cap.
@@ -154,6 +178,7 @@ export const dogRepo = {
   async update(id, changes) {
     const existing = await db.dogs.get(id);
     if (!existing) throw new Error(`dogs: no record with id ${id}`);
+    changes = withRegistrations(changes);
     const merged = { ...existing, ...changes };
     // Validate the merged result so partial updates are checked against the whole.
     await validateDog(merged, id);

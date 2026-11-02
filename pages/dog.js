@@ -67,7 +67,7 @@ const blankDog = () => ({
   date_of_death: '', breed: '', color_markings: '', registry: '', registration_number: '',
   microchip_id: '', url: '', photos_online: false, sire_id: '', dam_id: '', ownership_type: '', owner_contact_id: '',
   co_owner_contact_ids: [], litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_registration: '', notes: '',
-  planned_tests: []
+  planned_tests: [], additional_registrations: []
 });
 
 const ctx = {
@@ -290,6 +290,7 @@ function renderView() {
       ${row('Color / markings', esc(d.color_markings))}
       ${row('Registry', esc(d.registry))}
       ${row('Registration #', esc(d.registration_number))}
+      ${row('Other registrations', otherRegistrationsHtml(d.additional_registrations))}
       ${row('Microchip', esc(d.microchip_id))}
       ${row('URL', d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a>${editionFlags.waitlist && d.photos_online ? ' <span class="badge badge-blue">Shown on waitlist pages</span>' : ''}` : '')}
       ${row('Sire', dogLink(d.sire_id))}
@@ -305,6 +306,15 @@ function renderView() {
       ${d.status === 'puppy' ? row('Intended registration', d.intended_registration ? badge(REGISTRATION_TYPE, d.intended_registration) : '') : ''}
       ${row('Notes', d.notes ? esc(d.notes).replace(/\n/g, '<br>') : '')}
     </dl>`;
+}
+
+// A dog's additional registrations, one per line: "UKC · P123-456 · Registered as …".
+function otherRegistrationsHtml(list) {
+  return (list || [])
+    .filter((r) => r && (r.registry || r.registration_number))
+    .map((r) => [r.registry, r.registration_number].filter(Boolean).map(esc).join(' · ')
+      + (r.registered_name ? ` <span class="faint">· registered as ${esc(r.registered_name)}</span>` : ''))
+    .join('<br>');
 }
 
 // --- Rendering: edit form ------------------------------------------------
@@ -337,6 +347,7 @@ function renderEdit() {
       ${field('Color / markings', `<input id="f-color_markings" type="text" value="${esc(d.color_markings)}">`)}
       ${field('Registry', `<input id="f-registry" type="text" value="${esc(d.registry)}">`)}
       ${field('Registration #', `<input id="f-registration_number" type="text" value="${esc(d.registration_number)}">`)}
+      ${registrationsEditor(d.additional_registrations)}
       ${field('Microchip', `<input id="f-microchip_id" type="text" value="${esc(d.microchip_id)}">`)}
       ${field('URL', `<input id="f-url" type="url" value="${esc(d.url || '')}" placeholder="https://…">`, { hint: 'A link to this dog\'s photos (an album, a gallery page).' })}
       ${editionFlags.waitlist ? field('Photos online', `<label class="check-inline"><input id="f-photos_online" type="checkbox"${d.photos_online ? ' checked' : ''}> Show the URL as a photos link on waitlist pages</label>`, { hint: 'Families see it as a parent of a litter (public list and family pages) and as a pup on their turn or their pick. Off until you tick it.' }) : ''}
@@ -371,6 +382,18 @@ function renderEdit() {
   }
 
   const form = document.getElementById('dog-form');
+  document.getElementById('reg-add').addEventListener('click', () => {
+    ctx.draft = readForm();
+    ctx.draft.additional_registrations = [...ctx.draft.additional_registrations, { registry: '', registration_number: '', registered_name: '' }];
+    renderEdit();
+    [...document.querySelectorAll('#f-additional_registrations .reg-registry')].pop()?.focus();
+  });
+  form.querySelectorAll('[data-reg-remove]').forEach((btn) => btn.addEventListener('click', () => {
+    ctx.draft = readForm();
+    const i = Number(btn.dataset.regRemove);
+    ctx.draft.additional_registrations = ctx.draft.additional_registrations.filter((_, j) => j !== i);
+    renderEdit();
+  }));
   form.addEventListener('input', updateWarnings);
   form.addEventListener('change', updateWarnings);
   document.getElementById('picker-archived')?.addEventListener('change', (e) => {
@@ -434,6 +457,34 @@ function renderEdit() {
   updateWarnings();
 }
 
+// Additional registrations: one row per registry beyond the main one above.
+// Blank rows are kept while editing and dropped on save (dogRepo).
+function registrationsEditor(list) {
+  const rows = (list || []).map((r, i) => `
+    <div class="reg-row" data-reg="${i}" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
+      <input class="reg-registry" type="text" value="${esc(r.registry || '')}" placeholder="Registry (UKC, CKC…)" aria-label="Registry" style="flex:1 1 120px; min-width:0;">
+      <input class="reg-number" type="text" value="${esc(r.registration_number || '')}" placeholder="Registration #" aria-label="Registration number" style="flex:1 1 140px; min-width:0;">
+      <input class="reg-name" type="text" value="${esc(r.registered_name || '')}" placeholder="Registered name, if different" aria-label="Registered name with this registry" style="flex:2 1 200px; min-width:0;">
+      <button type="button" class="btn btn-sm reg-remove" data-reg-remove="${i}" aria-label="Remove this registration">Remove</button>
+    </div>`).join('');
+  return `<div class="field field-wide" id="f-additional_registrations">
+    <label>Additional registrations</label>
+    ${rows}
+    <div style="margin-top:6px;"><button type="button" class="btn btn-sm" id="reg-add">+ Add registration</button></div>
+    <span class="field-hint">Other registries this dog is registered with, beyond the Registry and Registration # above.</span>
+  </div>`;
+}
+
+function readRegistrations() {
+  const holder = document.getElementById('f-additional_registrations');
+  if (!holder) return [...(ctx.draft?.additional_registrations || [])];
+  return [...holder.querySelectorAll('.reg-row')].map((el) => ({
+    registry: el.querySelector('.reg-registry').value.trim(),
+    registration_number: el.querySelector('.reg-number').value.trim(),
+    registered_name: el.querySelector('.reg-name').value.trim()
+  }));
+}
+
 function readForm() {
   const val = (id) => document.getElementById(id)?.value ?? '';
   const coSel = document.getElementById('f-co_owner_contact_ids');
@@ -449,6 +500,7 @@ function readForm() {
     color_markings: val('f-color_markings').trim(),
     registry: val('f-registry').trim(),
     registration_number: val('f-registration_number').trim(),
+    additional_registrations: readRegistrations(),
     microchip_id: val('f-microchip_id').trim(),
     url: val('f-url').trim(),
     // Only read when its field rendered (Pro with the waitlist), else kept.
@@ -621,7 +673,8 @@ function enterEdit({ bringIn = false } = {}) {
   ctx.mode = 'edit';
   ctx.bringIn = bringIn;
   ctx.coiEditing = false;
-  ctx.draft = { ...ctx.original, co_owner_contact_ids: [...(ctx.original.co_owner_contact_ids || [])] };
+  ctx.draft = { ...ctx.original, co_owner_contact_ids: [...(ctx.original.co_owner_contact_ids || [])],
+    additional_registrations: (ctx.original.additional_registrations || []).map((r) => ({ ...r })) };
   // Bringing a pedigree-only dog into use: its placeholder ownership/status
   // (external / external reference) are cleared so both are chosen deliberately.
   if (bringIn) Object.assign(ctx.draft, { ownership_type: '', status: '' });

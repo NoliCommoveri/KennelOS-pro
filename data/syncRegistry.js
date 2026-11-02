@@ -55,7 +55,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'intended_registration', // Waitlist Spec §9
       'waitlist_tests', // its say over its health tests on waitlist family pages; a display choice, read by whichever device publishes
       'photos_online', // its say over showing its url as a photos link on waitlist pages; a display choice like waitlist_tests
-      'pedigree_only' // without it a cloud restore would turn every ancestor into a kennel dog
+      'pedigree_only', // without it a cloud restore would turn every ancestor into a kennel dog
+      'additional_registrations' // the dog's other registries and numbers; the same kind of data as registry/registration_number
     ],
     private: ['notes'],
     pending: []

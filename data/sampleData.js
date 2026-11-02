@@ -239,6 +239,7 @@ export async function seedSampleData() {
     date_of_birth: '2019-11-03', sire_id: ash.id, dam_id: willow.id,
     registered_name: 'Thornfield Midnight Juniper', registration_number: 'WS71029304',
     microchip_id: '985141000123456', color_markings: 'Black & white, seal points', registry: 'AKC',
+    additional_registrations: [{ registry: 'UKC', registration_number: 'P1048-221', registered_name: '' }],
     url: 'https://images.example.com/thornfield/juniper.jpg',
     planned_tests: ['OFA Patella', 'Companion Animal Eye Exam (CAER)'],
     ownership_type: 'owned', status: 'active_breeding', kennel_id: thornfield.id,

@@ -13,7 +13,7 @@
 // the order she raises them in: TIDY_KINDS.
 import { RELEASED_SALE_STATUSES, EVENT_TYPES, WHELPED_OR_LATER } from './vocab.js';
 import { studParents } from './studRules.js';
-import { normReg, similarNamed } from './dogSearch.js';
+import { similarNamed, dogRegKeys, dogNameKeys, sameRegistration, sameRegisteredName, registrationsConflict } from './dogSearch.js';
 import { normName, normEmail, normPhone, hasVet, isVet } from './contactSearch.js';
 
 export const TIDY_KINDS = [
@@ -321,12 +321,14 @@ const orderPair = (a, b) => (String(a.created_at || '') <= String(b.created_at |
 // Two dog records for one dog. Missing details are unknown, never a difference:
 // an outside dog often has no birthday or registration number, so those can only
 // rule a pair OUT when both records have them and they differ.
-//   certain: the same registration number, or the same registered name;
+//   certain: a registration number in common, or a registered name in common
+//     (any of either's, additional registrations included: dogSearch);
 //   possible: the same call name, breed and sex, and nothing that contradicts it.
+// Registration numbers contradict only as `registrationsConflict` says (both have
+// numbers, none shared, and two could be the same registry's).
 // Never a pair: littermates (same litter) by name alone, a dog and its own parent
 // or child, or two dogs whose known sex differs.
 export const DOG_CONTRADICTIONS = [
-  ['registration number', (d) => normReg(d.registration_number)],
   ['birthday', (d) => d.date_of_birth || ''],
   ['microchip', (d) => normId(d.microchip_id)],
   ['sire', (d) => d.sire_id || ''],
@@ -338,15 +340,17 @@ export function compareDogs(a, b) {
   if (a.id === b.id) return null;
   if (a.sire_id === b.id || a.dam_id === b.id || b.sire_id === a.id || b.dam_id === a.id) return null;
   if (knownSex(a) && knownSex(b) && knownSex(a) !== knownSex(b)) return null;
-  const regA = normReg(a.registration_number);
-  const sameReg = regA && regA === normReg(b.registration_number);
-  const rnA = normName(a.registered_name);
-  const sameRegName = rnA && rnA === normName(b.registered_name);
+  const sameReg = sameRegistration(a, b);
+  const sameRegName = sameRegisteredName(a, b);
   const cnA = normName(a.call_name);
   const sameCall = cnA && cnA === normName(b.call_name) && normName(a.breed) === normName(b.breed);
-  const differs = DOG_CONTRADICTIONS.filter(([, f]) => f(a) && f(b) && f(a) !== f(b)).map(([label]) => label);
-  const matches = DOG_CONTRADICTIONS.filter(([, f]) => f(a) && f(a) === f(b)).map(([label]) => label);
-  const unknown = DOG_CONTRADICTIONS.filter(([, f]) => !f(a) || !f(b)).map(([label]) => label);
+  const hasRegs = dogRegKeys(a).length && dogRegKeys(b).length;
+  const differs = [...(registrationsConflict(a, b) ? ['registration number'] : []),
+    ...DOG_CONTRADICTIONS.filter(([, f]) => f(a) && f(b) && f(a) !== f(b)).map(([label]) => label)];
+  const matches = [...(sameReg ? ['registration number'] : []),
+    ...DOG_CONTRADICTIONS.filter(([, f]) => f(a) && f(a) === f(b)).map(([label]) => label)];
+  const unknown = [...(hasRegs ? [] : ['registration number']),
+    ...DOG_CONTRADICTIONS.filter(([, f]) => !f(a) || !f(b)).map(([label]) => label)];
   if (sameReg) return { strength: 'certain', reasons: ['registration number'], matches, unknown: [] };
   if (sameRegName && !differs.length) return { strength: 'certain', reasons: ['registered name'], matches, unknown };
   if (sameCall && !differs.length && !(a.litter_id && a.litter_id === b.litter_id)) {
@@ -362,8 +366,8 @@ export function duplicateDogFindings(dogs) {
   const put = (k, d) => { if (!k) return; if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(d); };
   for (const d of live) {
     put(normName(d.call_name) && `c:${normName(d.call_name)}`, d);
-    put(normName(d.registered_name) && `r:${normName(d.registered_name)}`, d);
-    put(normReg(d.registration_number) && `n:${normReg(d.registration_number)}`, d);
+    for (const k of dogNameKeys(d)) put(`r:${k}`, d);
+    for (const k of dogRegKeys(d)) put(`n:${k}`, d);
   }
   const seen = new Set();
   const out = [];

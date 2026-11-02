@@ -28,6 +28,7 @@ import { formQuestions, isAnswerQuestion, snapshotQuestions, columnsFor, IMPORT_
 import { waitlistConfig, kennelBreeds, resolveBreed } from './waitlistRules.js';
 import { todayYMD } from './dateUtils.js';
 import { normReg } from './pedigreeImport.js';
+import { dogRegKeys, dogRegisteredNames } from './dogSearch.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
@@ -235,11 +236,12 @@ const DOG_MAPPING = {
     const byName = new Map();  // any name -> id (for sire/dam resolution)
     const byRegNo = new Map(); // registration number key (normReg) -> [dogs]
     for (const d of existing) {
-      const rk = d.registration_number ? normReg(d.registration_number) : '';
-      if (rk) { if (!byRegNo.has(rk)) byRegNo.set(rk, []); byRegNo.get(rk).push(d); }
-      if (d.registered_name && d.date_of_birth) byReg.set(nk(d.registered_name, d.date_of_birth), d);
+      // Every number and registered name it holds, additional registrations included.
+      for (const rk of dogRegKeys(d)) { if (!byRegNo.has(rk)) byRegNo.set(rk, []); byRegNo.get(rk).push(d); }
+      const regNames = dogRegisteredNames(d);
+      if (d.date_of_birth) for (const n of regNames) byReg.set(nk(n, d.date_of_birth), d);
       if (d.call_name && d.date_of_birth) byCall.set(nk(d.call_name, d.date_of_birth), d);
-      if (d.registered_name) byName.set(d.registered_name.trim().toLowerCase(), d);
+      for (const n of regNames) { const k = n.toLowerCase(); if (!byName.has(k)) byName.set(k, d); }
       const ck = d.call_name?.trim().toLowerCase();
       if (ck && !byName.has(ck)) byName.set(ck, d);
     }

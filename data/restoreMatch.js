@@ -12,7 +12,7 @@
 //     preview) or null. A row with more than one candidate is asked about.
 //   - Tables go in MATCH_ORDER, comparing foreign keys through the pairs found so
 //     far, so a dog she says isn't the same leaves what hangs off it unpaired.
-import { normReg, nameKey } from './dogSearch.js';
+import { nameKey, sameRegistration, sameRegisteredName, registrationsConflict } from './dogSearch.js';
 import { normName, normEmail, normPhone } from './contactSearch.js';
 import {
   EVENT_TYPES, RELEASED_SALE_STATUSES, WAITLIST_OPEN_STATUSES, SEX, SALE_STATUS, LITTER_STATUS, PAIRING_STATUS,
@@ -76,8 +76,8 @@ const RULES = {
   // pups and the call-name question (dogs_late).
   dogs(l, f, ctx) {
     if (dogNever(l, f, ctx)) return null;
-    if (eqSet(nameKey(l.registered_name), nameKey(f.registered_name))) return 'same';
-    if (eqSet(normReg(l.registration_number), normReg(f.registration_number))) return 'same';
+    if (sameRegisteredName(l, f)) return 'same';
+    if (sameRegistration(l, f)) return 'same';
     if (eqSet(chip(l.microchip_id), chip(f.microchip_id))) return 'same';
     return null;
   },
@@ -153,7 +153,7 @@ export { RULES as MATCH_RULES };
 // Never one dog, whatever else agrees.
 export function dogNever(l, f, { fk }) {
   if (knownSex(l) && knownSex(f) && knownSex(l) !== knownSex(f)) return true;
-  if (differs(normReg(l.registration_number), normReg(f.registration_number))) return true;
+  if (registrationsConflict(l, f)) return true;
   if (differs(chip(l.microchip_id), chip(f.microchip_id))) return true;
   if (differs(l.date_of_birth, f.date_of_birth)) return true;
   // One is the other's parent (seen through the pairs so far).

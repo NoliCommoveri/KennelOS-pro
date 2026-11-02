@@ -38,6 +38,58 @@ export const normReg = (r) => {
   return /^[A-Z]{2}\d{8}(\d{4})?$/.test(k) ? k.slice(0, 10) : k;
 };
 
+// --- A dog's identity: every registration and registered name it holds -------
+// One set of helpers for every place that asks "is this the same dog?" — the
+// duplicate scan, the tidy-up, backup restore, CSV and pedigree import, Kels's
+// dog matching and Find — so they all match on the same things.
+
+const extraRegs = (d) => (Array.isArray(d?.additional_registrations) ? d.additional_registrations.filter(Boolean) : []);
+const registryKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Every registration number a dog holds, as typed: the main one
+// (`registration_number`) first, then its additional registrations'.
+export const dogRegistrationNumbers = (d) =>
+  [d?.registration_number, ...extraRegs(d).map((r) => r.registration_number)]
+    .map((n) => String(n ?? '').trim()).filter(Boolean);
+
+// Every registration with a number: [{ registry, number }], the registry
+// lowercased letters and digits ('' when not given), the number `normReg`'d.
+export const dogRegistrations = (d) =>
+  [{ registry: d?.registry, registration_number: d?.registration_number }, ...extraRegs(d)]
+    .map((r) => ({ registry: registryKey(r.registry), number: normReg(r.registration_number) }))
+    .filter((r) => r.number);
+
+// Its registration numbers' keys (`normReg`), each once.
+export const dogRegKeys = (d) => [...new Set(dogRegistrations(d).map((r) => r.number))];
+
+// Every registered name it holds, as typed: the main one first, then any an
+// additional registration gives.
+export const dogRegisteredNames = (d) =>
+  [d?.registered_name, ...extraRegs(d).map((r) => r.registered_name)]
+    .map((n) => String(n ?? '').trim()).filter(Boolean);
+
+// Its registered names' keys (`nameKey`: titles, case, punctuation ignored), each once.
+export const dogNameKeys = (d) => [...new Set(dogRegisteredNames(d).map(nameKey).filter(Boolean))];
+
+const overlap = (xs, ys) => xs.some((x) => ys.includes(x));
+
+// The two share a registration number (any of either's).
+export const sameRegistration = (a, b) => overlap(dogRegKeys(a), dogRegKeys(b));
+
+// The two share a registered name (any of either's).
+export const sameRegisteredName = (a, b) => overlap(dogNameKeys(a), dogNameKeys(b));
+
+// Their registration numbers rule them out as one dog: both have numbers, none
+// is shared, and two of them could be for the same registry (the same registry,
+// or one not given). An AKC number on one and a UKC number on the other says
+// nothing — one dog holds both.
+export function registrationsConflict(a, b) {
+  const A = dogRegistrations(a);
+  const B = dogRegistrations(b);
+  if (!A.length || !B.length || sameRegistration(a, b)) return false;
+  return A.some((x) => B.some((y) => !x.registry || !y.registry || x.registry === y.registry));
+}
+
 const STRENGTH_ORDER = { certain: 0, likely: 1, possible: 2 };
 
 // Number-like: 5+ letters/digits with at least 4 digits ("SR12345601", "WS-7102").
@@ -138,16 +190,20 @@ const sexFits = (want, d) => !want || want === 'unknown' || !d.sex || d.sex === 
 //    differs: ['registration number'|'breed'|'birthday'] }].
 // A same-number dog of another sex or breed is shown (`possible`, saying why),
 // never `certain`, so nothing takes it without her say.
-// typed: { callName, registeredName, registrationNumber, breed, dateOfBirth, sex };
+// typed: { callName, registeredName, registrationNumber, registry, breed, dateOfBirth, sex };
+// a dog's numbers and names include its additional registrations', and a
+// differing number counts only as `registrationsConflict` says.
 // `excludeIds`: dogs not to offer (the dog itself).
 export function findDogMatches(dogs, typed = {}, { excludeIds = [] } = {}) {
   const typedNames = [typed.callName, typed.registeredName].map(nameKey).filter((k) => k.length >= 2);
   const typedNums = [...new Set([typed.registrationNumber, typed.callName, typed.registeredName].flatMap(numbersIn))];
   const breedKey = nameKey(typed.breed);
+  // What she typed, as a dog, for the shared rule on numbers that differ.
+  const typedDog = { additional_registrations: typedNums.map((n) => ({ registry: typed.registry, registration_number: n })) };
   const out = [];
   for (const d of dogs) {
     if (!d || d.is_archived || excludeIds.includes(d.id)) continue;
-    const dogNums = [...new Set([d.registration_number, d.call_name, d.registered_name].flatMap(numbersIn))];
+    const dogNums = [...new Set([...dogRegistrationNumbers(d), d.call_name, ...dogRegisteredNames(d)].flatMap(numbersIn))];
     const sameNumber = typedNums.some((n) => dogNums.includes(n));
     const nearNumber = !sameNumber && typedNums.some((n) => dogNums.some((m) => Math.min(n.length, m.length) >= 6 && slips(n, m) <= 1));
     const sexOk = sexFits(typed.sex, d);
@@ -155,7 +211,7 @@ export function findDogMatches(dogs, typed = {}, { excludeIds = [] } = {}) {
     const RANK = { exact: 3, close: 2, partial: 1 };
     let hit = null;
     for (const t of typedNames) {
-      for (const n of [d.call_name, d.registered_name].map(nameKey).filter(Boolean)) {
+      for (const n of [d.call_name, ...dogRegisteredNames(d)].map(nameKey).filter(Boolean)) {
         const h = nameHit(t, n);
         if (h && (!hit || RANK[h] > RANK[hit])) hit = h;
       }
@@ -165,7 +221,7 @@ export function findDogMatches(dogs, typed = {}, { excludeIds = [] } = {}) {
     const differs = [];
     if (sameNumber) agrees.push('registration number');
     else if (nearNumber) agrees.push('nearly the same registration number');
-    else if (typedNums.length && dogNums.length) differs.push('registration number');
+    else if (registrationsConflict(typedDog, d)) differs.push('registration number');
     // A different breed is a different dog (spelled near enough is the same one);
     // only the same registration number still shows it, to say so.
     const dBreed = nameKey(d.breed);

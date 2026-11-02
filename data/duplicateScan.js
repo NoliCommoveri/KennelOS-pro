@@ -13,7 +13,7 @@
 //     her two dog records are merged; the card scans again after every merge.
 //   - Tables the edition doesn't have are skipped (SCAN_FLAGS).
 import { MATCH_RULES, dogNever } from './restoreMatch.js';
-import { normReg, nameKey } from './dogSearch.js';
+import { dogRegKeys, dogNameKeys } from './dogSearch.js';
 import { normName, normEmail, normPhone } from './contactSearch.js';
 import { duplicateDogFindings, duplicateContactFindings } from './tidyRules.js';
 
@@ -61,7 +61,7 @@ const BUCKETS = {
   contacts: (r) => [normName(r.name) && `n:${normName(r.name)}`, normEmail(r.email) && `e:${normEmail(r.email)}`, normPhone(r.phone) && `p:${normPhone(r.phone)}`],
   waitlist_programs: (r) => [r.kennel_id && `${r.kennel_id}|${normName(r.name)}`],
   breed_feeding_schedules: (r) => [normName(r.breed)],
-  dogs: (r) => [nameKey(r.registered_name) && `r:${nameKey(r.registered_name)}`, normReg(r.registration_number) && `n:${normReg(r.registration_number)}`,
+  dogs: (r) => [...dogNameKeys(r).map((k) => `r:${k}`), ...dogRegKeys(r).map((k) => `n:${k}`),
     chip(r.microchip_id) && `m:${chip(r.microchip_id)}`, normName(r.call_name) && `c:${normName(r.call_name)}`],
   pairings: (r) => [r.dam_id && r.sire_id && `${r.dam_id}|${r.sire_id}`],
   litters: (r) => [r.pairing_id && `p:${r.pairing_id}`, r.dam_id && `d:${r.dam_id}`],
@@ -85,7 +85,7 @@ const SHARED = {
     ['kennel', (r) => r.kennel_id]],
   waitlist_programs: [['kennel', (r) => r.kennel_id], ['name', (r) => normName(r.name)]],
   breed_feeding_schedules: [['breed', (r) => normName(r.breed)]],
-  dogs: [['registered name', (r) => nameKey(r.registered_name)], ['registration number', (r) => normReg(r.registration_number)],
+  dogs: [['registered name', dogNameKeys], ['registration number', dogRegKeys],
     ['microchip', (r) => chip(r.microchip_id)], ['call name', (r) => normName(r.call_name)], ['breed', (r) => normName(r.breed)],
     ['birthday', (r) => r.date_of_birth], ['litter', (r) => r.litter_id]],
   pairings: [['dam', (r) => r.dam_id], ['sire', (r) => r.sire_id], ['planned date', (r) => r.planned_date]],
@@ -102,8 +102,15 @@ const SHARED = {
   waitlist_offers: [['family', (r) => r.entry_id], ['litter', (r) => r.litter_id], ['offer date', (r) => r.offered_date]]
 };
 
+// A detail may be a list (a dog's registration numbers and registered names):
+// shared when the two lists have one in common.
 export function sharedDetails(table, a, b) {
-  return (SHARED[table] || []).filter(([, f]) => { const x = f(a); return !blank(x) && x === f(b); }).map(([label]) => label);
+  return (SHARED[table] || []).filter(([, f]) => {
+    const x = f(a);
+    const y = f(b);
+    if (Array.isArray(x)) return Array.isArray(y) && x.some((v) => y.includes(v));
+    return !blank(x) && x === y;
+  }).map(([label]) => label);
 }
 
 const RANK = { same: 2, ask: 1 };

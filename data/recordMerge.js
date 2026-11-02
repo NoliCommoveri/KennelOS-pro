@@ -41,6 +41,7 @@ import { nowIso, ReferenceBlockedError } from './repoBase.js';
 import { fileRepo } from './fileRepo.js';
 import { rekey } from './restoreMatch.js';
 import { findDuplicates } from './duplicateScan.js';
+import { normReg } from './dogSearch.js';
 
 const blank = (v) => v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && !v.length);
 const same = (a, b) => (typeof a === 'string' && typeof b === 'string' ? a.trim() === b.trim() : a === b);
@@ -70,7 +71,9 @@ export const MERGE_SPEC = {
       { key: 'url', label: 'Link' }
     ],
     group: { key: 'ownership', label: 'Ownership & status', keys: ['ownership_type', 'status', 'status_date', 'kennel_id', 'owner_contact_id', 'pedigree_only', 'disposition'] },
-    unions: ['co_owner_contact_ids', 'planned_tests']
+    unions: ['co_owner_contact_ids', 'planned_tests'],
+    // Joined like the unions but by registration (mergedRegistrations).
+    registrations: true
   },
   contact: {
     fields: [
@@ -123,6 +126,7 @@ export function mergedChanges(kind, keep, drop, choices = {}) {
   const changes = {};
   for (const [key, v] of Object.entries(drop)) {
     if (NEVER_COPY.has(key) || groupKeys.has(key) || spec.unions.includes(key)) continue;
+    if (spec.registrations && key === 'additional_registrations') continue;
     if (blank(keep[key]) && !blank(v)) changes[key] = v;
     else if (!blank(v) && choices[key] === 'drop' && !same(keep[key], v)) changes[key] = v;
   }
@@ -133,7 +137,11 @@ export function mergedChanges(kind, keep, drop, choices = {}) {
     const joined = [...new Set([...(keep[key] || []), ...(drop[key] || [])])];
     if (joined.length !== (keep[key] || []).length) changes[key] = joined;
   }
-  const kn = String(keep.notes || '').trim();
+  if (spec.registrations) {
+    const regs = mergedRegistrations(keep, drop, changes);
+    if (regs) changes.additional_registrations = regs;
+  }
+    const kn = String(keep.notes || '').trim();
   const dn = String(drop.notes || '').trim();
   if (dn && dn !== kn && !kn.includes(dn)) changes.notes = kn ? `${kn}\n\n${dn}` : dn;
   // A merged dog's co-owners never include its owner.
@@ -143,6 +151,26 @@ export function mergedChanges(kind, keep, drop, choices = {}) {
     if (owner && (co || []).includes(owner)) changes.co_owner_contact_ids = co.filter((id) => id !== owner);
   }
   return changes;
+}
+
+// A merged dog keeps every registration either record held: the kept list, then
+// the other's, then either main registration with a number that isn't the one kept —
+// each once (same registry and number, `normReg`). null when nothing is added.
+function mergedRegistrations(keep, drop, changes) {
+  const key = (r) => `${String(r.registry || '').trim().toLowerCase()}|${normReg(r.registration_number)}`;
+  const mainOf = (r) => ({ registry: r.registry || '', registration_number: r.registration_number || '', registered_name: '' });
+  const kept = { ...keep, ...changes };
+  const seen = new Set([key(mainOf(kept))]);
+  const current = (keep.additional_registrations || []).filter((r) => r && (r.registry || r.registration_number));
+  for (const r of current) seen.add(key(r));
+  const added = [];
+  const mains = [drop, keep].filter((r) => String(r.registration_number || '').trim()).map(mainOf);
+  for (const r of [...(drop.additional_registrations || []), ...mains]) {
+    if (!r || !(r.registry || r.registration_number) || seen.has(key(r))) continue;
+    seen.add(key(r));
+    added.push({ registry: r.registry || '', registration_number: r.registration_number || '', registered_name: r.registered_name || '' });
+  }
+  return added.length ? [...current, ...added] : null;
 }
 
 // Why these two can't be merged (a sentence), or null. Dogs: a known sex that

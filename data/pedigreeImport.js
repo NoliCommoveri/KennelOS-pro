@@ -26,8 +26,7 @@ import { dogRepo, dogName } from './dogRepo.js';
 import { documentRepo } from './documentRepo.js';
 import { fileRepo } from './fileRepo.js';
 import { resolveKennelIdForWrite } from './kennelScope.js';
-import { splitTitles } from './pedigreeParse.js';
-import { normReg } from './dogSearch.js';
+import { normReg, nameKey, dogRegKeys, dogNameKeys, registrationsConflict, dogRegistrationNumbers } from './dogSearch.js';
 
 // normReg (a registration number's key) lives in dogSearch.js; kept exported here
 // for the importers that read it from this module.
@@ -35,10 +34,10 @@ export { normReg };
 export const normName = (n) => String(n || '').replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"')
   .trim().replace(/\s+/g, ' ').toLowerCase();
 
-// The key two registered names are compared by: normName without the titles in
-// front. A chart's titles go to notes when it's read, but the same dog already in
-// the app is often saved as "GCH A-K Bella", so its titles come off too.
-const nameKey = (n) => normName(splitTitles(String(n || '')).name);
+// The key two registered names are compared by: dogSearch.nameKey (titles in
+// front off, case and punctuation ignored), the one every dog match uses. A
+// chart's titles go to notes when it's read, but the same dog already in the app
+// is often saved as "GCH A-K Bella", so its titles come off too.
 
 const srcId = (fileId, path) => `${fileId}:${path}`;
 
@@ -125,15 +124,16 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
   const byReg = new Map();
   const byName = new Map();
   for (const d of existing) {
-    if (d.registration_number) byReg.set(normReg(d.registration_number), d);
+    // Every number and registered name it holds, additional registrations included.
+    for (const k of dogRegKeys(d)) byReg.set(k, d);
     // A chart's names are registered names, so they're compared with the
     // registered name of every dog in the app — the kennel's own current dogs as
     // well as archived and pedigree-only ones — never a call name ("Bella" the
     // call name is not "Bella" the registered name).
-    const nm = nameKey(d.registered_name);
-    if (!nm) continue;
-    if (!byName.has(nm)) byName.set(nm, []);
-    byName.get(nm).push(d);
+    for (const nm of dogNameKeys(d)) {
+      if (!byName.has(nm)) byName.set(nm, []);
+      byName.get(nm).push(d);
+    }
   }
   const candsByName = new Map();
   for (const c of cands.values()) {
@@ -172,7 +172,7 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
       // likely than two dogs with one registered name. Never silently a new dog.
       const sameName = byName.get(nm) || [];
       for (const d of sameName) {
-        if (c.reg && d.registration_number) row.issues.push(`Same registered name as your ${dogName(d)}, but the registration numbers differ (this chart: ${c.fields.registration_number}; yours: ${d.registration_number}).`);
+        if (c.reg && registrationsConflict({ registry: c.fields.registry, registration_number: c.fields.registration_number }, d)) row.issues.push(`Same registered name as your ${dogName(d)}, but the registration numbers differ (this chart: ${c.fields.registration_number}; yours: ${dogRegistrationNumbers(d).join(', ')}).`);
       }
       const batchSame = (candsByName.get(nm) || []).filter((o) => o !== c && (!c.reg || !o.reg));
       if (nm && (sameName.length || batchSame.length)) {
