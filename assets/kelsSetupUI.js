@@ -387,6 +387,7 @@ class Setup {
       }
       const saved = await this.askAccount(accountRepo, account, chargeBack);
       if (!saved) continue;
+      await this.offerAccountOnWebsite(accountRepo, saved);
       list = await load();
       if (!account && saved.account_type === 'payment_service' && /stripe/i.test(saved.name || '')) {
         const { offerStripe } = await import('./waitlistFeeStep.js');
@@ -397,6 +398,19 @@ class Setup {
     await this.chat.say(list.length
       ? 'They\'re all on your Accounts page, with room for logins and referral codes too.'
       : 'No problem. You can add them any time on your Accounts page.', { typing: 300 });
+  }
+
+  // An account with something to share (a referral link, code or instructions),
+  // on a device with a website linked: show it under Recommended products there?
+  async offerAccountOnWebsite(accountRepo, a) {
+    if (!a || a.show_on_website === true || a.account_type === 'transport' || editionFlags.demoMode) return;
+    const [{ anyWebsiteLink }, { hasReferral }] = await Promise.all([import('../data/kennelportLinkStore.js'), import('../data/siteExport.js')]);
+    if (!hasReferral(a) || !(await anyWebsiteLink())) return;
+    await this.chat.say(`${esc(a.name)} has a referral ${a.referral_code ? 'code' : 'link'} to share. Show it on your website under <strong>Recommended products</strong>, with its link and code? Never a login or a fee.`);
+    const pick = await this.chat.choose([{ label: 'Show it on my website', value: 'yes', primary: true }, { label: 'Not on the website', value: 'no' }]);
+    if (pick !== 'yes') return;
+    await accountRepo.update(a.id, { show_on_website: true });
+    await this.chat.say('Marked for your website.', { typing: 300 });
   }
 
   // One account, new (`a` null) or one she has. → the saved account, or null.
@@ -419,11 +433,16 @@ class Setup {
           ${field('Its payment link (optional)', input('ks-ac-link', a?.payment_link ?? '', { type: 'url', inputmode: 'url', placeholder: 'https://…' }), 'A PayPal.me or Stripe link families can tap.')}
           ${chargeBack ? `<label class="check-inline"><input id="ks-ac-back" type="checkbox"${a?.fee_charge_back ? ' checked' : ''}> Only some families pay this way, and I charge them the fee</label>
             <p class="field-hint">When a deposit comes in this way, the sale offers to add the fee to their balance.</p>` : ''}
+        </div>
+        <div id="ks-ac-ref"${type === 'transport' ? ' hidden' : ''}>
+          ${field('Referral link to share (optional)', input('ks-ac-ref-link', a?.referral_link ?? '', { type: 'url', inputmode: 'url', placeholder: 'https://…' }))}
+          ${field('Referral code (optional)', input('ks-ac-ref-code', a?.referral_code ?? '', { placeholder: 'e.g. AKBOSTONS' }), 'For families: a discount or a referral, say. Never a login.')}
         </div>`,
       wire: (root) => {
         root.querySelector('#ks-ac-type').addEventListener('change', (e) => {
           root.querySelector('#ks-ac-fee').hidden = !FEE_ACCOUNT_TYPES.includes(e.target.value);
           root.querySelector('#ks-ac-pay').hidden = e.target.value !== 'payment_service';
+          root.querySelector('#ks-ac-ref').hidden = e.target.value === 'transport';
         });
       },
       submitLabel: 'Save',
@@ -436,6 +455,10 @@ class Setup {
         if (!name) return 'What\'s it called?';
         if (!account_type) return `What is ${name}? Pick the closest one.`;
         const changes = { name, account_type, website: q('#ks-ac-site').value.trim() };
+        if (account_type !== 'transport') {
+          changes.referral_link = q('#ks-ac-ref-link').value.trim();
+          changes.referral_code = q('#ks-ac-ref-code').value.trim();
+        }
         if (FEE_ACCOUNT_TYPES.includes(account_type)) {
           changes.fee_percent = num(q('#ks-ac-percent').value);
           changes.fee_fixed = num(q('#ks-ac-fixed').value);

@@ -134,7 +134,7 @@ async function askWhatsMissing(chat, kennel) {
   const dogName = (d) => esc(d?.call_name || d?.registered_name || 'Unknown');
   const parents = (r) => `${dogName(dogsById.get(r.dam_id))} × ${dogName(dogsById.get(r.sire_id))}`;
   const one = (list, a, b) => (list.length === 1 ? a : b);
-  const picked = { dogs: [], litters: [], pairings: [], heats: [] };
+  const picked = { dogs: [], litters: [], pairings: [], heats: [], accounts: [] };
 
   picked.dogs.push(...await askGroup(chat, {
     title: `You have ${plural(g.dogs.length, 'dog')} that ${one(g.dogs, 'isn\'t', 'aren\'t')} on your website. Want to add ${one(g.dogs, 'it', 'them')}? Each gets a page and a card on your Dogs page.`,
@@ -164,7 +164,12 @@ async function askWhatsMissing(chat, kennel) {
     ticked: false,
     submitLabel: 'Show these'
   });
-  const n = picked.dogs.length + picked.litters.length + picked.pairings.length + picked.heats.length;
+  picked.accounts = await askGroup(chat, {
+    title: `${one(g.accounts, 'One of your accounts has', `${plural(g.accounts.length, 'account')} have`)} a referral link or code to share, and ${one(g.accounts, 'isn\'t', 'aren\'t')} on your website. Show ${one(g.accounts, 'it', 'them')} under <strong>Recommended products</strong>, with the link and code? Never a login or a fee.`,
+    items: g.accounts,
+    label: (a) => `<span><strong>${esc(a.name)}</strong>${a.referral_code ? ` <span class="muted">· code ${esc(a.referral_code)}</span>` : ''}</span>`
+  });
+  const n = picked.dogs.length + picked.litters.length + picked.pairings.length + picked.heats.length + picked.accounts.length;
   if (n) {
     await markOnWebsite(picked);
     await chat.say(`Done, ${plural(n, 'change')} marked for your website.`, { typing: 300 });

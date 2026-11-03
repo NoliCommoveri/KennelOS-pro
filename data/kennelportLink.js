@@ -155,8 +155,9 @@ export async function websiteGapsFor(kennel, { marking = [] } = {}) {
 }
 
 // Her ticks from those groups: Show on website on the dogs (and kept pups),
-// litters and pairings named, and heats_online on the girls named.
-export async function markOnWebsite({ dogs = [], litters = [], pairings = [], heats = [] } = {}) {
+// litters, pairings and accounts named, and heats_online on the girls named.
+export async function markOnWebsite({ dogs = [], litters = [], pairings = [], heats = [], accounts = [] } = {}) {
+  for (const id of accounts) await accountRepo.update(id, { show_on_website: true });
   for (const id of dogs) await dogRepo.update(id, { show_on_website: true });
   for (const id of litters) await litterRepo.update(id, { show_on_website: true });
   for (const id of pairings) await pairingRepo.update(id, { show_on_website: true });

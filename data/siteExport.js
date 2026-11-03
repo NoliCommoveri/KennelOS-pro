@@ -361,9 +361,12 @@ export function websiteProducts(accounts = []) {
 // - heats: her breeding girls whose coming heats don't show (heats_online off);
 // - deposits: marked litters past Expected with no accept deposits date (blank
 //   means available straight away). `marking`: ids she is about to mark, counted
-//   as marked here.
-// → { dogs, keptPups, litters, pairings, heats, deposits }, each a list of records.
-export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [] }, { marking = [] } = {}) {
+//   as marked here;
+// - accounts: ones with something to share (a referral link, code or
+//   instructions) not marked, for Recommended products (never transport).
+// → { dogs, keptPups, litters, pairings, heats, deposits, accounts }, each a list.
+export const hasReferral = (a) => Boolean(line(a?.referral_link, 500) || line(a?.referral_code, 40) || line(a?.referral_instructions, 1000));
+export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [], accounts = [] }, { marking = [] } = {}) {
   const mine = (r) => !r.is_archived && r.kennel_id === kennel.id;
   const willMark = new Set(marking);
   const pairingsById = new Map(pairings.map((p) => [p.id, p]));
@@ -377,7 +380,8 @@ export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [] }, 
     litters: liveLitters.filter((l) => !litterMarked(l, pairingsById)),
     pairings: pairings.filter((p) => mine(p) && !isMarked(p) && LIVE_PAIRING_STATUSES.includes(p.status) && !hasLitter.has(p.id)),
     heats: dogs.filter((d) => ownDog(d) && d.sex === 'female' && d.status === 'active_breeding' && !d.heats_online),
-    deposits: liveLitters.filter((l) => l.status !== 'expected' && !ymd(l.accept_deposits_date) && (litterMarked(l, pairingsById) || willMark.has(l.id)))
+    deposits: liveLitters.filter((l) => l.status !== 'expected' && !ymd(l.accept_deposits_date) && (litterMarked(l, pairingsById) || willMark.has(l.id))),
+    accounts: accounts.filter((a) => a && !a.is_archived && !isMarked(a) && a.account_type !== 'transport' && line(a.name, 80) && hasReferral(a))
   };
 }
 
