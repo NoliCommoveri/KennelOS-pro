@@ -65,6 +65,10 @@ export const DOG_KEYS = ['id', 'call_name', 'registered_name', 'sex', 'date_of_b
 // lists the 'registry' section: an older one refuses a field it doesn't know.
 const withRegistry = (keys, on) => (on ? [...keys, 'registry'] : keys);
 const registryOf = (d, on) => (on ? { registry: line(d.registry, 30) } : {});
+// `heat_id` (on a pairing and a litter: the heat it uses, so the website litter
+// made from that heat carries on as the pairing's, with its photos, wording and
+// address) goes only to a Worker whose answer lists the 'heat_id' section.
+const withHeat = (keys, on) => (on ? [...keys, 'heat_id'] : keys);
 export const HEALTH_KEYS = ['id', 'test', 'result', 'normal', 'date'];
 export const LITTER_KEYS = ['id', 'pairing_id', 'name', 'dam_id', 'sire_id', 'dam_name', 'sire_name', 'expected_on', 'born_on', 'ready_on', 'deposits_on', 'prices', 'puppies'];
 export const PRICE_KEYS = ['price_female', 'price_male', 'full_reg_female', 'full_reg_male', 'deposit_female', 'deposit_male'];
@@ -194,12 +198,13 @@ function litterPrices(litter) {
   }, PRICE_KEYS, 'prices');
 }
 
-function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry }) {
+function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry, heatOf }) {
   const pairing = litter.pairing_id ? pairingsById.get(litter.pairing_id) : null;
   const born = litter.status !== 'expected';
   return assertOnlyKeys({
     id: litter.id,
     pairing_id: litter.pairing_id || null,
+    ...(heatOf ? { heat_id: (litter.pairing_id && heatOf.get(litter.pairing_id)) || null } : {}),
     name: line(litter.nickname, 80),
     dam_id: litter.dam_id || null,
     sire_id: litter.sire_id || null,
@@ -211,7 +216,7 @@ function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry })
     deposits_on: ymd(litter.accept_deposits_date),
     prices: prices ? litterPrices(litter) : null,
     puppies: puppyEntries(litter, dogs, registry)
-  }, LITTER_KEYS, 'litter');
+  }, withHeat(LITTER_KEYS, Boolean(heatOf)), 'litter');
 }
 
 // Pairings she shows under Coming up: marked, still on their way, and not yet a
@@ -221,15 +226,16 @@ export function websitePairings(kennel, pairings, litters) {
   return pairings.filter((p) => !p.is_archived && p.kennel_id === kennel.id && isMarked(p) && LIVE_PAIRING_STATUSES.includes(p.status) && !hasLitter.has(p.id));
 }
 
-const pairingEntry = (p, dogsById) => assertOnlyKeys({
+const pairingEntry = (p, dogsById, heatOf) => assertOnlyKeys({
   id: p.id,
+  ...(heatOf ? { heat_id: heatOf.get(p.id) || null } : {}),
   dam_id: p.dam_id || null,
   sire_id: p.sire_id || null,
   dam_name: dogName(dogsById.get(p.dam_id)),
   sire_name: dogName(dogsById.get(p.sire_id)),
   planned_on: ymd(p.planned_date),
   expected_on: ymd(p.expected_due_date)
-}, PAIRING_KEYS, 'pairing');
+}, withHeat(PAIRING_KEYS, Boolean(heatOf)), 'pairing');
 
 // --- heats --------------------------------------------------------------------
 
@@ -242,7 +248,15 @@ const dayNumber = (d) => Math.round(Date.parse(`${d}T00:00:00Z`) / 86400000);
 // planned_date (else the day it was entered) falls from 30 days before to 60 days
 // after; each pairing uses at most one. A used heat leaves: the pairing's own
 // entry, or its litter's, takes over. → [{ id, dam_id, month }], soonest first.
-export function websiteHeats(kennel, { dogs = [], events = [], pairings = [], today }) {
+export function websiteHeats(kennel, opts) {
+  const { heats, heatOf } = heatUse(kennel, opts);
+  const used = new Set(heatOf.values());
+  return heats.filter((h) => !used.has(h.id)).map((h) => ({ id: h.id, dam_id: h.subject_id, month: h.event_date.slice(0, 7) }));
+}
+
+// The heats the website could show, and which one each pairing uses (by the rules
+// above): → { heats: [heat_cycle events], heatOf: Map(pairing id → heat id) }.
+export function heatUse(kennel, { dogs = [], events = [], pairings = [], today }) {
   const dams = new Map(dogs.filter((d) => !d.is_archived && d.kennel_id === kennel.id && d.sex === 'female' && d.heats_online === true).map((d) => [d.id, d]));
   const from = addDaysToYMD(today, -HEAT_KEEP_DAYS);
   const seen = new Set();
@@ -255,7 +269,7 @@ export function websiteHeats(kennel, { dogs = [], events = [], pairings = [], to
     seen.add(k);
     heats.push(ev);
   }
-  const used = new Set();
+  const heatOf = new Map();
   for (const p of pairings.filter((x) => !x.is_archived && dams.has(x.dam_id) && !DEAD_PAIRING_STATUSES.includes(x.status))) {
     const when = ymd(p.planned_date) || ymd(String(p.created_at || '').slice(0, 10));
     if (!when) continue;
@@ -267,9 +281,9 @@ export function websiteHeats(kennel, { dogs = [], events = [], pairings = [], to
       if (gap < -HEAT_USE_BEFORE_DAYS || gap > HEAT_USE_AFTER_DAYS) continue;
       if (!best || Math.abs(gap) < best.gap) best = { h, gap: Math.abs(gap) };
     }
-    if (best) used.add(best.h.id);
+    if (best) heatOf.set(p.id, best.h.id);
   }
-  return heats.filter((h) => !used.has(h.id)).map((h) => ({ id: h.id, dam_id: h.subject_id, month: h.event_date.slice(0, 7) }));
+  return { heats, heatOf };
 }
 
 // --- the waitlist's part: steps, How to pay -----------------------------------
@@ -429,7 +443,7 @@ export function bundleChanges(before = {}, after = {}) {
   for (const [id, l] of l1) {
     const was = l0.get(id);
     if (!was) { out.push(`New litter: ${litterName(l)}${l.puppies?.length ? ` (${l.puppies.length} ${l.puppies.length === 1 ? 'puppy' : 'puppies'})` : ''}`); continue; }
-    const ks = fields(was, l, ['id', 'puppies']);
+    const ks = fields(was, l, ['id', 'heat_id', 'puppies']);
     if (ks.length) out.push(`${litterName(l)}: ${words(ks)} changed`);
     const [p0, p1] = [byId(was.puppies), byId(l.puppies)];
     for (const [pid, p] of p1) {
@@ -447,7 +461,7 @@ export function bundleChanges(before = {}, after = {}) {
   for (const [id, p] of q1) {
     const was = q0.get(id);
     if (!was) out.push(`New under Coming up: ${pairName(p)}`);
-    else if (fields(was, p, ['id']).length) out.push(`${pairName(p)}: ${words(fields(was, p, ['id']))} changed`);
+    else if (fields(was, p, ['id', 'heat_id']).length) out.push(`${pairName(p)}: ${words(fields(was, p, ['id', 'heat_id']))} changed`);
   }
   for (const [id, p] of q0) if (!q1.has(id)) out.push(`${pairName(p)}: off Coming up`);
 
@@ -489,12 +503,13 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   const tests = completedTestsByDog(events);
   const config = waitlistConfig(kennel);
   const registry = Array.isArray(sections) && sections.includes('registry');
-  const ctx = { dogsById, pairingsById, dogs, prices, registry };
+  const heatOf = Array.isArray(sections) && sections.includes('heat_id') ? heatUse(kennel, { dogs, events, pairings, today }).heatOf : null;
+  const ctx = { dogsById, pairingsById, dogs, prices, registry, heatOf };
 
   const shown = {
     dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry)),
     litters: websiteLitters(kennel, litters, pairingsById).map((l) => litterEntry(l, ctx)),
-    pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById)),
+    pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById, heatOf)),
     heats: websiteHeats(kennel, { dogs, events, pairings, today }).map((h) => assertOnlyKeys({ ...h, dam_name: dogName(dogsById.get(h.dam_id)) }, HEAT_KEYS, 'heat'))
   };
   const products = Array.isArray(sections) && sections.includes('products') ? websiteProducts(accounts) : null;

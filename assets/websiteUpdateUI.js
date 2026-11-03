@@ -16,7 +16,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import {
   getWebsiteLink, connectWebsite, websiteSummary, pendingWebsiteOffer, useSiteAsKennelWebsite, keepKennelWebsite,
-  websiteGapsFor, markOnWebsite, setDepositsDate, websiteFacts, setWebsitePrices, pendingWebsiteChanges, KennelportError
+  websiteGapsFor, markOnWebsite, setDepositsDate, websiteFacts, setWebsitePrices, pendingWebsiteChanges, websiteSnapshot, KennelportError
 } from '../data/kennelportLink.js';
 import { waitlistIsSetUp } from '../data/waitlistRules.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
@@ -296,19 +296,44 @@ export async function offerWebsiteFor(chat, { dogIds = [], litterIds = [] } = {}
   return marked;
 }
 
+// What each linked website would be sent as a task starts (kels.js startTask):
+// kennel id → snapshot. Afterwards Kels asks only when the task changed it, and
+// lists only those changes, so changes she already said Not now to (or made on
+// another page) aren't put to her again after every task.
+let baselines = null;
+export async function noteWebsiteBaseline() {
+  const next = new Map();
+  for (const k of await ownKennels()) {
+    const snap = await websiteSnapshot(k);
+    if (snap) next.set(k.id, snap);
+  }
+  baselines = next;
+}
+
 // After any of Kels's tasks (kels.js onExit, and Add dogs / Record a new litter
-// before their last step): when a linked website would change with an update, ask
-// whether to check; on a yes, what would change (pendingWebsiteChanges) and Update
-// website. The same changes aren't asked about twice on one page.
+// before their last step): when the task changed what a linked website would show,
+// ask whether to check; on a yes, what it changed (pendingWebsiteChanges), how many
+// earlier changes are waiting too, and Update website. With no baseline (a page
+// that didn't take one), everything waiting since the last update. The same
+// changes aren't asked about twice on one page.
 const asked = new Set();
 const SHOW_LINES = 12;
 export async function offerWebsiteCheck(chat) {
   const linked = [];
   for (const k of await ownKennels()) if (await getWebsiteLink(k.id)) linked.push(k);
   for (const kennel of linked) {
-    const ch = await pendingWebsiteChanges(kennel);
+    const since = baselines?.get(kennel.id) || null;
+    const ch = await pendingWebsiteChanges(kennel, { since });
     if (ch.error || (!ch.never && !ch.lines.length)) continue;
-    const key = `${kennel.id}:${ch.never ? 'never' : JSON.stringify(ch.lines)}`;
+    // This task changed nothing the website shows: nothing to ask. Asked or not,
+    // the next check counts from here.
+    if (since) {
+      baselines.set(kennel.id, ch.now);
+      if (!ch.fresh.length) continue;
+    }
+    const lines = since ? ch.fresh : ch.lines || [];
+    const earlier = since && !ch.never ? ch.lines.filter((t) => !ch.fresh.includes(t)).length : 0;
+    const key = `${kennel.id}:${ch.never && !since ? 'never' : JSON.stringify(lines)}`;
     if (asked.has(key)) continue;
     asked.add(key);
     const whose = linked.length > 1 ? ` (${esc(kennel.kennel_name || 'your kennel')})` : '';
@@ -319,9 +344,9 @@ export async function offerWebsiteCheck(chat) {
       const c = await websiteSummary(kennel);
       await chat.say(`Your website hasn't been updated from this device yet, so I'd send everything you've marked: ${esc([plural(c.dogs, 'dog'), plural(c.litters, 'litter'), plural(c.pairings, 'pairing'), plural(c.heats, 'planned heat')].join(', '))}, with each puppy's status.`);
     } else {
-      const shown = ch.lines.slice(0, SHOW_LINES);
-      const more = ch.lines.length - shown.length;
-      await chat.say(`An update would change ${plural(ch.lines.length, 'thing')} on your website:<ul class="kels-list">${shown.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>${more ? `…and ${plural(more, 'more change')}.` : ''}`);
+      const shown = lines.slice(0, SHOW_LINES);
+      const more = lines.length - shown.length;
+      await chat.say(`${since ? 'This changes' : 'An update would change'} ${plural(lines.length, 'thing')} on your website:<ul class="kels-list">${shown.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>${more ? `…and ${plural(more, 'more change')}.` : ''}${earlier ? ` An update also sends ${plural(earlier, 'earlier change')} still waiting.` : ''}`);
     }
     const go = await chat.choose([{ label: 'Update website', value: 'send', primary: true }, { label: 'Not now', value: 'no' }]);
     if (go !== 'send') { await chat.say('Okay. Ask me to <strong>Update my website</strong> whenever you\'re ready.', { typing: 300 }); continue; }

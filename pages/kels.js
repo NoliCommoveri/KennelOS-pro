@@ -393,6 +393,11 @@ async function startTask(task, opts = {}) {
   // resumed draft is the same work, not a new start.
   if (!task.id.startsWith('resume-')) setKelsTaskUse(withStart(getKelsTaskUse(), task.id, todayYMD()));
   running(task);
+  // What a linked website would show as the task starts, so the check after it
+  // asks only about what it changed.
+  if (!editionFlags.demoMode && await anyWebsiteLink()) {
+    try { await (await import('../assets/websiteUpdateUI.js')).noteWebsiteBaseline(); } catch { /* then it asks about all that's waiting */ }
+  }
   return task.run({ ...opts, onExit, handoff, onSaved: () => running(null) });
 }
 

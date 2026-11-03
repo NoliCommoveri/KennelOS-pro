@@ -235,8 +235,10 @@ const sentCopy = ({ bundle_id: _id, sent_at: _at, ...rest }) => rest;
 // What an Update website would change now, against what this device sent last
 // (siteExport.bundleChanges): → { never: true } when this device hasn't sent yet,
 // { lines: [..] } (empty when nothing would change), or { error } when the bundle
-// can't be built (a cap she's over, say). No network.
-export async function pendingWebsiteChanges(kennel, { today = todayYMD() } = {}) {
+// can't be built (a cap she's over, say). With `since` (a websiteSnapshot taken
+// earlier), also `fresh`: the changes made since then, and `now`, the snapshot
+// now. No network.
+export async function pendingWebsiteChanges(kennel, { today = todayYMD(), since = null } = {}) {
   const link = await getWebsiteLink(kennel?.id);
   if (!link) return { lines: [] };
   let now;
@@ -245,8 +247,22 @@ export async function pendingWebsiteChanges(kennel, { today = todayYMD() } = {})
   } catch (err) {
     return { error: err.message || String(err) };
   }
-  if (!link.sent) return { never: true };
-  return { lines: bundleChanges(link.sent, now) };
+  const out = link.sent ? { lines: bundleChanges(link.sent, now) } : { never: true };
+  if (since) Object.assign(out, { fresh: bundleChanges(since, now), now });
+  return out;
+}
+
+// What the website would be sent now, as pendingWebsiteChanges compares it: null
+// when no website is linked here or it can't be built. Kels takes one as a task
+// starts, so afterwards it asks only about what that task changed.
+export async function websiteSnapshot(kennel, { today = todayYMD() } = {}) {
+  const link = await getWebsiteLink(kennel?.id);
+  if (!link) return null;
+  try {
+    return sentCopy(buildSiteBundle({ kennel, ...(await records(kennel)), today, bundleId: 'compare-0000', prices: link.site?.kennelos_prices === true, sections: link.site?.sections || [] }));
+  } catch {
+    return null;
+  }
 }
 
 // Send this kennel's website what she marked. → { summary, filled, site }:
