@@ -28,25 +28,15 @@ import { editionFlags } from './editionConfig.js';
 import { buildSiteBundle, websiteCounts, websiteGaps, bundleChanges } from './siteExport.js';
 import { redeemLinkCode, linkStatus, stopLink, sendBundle, setSiteSettings, websiteLinkOffered, KennelportError } from './kennelportApi.js';
 import { getWebsiteLink, setWebsiteLink, noteWebsiteAnswer, clearWebsiteLink, anyWebsiteLink } from './kennelportLinkStore.js';
+import { isWebsiteAddress, originOf } from './websiteAddress.js';
 
-export { websiteLinkOffered, KennelportError, getWebsiteLink, anyWebsiteLink };
+export { websiteLinkOffered, KennelportError, getWebsiteLink, anyWebsiteLink, isWebsiteAddress };
 
 // --- pure: what the site's answer changes here --------------------------------
 
-const originOf = (url) => {
-  try { return new URL(String(url)).origin; } catch { return null; }
-};
-const KENNELPORT_ORIGIN = /^https:\/\/([a-z0-9-]+\.)*kennelport\.com$/;
-
-// Was this address written by KennelPort (so it may be replaced or blanked)? Any
-// kennelport.com page, or a page on her site's own address (her custom domain).
-// `sites`: the site facts this device has had (now and before).
-export function isWebsiteAddress(url, sites = []) {
-  const o = originOf(url);
-  if (!o) return false;
-  if (KENNELPORT_ORIGIN.test(o)) return true;
-  return sites.some((s) => s?.website && originOf(s.website) === o);
-}
+// Was this address written by KennelPort (so it may be replaced or blanked)?
+// isWebsiteAddress (websiteAddress.js): any kennelport.com page, or a page on her
+// site's own address.
 
 // The url / photos_url changes an answer's addresses make (KennelPort plan 5.4).
 // `addresses`: { dogs: { kennelosDogId: url }, litters: { kennelosLitterId: url } }.

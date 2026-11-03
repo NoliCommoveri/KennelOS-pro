@@ -28,6 +28,7 @@ import {
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
+import { isWebsiteAddress } from './websiteAddress.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
@@ -104,19 +105,42 @@ export function photoLink(v) {
 export const dogPhotosLink = (dog) => (dog && dog.photos_online ? photoLink(dog.url) : null);
 const withPhotos = (url) => (url ? { photos_url: url } : {});
 
-// A pup as a family may see it: call name, sex, color, and its photos link where
-// she shows it. Nothing else.
-const publicPup = (d) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings), registration: orNull(d.intended_registration), ...withPhotos(dogPhotosLink(d)) });
+// A pup's link as family pages show it: its page on her KennelPort website when its
+// `url` is one (Update website fills it; the page is public anyway, so no
+// photos_online tick is needed: `page: true`), else its photos link where she
+// shows it (dogPhotosLink).
+function pupLink(d, kennel) {
+  const page = isWebsiteAddress(d.url, [kennel]) ? photoLink(d.url) : null;
+  if (page) return { photos_url: page, page: true };
+  return withPhotos(dogPhotosLink(d));
+}
+
+// A litter's link as family pages show it: its page on her KennelPort website when
+// its `photos_url` is one (Update website fills it, and a pup's page sits under it),
+// else the photos link she set. `page: true` so a turn reads "View litter on our
+// website" rather than "See the litter's photos".
+function litterLink(litter, kennel) {
+  const url = photoLink(litter.photos_url);
+  if (!url) return {};
+  return isWebsiteAddress(url, [kennel]) ? { photos_url: url, page: true } : { photos_url: url };
+}
+
+// A pup as a family may see it: call name, sex, color, the registration it's
+// planned for (null: undecided, either), its registry ("AKC"; null when none),
+// and its link. Nothing else.
+const registryOf = (d) => orNull(String(d.registry ?? '').trim().slice(0, 30));
+const publicPup = (d, kennel) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings), registration: orNull(d.intended_registration), registry: registryOf(d), ...pupLink(d, kennel) });
 
 // A litter's expected prices as a family on their turn may see them (her setting
-// turn_prices): per registration the pups of it are planned for, the male and
+// turn_prices): per registration the pups of it are planned for (an undecided pup
+// counts as Limited, and brings Full too, for its "($3,700 for full)"), the male and
 // female price (saleDefaults.expectedPricing, the price a sale starts at: Full
 // includes her surcharge, never shown apart), and her expected deposit for a male
 // and a female.
 // Her listed prices only: never a sale's amount or anything a family owes. null
 // when she set none.
 function litterPrices(litter, pups) {
-  const regs = [...new Set(pups.map((d) => d.intended_registration || 'limited'))].sort();
+  const regs = [...new Set(pups.flatMap((d) => (d.intended_registration ? [d.intended_registration] : ['limited', 'full'])))].sort();
   const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
   const by = Object.fromEntries(regs.map((reg) => [reg, {
     male: num(expectedPricing({ sex: 'male' }, litter, reg).price),
@@ -473,10 +497,10 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       whelp_date: orNull(litter.whelp_date),
       ready_date: orNull(litter.estimated_ready_date),
       picks_open: Boolean(litter.picks_opened_date),
-      ...withPhotos(photoLink(litter.photos_url)),
+      ...litterLink(litter, kennel),
       ...(config.turn_prices !== false ? { prices: litterPrices(litter, pups.filter((d) => isPupAvailable(d, sales))) } : {}),
       pairing_id: orNull(litter.pairing_id),
-      pups: pups.filter((d) => isPupAvailable(d, sales)).sort(byId).map(publicPup),
+      pups: pups.filter((d) => isPupAvailable(d, sales)).sort(byId).map((d) => publicPup(d, kennel)),
       open_offer_entry_id: open ? open.entry_id : null
     };
   }
@@ -513,7 +537,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Each record's own pup's sale (familySale): a family back on the list for a
     // second pup gets its first pup's cards only on that pup's record.
     saleFor: (entry) => familySale(entry, sales, kennelOffers, live),
-    pickedPup: (id) => (dogsById.get(id) ? publicPup(dogsById.get(id)) : null),
+    pickedPup: (id) => (dogsById.get(id) ? publicPup(dogsById.get(id), kennel) : null),
     // The deposit for a family's pick: on its sale, else her listed one for the pup.
     depositFor: (o) => {
       const sale = o.sale_id ? sales.find((x) => x.id === o.sale_id) : null;

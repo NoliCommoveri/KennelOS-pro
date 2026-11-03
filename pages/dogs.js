@@ -106,6 +106,7 @@ async function init() {
       { header: 'Call name', sortable: true, sortFn: nameAsc, cell: (d) => `<strong>${esc(d.call_name)}</strong>` },
       { header: 'Registered name', sortable: true, sortFn: registeredNameAsc, collapse: true, cell: (d) => d.registered_name ? esc(d.registered_name) : '<span class="faint">—</span>' },
       { header: 'Sex', sortable: true, sortFn: dogSexOrder, cell: (d) => sexBadge(d.sex) },
+      { header: 'Registry', collapse: true, cell: (d) => d.registry ? esc(d.registry) : '<span class="faint">—</span>' },
       { header: 'Breed', sortable: true, sortFn: breedAsc, collapse: true, cell: (d) => esc(d.breed || '—') },
       { header: 'DOB', sortable: true, sortFn: dobAscUndatedLast, collapse: true, cell: (d) => d.date_of_birth ? esc(fmtDate(d.date_of_birth)) : '<span class="faint">—</span>' },
       { header: 'Status', sortable: true, sortFn: dogStatusOrder, cell: (d) => badge(DOG_STATUS, d.status) },
@@ -121,6 +122,7 @@ async function init() {
       columns: [
         { header: 'Call name', value: (d) => d.call_name || '' },
         { header: 'Registered name', value: (d) => d.registered_name || '' },
+        { header: 'Registry', value: (d) => d.registry || '' },
         { header: 'Sex', value: (d) => label(SEX, d.sex) },
         { header: 'Breed', value: (d) => d.breed || '' },
         { header: 'DOB', value: (d) => d.date_of_birth || '' },

@@ -148,7 +148,7 @@ async function testForm(chat, dog, name, tests) {
         ${field('Date', `<input id="ht-date" type="date" value="${esc(todayYMD())}">`)}
       </div>
       ${field('Result', `<input id="ht-result" type="text" list="ht-results" autocomplete="off" placeholder="e.g. Good, Clear, Grade 2, N/N"><datalist id="ht-results">${results.map((r) => `<option value="${esc(r)}"></option>`).join('')}</datalist>`, 'Optional. For OFA, its rating.')}
-      ${field('Normal or abnormal', `<select id="ht-outcome"><option value="">Not marked</option>${TEST_OUTCOME.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>`, 'Optional. Your online waitlist can show only the results marked Normal.')}
+      ${field('Normal or abnormal', `<select id="ht-outcome"><option value="">Not marked</option>${TEST_OUTCOME.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>`, 'Optional. Your website keeps off only results marked Abnormal; your online waitlist can show only the results marked Normal.')}
       <div id="ht-lab-wrap">${field('Lab (optional)', '<input id="ht-lab" type="text" autocomplete="off" placeholder="e.g. Embark, Paw Print Genetics">')}</div>
       ${docs ? filePicker('ht-doc', { label: 'Certificate or report (optional)', hint: 'A PDF, or photos of the pages. Filed on their page under Documents.' }) : ''}`,
     submitLabel: 'Log result',

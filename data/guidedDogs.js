@@ -102,7 +102,7 @@ export const noBreeder = () => ({
 export function newDog() {
   return {
     key: key(),
-    call_name: '', sex: '', breed: '', date_of_birth: '', registered_name: '', registration_number: '',
+    call_name: '', sex: '', breed: '', date_of_birth: '', registry: '', registered_name: '', registration_number: '',
     color_markings: '', microchip_id: '', status: '', ownership_type: '',
     ownerId: null, ownerName: '', kennelId: null,
     dam: noParent(), sire: noParent(),
@@ -342,7 +342,7 @@ export function reviewSections(draft, names = {}, { kennelNames = false } = {}) 
     const born = blank(d.date_of_birth) ? '' : `born ${fmt(d.date_of_birth)}`;
     lines.push([label(SEX, d.sex), trimmed(d.breed), born].filter(Boolean).join(', ') + '.');
     const reg = [trimmed(d.registered_name), blank(d.registration_number) ? '' : `#${trimmed(d.registration_number)}`].filter(Boolean).join(' ');
-    if (reg) lines.push(`Registered: ${reg}.`);
+    if (!blank(d.registry) || reg) lines.push(`Registered${blank(d.registry) ? '' : ` with ${trimmed(d.registry)}`}${reg ? `: ${reg}` : ''}.`);
     const more = [blank(d.color_markings) ? '' : trimmed(d.color_markings), blank(d.microchip_id) ? '' : `microchip ${trimmed(d.microchip_id)}`].filter(Boolean);
     if (more.length) lines.push(`${more.join(', ')}.`.replace(/^./, (c) => c.toUpperCase()));
     const owner = OWNER_REQUIRED.includes(d.ownership_type)
@@ -375,7 +375,7 @@ function dogFields(d) {
     status: d.status,
     ownership_type: d.ownership_type
   };
-  for (const k of ['date_of_birth', 'registered_name', 'registration_number', 'color_markings', 'microchip_id']) {
+  for (const k of ['date_of_birth', 'registry', 'registered_name', 'registration_number', 'color_markings', 'microchip_id']) {
     if (!blank(d[k])) fields[k] = trimmed(d[k]);
   }
   return fields;

@@ -840,7 +840,7 @@ async function renderRosterSection() {
         const openBtn = hideArchive ? '' : `<a class="btn btn-sm" href="dog.html?id=${encodeURIComponent(d.id)}">Open →</a>`;
         return `
         <li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
-          <span>${badge(SEX, d.sex)} <strong>${esc(d.call_name)}</strong>${d.registered_name ? ` <span class="faint">${esc(d.registered_name)}</span>` : ''} ${badge(DOG_STATUS, d.status)}${d.intended_registration ? ' ' + badge(REGISTRATION_TYPE, d.intended_registration) : ''}${archBadge}</span>
+          <span>${badge(SEX, d.sex)} <strong>${esc(d.call_name)}</strong>${d.registered_name ? ` <span class="faint">${esc(d.registered_name)}</span>` : ''} ${badge(DOG_STATUS, d.status)}${d.intended_registration ? ' ' + badge(REGISTRATION_TYPE, d.intended_registration) : ''}${d.registry ? ` <span class="faint">${esc(d.registry)}</span>` : ''}${archBadge}</span>
           ${openBtn}
         </li>`;
       }).join('') + `</ul>`

@@ -407,6 +407,16 @@ function screens(draft, data, ctx) {
       }
     }),
 
+    // Once for the litter, starting on the dam's registry.
+    registry: () => {
+      if (draft.registry === null) draft.registry = ctx.dam?.registry || '';
+      return {
+        title: 'Will these puppies belong to any registry, like AKC or CKC?',
+        html: `${field('Registry', input('gl-registry', draft.registry, { placeholder: 'AKC, CKC, UKC…' }), 'Leave it empty if they won\'t. Puppies planned as Unregistered get none. You can change one later on its page.')}`,
+        read: (root) => { draft.registry = val(root, 'gl-registry'); }
+      };
+    },
+
     prices: () => {
       const p = draft.prices;
       const moneyInput = (k) => input(`gl-pr-${k}`, p[k], { type: 'number', min: 0, step: '0.01', inputmode: 'decimal' });
@@ -527,6 +537,7 @@ function answerFor(stepId, draft, data) {
     return [p.call_name, p.sex === 'female' ? 'Girl' : 'Boy', p.color_markings, p.birth_oz ? `${p.birth_oz} oz` : ''].filter(Boolean).join(' · ');
   }
   switch (stepId) {
+    case 'registry': return draft.registry ? draft.registry : 'No registry';
     case 'match-litter': return draft.litterChoice === 'none' ? 'No, this is a new litter' : 'Yes, that one';
     case 'match-pairing': return draft.pairingChoice === 'none' ? 'No, a different breeding' : 'Yes, that one';
     case 'bred': return [draft.bredDate ? G.fmt(draft.bredDate) : 'Not sure of the date', draft.lastBredDate ? `and ${G.fmt(draft.lastBredDate)}` : '', draft.method ? descriptor(PAIRING_METHOD, draft.method).label : ''].filter(Boolean).join(' · ');

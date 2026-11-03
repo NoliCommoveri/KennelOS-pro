@@ -61,6 +61,10 @@ export class SiteExportError extends Error {
 export const BUNDLE_KEYS = ['format', 'bundle_id', 'kennel_id', 'sent_at', 'waitlist_public_id', 'dogs', 'litters', 'pairings', 'heats', 'extras', 'products', 'steps', 'payment'];
 export const PRODUCT_KEYS = ['id', 'name', 'link_url', 'code', 'code_note'];
 export const DOG_KEYS = ['id', 'call_name', 'registered_name', 'sex', 'date_of_birth', 'color', 'status', 'died_on', 'titles', 'health'];
+// `registry` (a dog's and a puppy's, "AKC"…) goes only to a Worker whose answer
+// lists the 'registry' section: an older one refuses a field it doesn't know.
+const withRegistry = (keys, on) => (on ? [...keys, 'registry'] : keys);
+const registryOf = (d, on) => (on ? { registry: line(d.registry, 30) } : {});
 export const HEALTH_KEYS = ['id', 'test', 'result', 'normal', 'date'];
 export const LITTER_KEYS = ['id', 'pairing_id', 'name', 'dam_id', 'sire_id', 'dam_name', 'sire_name', 'expected_on', 'born_on', 'ready_on', 'deposits_on', 'prices', 'puppies'];
 export const PRICE_KEYS = ['price_female', 'price_male', 'full_reg_female', 'full_reg_male', 'deposit_female', 'deposit_male'];
@@ -104,12 +108,13 @@ const isMarked = (r) => r?.show_on_website === true;
 
 // --- dogs ---------------------------------------------------------------------
 
-function dogEntry(dog, titles, tests) {
+function dogEntry(dog, titles, tests, registry = false) {
   const done = (tests.get(dog.id) || []).slice(0, SITE_MAX.health);
   return assertOnlyKeys({
     id: dog.id,
     call_name: line(dog.call_name || dog.registered_name, 40),
     registered_name: line(dog.registered_name, 120),
+    ...registryOf(dog, registry),
     sex: dog.sex,
     date_of_birth: ymd(dog.date_of_birth),
     color: line(dog.color_markings, 40),
@@ -122,10 +127,12 @@ function dogEntry(dog, titles, tests) {
       id: `test:${t.name.trim().toLowerCase()}`.slice(0, 80),
       test: line(t.name, 60),
       result: line(t.result, 60),
-      normal: t.outcome === 'Normal',
+      // Marked Normal: true; Abnormal: false; not marked: null, which the website
+      // counts as normal (only a result she marked Abnormal is kept off).
+      normal: t.outcome === 'Normal' ? true : t.outcome === 'Abnormal' ? false : null,
       date: ymd(t.date)
     }, HEALTH_KEYS, 'health'))
-  }, DOG_KEYS, 'dog');
+  }, withRegistry(DOG_KEYS, registry), 'dog');
 }
 
 // The dogs she shows: her own kennel's, marked, with a status the website has.
@@ -147,7 +154,7 @@ export function puppyStatus(pup) {
   return DISPOSITION_ON_SITE[pup.disposition] ?? 'undecided';
 }
 
-function puppyEntries(litter, dogs) {
+function puppyEntries(litter, dogs, registry = false) {
   return dogs
     .filter((d) => d.litter_id === litter.id && !d.is_archived && !['deceased', 'external_reference'].includes(d.status) && SEXES.includes(d.sex))
     .sort((a, b) => String(a.call_name || '').localeCompare(String(b.call_name || '')) || String(a.id).localeCompare(String(b.id)))
@@ -158,8 +165,9 @@ function puppyEntries(litter, dogs) {
       sex: p.sex,
       color: line(p.color_markings, 40),
       registration: REGISTRATIONS.includes(p.intended_registration) ? p.intended_registration : null,
-      status: puppyStatus(p)
-    }, PUPPY_KEYS, 'puppy'));
+      status: puppyStatus(p),
+      ...registryOf(p, registry)
+    }, withRegistry(PUPPY_KEYS, registry), 'puppy'));
 }
 
 // --- litters and pairings -----------------------------------------------------
@@ -186,7 +194,7 @@ function litterPrices(litter) {
   }, PRICE_KEYS, 'prices');
 }
 
-function litterEntry(litter, { dogsById, pairingsById, dogs, prices }) {
+function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry }) {
   const pairing = litter.pairing_id ? pairingsById.get(litter.pairing_id) : null;
   const born = litter.status !== 'expected';
   return assertOnlyKeys({
@@ -202,7 +210,7 @@ function litterEntry(litter, { dogsById, pairingsById, dogs, prices }) {
     ready_on: born ? ymd(litter.estimated_ready_date) : null,
     deposits_on: ymd(litter.accept_deposits_date),
     prices: prices ? litterPrices(litter) : null,
-    puppies: puppyEntries(litter, dogs)
+    puppies: puppyEntries(litter, dogs, registry)
   }, LITTER_KEYS, 'litter');
 }
 
@@ -393,7 +401,7 @@ export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [], ac
 const PUPPY_WORDS = { available: 'Available', placed: 'Spoken for', staying: 'Staying with us', undecided: 'Still deciding', hidden: 'Hidden', reserved: 'Reserved' };
 const DOG_WORDS = { puppy: 'up and coming', active_breeding: 'at home', for_sale: 'looking for a home', retired_breeding: 'retired', deceased: 'in memory' };
 const FIELD_WORDS = {
-  call_name: 'name', registered_name: 'registered name', sex: 'sex', date_of_birth: 'birthday', color: 'colour', died_on: 'date of death',
+  call_name: 'name', registered_name: 'registered name', registry: 'registry', sex: 'sex', date_of_birth: 'birthday', color: 'colour', died_on: 'date of death',
   titles: 'titles', health: 'health results', name: 'name', dam_id: 'dam', sire_id: 'sire', dam_name: 'dam', sire_name: 'sire',
   expected_on: 'expected date', born_on: 'birth date', ready_on: 'going-home date', deposits_on: 'deposits date', prices: 'prices',
   planned_on: 'planned date', month: 'month', pairing_id: 'pairing', registration: 'registration'
@@ -480,10 +488,11 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   const titles = titlesByDog(events);
   const tests = completedTestsByDog(events);
   const config = waitlistConfig(kennel);
-  const ctx = { dogsById, pairingsById, dogs, prices };
+  const registry = Array.isArray(sections) && sections.includes('registry');
+  const ctx = { dogsById, pairingsById, dogs, prices, registry };
 
   const shown = {
-    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests)),
+    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry)),
     litters: websiteLitters(kennel, litters, pairingsById).map((l) => litterEntry(l, ctx)),
     pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById)),
     heats: websiteHeats(kennel, { dogs, events, pairings, today }).map((h) => assertOnlyKeys({ ...h, dam_name: dogName(dogsById.get(h.dam_id)) }, HEAT_KEYS, 'heat'))

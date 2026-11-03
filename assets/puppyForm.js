@@ -3,8 +3,9 @@
 // ordinary Dog records via dogRepo.create(), with the litter-derived fields
 // (litter_id, dam_id, sire_id, breed, date_of_birth, status:puppy,
 // ownership_type:owned) pre-filled. call_name and sex are the only per-puppy
-// fields required (Dog's "required to save" list); disposition and intended
-// registration are offered too (applied to all on the bulk form). Everything
+// fields required (Dog's "required to save" list); disposition, intended
+// registration and the registry ("Will these puppies belong to any registry?",
+// starting on the dam's) are offered too (applied to all on the bulk form). Everything
 // else is edited later on Dog Detail.
 import { dogRepo } from '../data/dogRepo.js';
 import { offerKeeperTests } from './keeperTests.js';
@@ -23,6 +24,18 @@ function dispositionOptions(current) {
 // Intended registration (Dog.intended_registration); blank = not decided yet.
 function registrationOptions(current) {
   return `<option value="">Not decided</option>` + REGISTRATION_TYPE.map((r) => `<option value="${esc(r.value)}"${r.value === current ? ' selected' : ''}>${esc(r.label)}</option>`).join('');
+}
+
+// The registry question (Dog.registry), once for what's being added; it starts on
+// the dam's. Left empty, or planned as Unregistered: none.
+function registryField(question, dam) {
+  return `<div class="field" style="grid-column:1/-1;"><label for="pf-registry">${esc(question)}</label>
+    <input id="pf-registry" type="text" value="${esc(dam?.registry || '')}" placeholder="AKC, CKC, UKC…">
+    <p class="field-hint">Leave it empty if not.</p></div>`;
+}
+function readRegistry(modal, intendedRegistration) {
+  const v = modal.querySelector('#pf-registry').value.trim();
+  return v && intendedRegistration !== 'none' ? { registry: v } : {};
 }
 
 function modalShell(titleText) {
@@ -68,6 +81,7 @@ export function openAddPuppyForm({ litter, dam, onSaved }) {
         <select id="pf-disposition">${dispositionOptions('undecided')}</select></div>
       <div class="field"><label>Registration</label>
         <select id="pf-registration">${registrationOptions('')}</select></div>
+      ${registryField('Will this puppy belong to any registry, like AKC or CKC?', dam)}
     </div>
     <div id="pf-error"></div>
     <div class="form-actions">
@@ -103,7 +117,7 @@ export function openAddPuppyForm({ litter, dam, onSaved }) {
       return;
     }
     try {
-      const puppy = await dogRepo.create({ ...base, call_name, sex, disposition, intended_registration });
+      const puppy = await dogRepo.create({ ...base, call_name, sex, disposition, intended_registration, ...readRegistry(modal, intended_registration) });
       close();
       await offerKeeperTests(puppy);
       if (openAfter) { location.href = `dog.html?id=${encodeURIComponent(puppy.id)}`; return; }
@@ -148,6 +162,7 @@ export function openAddPuppiesForm({ litter, dam, existingCount = 0, onSaved }) 
         <select id="pf-disposition">${dispositionOptions('undecided')}</select></div>
       <div class="field"><label>Registration (applies to all)</label>
         <select id="pf-registration">${registrationOptions('')}</select></div>
+      ${registryField('Will these puppies belong to any registry, like AKC or CKC?', dam)}
     </div>
     <div id="pf-error"></div>
     <div class="form-actions">
@@ -168,6 +183,7 @@ export function openAddPuppiesForm({ litter, dam, existingCount = 0, onSaved }) 
     const females = Number(modal.querySelector('#pf-females').value || 0);
     const disposition = modal.querySelector('#pf-disposition').value;
     const intended_registration = modal.querySelector('#pf-registration').value || null;
+    const registry = readRegistry(modal, intended_registration);
     const whole = (n) => Number.isInteger(n) && n >= 0;
     if (!whole(males) || !whole(females) || males + females < 1 || males + females > 20) {
       modal.querySelector('#pf-error').innerHTML = `<div class="inline-error">Enter whole numbers of males and females, 1 to 20 puppies in all.</div>`;
@@ -179,7 +195,7 @@ export function openAddPuppiesForm({ litter, dam, existingCount = 0, onSaved }) 
       // Number the placeholders continuing past any puppies already on the roster.
       const made = [];
       for (let i = 0; i < sexes.length; i++) {
-        made.push(await dogRepo.create({ ...base, call_name: `Puppy ${existingCount + i + 1}`, sex: sexes[i], disposition, intended_registration }));
+        made.push(await dogRepo.create({ ...base, call_name: `Puppy ${existingCount + i + 1}`, sex: sexes[i], disposition, intended_registration, ...registry }));
       }
       close();
       await offerKeeperTests(made);

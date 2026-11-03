@@ -112,6 +112,9 @@ export function emptyDraft({ litterId = null } = {}) {
     kennelId: null,     // chosen on the kennel step (only asked when it can't be worked out)
     autoKennelId: null, // worked out from the parents / breeding / active kennel
     pups: [],
+    // The puppies' registry ("AKC"…), asked once for the litter: null = not asked
+    // yet (the step starts on the dam's); '' = none.
+    registry: null,
     prices: {
       expected_price_male: '', expected_deposit_male: '', full_reg_surcharge_male: '',
       expected_price_female: '', expected_deposit_female: '', full_reg_surcharge_female: ''
@@ -277,7 +280,7 @@ export function stepsFor(draft, ctx = {}) {
   if (!ctx.litter?.delivery_type) steps.push('delivery');
   if (ctx.needsKennel) steps.push('kennel');
   draft.pups.forEach((_, i) => steps.push(`pup:${i}`));
-  if (draft.pups.length) steps.push('plans', 'prices', 'dates', 'extras');
+  if (draft.pups.length) steps.push('plans', 'registry', 'prices', 'dates', 'extras');
   else steps.push('dates');
   steps.push('review');
   return steps;
@@ -490,6 +493,10 @@ export function reviewSections(draft, ctx = {}) {
         return `${trimmed(p.call_name)}: ${label(DISPOSITION, p.disposition)}, ${label(REGISTRATION_TYPE, p.intended_registration)} registration${price ? `, ${price}` : ''}`;
       })
     });
+    if (!blank(draft.registry)) {
+      const left = draft.pups.filter((p) => !pupRegistry(p, draft.registry)).length;
+      sections.push({ title: 'Registry', step: 'registry', lines: [`${trimmed(draft.registry)} for ${left ? `every puppy but the ${left} marked Unregistered` : 'every puppy'}.`] });
+    }
   }
 
   const dates = [];
@@ -532,13 +539,18 @@ function litterFieldsFromDraft(draft) {
   return fields;
 }
 
-function pupFields(pup) {
+// The litter's registry goes on every pup but one planned as Unregistered.
+export const pupRegistry = (pup, registry) => (!blank(registry) && pup.intended_registration !== 'none' ? trimmed(registry) : null);
+
+function pupFields(pup, registry = null) {
   const fields = {
     call_name: trimmed(pup.call_name),
     sex: pup.sex,
     disposition: pup.disposition || 'undecided',
     intended_registration: pup.intended_registration || null
   };
+  const reg = pupRegistry(pup, registry);
+  if (reg) fields.registry = reg;
   for (const k of ['color_markings', 'microchip_id', 'url']) if (!blank(pup[k])) fields[k] = trimmed(pup[k]);
   return fields;
 }
@@ -674,14 +686,15 @@ export async function saveGuidedLitter(draft, { onProgress = () => {} } = {}) {
   const base = baseFromLitter(litter, dam);
   for (const pup of draft.pups) {
     if (!pup.id) {
-      const made = await dogRepo.create({ ...base, ...pupFields(pup) });
+      const made = await dogRepo.create({ ...base, ...pupFields(pup, draft.registry) });
       pup.id = made.id;
       pup.saved = true;
       await step();
     } else if (!pup.saved) {
       const current = await dogRepo.getById(pup.id);
-      const changes = pupFields(pup);
+      const changes = pupFields(pup, draft.registry);
       if (current && !current.date_of_birth && base.date_of_birth) changes.date_of_birth = base.date_of_birth;
+      if (current?.registry) delete changes.registry; // one she already set stays
       await dogRepo.update(pup.id, changes);
       pup.saved = true;
       await step();

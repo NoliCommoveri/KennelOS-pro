@@ -253,6 +253,7 @@ function screens(draft, data) {
         html: `<p class="gl-lead">Fill in what you have. Anything you skip can go on ${her(d.sex)} page later.</p>
           ${breedPicker('gd-breed', d.breed, data.breeds)}
           ${field('Date of birth (optional)', input('gd-dob', d.date_of_birth, { type: 'date', max: todayYMD() }))}
+          ${field('Does this dog belong to any registry, like AKC or CKC?', input('gd-registry', d.registry, { placeholder: 'AKC, CKC, UKC…' }), 'Leave it empty if not.')}
           ${field('Registered name (optional)', input('gd-reg', d.registered_name))}
           ${field('Registration number (optional)', input('gd-regnum', d.registration_number))}
           ${field('Color and markings (optional)', input('gd-color', d.color_markings, { placeholder: 'e.g. red with white chest' }))}
@@ -263,6 +264,7 @@ function screens(draft, data) {
         read: (root) => {
           d.breed = readBreedPicker(root, 'gd-breed');
           d.date_of_birth = val(root, 'gd-dob');
+          d.registry = val(root, 'gd-registry');
           d.registered_name = val(root, 'gd-reg');
           d.registration_number = val(root, 'gd-regnum');
           d.color_markings = val(root, 'gd-color');
@@ -389,7 +391,7 @@ function answerFor(stepId, draft, data) {
     return `Yes, that's ${herHim(d.sex)}: ${dogName(data.dogsById.get(d.match))}`;
   }
   if (stepId.startsWith('dog:')) {
-    return [d.breed, d.date_of_birth ? `born ${fmt(d.date_of_birth)}` : '', d.registered_name, lbl(DOG_STATUS, d.status), lbl(OWNERSHIP_TYPE, d.ownership_type), ownerText(d), kennelText(d)]
+    return [d.breed, d.date_of_birth ? `born ${fmt(d.date_of_birth)}` : '', d.registry, d.registered_name, lbl(DOG_STATUS, d.status), lbl(OWNERSHIP_TYPE, d.ownership_type), ownerText(d), kennelText(d)]
       .filter(Boolean).join(' · ');
   }
   if (stepId.startsWith('breeder:')) {
