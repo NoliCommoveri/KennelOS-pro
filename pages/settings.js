@@ -13,6 +13,7 @@ import { runWizardStep } from '../assets/wizardUI.js';
 import { esc } from '../assets/ui.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { websiteLinkOffered } from '../data/kennelportApi.js';
 
 // Loaded only when this edition has a server (`cloudUrl` set), so an edition
 // without one never even loads the cloud modules (plan §7).
@@ -34,6 +35,13 @@ if (cloudUI && editionFlags.waitlist) {
     .then((m) => m.mountNotificationsCard(document.getElementById('notify-section')))
     .catch(() => document.getElementById('notify-section')?.remove());
 } else document.getElementById('notify-section')?.remove();
+
+// --- Your website: Connect website and Update website (Pro, KennelPort plan 5.5) ----
+if (websiteLinkOffered()) {
+  import('../assets/websiteCard.js')
+    .then((m) => m.mountWebsiteCard(document.getElementById('website-section')))
+    .catch(() => document.getElementById('website-section')?.remove());
+} else document.getElementById('website-section')?.remove();
 
 // Guided tour — the tour anchors to specific sample records, so it's only
 // offerable while the "Thornfield Kennels" sample data is loaded (same gate as

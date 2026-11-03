@@ -44,6 +44,7 @@ import { param, esc, todayYMD, confirmModal } from '../assets/ui.js';
 import { orderTasks, withStart, withStar } from '../data/kelsFavorites.js';
 import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote, getGuidedPeopleDraft, clearGuidedPeopleDraft, getGuidedFormDraft, clearGuidedFormDraft } from '../data/settings.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { websiteLinkOffered } from '../data/kennelportApi.js';
 
 const chat = createChat(document.getElementById('kels-transcript'));
 const laterBtn = document.getElementById('kels-later');
@@ -315,6 +316,16 @@ const TASKS = [
     available: () => editionFlags.accounts && !editionFlags.demoMode,
     priority: () => 22,
     run: (opts) => runAccountsTask(chat, opts)
+  },
+  {
+    id: 'website-update',
+    label: () => 'Update my website',
+    sub: 'Send your KennelPort website the dogs and litters you show there',
+    keywords: ['website', 'web site', 'site', 'kennelport', 'publish', 'show on website', 'puppies page', 'online', 'update site'],
+    // Pro with a KennelPort address (KennelPort plan 5.5); never in the Demo.
+    available: () => websiteLinkOffered() && !editionFlags.demoMode,
+    priority: () => 21,
+    run: async (opts) => (await import('../assets/websiteUpdateUI.js')).runWebsiteTask(chat, opts)
   },
   {
     id: 'account-health',

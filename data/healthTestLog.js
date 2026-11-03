@@ -100,7 +100,9 @@ export function unloggedPlanned(dog, events, tokensOf) {
 // test's name as eventRepo.testTokensOf reads it (OFA: Method + Joint, "OFA
 // Hips"), else the event title, as the Puppy Record names it. Archived events and
 // non-dog subjects are skipped. `outcome` is 'Normal' / 'Abnormal' (TEST_OUTCOME)
-// or '' when unflagged. Never the lab, notes, dates or documents.
+// or '' when unflagged; `date` is the latest result's date, which her website
+// shows (siteExport.js) and family pages don't (they copy name and result by
+// name). Never the lab, notes or documents.
 export function completedTestsByDog(events = []) {
   const latest = new Map(); // dogId → Map(nameKey → event)
   const sorted = events
@@ -117,7 +119,7 @@ export function completedTestsByDog(events = []) {
     const k = key(name);
     const flag = String(e.details?.[TEST_OUTCOME_FIELD] ?? '').trim();
     const outcome = TEST_OUTCOME.find((o) => o.toLowerCase() === flag.toLowerCase()) || '';
-    byName.set(k, { name, result, outcome }); // a retest keeps the first test's place
+    byName.set(k, { name, result, outcome, date: e.event_date || null }); // a retest keeps the first test's place
     latest.set(e.subject_id, byName);
   }
   return new Map([...latest].map(([id, byName]) => [id, [...byName.values()]]));

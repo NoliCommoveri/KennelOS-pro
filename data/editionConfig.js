@@ -27,6 +27,13 @@ export const demoUrl = null;
 export const cloudUrl = 'https://api.kennelos.app';
 export const devCloudUrl = 'https://kennelos-api-staging.admin-kennelos.workers.dev';
 
+// Her KennelPort website (KennelPort plan 5.5; data/kennelportApi.js). Null: no
+// Connect website, no Update website, no request to KennelPort. `devKennelportUrl`
+// is KennelPort's staging Worker, used on localhost and with ?cloud=staging, like
+// devCloudUrl. Pro only (KennelPort decision 27).
+export const kennelportUrl = 'https://api.kennelport.com';
+export const devKennelportUrl = 'https://kennelport-staging.kennelport.workers.dev';
+
 // --- License gate (editions plan §Licensing) -------------------------------
 // Pro is a Lemon Squeezy subscription unlocked by a browser-validated license
 // key (data/license.js + assets/licenseGate.js). This config is read only when
@@ -109,6 +116,9 @@ export const editionFlags = {
   // gets more than one own kennel and the active-kennel switcher.
   multiKennel: true,
   liveSync: true,
+  // Her KennelPort website (KennelPort plan 5.5): the Show on website marks, Connect
+  // website and Update website. Pro only; Lite and Demo can't link (decision 27).
+  websiteLink: true,
 };
 
 // Full nav bar (Pro has every hub).

@@ -12,6 +12,7 @@ import { esc, badge, fmtDate, param, confirmModal, dogRefHtml } from '../assets/
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { ourStudPairingIds, studParents, ourRole } from '../data/studRules.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { renderTimeline } from '../assets/timeline.js';
 import { openEventFromQuery } from '../assets/eventForm.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
@@ -131,6 +132,7 @@ function renderView() {
       ${row('Planned first date', p.planned_date ? esc(fmtDate(p.planned_date)) : '')}
       ${row('Last observed date', p.last_observed_date ? esc(fmtDate(p.last_observed_date)) : '')}
       ${row('Expected due date', p.expected_due_date ? esc(fmtDate(p.expected_due_date)) : '')}
+      ${websiteLinkOffered() && p.show_on_website ? row('Your website', '<span class="badge badge-blue">Shown on website</span>') : ''}
       ${row('Notes', p.notes ? esc(p.notes).replace(/\n/g, '<br>') : '')}
     </dl>`;
 }
@@ -163,6 +165,7 @@ function renderEdit() {
         <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show dogs from all my kennels</label>
         <span class="field-hint">Off by default while a kennel is active. Turn it on to co-breed across your own kennels — a sire at one over a dam at another (Multi-Kennel Scope Spec §9).</span>
       </div>` : ''}
+      ${websiteLinkOffered() ? field('Your website', `<label class="check-inline"><input id="f-show_on_website" type="checkbox"${p.show_on_website ? ' checked' : ''}> Show this on the website</label>`, { hint: 'Under Coming up on your KennelPort website, from your next Update website (Settings). Its litter carries the mark on when it\'s born.' + (ctx.original ? '' : ' Ticked for you when the dam is on the website.') }) : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(p.notes)}</textarea>`, { wide: true })}
     </div>
     <div id="form-warn"></div>`;
@@ -180,6 +183,15 @@ function renderEdit() {
     ctx.pickerAllKennels = e.target.checked;
     renderEdit();
   });
+  // A new pairing asks "Show this on the website?" pre-ticked when the dam is on it
+  // (KennelPort plan 5.3), until she ticks or unticks it herself.
+  if (!ctx.original) {
+    document.getElementById('f-dam_id').addEventListener('change', (e) => {
+      const box = document.getElementById('f-show_on_website');
+      if (box && !box.dataset.touched) box.checked = ctx.dogsById.get(e.target.value)?.show_on_website === true;
+    });
+    document.getElementById('f-show_on_website')?.addEventListener('change', (e) => { e.target.dataset.touched = '1'; });
+  }
   // Planned first date prefills expected due date (63 days later) — only while
   // that field is still empty, so it never clobbers a deliberate edit.
   document.getElementById('f-planned_date').addEventListener('change', (e) => {
@@ -204,7 +216,9 @@ function readForm() {
     planned_date: val('f-planned_date'),
     last_observed_date: val('f-last_observed_date'),
     expected_due_date: val('f-expected_due_date'),
-    notes: val('f-notes')
+    notes: val('f-notes'),
+    // Only read when it rendered (Pro), else kept.
+    show_on_website: document.getElementById('f-show_on_website') ? document.getElementById('f-show_on_website').checked : Boolean(ctx.draft?.show_on_website)
   };
 }
 
@@ -517,6 +531,7 @@ async function main() {
     // Brief §4.5) — a lighter-weight seed than `stud_service`, just the dam.
     const damId = param('dam');
     if (damId && ctx.dogsById.has(damId)) ctx.draft.dam_id = damId;
+    ctx.draft.show_on_website = ctx.dogsById.get(ctx.draft.dam_id)?.show_on_website === true;
     renderTitle();
     renderEdit();
     renderProfileActions();

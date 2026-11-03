@@ -128,7 +128,12 @@ export const PRO_ONLY_STANDALONE = [
   // pages', and Kels's "How my business is doing", which is Pro-only too.
   'data/reportSources.js', 'data/reportFigures.js',
   // ...and the sentences she makes from them, with their chat.
-  'data/kennelInsights.js', 'assets/kelsInsightsUI.js'
+  'data/kennelInsights.js', 'assets/kelsInsightsUI.js',
+  // Her KennelPort website (KennelPort plan 5.5): Settings' Your website card and
+  // Kels's "Update my website", each imported only when websiteLinkOffered() (Pro
+  // with a KennelPort address). The data layer (siteExport, kennelportApi,
+  // kennelportLink, kennelportLinkStore) stays shared, like every repo.
+  'assets/websiteCard.js', 'assets/websiteUpdateUI.js'
 ];
 
 // True when a link target (an href like "contact-import.html" or with a query string)

@@ -55,6 +55,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'intended_registration', // Waitlist Spec §9
       'waitlist_tests', // its say over its health tests on waitlist family pages; a display choice, read by whichever device publishes
       'photos_online', // its say over showing its url as a photos link on waitlist pages; a display choice like waitlist_tests
+      // Her KennelPort website (KennelPort plan 5.3): this dog has a page on it, and its
+      // coming heats may show (a month only). Display choices like photos_online, read by
+      // whichever device presses Update website.
+      'show_on_website', 'heats_online',
       'pedigree_only', // without it a cloud restore would turn every ancestor into a kennel dog
       'additional_registrations' // the dog's other registries and numbers; the same kind of data as registry/registration_number
     ],
@@ -117,7 +121,8 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: ALL,
     cloud: [
       'kennel_id', 'sire_id', 'dam_id', 'pairing_type', 'status', 'method',
-      'planned_date', 'last_observed_date', 'expected_due_date'
+      'planned_date', 'last_observed_date', 'expected_due_date',
+      'show_on_website' // shows under Coming up on her KennelPort website (KennelPort plan 5.3); a display choice
     ],
     private: ['notes'],
     pending: []
@@ -132,7 +137,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'puppies_born_deceased', 'puppies_born_abnormalities', 'delivery_type', 'foster_direction',
       'foster_partner_contact_id',
       'picks_opened_date', // a waitlist date: the auto-offer flow needs it after a restore
-      'photos_url' // the litter's photos link: like a dog's url, and the publishing device shows it on waitlist pages
+      'photos_url', // the litter's photos link: like a dog's url, and the publishing device shows it on waitlist pages
+      'show_on_website' // this litter and its puppies show on her KennelPort website (KennelPort plan 5.3); a display choice
     ],
     // Plan §5: "every price/deposit/foster-money field" — the foster comp model
     // and split basis are the terms of that money, so they stay with it.
@@ -274,6 +280,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // Whether her referral link/code shows to families (Integrations plan §3):
       // the referral fields are already cloud, made to be handed out.
       'share_with_families',
+      // Whether it shows on her KennelPort website's Recommended products page
+      // (KennelPort plan 5.3): a display choice like the four record marks.
+      'show_on_website',
       // Her contract forms (Integrations plan §2.1a, D15): type, her label and the
       // form's public share link, and for a form picked through Connect Jotform
       // (§2.1b) its form id and her field names (field_map). Nothing about anyone

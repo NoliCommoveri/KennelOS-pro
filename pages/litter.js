@@ -13,6 +13,8 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { extraChargesTotal } from '../data/extraCharges.js';
 import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { websiteLinkOffered } from '../data/kennelportApi.js';
+import { litterMarked, LIVE_LITTER_STATUSES } from '../data/siteExport.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
@@ -204,6 +206,7 @@ function renderView() {
       ${row('Accept deposits date', l.accept_deposits_date ? esc(fmtDate(l.accept_deposits_date)) : '')}
       ${row('Estimated ready date', l.estimated_ready_date ? esc(fmtDate(l.estimated_ready_date)) : '')}
       ${row('Litter registration #', esc(l.litter_registration_number))}
+      ${websiteLinkOffered() && litterMarked(l, ctx.pairingsById) ? row('Your website', '<span class="badge badge-blue">Shown on website</span>') : ''}
       ${row('Litter photos', l.photos_url ? `<a href="${esc(l.photos_url)}" target="_blank" rel="noopener noreferrer">${esc(l.photos_url)}</a>` : '')}
       ${row('Puppies born', countsDisplay(l))}
       ${WHELPED_OR_LATER.includes(l.status) ? row('Delivery', l.delivery_type ? badge(LITTER_DELIVERY_TYPE, l.delivery_type) : '') : ''}
@@ -299,6 +302,7 @@ function renderEdit() {
       ${WHELPED_OR_LATER.includes(l.status) ? field('Delivery', `<select id="f-delivery_type">${vocabOptions(LITTER_DELIVERY_TYPE, l.delivery_type, 'Not recorded')}</select>`, { hint: 'How the litter was delivered.' }) : ''}
       ${field('Accept deposits date', `<input id="f-accept_deposits_date" type="date" value="${esc(l.accept_deposits_date)}">`, { hint: 'When you begin accepting deposits on this litter. Shown to prospective families when set.' })}
       ${field('Estimated ready date', `<input id="f-estimated_ready_date" type="date" value="${esc(l.estimated_ready_date)}">`, { hint: 'Defaults to 8 weeks (56 days) after the whelp date. Still editable.' })}
+      ${websiteLinkOffered() ? field('Your website', `<label class="check-inline"><input id="f-show_on_website" type="checkbox"${litterMarked(l, ctx.pairingsById) ? ' checked' : ''}> Show this litter and its puppies on the website</label>`, { hint: 'From your next Update website (Settings). Where it shows comes from its dates: Coming up until the accept deposits date, then among the available puppies. Each puppy shows its own status.' }) : ''}
       ${field('Litter registration #', `<input id="f-litter_registration_number" type="text" value="${esc(l.litter_registration_number)}">`)}
       ${field('Litter photos link', `<input id="f-photos_url" type="url" value="${esc(l.photos_url || '')}" placeholder="https://…">`, { hint: 'An album of the whole litter.' + (editionFlags.waitlist ? ' Families see it on this litter\'s card on your waitlist pages.' : ''), wide: true })}
       ${field('Puppies born (total)', `<input id="f-puppies_born_total" type="number" min="0" value="${esc(l.puppies_born_total)}">`)}
@@ -407,6 +411,8 @@ function readForm() {
     estimated_ready_date: val('f-estimated_ready_date'),
     litter_registration_number: val('f-litter_registration_number').trim(),
     photos_url: val('f-photos_url').trim(),
+    // Her website's mark (KennelPort plan 5.3): only read when it rendered (Pro), else kept.
+    show_on_website: document.getElementById('f-show_on_website') ? document.getElementById('f-show_on_website').checked : ctx.draft.show_on_website,
     puppies_born_total: val('f-puppies_born_total'),
     puppies_born_alive: val('f-puppies_born_alive'),
     puppies_born_deceased: val('f-puppies_born_deceased'),
@@ -645,6 +651,85 @@ function maybePromptPairingWhelped(litter) {
   });
 }
 
+// --- Her website's two moments (KennelPort plan 5.3): asked, never changed for her ---
+
+const onWebsite = (litter) => websiteLinkOffered() && litterMarked(litter, ctx.pairingsById);
+const litterName = (l) => l.nickname || `${ctx.dogsById.get(l.dam_id)?.call_name || 'Unknown'} × ${ctx.dogsById.get(l.sire_id)?.call_name || 'Unknown'}`;
+
+function modal(html) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+// Past Expected with no accept deposits date: on the website a blank date means
+// its puppies are available now, so ask when deposits open.
+function maybeAskDepositsDate(litter) {
+  if (!onWebsite(litter) || litter.accept_deposits_date) return Promise.resolve();
+  return new Promise((resolve) => {
+    const overlay = modal(`
+      <h2 style="margin-top:0;">When do deposits open?</h2>
+      <p class="muted">The ${esc(litterName(litter))} litter is on your website. Until this date its puppies show under Coming up, and those you mark Available read "Available on" this date. Left blank, they show as available straight away.</p>
+      <div class="field"><label>Accept deposits date</label><input id="dd-date" type="date"></div>
+      <div id="dd-error"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="dd-save">Save</button>
+        <button class="btn" id="dd-skip">Not now</button>
+      </div>`);
+    const close = () => { overlay.remove(); resolve(); };
+    overlay.querySelector('#dd-skip').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('#dd-save').addEventListener('click', async () => {
+      const accept_deposits_date = overlay.querySelector('#dd-date').value;
+      if (!accept_deposits_date) { close(); return; }
+      try {
+        await litterRepo.update(litter.id, { accept_deposits_date });
+        close();
+      } catch (e) {
+        overlay.querySelector('#dd-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
+      }
+    });
+  });
+}
+
+// Sold or Closed: the litter leaves the website (KennelOS sends only live litters;
+// KennelPort keeps it 30 days, and Keep there holds it). Say so, and ask about each
+// puppy she is keeping: on her yes the pup gets her own page, taking her puppy
+// photos with her (the hand-over). Not asked when a pup is marked Keeping: the
+// litter's page still carries her then.
+async function maybeAskLitterLeaving(litter) {
+  if (!onWebsite(litter)) return;
+  const kept = (await dogRepo.getByLitter(litter.id)).filter((d) => !d.is_archived && !d.show_on_website
+    && (d.disposition === 'keeping' || ['active_breeding', 'retired_breeding', 'for_sale'].includes(d.status)));
+  await new Promise((resolve) => {
+    const overlay = modal(`
+      <h2 style="margin-top:0;">Take the ${esc(litterName(litter))} litter off the website?</h2>
+      <p class="muted">Now that it's "${esc(descriptor(LITTER_STATUS, litter.status).label)}", it leaves your website at your next Update website. KennelPort keeps it for 30 days in case that was a mistake; press Keep there to hold on to its page.</p>
+      ${kept.map((d) => `<label class="check-inline" style="display:flex;margin:6px 0;"><input type="checkbox" data-keep="${esc(d.id)}"> ${esc(d.call_name || 'This puppy')} is staying with you: keep ${d.sex === 'male' ? 'him' : d.sex === 'female' ? 'her' : 'them'} on the site, with ${d.sex === 'male' ? 'his' : d.sex === 'female' ? 'her' : 'their'} puppy photos</label>`).join('')}
+      <div id="lo-error"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="lo-ok">Take it off</button>
+        <button class="btn" id="lo-skip">Not now</button>
+      </div>`);
+    const close = () => { overlay.remove(); resolve(); };
+    overlay.querySelector('#lo-skip').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('#lo-ok').addEventListener('click', async () => {
+      try {
+        await litterRepo.update(litter.id, { show_on_website: false });
+        for (const box of overlay.querySelectorAll('[data-keep]')) {
+          if (box.checked) await dogRepo.update(box.dataset.keep, { show_on_website: true });
+        }
+        close();
+      } catch (e) {
+        overlay.querySelector('#lo-error').innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
+      }
+    });
+  });
+}
+
 // Guards against a rapid double-tap/double-click firing save() twice before
 // the first call's await chain has a chance to disable anything itself —
 // each call would otherwise run to completion independently, e.g. creating
@@ -677,6 +762,7 @@ async function doSave() {
       if (WHELPED_OR_LATER.includes(saved.status)) {
         await maybeAskDelivery(saved);
         await maybePromptPairingWhelped(saved);
+        if (LIVE_LITTER_STATUSES.includes(saved.status)) await maybeAskDepositsDate(saved);
       }
       location.href = `litter.html?id=${encodeURIComponent(saved.id)}`;
       return;
@@ -695,6 +781,15 @@ async function doSave() {
       renderAll();
       await maybePromptPairingWhelped(saved);
     }
+    // Her website (KennelPort plan 5.3): leaving Expected, then Sold or Closed.
+    const ended = (st) => ['sold', 'closed'].includes(st);
+    if (prevStatus === 'expected' && LIVE_LITTER_STATUSES.includes(saved.status) && saved.status !== 'expected') {
+      await maybeAskDepositsDate(await litterRepo.getById(saved.id));
+    } else if (ended(saved.status) && !ended(prevStatus)) {
+      await maybeAskLitterLeaving(await litterRepo.getById(saved.id));
+    }
+    ctx.original = await litterRepo.getById(saved.id);
+    renderAll();
   } catch (e) {
     // Lite cap: creating a litter past the limit throws CapExceededError — show
     // the upgrade nudge instead of a raw error (litter update is never capped).
@@ -959,6 +1054,10 @@ async function main() {
       // Sensible default status: a just-created pairing→litter is usually expected.
       ctx.draft.status = 'expected';
     }
+    // "Show this on the website?" pre-ticked from its pairing, else when the dam is
+    // on the website (KennelPort plan 5.3).
+    const pairingMark = ctx.pairingsById.get(ctx.draft.pairing_id)?.show_on_website;
+    ctx.draft.show_on_website = typeof pairingMark === 'boolean' && ctx.draft.pairing_id ? pairingMark : ctx.dogsById?.get(ctx.draft.dam_id)?.show_on_website === true;
     renderTitle();
     renderEdit();
     renderProfileActions();
