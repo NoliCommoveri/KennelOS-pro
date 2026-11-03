@@ -44,6 +44,7 @@ const KIND_WORDS = {
   'litter-count': ['litter count', 'litter counts'],
   'litter-delivery': ['litter without its delivery', 'litters without their delivery'],
   'pup-placed': ['puppy plan', 'puppy plans'],
+  'pup-no-plan': ['puppy with no plan', 'puppies with no plan'],
   'delivered-owned': ['dog that went home', 'dogs that went home'],
   'litter-pairing-parents': ['litter and its breeding', 'litters and their breedings'],
   'pup-litter-parents': ['litter\'s puppy parents', 'litters\' puppy parents'],
@@ -128,6 +129,7 @@ class Tidy extends FindingsTask {
       case 'litter-count': return this.litterCount(f);
       case 'litter-delivery': return this.litterDelivery(f);
       case 'pup-placed': return this.pupPlaced(f);
+      case 'pup-no-plan': return this.pupNoPlan(f);
       case 'delivered-owned': return this.deliveredOwned(f);
       case 'litter-pairing-parents': return this.litterPairing(f);
       case 'pup-litter-parents': return this.pupParents(f);
@@ -261,6 +263,20 @@ class Tidy extends FindingsTask {
     if (pick !== 'yes') return pick;
     await dogRepo.update(d.id, { disposition: 'placed' });
     return this.done(`Done. ${esc(dogName(d))} is Placed.`);
+  }
+
+  // No plan reads as Undecided: not offered on the waitlist, not shown as available.
+  async pupNoPlan(f) {
+    const d = f.dog;
+    const name = esc(dogName(d));
+    const pick = await this.ask(f, `${this.b(dogName(d))} doesn't have a plan yet, so ${name} counts as Undecided: your waitlist won't offer ${name} and your website won't show ${name} as available. What's the plan?`, [
+      { label: 'Available', value: 'available', primary: true },
+      { label: 'Keeping', value: 'keeping' },
+      { label: 'Still deciding', value: 'undecided' }
+    ]);
+    if (!['available', 'keeping', 'undecided'].includes(pick)) return pick;
+    await dogRepo.update(d.id, { disposition: pick });
+    return this.done(`Done. ${name} is ${esc(label(DISPOSITION, pick))}.`);
   }
 
   async deliveredOwned(f) {

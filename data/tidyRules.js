@@ -20,6 +20,7 @@ export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
   'litter-delivery',     // a whelped litter with no delivery type
   'pup-placed',          // a pup with a sale isn't marked Placed
+  'pup-no-plan',         // a pup of hers with no plan (disposition) at all
   'delivered-owned',     // a delivered pup is still on her roster as hers
   'litter-pairing-parents', // a litter's parents ≠ its breeding's
   'pup-litter-parents',  // a litter's pups have blank or different parents
@@ -166,6 +167,16 @@ export function pupPlacedFindings(dogs, sales) {
   return dogs
     .filter((d) => !d.is_archived && d.status === 'puppy' && d.disposition !== 'placed' && live.has(d.id))
     .map((d) => ({ key: `placed:${d.id}`, kind: 'pup-placed', dog: d, sale: sales.find((s) => s.dog_id === d.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status)) }));
+}
+
+// Pups of hers (owned) with no plan at all: blank reads as Undecided, which the
+// waitlist never offers and the website never shows as available, so she's asked
+// what the plan is. A pup with a sale going ahead is pup-placed's to ask about.
+export function pupNoPlanFindings(dogs, sales) {
+  const live = new Set(sales.filter((s) => !s.is_archived && s.status && !RELEASED_SALE_STATUSES.includes(s.status)).map((s) => s.dog_id));
+  return dogs
+    .filter((d) => !d.is_archived && d.status === 'puppy' && d.ownership_type === 'owned' && blank(d.disposition) && !live.has(d.id))
+    .map((d) => ({ key: `noplan:${d.id}`, kind: 'pup-no-plan', dog: d }));
 }
 
 // A dog whose sale is Delivered but who is still on her roster as hers (owned).
@@ -400,6 +411,7 @@ export function tidyFindings({ litters, pairings, sales, studServices = [], dogs
     ...litterCountFindings(litters, allDogs),
     ...deliveryFindings(litters),
     ...pupPlacedFindings(dogs, sales),
+    ...pupNoPlanFindings(dogs, sales),
     ...deliveredOwnedFindings(dogs, sales),
     ...litterPairingFindings(litters, pairings),
     ...pupParentFindings(litters, dogs),

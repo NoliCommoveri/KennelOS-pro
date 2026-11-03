@@ -468,20 +468,23 @@ export function prefPlaces(entries, kennelId, programsById = new Map(), config =
 // outside dog now). A pup that came back is a puppy again before it's offered.
 const GONE_DOG_STATUSES = ['deceased', 'pet_home', 'external_reference'];
 
-// Dispositions that take a pup out of the offers: kept back, already placed, or on
-// a health hold (not sellable right now).
-const UNOFFERED_DISPOSITIONS = ['keeping', 'placed', 'health_hold'];
+// Dispositions that take a pup out of the offers: not decided yet (decision 10 of
+// the KennelPort plan: an Undecided pup isn't for sale anywhere), kept back,
+// already placed, or on a health hold (not sellable right now). Unset reads as
+// undecided (vocab DISPOSITION), so only an Available pup is offered.
+const UNOFFERED_DISPOSITIONS = ['undecided', 'keeping', 'placed', 'health_hold'];
 
-// Is this pup still available to offer? Kept-back (`keeping`), already placed, on a
-// health hold, deceased or gone home, archived, or carrying a live Sale → no. A sale that was
+// Is this pup still available to offer? Undecided (or unset), kept back (`keeping`),
+// already placed, on a health hold, deceased or gone home, archived, or carrying a
+// live Sale → no. A sale that was
 // returned, cancelled or voided (vocab.RELEASED_SALE_STATUSES) frees the pup; any
 // other non-archived sale (open OR delivered) means it's spoken for.
-// Unset/`undecided`/`available` disposition → yes (keeping a pup is an explicit
-// choice; Spec §0).
+// Only an `available` disposition is offered: the breeder marks a pup Available
+// once she's decided to sell it, and Kels's Tidy up asks about pups left unset.
 export function isPupAvailable(dog, sales = []) {
   if (!dog || dog.is_archived) return false;
   if (GONE_DOG_STATUSES.includes(dog.status)) return false;
-  if (UNOFFERED_DISPOSITIONS.includes(dog.disposition)) return false;
+  if (UNOFFERED_DISPOSITIONS.includes(dog.disposition || 'undecided')) return false;
   return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status));
 }
 
