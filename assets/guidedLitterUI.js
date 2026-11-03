@@ -21,6 +21,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { ownKennels, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { getGuidedLitterDraft, setGuidedLitterDraft, clearGuidedLitterDraft } from '../data/settings.js';
 import {
@@ -676,6 +677,13 @@ class LitterConversation extends StepConversation {
     await this.chat.say(`Done! ✓ I built ${esc(name)}${pups.length ? ` with ${plural(pups.length, 'puppy', 'puppies')}` : ''}.`, { typing: 1100 });
     // Pups she's keeping: offer her kennel's planned tests for them.
     await askKeeperTests(this.chat, pups);
+    // A website linked on this device: show the litter there too, and its parents
+    // if they're hers and not shown yet; then check for website updates.
+    if (!editionFlags.demoMode && await anyWebsiteLink()) {
+      const w = await import('./websiteUpdateUI.js');
+      await w.offerWebsiteFor(this.chat, { litterIds: [litter.id], dogIds: [litter.dam_id, litter.sire_id].filter(Boolean) }).catch(() => {});
+      await w.offerWebsiteCheck(this.chat).catch(() => {});
+    }
 
     const finish = async () => {
       await this.chat.say(`All set. When you're ready to offer pups to families on your waitlist, use <strong>Open picks</strong> on <a href="${esc(litterHref)}">the litter's page</a>.`);

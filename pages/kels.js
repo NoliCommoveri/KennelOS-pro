@@ -45,6 +45,7 @@ import { orderTasks, withStart, withStar } from '../data/kelsFavorites.js';
 import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote, getGuidedPeopleDraft, clearGuidedPeopleDraft, getGuidedFormDraft, clearGuidedFormDraft } from '../data/settings.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
+import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 
 const chat = createChat(document.getElementById('kels-transcript'));
 const laterBtn = document.getElementById('kels-later');
@@ -365,9 +366,18 @@ function running(task) {
 
 // Back to the menu after a task ends, is put off, or she says never mind.
 async function onExit(reason) {
+  const was = current;
   running(null);
   if (reason === 'nevermind') await chat.say('No problem!');
+  // A linked website that this changed: offer to check it and update.
+  else if (was?.id !== 'website-update') await checkWebsite();
   await menu({ again: true });
+}
+
+// Only on a device with a website linked; the Pro-only UI loads only then.
+async function checkWebsite() {
+  if (editionFlags.demoMode || !(await anyWebsiteLink())) return;
+  try { await (await import('../assets/websiteUpdateUI.js')).offerWebsiteCheck(chat); } catch { /* the menu still comes back */ }
 }
 
 // One task hands her to another (the check-in's Expected litter → its birth).

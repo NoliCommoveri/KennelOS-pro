@@ -5,7 +5,9 @@
 // reader/writer of the `kennelport:` rows.
 //
 // A row: { token, site: { name, website, extras_info_url, waitlist_page,
-// kennelos_prices }, device_label, linked_at, last_sent_at, last_summary }.
+// kennelos_prices }, device_label, linked_at, last_sent_at, last_summary, sent }.
+// `sent`: the last bundle this device sent (less its id and time), so Kels can
+// say what an update would change (siteExport.bundleChanges).
 // `site` is what KennelPort said last (each answer refreshes it). `kept_website`:
 // the site address she said Keep mine to, for the kennel record's website.
 // A device choice, like the rest of the row.
@@ -30,17 +32,24 @@ export async function setWebsiteLink(kennelId, { token, site, device_label = '' 
 
 // After an answer from KennelPort: the site's facts, and after an Update website
 // its summary and when.
-export async function noteWebsiteAnswer(kennelId, { site, summary, kept_website } = {}) {
+export async function noteWebsiteAnswer(kennelId, { site, summary, kept_website, sent } = {}) {
   const row = await getWebsiteLink(kennelId);
   if (!row) return;
   await db.device_secrets.put({
     ...row,
     ...(site ? { site } : {}),
     ...(kept_website ? { kept_website } : {}),
+    ...(sent ? { sent } : {}),
     ...(summary ? { last_summary: summary, last_sent_at: new Date().toISOString() } : {})
   });
 }
 
 export async function clearWebsiteLink(kennelId) {
   if (kennelId) await db.device_secrets.delete(rowId(kennelId));
+}
+
+// Is a website linked for any kennel on this device? (Kels asks about the
+// website only then.)
+export async function anyWebsiteLink() {
+  return (await db.device_secrets.toArray()).some((r) => String(r.id).startsWith('kennelport:') && r.token);
 }

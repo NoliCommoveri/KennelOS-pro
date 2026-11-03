@@ -18,20 +18,18 @@ import { dogRepo } from './dogRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { pairingRepo } from './pairingRepo.js';
 import { eventRepo } from './eventRepo.js';
-import { saleRepo } from './saleRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { accountRepo } from './accountRepo.js';
-import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { TEST_TYPES } from './healthTestLog.js';
 import { waitlistConfig, embedOrigin, EMBED_ORIGINS_MAX } from './waitlistRules.js';
 import { todayYMD } from './dateUtils.js';
 import { isLicenseGated, evaluateLicense } from './license.js';
 import { editionFlags } from './editionConfig.js';
-import { buildSiteBundle, websiteCounts } from './siteExport.js';
-import { redeemLinkCode, linkStatus, stopLink, sendBundle, websiteLinkOffered, KennelportError } from './kennelportApi.js';
-import { getWebsiteLink, setWebsiteLink, noteWebsiteAnswer, clearWebsiteLink } from './kennelportLinkStore.js';
+import { buildSiteBundle, websiteCounts, websiteGaps, bundleChanges } from './siteExport.js';
+import { redeemLinkCode, linkStatus, stopLink, sendBundle, setSiteSettings, websiteLinkOffered, KennelportError } from './kennelportApi.js';
+import { getWebsiteLink, setWebsiteLink, noteWebsiteAnswer, clearWebsiteLink, anyWebsiteLink } from './kennelportLinkStore.js';
 
-export { websiteLinkOffered, KennelportError, getWebsiteLink };
+export { websiteLinkOffered, KennelportError, getWebsiteLink, anyWebsiteLink };
 
 // --- pure: what the site's answer changes here --------------------------------
 
@@ -135,22 +133,59 @@ export async function keepKennelWebsite(kennelId) {
 // --- the records a bundle is built from ---------------------------------------
 
 async function records(kennel) {
-  const [dogs, litters, pairings, sales, offers, accounts, events] = await Promise.all([
+  const [dogs, litters, pairings, accounts, events] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll(),
     pairingRepo.getAll(),
-    saleRepo.getAll(),
-    editionFlags.waitlist ? waitlistOfferRepo.getByKennel(kennel.id) : [],
     editionFlags.accounts ? accountRepo.getAll() : [],
     Promise.all(['title_earned', 'heat_cycle', ...TEST_TYPES].map((t) => eventRepo.getByType(t))).then((lists) => lists.flat())
   ]);
-  return { dogs, litters, pairings, sales, offers, accounts, events };
+  return { dogs, litters, pairings, accounts, events };
 }
 
 // What Update website would send for this kennel, counted (the Website card).
 export async function websiteSummary(kennel) {
   const r = await records(kennel);
   return websiteCounts(kennel, { ...r, today: todayYMD() });
+}
+
+// What Kels asks about before she sends (siteExport.websiteGaps), for this kennel.
+export async function websiteGapsFor(kennel, { marking = [] } = {}) {
+  return websiteGaps(kennel, await records(kennel), { marking });
+}
+
+// Her ticks from those groups: Show on website on the dogs (and kept pups),
+// litters and pairings named, and heats_online on the girls named.
+export async function markOnWebsite({ dogs = [], litters = [], pairings = [], heats = [] } = {}) {
+  for (const id of dogs) await dogRepo.update(id, { show_on_website: true });
+  for (const id of litters) await litterRepo.update(id, { show_on_website: true });
+  for (const id of pairings) await pairingRepo.update(id, { show_on_website: true });
+  for (const id of heats) await dogRepo.update(id, { heats_online: true });
+}
+
+// A litter's accept deposits date, from Kels's deposit check.
+export async function setDepositsDate(litterId, date) {
+  await litterRepo.update(litterId, { accept_deposits_date: date });
+}
+
+// The site's facts as this device last had them (from Connect or an update).
+export async function websiteFacts(kennelId) {
+  return (await getWebsiteLink(kennelId))?.site || null;
+}
+
+// Use my KennelOS prices on her website (KennelPort decision 6), from Kels. Only a
+// site that lists it under `settings` takes it. → the site's facts.
+export async function setWebsitePrices(kennel, on) {
+  const link = await getWebsiteLink(kennel?.id);
+  if (!link) throw new KennelportError('not_linked', 'Connect your website first.', 'not_linked');
+  try {
+    const out = await setSiteSettings(link.token, { kennelos_prices: Boolean(on) });
+    if (out?.site) await noteWebsiteAnswer(kennel.id, { site: out.site });
+    return out?.site || link.site;
+  } catch (err) {
+    if (err instanceof KennelportError && err.kind === 'not_linked') await clearWebsiteLink(kennel.id);
+    throw err;
+  }
 }
 
 async function applyKennelFacts(kennel, site, previous) {
@@ -203,6 +238,26 @@ async function licenseOk() {
   return state === 'valid' || state === 'grace';
 }
 
+// A bundle as kept for comparing: without its id and time, which differ each send.
+const sentCopy = ({ bundle_id: _id, sent_at: _at, ...rest }) => rest;
+
+// What an Update website would change now, against what this device sent last
+// (siteExport.bundleChanges): → { never: true } when this device hasn't sent yet,
+// { lines: [..] } (empty when nothing would change), or { error } when the bundle
+// can't be built (a cap she's over, say). No network.
+export async function pendingWebsiteChanges(kennel, { today = todayYMD() } = {}) {
+  const link = await getWebsiteLink(kennel?.id);
+  if (!link) return { lines: [] };
+  let now;
+  try {
+    now = sentCopy(buildSiteBundle({ kennel, ...(await records(kennel)), today, bundleId: 'compare-0000', prices: link.site?.kennelos_prices === true, sections: link.site?.sections || [] }));
+  } catch (err) {
+    return { error: err.message || String(err) };
+  }
+  if (!link.sent) return { never: true };
+  return { lines: bundleChanges(link.sent, now) };
+}
+
 // Send this kennel's website what she marked. → { summary, filled, site }:
 // KennelPort's summary ({ text, updated, created, … }), how many photos links were
 // filled or cleared here, and the site's facts. A stopped link (Unlink in
@@ -223,7 +278,7 @@ export async function updateWebsite(kennel, { bundleId = crypto.randomUUID(), to
   const bundle = buildSiteBundle({ kennel, ...r, today, bundleId, sentAt: new Date().toISOString(), prices: site?.kennelos_prices === true, sections: site?.sections || [] });
   const answer = await sendBundle(link.token, bundle).catch(forget);
   const after = answer.site || site;
-  await noteWebsiteAnswer(kennel.id, { site: after, summary: answer.summary || { text: 'Sent.' } });
+  await noteWebsiteAnswer(kennel.id, { site: after, summary: answer.summary || { text: 'Sent.' }, sent: sentCopy(bundle) });
 
   // Photos links (KennelPort plan 5.4): only this kennel's dogs and litters.
   const sites = [after, link.site].filter(Boolean);

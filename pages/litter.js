@@ -695,19 +695,19 @@ function maybeAskDepositsDate(litter) {
 }
 
 // Sold or Closed: the litter leaves the website (KennelOS sends only live litters;
-// KennelPort keeps it 30 days, and Keep there holds it). Say so, and ask about each
-// puppy she is keeping: on her yes the pup gets her own page, taking her puppy
-// photos with her (the hand-over). Not asked when a pup is marked Keeping: the
-// litter's page still carries her then.
+// KennelPort keeps it 30 days, and Keep there holds it). Say so, and list each
+// puppy marked Keeping, ticked: on her yes (she can untick one) the pup gets her
+// own page, taking her puppy photos with her (the hand-over), so she isn't lost
+// with the litter.
 async function maybeAskLitterLeaving(litter) {
   if (!onWebsite(litter)) return;
   const kept = (await dogRepo.getByLitter(litter.id)).filter((d) => !d.is_archived && !d.show_on_website
-    && (d.disposition === 'keeping' || ['active_breeding', 'retired_breeding', 'for_sale'].includes(d.status)));
+    && d.disposition === 'keeping');
   await new Promise((resolve) => {
     const overlay = modal(`
       <h2 style="margin-top:0;">Take the ${esc(litterName(litter))} litter off the website?</h2>
       <p class="muted">Now that it's "${esc(descriptor(LITTER_STATUS, litter.status).label)}", it leaves your website at your next Update website. KennelPort keeps it for 30 days in case that was a mistake; press Keep there to hold on to its page.</p>
-      ${kept.map((d) => `<label class="check-inline" style="display:flex;margin:6px 0;"><input type="checkbox" data-keep="${esc(d.id)}"> ${esc(d.call_name || 'This puppy')} is staying with you: keep ${d.sex === 'male' ? 'him' : d.sex === 'female' ? 'her' : 'them'} on the site, with ${d.sex === 'male' ? 'his' : d.sex === 'female' ? 'her' : 'their'} puppy photos</label>`).join('')}
+      ${kept.map((d) => `<label class="check-inline" style="display:flex;margin:6px 0;"><input type="checkbox" data-keep="${esc(d.id)}" checked> ${esc(d.call_name || 'This puppy')} is staying with you: keep ${d.sex === 'male' ? 'him' : d.sex === 'female' ? 'her' : 'them'} on the site, with ${d.sex === 'male' ? 'his' : d.sex === 'female' ? 'her' : 'their'} puppy photos</label>`).join('')}
       <div id="lo-error"></div>
       <div class="form-actions">
         <button class="btn btn-primary" id="lo-ok">Take it off</button>
