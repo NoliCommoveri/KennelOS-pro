@@ -283,11 +283,13 @@ export async function unlockWithHandoffCode(rawCode, { merge = true, onProgress 
 // New device, part 1: ask. Shows `code` (formatted) until answered or expired.
 // The request is kept in device_secrets, so a reload doesn't lose it
 // (pendingDeviceUnlock). → { pairingId, code, expiresAt }
-export async function requestDeviceUnlock({ label = null } = {}) {
+// `auto`: an assisted program's automatic pairing (docs/KennelOS_Assisted_Setup_Plan.md):
+// the code goes to the server too, and the other side approves without anyone typing.
+export async function requestDeviceUnlock({ label = null, auto = false } = {}) {
   const { token, programId } = requireSession();
   const pair = await generatePairingKeyPair();
   const code = newPairingCode();
-  const { pairingId, expiresAt } = await api.createPairing(token, { publicKey: await exportPublicKey(pair.publicKey), label });
+  const { pairingId, expiresAt } = await api.createPairing(token, { publicKey: await exportPublicKey(pair.publicKey), label, autoCode: auto ? code : undefined });
   await setPendingPairing(programId, { pairingId, privateKey: pair.privateKey, code, expiresAt });
   return { pairingId, code: formatCode(code), expiresAt };
 }

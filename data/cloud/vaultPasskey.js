@@ -157,6 +157,20 @@ export async function createPasskey({ userId, userName, prfSalt, exclude = [], r
   }
 }
 
+// The account is gone (deleted by its owner or by support at her request): tell
+// the password manager that none of this program's passkeys are wanted any more,
+// so it drops every one of them, on every device its keychain syncs to. The
+// passkeys' user handle is the program id (createPasskey's `userId`). Best
+// effort: Chrome with Google Password Manager acts on it; a browser without the
+// Signal API leaves them for her to delete by hand.
+export function forgetAllPasskeys(programId, rpId = passkeyRpId()) {
+  if (!programId) return;
+  try {
+    const userId = toBase64Url(new TextEncoder().encode(String(programId)).slice(0, 64));
+    globalThis.PublicKeyCredential?.signalAllAcceptedCredentials?.({ rpId, userId, allAcceptedCredentialIds: [] })?.catch?.(() => {});
+  } catch { /* best effort */ }
+}
+
 // A passkey made but never saved (or removed from the vault) is useless; where
 // the browser supports it, tell the password manager so it can drop it.
 export function forgetPasskey(credentialId, rpId = passkeyRpId()) {

@@ -8,7 +8,7 @@ import {
   db, requestPersistentStorage, isDbUpgradeBlocked,
   DB_BLOCKED_EVENT, DB_READY_EVENT, DB_VERSIONCHANGE_EVENT
 } from './data/db.js';
-import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft, getGuidedDogsDraft, getGuidedPeopleDraft, getGuidedFormDraft } from './data/settings.js';
+import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft, getGuidedDogsDraft, getGuidedPeopleDraft, getGuidedFormDraft, getCloudSession } from './data/settings.js';
 import { renderAssistButton } from './assets/kelsChat.js';
 import { expenseRepo } from './data/expenseRepo.js';
 import { studServiceRepo } from './data/studServiceRepo.js';
@@ -128,7 +128,17 @@ window.addEventListener(DB_VERSIONCHANGE_EVENT, () => {
   renderDbNotice('db-closed-notice', '<strong>KennelOS was updated in another tab.</strong> <a href="">Reload this page</a> to keep working; anything not yet saved on this page can no longer be saved.');
 });
 
+// Support's helper device (docs/KennelOS_Assisted_Setup_Plan.md): signed in to a
+// user's account through an assist link. It runs on her Pro, not a license here.
+const isHelperDevice = () => getCloudSession()?.role === 'helper';
+const assistUI = () => import('./assets/cloudAssistUI.js');
+
 async function boot() {
+  // An assist link (?assist=…) opened on support's device: sign in as her helper
+  // before anything else, since it decides the license gate and first run below.
+  if (isCloudAvailable() && new URLSearchParams(globalThis.location?.search || '').has('assist')) {
+    try { await (await assistUI()).openAssistLink(); } catch (e) { console.warn('KennelOS: assist link', e); }
+  }
   // Lost device (Cloud Phase 1 plan §2.5): a signed-in device checks in so an
   // erase its owner sent from another device reaches it. First, and not
   // awaited: a Pro device whose license was already released walls below, and
@@ -143,7 +153,7 @@ async function boot() {
   // Pro edition (isLicenseGated) — Lite is free and Demo is a public showcase, so
   // this is a no-op there. Runs before the demo branch, but Demo never sets the
   // gate flag so it's skipped there regardless.
-  if (isLicenseGated()) {
+  if (isLicenseGated() && !isHelperDevice()) {
     let licensed = false;
     try {
       licensed = await ensureLicensed();
@@ -174,6 +184,15 @@ async function boot() {
   renderNav();
   registerServiceWorker();
   renderCloudTestBanner();
+  // Support's device: the "Helping …" bar, and its one-time setup (the vault and
+  // sync) before first run, so a help visit opens on her records, not a welcome.
+  if (isCloudAvailable() && isHelperDevice()) {
+    try {
+      const ui = await assistUI();
+      ui.renderHelperBar();
+      await ui.bootstrapHelper();
+    } catch (e) { console.warn('KennelOS: assist', e); }
+  }
   renderKelsButton();
   firstRunPersistence();
   // One-time fold of legacy Event.cost values into the Financials ledger. Guarded

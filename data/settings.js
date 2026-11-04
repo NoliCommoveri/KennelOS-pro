@@ -24,6 +24,7 @@ const KEYS = {
   cloudDirtySince: 'kennelOS.cloudDirtySince',
   cloudOfferPending: 'kennelOS.cloudOfferPending',
   cloudRestoredAt: 'kennelOS.cloudRestoredAt',
+  assistReady: 'kennelOS.assistReady',
   guidedLitterDraft: 'kennelOS.guidedLitterDraft',
   guidedDogsDraft: 'kennelOS.guidedDogsDraft',
   guidedPeopleDraft: 'kennelOS.guidedPeopleDraft',
@@ -674,6 +675,17 @@ export function isCloudOfferPending() {
 export function setCloudOfferPending(on) {
   if (on) localStorage.setItem(KEYS.cloudOfferPending, '1');
   else localStorage.removeItem(KEYS.cloudOfferPending);
+}
+
+// Support's helper device has set itself up for this program (cloudAssistUI.js
+// bootstrapHelper): its vault key and the join. Keyed by program id.
+export function getAssistReady() {
+  return localStorage.getItem(KEYS.assistReady);
+}
+
+export function setAssistReady(programId) {
+  if (programId) localStorage.setItem(KEYS.assistReady, programId);
+  else localStorage.removeItem(KEYS.assistReady);
 }
 
 export function getCloudRestoredAt() {

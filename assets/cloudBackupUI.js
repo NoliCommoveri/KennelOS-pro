@@ -136,6 +136,9 @@ export function errorText(e) {
       case 'same_email': return "That's already this account's email.";
       case 'email_taken': return 'That email already has its own KennelOS account. Use another address, or delete that account first.';
       case 'invalid_old_code': return "The code for your current email isn't right, or it has expired. Check it, or send a new one.";
+      case 'helper_not_allowed': return 'Only the account’s owner can do that, on her own device.';
+      case 'link_expired': return 'That assist link has expired or was already used. Make a new one in KennelOS Assist.';
+      case 'still_in_setup': return 'KennelOS support is still setting up this account.';
       default: return `Cloud backup refused that (${e.code || e.status}).`;
     }
   }
@@ -929,6 +932,11 @@ function renderAccountCard(el) {
         Backup is paused until you sign in again. Your records here are untouched.</p>
       <div class="form-actions"><button class="btn btn-primary" data-act="signin">Sign in again</button>
         <button class="btn" data-act="signout">Sign out</button></div>`;
+  } else if (account.role === 'helper') {
+    // Support's device in her account (docs/KennelOS_Assisted_Setup_Plan.md §5):
+    // her account settings are hers; Hand back is on the bar at the top.
+    main = `<p>Signed in as <strong>KennelOS support</strong>, helping <strong>${esc(account.helperLabel || 'this user')}</strong>.</p>
+      <p class="muted">Her email, sign-in, devices, recovery code and license are hers to change. Use <strong>Hand back</strong> at the top when you’re done.</p>`;
   } else {
     main = `
       ${emailChangeNoticeHtml()}
@@ -942,9 +950,12 @@ function renderAccountCard(el) {
         <button class="btn btn-sm" data-act="others">Sign out other devices</button>
         <button class="btn btn-sm" data-act="signout">Sign out</button>
         <button class="btn btn-sm btn-danger" data-act="delete">Delete my cloud data…</button>
-      </div>`;
+      </div>
+      ${editionFlags.liveSync === true ? '<div data-assist-help></div>' : ''}`;
   }
   el.innerHTML = `<h2 style="margin-top:0;">Account</h2>${main}`;
+  const helpSlot = el.querySelector('[data-assist-help]');
+  if (helpSlot) import('./cloudAssistUI.js').then((ui) => ui.mountHelpSection(helpSlot)).catch(() => {});
 
   const act = (name, fn) => el.querySelector(`[data-act="${name}"]`)?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
@@ -1441,6 +1452,12 @@ export async function runSignInAndRestore({ fromCard = false } = {}) {
     intro: 'Sign in with the email you used for cloud backup. Your records come back on this device.'
   });
   if (!account) return false;
+  // A program KennelOS support set up for her (docs/KennelOS_Assisted_Setup_Plan.md):
+  // her takeover replaces the restore. Reload either way; a later load finishes it.
+  if (account.assisted) {
+    await (await import('./cloudAssistUI.js')).claimAssistedAccount();
+    return true;
+  }
   // Private Vault Plan §2.3: the unlock step, when the program has a vault.
   if (isVaultOffered()) await (await vaultUI()).unlockBeforeRestore();
   // A program that keeps its devices in step (Cloud Phase 2 plan §2.1): this
@@ -1651,4 +1668,13 @@ export async function bootCloud() {
   if (editionFlags.liveSync === true && syncsHere()) syncUI().then((ui) => ui.startSyncUI()).catch(() => {});
   renderServiceNotices().catch(() => {});
   try { renderPrivateGapHint(); } catch { /* a hint only */ }
+  // Assisted setup and help (docs/KennelOS_Assisted_Setup_Plan.md): the automatic
+  // vault hand-over on whichever side gives the key, and an unfinished takeover.
+  if (editionFlags.liveSync === true && currentAccount()?.signedIn) {
+    import('./cloudAssistUI.js').then((ui) => {
+      ui.startAssistLoops();
+      if (currentAccount()?.assisted) return ui.claimAssistedAccount();
+      return null;
+    }).catch((e) => console.warn('KennelOS: assist', e));
+  }
 }

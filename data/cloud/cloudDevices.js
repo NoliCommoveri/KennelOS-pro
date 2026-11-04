@@ -22,6 +22,7 @@ import {
 } from '../settings.js';
 import { isLicenseGated, deactivate } from '../license.js';
 import { eraseThisDevice as wipeThisDevice } from '../appReset.js';
+import { forgetAllPasskeys } from './vaultPasskey.js';
 import { getVaultKey } from './vaultKeyStore.js';
 import { accountCheck } from './vaultCrypto.js';
 
@@ -67,6 +68,10 @@ export function checkIn({ force = false, minGapMs = CHECK_IN_EVERY_MS } = {}) {
       if (err instanceof api.CloudErasedError) {
         await eraseThisDevice(token);
         return { erased: true };
+      }
+      if (err instanceof api.CloudAccountDeletedError) {
+        await accountDeleted(token, err.erase);
+        return { erased: err.erase, accountDeleted: true };
       }
       if (err instanceof api.CloudAuthError) markSessionExpired();
       return null;
@@ -137,6 +142,24 @@ async function doErase(token) {
 }
 
 api.setErasedHandler((token) => eraseThisDevice(token));
+
+// The account was deleted on purpose (401 account_deleted): first tell the
+// password manager to drop its passkeys (they can never unlock anything again),
+// then, when support asked for a fresh start, erase this device as above;
+// otherwise keep its records and drop the dead session.
+let deletingAccount = null;
+export function accountDeleted(token = sessionToken(), erase = false) {
+  if (!deletingAccount) deletingAccount = onAccountDeleted(token, erase).finally(() => { deletingAccount = null; });
+  return deletingAccount;
+}
+
+async function onAccountDeleted(token, erase) {
+  forgetAllPasskeys(currentAccount()?.programId);
+  if (erase) return eraseThisDevice(token);
+  markSessionExpired();
+}
+
+api.setAccountDeletedHandler((token, erase) => accountDeleted(token, erase));
 
 // Tell the server this device is erased. Kept until it lands: an offline
 // failure keeps the token for the next try; any answer at all clears it.

@@ -31,6 +31,7 @@ import * as api from './cloudApi.js';
 import { currentAccount, sessionToken, markSessionExpired, signOut } from './cloudAuth.js';
 import { checkIn, cacheNotices, NOTICE_CACHE } from './cloudDevices.js';
 import { getVaultKey, clearVaultKey } from './vaultKeyStore.js';
+import { forgetAllPasskeys } from './vaultPasskey.js';
 import { encryptPayload, decryptPayload, encryptFile, decryptFile, readVaultHeader } from './vaultCrypto.js';
 import {
   filterCollectionsForCloud, assertCloudCollections, REGISTRY_TABLES
@@ -506,7 +507,9 @@ export async function deleteCloudData(reauth = {}) {
   if (!isCloudAvailable()) throw new api.CloudUnavailableError();
   const token = sessionToken();
   if (!token) throw new api.CloudAuthError({ status: 401, code: 'unauthorized' });
+  const programId = currentAccount()?.programId;
   await api.deleteAccount(token, reauth);
+  forgetAllPasskeys(programId); // its passkeys can't unlock anything now
   await signOut();
 }
 

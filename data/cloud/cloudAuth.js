@@ -47,8 +47,28 @@ export async function verifySignIn(email, code, { deviceLabel = defaultDeviceLab
   }
   return setCloudSession({
     token: res.token, email: cleanEmail, programId: res.programId, deviceId: res.deviceId, deviceLabel: deviceLabel || null,
-    emailSince: new Date().toISOString()
+    emailSince: new Date().toISOString(),
+    // A program KennelOS support set up for her: this first sign-in takes it over
+    // (cloudAssist.js claimAssisted).
+    ...(res.assisted ? { assisted: true } : {})
   });
+}
+
+// Support's device, signed in to her account through an assist link (cloudAssist.js).
+// The session shows her label in place of an email.
+export function setHelperSession(res, { deviceLabel = null } = {}) {
+  setCloudDeviceId(res.deviceId);
+  updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null, vault: null });
+  return setCloudSession({
+    token: res.token, email: null, programId: res.programId, deviceId: res.deviceId, deviceLabel,
+    role: 'helper', helperLabel: res.label || null
+  });
+}
+
+// Her takeover is done: her later sign-ins are ordinary.
+export function clearAssisted() {
+  const s = getCloudSession();
+  if (s?.assisted) { const { assisted, ...rest } = s; setCloudSession(rest); }
 }
 
 // --- Changing the account's email (Phase 1 plan §2.6) -------------------------------
@@ -115,7 +135,8 @@ export function currentAccount() {
   if (!s) return null;
   return {
     email: s.email || null, programId: s.programId || null, deviceId: s.deviceId || null,
-    deviceLabel: s.deviceLabel || null, signedIn: !!s.token
+    deviceLabel: s.deviceLabel || null, signedIn: !!s.token,
+    role: s.role === 'helper' ? 'helper' : 'owner', helperLabel: s.helperLabel || null, assisted: !!s.assisted
   };
 }
 
