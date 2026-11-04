@@ -12,7 +12,7 @@
 // The repos store; the pages call these functions to decide what to write.
 import { addDaysToYMD, addMonthsToYMD, addOpenDays, ALL_WEEKDAYS } from './dateUtils.js';
 import { findContactMatches, contactMatchReason } from './contactSearch.js';
-import { WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, REGISTRATION_TYPE, cleanPurposes, registrationsForPurposes, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
+import { WAITLIST_OPEN_STATUSES, WAITLIST_READY_TIMING, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, REGISTRATION_TYPE, cleanPurposes, registrationsForPurposes, RELEASED_SALE_STATUSES, isLostSale, descriptor, WAITLIST_PROGRAM_ICON } from './vocab.js';
 
 // --- Config (Spec §4.6) -------------------------------------------------------
 
@@ -47,6 +47,7 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   soon_notice_text: '', // blank = SOON_NOTICE_DEFAULT
   public_intro_text: '', // blank = PUBLIC_INTRO_DEFAULT (the message under her public list's heading)
   public_show_paused: false, // paused families on the public list, "Skipped until …" in place of their preferences
+  public_show_programs: false, // a program with an icon and a description for families shows its icon by the family's number on the public list (publicProgram)
   email_templates: null, // her wording per email kind (waitlistEmails.js; W2 step 6); null/blank = the defaults
   email_reminders: true, // the server's reminder and "Ready now?" emails while the list is online (W2 step 7)
   pass_reasons: null, // her reasons for a pass (Spec §16.5); null = DEFAULT_PASS_REASONS
@@ -1376,7 +1377,8 @@ export const listedName = (entry, fullName) => (entry && entry.private_listing ?
 // config.public_show_paused on, paused families show at their number instead, with
 // `skipped: true` and `skipped_until` (pausedUntil, or null) in place of their sex
 // preference.
-// Listen-only families show, with no marker. Programs, notes and money never do.
+// Listen-only families show, with no marker. Notes and money never do; a program
+// only as `program` (publicProgram), with config.public_show_programs on.
 // `nameOf(entry)` returns the family's full name.
 // `deciding(entry)`: a family holding a turn (placeHidden). Their row stays, at
 // their number, with their sex preference and date added, but the name reads
@@ -1395,9 +1397,25 @@ export function publicList(entries, kennelId, programsById = new Map(), { today,
       name: deciding(entry) ? DECIDING_LABEL : listedName(entry, nameOf(entry)),
       ...(paused ? { skipped: true, skipped_until: pausedUntil(entry, today, config) } : { pref_sex: entry.pref_sex || 'any', ...wantsMoreOf(wantsMore(entry)) }),
       added: anchorDate(entry),
+      ...publicProgramOf(publicProgram(entry, programsById, config)),
       ...(deciding(entry) ? { deciding: true } : {})
     }));
 }
+
+// The program a public-list row shows, so families can see why someone who joined
+// later is ahead of them (asked by the owner, 2026-11-04): only with
+// config.public_show_programs on, and only a program she gave an icon
+// (WAITLIST_PROGRAM_ICON) and a description for families. Its icon shows by the
+// family's number; tapping it shows the description. The program's name never
+// shows. → { icon, about } or null.
+export function publicProgram(entry, programsById, config = null) {
+  if (!config || !config.public_show_programs) return null;
+  const p = programOf(entry, programsById);
+  const about = String(p?.public_description ?? '').trim();
+  const icon = WAITLIST_PROGRAM_ICON.some((i) => i.value === p?.public_icon) ? p.public_icon : null;
+  return icon && about ? { icon, about } : null;
+}
+const publicProgramOf = (program) => (program ? { program } : {});
 
 const wantsMoreOf = (list) => (Array.isArray(list) && list.length ? { wants_more: list } : {});
 
@@ -1441,9 +1459,12 @@ const PUBLIC_SEX = { male: 'Male', female: 'Female', any: 'Either' };
 export function publicListText(rows, { kennelName = '', today = '', fmtDate = (d) => d } = {}) {
   const head = `${kennelName ? `${kennelName} Waitlist` : 'Waitlist'}${today ? ` (updated ${fmtDate(today)})` : ''}`;
   if (!rows.length) return `${head}\nNo families to show right now.`;
-  const lines = rows.map((r) => `#${r.position} ${r.name} · ${publicWants(r, fmtDate)}`);
+  const emoji = (icon) => WAITLIST_PROGRAM_ICON.find((i) => i.value === icon)?.emoji || '';
+  const lines = rows.map((r) => `${r.program ? `${emoji(r.program.icon)} ` : ''}#${r.position} ${r.name} · ${publicWants(r, fmtDate)}`);
+  // Text can't be tapped: each program icon shown gets its description as a key.
+  const key = [...new Map(rows.filter((r) => r.program).map((r) => [`${r.program.icon}\n${r.program.about}`, `${emoji(r.program.icon)} ${r.program.about}`])).values()];
   const gaps = rows.some((r, i) => r.position !== i + 1);
-  return [head, '', ...lines, ...(gaps ? ['', 'Note: in special circumstances, some applicant names may not be displayed above. Their place is being held, but they are not currently eligible for available pups.'] : [])].join('\n');
+  return [head, '', ...lines, ...(key.length ? ['', ...key] : []), ...(gaps ? ['', 'Note: in special circumstances, some applicant names may not be displayed above. Their place is being held, but they are not currently eligible for available pups.'] : [])].join('\n');
 }
 
 // --- Telling her what an action did to offers -------------------------------------

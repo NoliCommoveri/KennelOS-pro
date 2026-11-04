@@ -4,7 +4,8 @@
 // window). List + an inline add/edit form. Pro-only page (proPages.js).
 import { waitlistProgramRepo, ReferenceBlockedError } from '../data/waitlistProgramRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
-import { WAITLIST_PRIORITY } from '../data/vocab.js';
+import { WAITLIST_PRIORITY, WAITLIST_PROGRAM_ICON } from '../data/vocab.js';
+import { PROGRAM_ICON_SVG, programIconHtml } from '../assets/programIcons.js';
 import { waitlistConfig } from '../data/waitlistRules.js';
 import { esc, badge, fmtMoney, param, confirmModal } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker } from '../assets/waitlistUI.js';
@@ -57,7 +58,7 @@ function renderList() {
   }
   els.list.innerHTML = `<section class="card"><table class="data"><thead><tr><th>Program</th><th>What it changes</th><th>Families</th><th></th></tr></thead><tbody>${
     ctx.programs.map((p) => `<tr>
-      <td><strong>${esc(p.name)}</strong>${p.is_archived ? ' <span class="badge badge-gray">Archived</span>' : ''}</td>
+      <td>${programIconHtml(p) ? `${programIconHtml(p)} ` : ''}<strong>${esc(p.name)}</strong>${p.is_archived ? ' <span class="badge badge-gray">Archived</span>' : ''}</td>
       <td>${adjustments(p)}</td>
       <td>${ctx.counts.get(p.id) || none}</td>
       <td class="pill-row"><button class="btn btn-sm" data-edit="${esc(p.id)}">Edit</button></td>
@@ -88,7 +89,13 @@ function renderForm() {
           <label class="check-inline"><input id="p-pause" type="checkbox"${p.pause_allowed ? ' checked' : ''}> These families may pause without it counting against them</label>
         </div>
         <div class="field field-wide"><label>Description for families</label><textarea id="p-public">${esc(p.public_description || '')}</textarea>
-          <span class="field-hint">Shown to families only if you fill it in. Leave blank to keep the program private.</span></div>
+          <span class="field-hint">Shown to families only if you fill it in. Leave blank to keep the program private. With an icon below, it's also what anyone reads when they tap the icon on the public list.</span></div>
+        <div class="field field-wide"><label>Icon on the public list</label>
+          <div class="icon-choices" role="radiogroup">
+            <label class="icon-choice"><input type="radio" name="p-icon" value=""${p.public_icon ? '' : ' checked'}> None</label>
+            ${WAITLIST_PROGRAM_ICON.map((i) => `<label class="icon-choice" title="${esc(i.label)}"><input type="radio" name="p-icon" value="${esc(i.value)}"${p.public_icon === i.value ? ' checked' : ''}> ${PROGRAM_ICON_SVG[i.value]} <span>${esc(i.label)}</span></label>`).join('')}
+          </div>
+          <span class="field-hint">Shows to the left of each of these families' numbers on your public list, so others can see why they're ahead; tapping it shows the description above. Only the icon shows, never the program's name. Needs "Show program icons on the public list" on in Waitlist settings${ctx.config.public_show_programs ? ' (on now)' : ' (off now)'}.</span></div>
         <div class="field field-wide"><label>Private notes</label><textarea id="p-notes">${esc(p.notes || '')}</textarea></div>
       </div>
       <div class="form-actions">
@@ -118,6 +125,7 @@ function readForm() {
     passes_count: !c('#p-passes'),
     pause_allowed: c('#p-pause'),
     public_description: v('#p-public').trim(),
+    public_icon: els.form.querySelector('input[name="p-icon"]:checked')?.value || null,
     notes: v('#p-notes')
   };
 }
@@ -132,6 +140,7 @@ async function save() {
   clearError();
   try {
     const data = readForm();
+    if (data.public_icon && !data.public_description) throw new Error('Add a description for families: it\'s what people read when they tap the icon.');
     if (ctx.editing.id) await waitlistProgramRepo.update(ctx.editing.id, data);
     else await waitlistProgramRepo.create({ ...data, kennel_id: ctx.kennel.id });
     ctx.editing = null;

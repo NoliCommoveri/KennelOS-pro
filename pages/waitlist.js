@@ -23,6 +23,7 @@ import {
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal, wireActionMenu } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, openSoonNotice } from '../assets/waitlistUI.js';
 import { offerEmails } from '../assets/waitlistEmailUI.js';
+import { programIconHtml } from '../assets/programIcons.js';
 import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
 
 const els = {
@@ -91,7 +92,8 @@ async function main() {
     const p = programs.get(e.waitlist_program_id);
     if (!p) return '';
     const cls = p.priority === 'ahead' ? 'badge-purple' : 'badge-neutral';
-    return ` <span class="badge ${cls}" title="${esc(p.priority === 'ahead' ? WAITLIST_PRIORITY[1].label : '')}">${esc(p.name)}</span>`;
+    const icon = programIconHtml(p);
+    return ` <span class="badge ${cls}" title="${esc(p.priority === 'ahead' ? WAITLIST_PRIORITY[1].label : '')}">${icon ? `${icon} ` : ''}${esc(p.name)}</span>`;
   };
 
   // --- New applications (Spec §5.2) ---

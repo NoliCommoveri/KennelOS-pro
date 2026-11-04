@@ -6,7 +6,7 @@ import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { WAITLIST_PROGRAM_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
-import { WAITLIST_PRIORITY } from './vocab.js';
+import { WAITLIST_PRIORITY, WAITLIST_PROGRAM_ICON } from './vocab.js';
 
 const base = makeRepo('waitlist_programs', WAITLIST_PROGRAM_REFERENCES);
 
@@ -14,6 +14,9 @@ function validateProgram(c) {
   if (!String(c.name || '').trim()) throw new Error('Waitlist program: "name" is required.');
   if (!WAITLIST_PRIORITY.some((p) => p.value === c.priority)) {
     throw new Error(`Waitlist program: unknown priority "${c.priority}".`);
+  }
+  if (c.public_icon && !WAITLIST_PROGRAM_ICON.some((i) => i.value === c.public_icon)) {
+    throw new Error(`Waitlist program: unknown icon "${c.public_icon}".`);
   }
   const fee = c.fee_override;
   if (fee != null && fee !== '' && !(Number(fee) >= 0)) {

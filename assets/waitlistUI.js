@@ -395,17 +395,25 @@ export async function depositDialog({ offer, name, pupName, sale, carried = null
         const send = left == null ? '' : left > 0 ? `, so ${esc(fmtMoney(left))} is what they send` : ', so there\'s nothing more for them to send';
         return ` Of it, ${esc(parts.join(' and '))}${send}. Enter the whole deposit.`;
       })() : '';
+  // A credit that covers the whole deposit (an early deposit taken before the pup
+  // was born) means the deposit came in on the credit's date, not today.
+  const creditDate = credited > 0 && sale?.deposit_amount != null
+    && Number(sale.deposit_amount) - feePart - credited <= 0 ? (sc.credit.received.date || null) : null;
   const ok = await formModal({
     title: `${name}'s deposit received`,
     confirmLabel: 'Deposit received',
     bodyHtml: `<p style="margin-top:0;">For <strong>${esc(pupName)}</strong>.</p>
       <div class="form-grid">
-        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || carried?.date || todayYMD())}"></div>
+        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || carried?.date || creditDate || todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
       </div>
       <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${carried ? ` ${esc(fmtMoney(carried.amount))} of it is what they paid on a pup they lost (${esc(fmtDate(carried.date))}).` : ''}${creditHint}</p>`,
     onConfirm: async (o) => {
-      res = await confirmDeposit(offer.id, { date: o.querySelector('#dp-date').value || todayYMD(), amount: o.querySelector('#dp-amount').value });
+      const when = o.querySelector('#dp-date').value || todayYMD();
+      // Credit-covered: the sale's deposit date is the credit's, but she's placing
+      // them today, so the next family's turn starts today, not on that old date.
+      const dates = creditDate ? { date: todayYMD(), paidDate: when } : { date: when };
+      res = await confirmDeposit(offer.id, { ...dates, amount: o.querySelector('#dp-amount').value });
     }
   });
   return ok ? res : null;

@@ -274,6 +274,20 @@ export const WAITLIST_PRIORITY = [
   { value: 'ahead',    label: 'Ahead of standard', badge: 'badge-purple' }
 ];
 
+// The icon a waitlist program shows by a family's number on the public list
+// (Waitlist settings "Show program icons on the public list"); tapping it shows
+// the program's description for families. `emoji` stands in for it in the list
+// copied as text. The drawings are in assets/programIcons.js.
+export const WAITLIST_PROGRAM_ICON = [
+  { value: 'star',   label: 'Star',      emoji: '⭐' },
+  { value: 'check',  label: 'Checkmark', emoji: '✅' },
+  { value: 'heart',  label: 'Heart',     emoji: '❤️' },
+  { value: 'ribbon', label: 'Ribbon (cancer support)', emoji: '🎗️' },
+  { value: 'medal',  label: 'Medal (military)', emoji: '🎖️' },
+  { value: 'shield', label: 'Shield',    emoji: '🛡️' },
+  { value: 'paw',    label: 'Paw',       emoji: '🐾' }
+];
+
 export const WAITLIST_LISTEN_MODE = [
   { value: 'all',      label: 'All litters',            badge: 'badge-gray' },
   { value: 'selected', label: 'Selected sires & dams only', badge: 'badge-blue' },

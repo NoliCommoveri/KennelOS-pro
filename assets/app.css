@@ -348,6 +348,10 @@ a.stat:hover { border-color: var(--accent); transform: translateY(-2px); }
 .badge-amber   { background: var(--warn-soft); color: var(--warn); border-color: #e6d5ad; }
 .badge-red     { background: var(--danger-soft); color: var(--danger); border-color: #e6c3c3; }
 .badge-purple  { background: #efe6f6; color: #6a3d90; border-color: #dbc7ea; }
+/* Waitlist program icons (assets/programIcons.js): the Programs page's picker and list. */
+.icon-choices { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.icon-choice { display: inline-flex; align-items: center; gap: 5px; font-weight: 400; cursor: pointer; }
+.icon-choice svg, .program-icon svg { vertical-align: -4px; }
 .badge-gray    { background: #e7e9ec; color: #55606c; border-color: #d3d8de; }
 
 /* --- Tables / list screens --------------------------------------------- */

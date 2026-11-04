@@ -35,6 +35,7 @@ import { PLACEMENT_METHODS } from '../data/vocab.js';
 import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf, boardingChargeText } from '../data/goHome.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmailUI.js';
+import { programIconHtml } from '../assets/programIcons.js';
 import { offerSpecs, retryEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
@@ -1069,6 +1070,17 @@ async function onRemoveCredit(id) {
   await afterAction();
 }
 
+// Their program: its icon, name, and whether the icon shows by their number on the
+// public list (Waitlist settings "Show program icons on the public list").
+function programRowHtml(program) {
+  const icon = programIconHtml(program);
+  const shown = icon && ctx.config.public_show_programs && String(program.public_description || '').trim();
+  const note = !icon ? '' : shown
+    ? ' <span class="faint">— this icon shows by their number on your public list</span>'
+    : ` <span class="faint">— not shown on your public list (${ctx.config.public_show_programs ? 'the program needs a description for families' : 'program icons are off in Waitlist settings'})</span>`;
+  return `${icon ? `${icon} ` : ''}${esc(program.name)}${program.is_archived ? ' <span class="badge badge-gray">archived</span>' : ''}${note}`;
+}
+
 // Who they are and what they asked for (Details tab).
 function detailsDlHtml() {
   const e = ctx.entry;
@@ -1080,7 +1092,7 @@ function detailsDlHtml() {
   return `
     <dl class="dl-meta" style="margin-top:14px;">
       ${row('Contact', contactHtml)}
-      ${row('Program', program ? esc(program.name) + (program.is_archived ? ' <span class="badge badge-gray">archived</span>' : '') : '')}
+      ${row('Program', program ? programRowHtml(program) : '')}
       ${row('Wants', prefsSummary(e) + (e.pref_breed && resolveBreed(e.pref_breed, ctx.breeds) === null ? ` <span class="badge badge-red" title="No pup will match this breed. Edit to pick one of your breeds.">Unknown breed</span>` : ''))}
       ${row('Ready to buy', readySummary(e))}
       ${row('Listening for', LISTEN_STATUSES.includes(e.status) || isListenOnly(e) ? listenSummary(e) : '')}

@@ -70,6 +70,7 @@ export const PRO_ONLY_STANDALONE = [
   // Page-side helpers for the waitlist pages only. Its data layer (repos, rules,
   // actions) stays shared, like every repo.
   'assets/waitlistUI.js',
+  'assets/programIcons.js',
   // The Litter page's waitlist picks panel — litter.js imports it dynamically only
   // when editionFlags.waitlist is on, so Lite never requests it.
   'assets/waitlistPicksPanel.js',
