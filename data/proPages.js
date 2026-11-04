@@ -29,6 +29,9 @@ export const PRO_ONLY_PAGES = [
   'health-gaps-report.html', 'lead-sources-report.html', 'returns-report.html', 'show-record-report.html', 'stud-results-report.html',
   // Companion share-out
   'companion.html',
+  // Dog Cards (Shared Dogs Plan §3). Its data layer, data/dogCard.js, stays shared like
+  // kennelCard.js.
+  'dog-cards.html',
   // KennelAssistant owner console (the helper's own app is the root-level
   // assistant.html in PRO_ONLY_STANDALONE below — same basename, different
   // directory, and both are Pro-only so isProOnlyPage's basename match is

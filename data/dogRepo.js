@@ -2,7 +2,7 @@
 // puppies, and external dogs all live here; life-stage changes are `status`
 // updates on the same record, never a new row — CLAUDE.md).
 import { db } from './db.js';
-import { makeRepo, nowIso } from './repoBase.js';
+import { makeRepo, nowIso, newId } from './repoBase.js';
 import { DOG_REFERENCES } from './referenceRegistry.js';
 import { todayYMD } from './dateUtils.js';
 import { enforceDogCap } from './editionConfig.js';
@@ -14,6 +14,25 @@ const base = makeRepo('dogs', DOG_REFERENCES);
 // name, DOB, registration number — is commonly unknown at entry time.
 const REQUIRED_FIELDS = ['call_name', 'sex', 'breed', 'ownership_type', 'status'];
 const OWNER_REQUIRED_TYPES = ['external', 'leased_in'];
+
+// A dog's portable id (Shared Dogs Plan §3.1): `kosd1_<uuid>`, a different prefix
+// from a kennel's `kos1_` so the two can't be mixed up. Minted when the dog first
+// goes on a Dog Card (data/dogCard.js), received with it on the other side, and
+// write-once after: both apps then name the same dog the same way. Unlike a
+// kennel's, an outside dog (an ancestor) may be given one, since it is only a
+// matching key, not an identity claim on anyone's behalf.
+const DOG_PUBLIC_ID_RE = /^kosd1_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const newDogPublicId = () => `kosd1_${newId()}`;
+export const isDogPublicId = (value) => DOG_PUBLIC_ID_RE.test(String(value ?? '').trim());
+
+// One public id, one dog: a repo guard rather than a unique index, so a clash
+// reaches her as a sentence.
+async function assertDogPublicIdFree(publicId, exceptId) {
+  const clash = await db.dogs.where('public_id').equals(publicId).first();
+  if (clash && clash.id !== exceptId) {
+    throw new Error(`Another dog on this device (“${dogName(clash) || 'unnamed'}”) already has that public ID.`);
+  }
+}
 
 // The name to show for a dog. A pedigree-only ancestor usually has no call name
 // (a pedigree gives registered names), so it shows its registered name instead.
@@ -176,6 +195,11 @@ export const dogRepo = {
 
   async create(data) {
     data = withRegistrations(data);
+    if (data.public_id) {
+      if (!isDogPublicId(data.public_id)) throw new Error(`Dog: "${data.public_id}" is not a valid KennelOS dog ID.`);
+      data = { ...data, public_id: String(data.public_id).trim() };
+      await assertDogPublicIdFree(data.public_id, null);
+    }
     await validateDog(data);
     // Edition cap hook (§3/§4 of the cap spec). Default (Pro/shared) is a no-op;
     // Lite throws CapExceededError here when adding a new counting dog at the cap.
@@ -188,6 +212,18 @@ export const dogRepo = {
     const existing = await db.dogs.get(id);
     if (!existing) throw new Error(`dogs: no record with id ${id}`);
     changes = withRegistrations(changes);
+    // public_id is write-once: it may be filled in once, never changed or cleared.
+    if ('public_id' in changes) {
+      const incoming = String(changes.public_id ?? '').trim();
+      changes = { ...changes };
+      if (!incoming || incoming === existing.public_id) delete changes.public_id;
+      else if (existing.public_id) throw new Error('A dog’s public ID is permanent and cannot be changed.');
+      else {
+        if (!isDogPublicId(incoming)) throw new Error(`Dog: "${incoming}" is not a valid KennelOS dog ID.`);
+        await assertDogPublicIdFree(incoming, id);
+        changes.public_id = incoming;
+      }
+    }
     const merged = { ...existing, ...changes };
     // Validate the merged result so partial updates are checked against the whole.
     await validateDog(merged, id);
@@ -201,6 +237,25 @@ export const dogRepo = {
     }
     if (!livesWithOk(merged)) changes = { ...changes, lives_with_contact_id: null };
     return base.update(id, changes);
+  },
+
+  // The Dog Card match key (never the row id). Undefined when no dog has it.
+  async getByPublicId(publicId) {
+    const key = String(publicId ?? '').trim();
+    if (!key) return undefined;
+    return db.dogs.where('public_id').equals(key).first();
+  },
+
+  // A dog's public id, minted (and saved) the first time it goes on a card.
+  async ensurePublicId(id) {
+    const existing = await db.dogs.get(id);
+    if (!existing) throw new Error(`dogs: no record with id ${id}`);
+    if (existing.public_id) return existing.public_id;
+    // Straight to the base update: minting changes nothing the dog rules check, and an
+    // older record that wouldn't pass them today must still go on a card.
+    const publicId = newDogPublicId();
+    await assertDogPublicIdFree(publicId, id);
+    return (await base.update(id, { public_id: publicId })).public_id;
   },
 
   // --- Pedigree helpers (pure derivation over sire_id/dam_id) --------------

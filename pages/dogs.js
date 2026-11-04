@@ -1,6 +1,7 @@
 // dogs.js — Dog List screen. Uses the shared listView component with dog-specific
 // filters, columns, and row navigation.
 import { dogRepo } from '../data/dogRepo.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createListView } from '../assets/listView.js';
 import { dogInScope } from '../data/kennelScope.js';
@@ -159,5 +160,8 @@ async function openLogSeveral(type = null) {
   });
 }
 document.getElementById('btn-log-several')?.addEventListener('click', () => openLogSeveral());
+// Dog Cards (Shared Dogs Plan §3): Pro only; the page itself is dropped from Lite.
+const dogCardBtn = document.getElementById('btn-dog-card');
+if (dogCardBtn && editionFlags.dogCards) dogCardBtn.hidden = false;
 
 init().then(() => { if (param('logEvent')) openLogSeveral(param('logEvent')); });

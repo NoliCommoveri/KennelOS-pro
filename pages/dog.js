@@ -670,8 +670,14 @@ async function renderHeaderActions() {
   const bringInBtn = d.pedigree_only && !d.is_archived
     ? '<button class="btn btn-primary btn-sm" id="btn-bring-in" title="Make this dog part of your kennel — e.g. you bought it, or are breeding to it">Bring into use</button>'
     : '';
+  // Dog Cards (Shared Dogs Plan §3): this dog, with its ancestors, tests and titles,
+  // for a breeder she co-owns with. Not for a pedigree-only ancestor.
+  const dogCardBtn = editionFlags.dogCards && !d.pedigree_only && !d.is_archived
+    ? `<a class="btn btn-sm" href="dog-cards.html?dog=${encodeURIComponent(d.id)}" title="Send this dog to another breeder's KennelOS">Send a dog card</a>`
+    : '';
   els.headerActions.innerHTML = `
     ${bringInBtn}
+    ${dogCardBtn}
     ${documentsBtn}
     ${archiveBtn}
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;

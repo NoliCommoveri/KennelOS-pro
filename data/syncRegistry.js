@@ -64,7 +64,11 @@ export const SYNC_REGISTRY = Object.freeze({
       // id, like co_owner_contact_ids.
       'lives_with_contact_id',
       'pedigree_only', // without it a cloud restore would turn every ancestor into a kennel dog
-      'additional_registrations' // the dog's other registries and numbers; the same kind of data as registry/registration_number
+      'additional_registrations', // the dog's other registries and numbers; the same kind of data as registry/registration_number
+      // Its Dog Card id (Shared Dogs Plan §3.1): a random kosd1_ id, minted when it first
+      // goes on a card or received with one. Cloud so every device of hers matches the
+      // same dog on the next card.
+      'public_id'
     ],
     private: ['notes'],
     pending: []
@@ -75,7 +79,10 @@ export const SYNC_REGISTRY = Object.freeze({
     cloud: [
       'subject_type', 'subject_id', 'event_type', 'event_date', 'event_end_date',
       'title', 'reminder_date', 'reminder_dismissed', 'related_dog_id',
-      'related_contact_id', 'details'
+      'related_contact_id', 'details',
+      // A test or title that came on a Dog Card: `<dog public id>:<the sender's event
+      // id>`, so a card sent again updates it (Shared Dogs Plan §3.5). Random ids only.
+      'shared_ref'
     ],
     private: ['notes'],
     pending: [],

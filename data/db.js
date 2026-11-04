@@ -186,6 +186,14 @@ db.version(5).stores({
   expenses: 'id, event_id, [subject_type+subject_id], category, expense_date, account_id, stud_service_id, is_archived'
 });
 
+// version(6), 2026-11-04 (Shared Dogs Plan §3.1): `dogs.public_id`, a dog's
+// portable id (`kosd1_<uuid>`), minted when it first goes on a Dog Card and
+// write-once after. Indexed because every card looks dogs up by it. Re-lists the
+// dogs index string from version(1) with the one index added.
+db.version(6).stores({
+  dogs: 'id, sire_id, dam_id, litter_id, breeder_kennel_id, owner_contact_id, *co_owner_contact_ids, status, ownership_type, sex, breed, kennel_id, public_id, is_archived'
+});
+
 // --- Schema upgrade hand-off between open copies ---------------------------
 // A new version(N) can only install once every other open copy of the app on
 // this device lets go of the older database. A live copy does that by itself
