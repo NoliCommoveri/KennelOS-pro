@@ -1283,11 +1283,43 @@ export function shouldRemoveForPasses(entry, offers, config = WAITLIST_CONFIG_DE
 
 export const REMOVAL_UNDO_DAYS = 7;
 
-// The 7-day undo on an automatic second-pass removal, worked out from removed_date
-// (nothing extra stored).
+// The 7-day undo on a removal: the automatic ones (second pass, no answer to
+// "Ready now?") and hers ("Remove them from the list"), worked out from
+// removed_date (nothing extra stored).
 export function canUndoRemoval(entry, today) {
-  if (!entry || entry.status !== 'removed' || !['second_pass', 'no_ready_answer'].includes(entry.removed_reason) || !entry.removed_date) return false;
+  if (!entry || entry.is_archived || entry.status !== 'removed' || !['second_pass', 'no_ready_answer', 'by_breeder'].includes(entry.removed_reason) || !entry.removed_date) return false;
   return today <= addDaysToYMD(entry.removed_date, REMOVAL_UNDO_DAYS);
+}
+
+// The 7-day undo on an application she declined, from declined_date.
+export function canUndoDecline(entry, today) {
+  if (!entry || entry.is_archived || entry.status !== 'declined' || !entry.declined_date) return false;
+  return today <= addDaysToYMD(entry.declined_date, REMOVAL_UNDO_DAYS);
+}
+
+// The 7-day undo on "The fee wasn't received in time", from expired_date (an
+// application closed before that date was kept has none).
+export function canUndoExpire(entry, today) {
+  if (!entry || entry.is_archived || entry.status !== 'expired' || !entry.expired_date) return false;
+  return today <= addDaysToYMD(entry.expired_date, REMOVAL_UNDO_DAYS);
+}
+
+// The 7-day undo on "Fee received" (feeReceived only, which sets
+// fee_received_manual; never an approval that put them straight on the list), from
+// the day she recorded it (fee_received_at; the fee date itself may be earlier).
+// Not once they've been offered a turn: by then the list has acted on their place.
+export function canUndoFeeReceived(entry, offers, today) {
+  if (!entry || entry.is_archived || entry.status !== 'active' || !entry.fee_received_manual || !entry.fee_received_at) return false;
+  if ((offers || []).some((o) => o.entry_id === entry.id && !o.is_archived)) return false;
+  return today <= addDaysToYMD(String(entry.fee_received_at).slice(0, 10), REMOVAL_UNDO_DAYS);
+}
+
+// The 7-day undo on a withdrawal she entered herself ("They withdrew" on the
+// family's page). Only that path stores `withdrawn_from` (the status they left);
+// a withdrawal from the family's own status page or an approved back-out has none.
+export function canUndoWithdrawal(entry, today) {
+  if (!entry || entry.is_archived || entry.status !== 'withdrawn' || !entry.withdrawn_from || !entry.withdrawn_date) return false;
+  return today <= addDaysToYMD(entry.withdrawn_date, REMOVAL_UNDO_DAYS);
 }
 
 // The offer an undo forgives: the most recent counted pass. Undo sets its

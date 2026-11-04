@@ -335,6 +335,12 @@ export const SYNC_REGISTRY = Object.freeze({
       'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors',
       'listen_mode', 'listen_sire_ids', 'listen_dam_ids',
       'removed_reason', 'placed_sale_id',
+      // The status a family left when she entered their withdrawal: drives the
+      // 7-day undo, so a restore inside the window can still undo it.
+      'withdrawn_from',
+      // When she closed an approved application for an unpaid fee, and that she
+      // marked the fee received by hand: each drives a 7-day undo, kept on restore.
+      'expired_date', 'fee_received_manual',
       // Decided 2026-10-07 (Cloud plan §5.1, decisions 1 and 2): the readiness
       // hold and the litters she told a family about are how the list RUNS; the
       // question wording is her own form; and the applicant's name + email are

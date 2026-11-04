@@ -1004,7 +1004,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
     });
   }
 
-  for (const e of entries.filter((x) => canUndoRemoval(x, today))) {
+  for (const e of entries.filter((x) => canUndoRemoval(x, today) && x.removed_reason !== 'by_breeder')) {
     const noAnswer = e.removed_reason === 'no_ready_answer';
     out.push({
       key: `waitlist-removed:${e.id}:${e.removed_date}`,

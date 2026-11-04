@@ -329,6 +329,13 @@ function field(label, inner, { required = false, hint = '', wide = false } = {})
   </div>`;
 }
 
+// An optional date with a Clear button beside it. Some browsers (Safari on
+// iPhone/iPad above all) give a date input no way to empty it once a date is
+// picked, so a date entered by mistake would otherwise be stuck.
+function clearableDate(input, id) {
+  return `<div style="display:flex;gap:6px;align-items:center;">${input}<button type="button" class="btn btn-sm" data-date-clear="${esc(id)}">Clear</button></div>`;
+}
+
 function renderEdit() {
   const d = ctx.draft;
   const breedList = ctx.breeds.map((b) => `<option value="${esc(b)}"></option>`).join('');
@@ -344,9 +351,9 @@ function renderEdit() {
       ${field('Registered name', `<input id="f-registered_name" type="text" value="${esc(d.registered_name)}">`)}
       ${field('Sex', `<select id="f-sex">${vocabOptions(SEX, d.sex, 'Select…')}</select>`, { required: true })}
       ${field('Breed', `<input id="f-breed" type="text" list="breed-list" value="${esc(d.breed)}"><datalist id="breed-list">${breedList}</datalist>`, { required: true, hint: 'Type freely; suggestions come from breeds already entered or seeded from a kennel test import.' })}
-      ${field('Date of birth', `<input id="f-date_of_birth" type="date" max="${todayYMD()}" value="${esc(d.date_of_birth)}">`)}
+      ${field('Date of birth', clearableDate(`<input id="f-date_of_birth" type="date" max="${todayYMD()}" value="${esc(d.date_of_birth)}">`, 'f-date_of_birth'))}
       ${field('DOB estimated', `<label class="check-inline"><input id="f-dob_is_estimated" type="checkbox"${d.dob_is_estimated ? ' checked' : ''}> approximate</label>`)}
-      ${field('Date of death', `<input id="f-date_of_death" type="date" value="${esc(d.date_of_death)}">`)}
+      ${field('Date of death', clearableDate(`<input id="f-date_of_death" type="date" value="${esc(d.date_of_death)}">`, 'f-date_of_death'))}
       ${field('Color / markings', `<input id="f-color_markings" type="text" value="${esc(d.color_markings)}">`)}
       ${field('Registry', `<input id="f-registry" type="text" value="${esc(d.registry)}">`)}
       ${field('Registration #', `<input id="f-registration_number" type="text" value="${esc(d.registration_number)}">`)}
@@ -396,6 +403,10 @@ function renderEdit() {
   }
 
   const form = document.getElementById('dog-form');
+  form.querySelectorAll('[data-date-clear]').forEach((btn) => btn.addEventListener('click', () => {
+    const input = document.getElementById(btn.dataset.dateClear);
+    if (input) { input.value = ''; input.dispatchEvent(new Event('change', { bubbles: true })); }
+  }));
   document.getElementById('reg-add').addEventListener('click', () => {
     ctx.draft = readForm();
     ctx.draft.additional_registrations = [...ctx.draft.additional_registrations, { registry: '', registration_number: '', registered_name: '' }];

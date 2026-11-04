@@ -47,7 +47,7 @@ import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
 import { RELEASED_SALE_STATUSES, SALE_END_REASON, registrationsForPurposes, descriptor } from './vocab.js';
 import {
-  waitlistConfig, openDays, businessDays, closedDates, liveClosedDates, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, passToForgive,
+  waitlistConfig, openDays, businessDays, closedDates, liveClosedDates, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, passToForgive,
   respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
@@ -66,6 +66,15 @@ async function load(entryId) {
 
 function requireStatus(entry, allowed, verb) {
   if (!allowed.includes(entry.status)) throw new Error(`Can't ${verb} a family whose status is "${entry.status}".`);
+}
+
+// An undo that would reopen a closed entry is refused once the family has a newer
+// live one on the same list (they re-applied), so they're never on it twice.
+async function assertNotReapplied(entry, what) {
+  if (!entry.contact_id) return;
+  const again = (await waitlistEntryRepo.getAll()).find((x) => x.id !== entry.id && x.kennel_id === entry.kennel_id
+    && x.contact_id === entry.contact_id && ['applied', 'approved', 'active'].includes(x.status));
+  if (again) throw new Error(`This family has applied again since, so the ${what} can't be undone. Their new application is on the list.`);
 }
 
 // The context approval needs: the kennel's config and the entry's program.
@@ -138,6 +147,14 @@ export async function decline(entryId, { date = todayYMD() } = {}) {
   return waitlistEntryRepo.update(entryId, { status: 'declined', declined_date: date });
 }
 
+// The 7-day undo on a decline: the application is open again (applied).
+export async function undoDecline(entryId, { today = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  if (!canUndoDecline(entry, today)) throw new Error('This decline can no longer be undone.');
+  await assertNotReapplied(entry, 'decline');
+  return waitlistEntryRepo.update(entryId, { status: 'applied', declined_date: null });
+}
+
 // Fee received — this fixes the family's place in line (fee_received_date is the
 // position anchor, §6.1; fee_received_at, the moment she recorded it, orders two
 // families who paid on the same day). Also used with a null fee ("Add to the list").
@@ -158,12 +175,25 @@ export async function feeReceived(entryId, { date = todayYMD(), amount, method =
     fee_received_at: nowISO(),
     fee_payment_method: method,
     fee_payment_reference: reference,
+    fee_received_manual: true,
     ...(Number(creditAmount) > 0 ? { fee_credit_amount: Number(creditAmount) } : {})
   };
   if (amount !== undefined) changes.fee_amount = amount === '' || amount == null ? null : Number(amount);
   // No offer is made here, even if they're now next on a litter with open picks:
   // the page tells her, and she offers it (see the header note).
   return waitlistEntryRepo.update(entryId, changes);
+}
+
+// The 7-day undo on "Fee received": back to approved, the fee not received (their
+// fee amount and pay-by date stand). Their place in line goes with it.
+export async function undoFeeReceived(entryId, { today = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  const offers = await waitlistOfferRepo.getByEntry(entryId);
+  if (!canUndoFeeReceived(entry, offers, today)) throw new Error('This fee can no longer be marked not received.');
+  return waitlistEntryRepo.update(entryId, {
+    status: 'approved', fee_received_date: null, fee_received_at: null, fee_received_manual: null,
+    fee_payment_method: '', fee_payment_reference: '', fee_credit_amount: null
+  });
 }
 
 // A credit for funds she'd already received from them (receivedCredits.js): added,
@@ -180,18 +210,30 @@ export async function removeCredit(entryId, creditId) {
   return waitlistEntryRepo.update(entryId, { received_credits: (entry.received_credits || []).filter((c) => c.id !== creditId) });
 }
 
-export async function markFeeExpired(entryId) {
+export async function markFeeExpired(entryId, { date = todayYMD() } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['approved'], 'expire');
-  return waitlistEntryRepo.update(entryId, { status: 'expired' });
+  return waitlistEntryRepo.update(entryId, { status: 'expired', expired_date: date });
 }
 
-// The family left the list themselves (they told her). Any open offer they held
-// is voided and that litter's turn moves on. Returns { entry, voided, offered }.
-export async function withdraw(entryId, { date = todayYMD(), moveOn = true } = {}) {
+// The 7-day undo on "The fee wasn't received in time": approved again, with the
+// same pay-by date (past, so Today asks about it again unless she marks it received).
+export async function undoExpire(entryId, { today = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  if (!canUndoExpire(entry, today)) throw new Error('Closing this application can no longer be undone.');
+  await assertNotReapplied(entry, 'closing');
+  return waitlistEntryRepo.update(entryId, { status: 'approved', expired_date: null });
+}
+
+// The family left the list themselves. Any open offer they held is voided and
+// that litter's turn moves on. `byBreeder`: she entered it ("They withdrew" on
+// their page), so it keeps the status they left in `withdrawn_from` and gets the
+// 7-day undo; a withdrawal from their own status page doesn't.
+// Returns { entry, voided, offered }.
+export async function withdraw(entryId, { date = todayYMD(), moveOn = true, byBreeder = false } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['applied', 'approved', 'active'], 'withdraw');
-  const saved = await waitlistEntryRepo.update(entryId, { status: 'withdrawn', withdrawn_date: date });
+  const saved = await waitlistEntryRepo.update(entryId, { status: 'withdrawn', withdrawn_date: date, withdrawn_from: byBreeder ? entry.status : null });
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'the family withdrew from the list', moveOn })) };
 }
 
@@ -221,7 +263,7 @@ export async function removeForNoReadyAnswer(entryId, { date = todayYMD() } = {}
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'they didn\'t answer the ready check' })) };
 }
 
-// She removes a family from the list. Final: coming back means re-applying. Any
+// She removes a family from the list (7-day undo, then coming back means re-applying). Any
 // open offer they held is voided and moves on. Returns { entry, voided, offered }.
 export async function removeByBreeder(entryId, { date = todayYMD() } = {}) {
   const entry = await load(entryId);
@@ -239,12 +281,17 @@ export async function archiveEntry(entryId, { date = todayYMD() } = {}) {
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'the entry was archived' })) };
 }
 
-// The 7-day undo on a second-pass removal (§6.4). Forgives the triggering pass so
+// The 7-day undo on a removal (§6.4). A second pass: forgives the triggering pass so
 // the family isn't removed again at once; their anchor is untouched, so they're
 // back at their old place. Makes no offers (the page says where they're next).
 export async function undoRemoval(entryId, { today = todayYMD() } = {}) {
   const entry = await load(entryId);
   if (!canUndoRemoval(entry, today)) throw new Error('This removal can no longer be undone.');
+  await assertNotReapplied(entry, 'removal');
+  // Hers ("Remove them from the list"): no pass to forgive, just back.
+  if (entry.removed_reason === 'by_breeder') {
+    return waitlistEntryRepo.update(entryId, { status: 'active', removed_date: null, removed_reason: null });
+  }
   // No answer to "Ready now?" (§16.7): back on the list, and the question asked
   // again from today, so the next sweep doesn't remove them again at once.
   if (entry.removed_reason === 'no_ready_answer') {
@@ -262,6 +309,17 @@ export async function undoRemoval(entryId, { today = todayYMD() } = {}) {
     });
   }
   return waitlistEntryRepo.update(entryId, { status: 'active', removed_date: null, removed_reason: null });
+}
+
+// The 7-day undo on a withdrawal she entered. Back to the status they left, with
+// their anchor untouched, so an active family is back at their old place. Makes
+// no offers (an offer voided by the withdrawal has moved on). Refused once the
+// family has re-applied, so they're never on the list twice.
+export async function undoWithdrawal(entryId, { today = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  if (!canUndoWithdrawal(entry, today)) throw new Error('This withdrawal can no longer be undone.');
+  await assertNotReapplied(entry, 'withdrawal');
+  return waitlistEntryRepo.update(entryId, { status: entry.withdrawn_from, withdrawn_date: null, withdrawn_from: null });
 }
 
 // A closed run (placed, removed, withdrawn, declined, expired) → a NEW application
@@ -1441,7 +1499,7 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
     });
   } else {
     result.entry = await waitlistEntryRepo.update(entry.id, {
-      status: 'withdrawn', withdrawn_date: date, placed_sale_id: entry.placed_sale_id || null, back_out_request: decided,
+      status: 'withdrawn', withdrawn_date: date, withdrawn_from: null, placed_sale_id: entry.placed_sale_id || null, back_out_request: decided,
       notes: appendNote(entry.notes, `${note} ${outcome === 'refund' ? 'Deposit refunded.' : 'Deposit kept.'}`)
     });
   }
