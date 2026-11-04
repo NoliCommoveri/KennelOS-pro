@@ -8,7 +8,8 @@
 // program prints: the dog on the left, each generation a column to its right, and
 // each ancestor's box vertically centred between the boxes of its own two parents
 // (sire above, dam below). Built against AKC Research Pedigrees (text PDFs and
-// images of them); other programs' charts are read best-effort. Nothing here is
+// images of them) and AKC Certified Pedigrees (the dog's box sits between its
+// parents' in the first column); other programs' charts are read best-effort. Nothing here is
 // trusted blindly — the import page shows every dog for review before saving.
 //
 // Ancestors are addressed by PATH from the dog: '' is the dog, 's' its sire, 'd'
@@ -59,23 +60,50 @@ export function wordsToSegments(words, { minConf = 0 } = {}) {
 // The digits allow OCR's usual letter-for-digit swaps (S/5, O/0, I/l/1, B/8, Z/2),
 // mapped back by akcDigits — "NPS60004/04" is NP560004/04 misread.
 const AKC_REG = /\b([A-Z]{2})\s?([0-9OSIlBZ]{6})\s?\/\s?([0-9OSIlBZ]{2})\b/;
-// The "03-25" / "03/25" after an AKC number — not followed by more of a date.
-const AKC_TAIL = /^\s*(\d{2}[-/]\d{2})(?![\d/-])/;
+// The same number as an AKC Certified Pedigree prints it: no slash, eight plain
+// digits ("NP80670402"). With no slash to anchor it, OCR swaps aren't accepted.
+const AKC_RUN = /\b([A-Z]{2})(\d{6})(\d{2})\b/;
+// The "03-25" / "03/25" after an AKC number — not followed by more of a date —
+// or, on a Certified Pedigree, in brackets: "(05-24)".
+const AKC_TAIL = /^\s*(?:\((\d{2}[-/]\d{2})\)|(\d{2}[-/]\d{2})(?![\d/-]))/;
 const akcDigits = (t) => t.replace(/O/g, '0').replace(/S/g, '5').replace(/[Il]/g, '1').replace(/B/g, '8').replace(/Z/g, '2');
-const COLOR_WORDS = new Set(['white', 'black', 'brindle', 'seal', 'blue', 'fawn', 'red', 'brown', 'cream',
+// The abbreviations an AKC Certified Pedigree prints ("BLK BRDL & WH"), spelled out.
+const COLOR_ABBR = { blk: 'Black', brdl: 'Brindle', wh: 'White', bl: 'Blue', fn: 'Fawn', sl: 'Seal', rd: 'Red',
+  brn: 'Brown', crm: 'Cream' };
+const COLOR_WORDS = new Set([...Object.keys(COLOR_ABBR), 'white', 'black', 'brindle', 'seal', 'blue', 'fawn', 'red', 'brown', 'cream',
   'merle', 'liver', 'chocolate', 'lilac', 'isabella', 'tan', 'gray', 'grey', 'sable', 'pied', 'piebald',
   'champagne', 'gold', 'golden', 'yellow', 'apricot', 'silver', 'tricolor', 'tri', 'parti', 'wheaten',
   'mahogany', 'orange', 'lemon', 'buff', 'platinum', 'harlequin', 'mantle', 'roan', 'ticked', 'spotted',
   'markings', 'and', '&', 'with', 'w/', '/', ',']);
 const TITLES = new Set(['CH', 'GCH', 'GCHB', 'GCHS', 'GCHG', 'GCHP', 'INT', 'MBIS', 'MBISS', 'BIS', 'BISS',
   'RBIS', 'NBISS', 'UCH', 'GRCH', 'DC', 'FC', 'AFC', 'OTCH', 'MACH', 'PACH', 'CT', 'TC', 'BPIS', 'MBPIS']);
-const HEADER = /^(name|akc\s*#|birth\s*date|date of birth|breed|sex|colou?rs?\b|breeder|report date|registration|owner|dob|whelped)\b|(american kennel club|research pedigree|\bgeneration\b|recreated|copyright|©|all rights|reserved|accuracy|warranty)/i;
+const HEADER = /^(name|akc\s*#|birth\s*date|date of birth|date whelped|breed|sex|colou?rs?\b|breeder|report date|registration|owner|dob|whelped)\b|(american kennel club|research pedigree|certified pedigree|executive secretary|founded 18\d\d|\bgeneration\b|recreated|copyright|©|all rights|reserved|accuracy|warranty)/i;
 // A column heading is the whole line ("Dog", "Gr-Gr-", "Great-Grandparents"),
 // never just its first word — a dog may well be named "Dog Gone It".
 const GEN_LABEL = /^(dog|parents?|grand-?parents|great-?|gr-?|gr-gr-?|gr-gr-gr-?|great-?grand-?parents|gr-?great-?grand-?parents)$/i;
-const isGenLabel = (t) => GEN_LABEL.test(t.replace(/[^A-Za-z-]/g, ''));
+const isGenLabel = (t) => GEN_LABEL.test(t.replace(/[^A-Za-z-]/g, '')) || /^(sire|dam)$/i.test(t.trim());
+// A Certified Pedigree prints breed, sex and color as one line under the dog's
+// name: "BOSTON TERRIER FEMALE BRDL & WH".
+const BREED_SEX = /^([A-Za-z][A-Za-z' -]*?)\s+(MALE|FEMALE|DOG|BITCH)\b\s*(.*)$/i;
+const breedSexLine = (t) => { const m = t.trim().match(BREED_SEX); return m && (!m[3] || isColorOnly(m[3])) ? m : null; };
 
-export function isAkcReg(text) { const m = text.match(AKC_REG); return !!m && /\d/.test(m[2]); }
+export function isAkcReg(text) { const m = text.match(AKC_REG); return (!!m && /\d/.test(m[2])) || AKC_RUN.test(text); }
+
+// The first AKC number in a line, slashed or not: { at, length, number } with the
+// number in the slashed form ("NP806704/02").
+function findAkc(t) {
+  const m = t.match(AKC_REG);
+  if (m && /\d/.test(m[2])) return { at: m.index, length: m[0].length, number: `${m[1]}${akcDigits(m[2])}/${akcDigits(m[3])}`, run: false };
+  const r = t.match(AKC_RUN);
+  return r ? { at: r.index, length: r[0].length, number: `${r[1]}${r[2]}/${r[3]}`, run: true } : null;
+}
+
+// "BLK BRDL & WH" → "Black Brindle & White"; full words are left as printed.
+export function expandColor(text) {
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (!t.split(/[\s,/&]+/).some((w) => COLOR_ABBR[w.toLowerCase()])) return t;
+  return t.split(' ').map((w) => COLOR_ABBR[w.toLowerCase()] || w).join(' ');
+}
 
 // A foreign or non-AKC registration: an uppercase registry code, then something
 // with a digit, and no ordinary lowercase words ("MET BOST.T.915/19",
@@ -103,18 +131,23 @@ export function isDetail(text) {
 
 // Pull a registration, color and notes out of an entry's detail lines.
 export function parseDetails(lines) {
+  // An AKC Certified Pedigree runs a dog's details on as one wrapped paragraph
+  // ("NP24941501 (10-11) OFA46G CHIC80937 BLK BRDL &" / "WH AKC DNA V627089"),
+  // so when its number is in that unslashed form the lines are read as one.
+  const first = lines.map((l) => findAkc(l.trim())).find(Boolean);
+  if (first?.run) return parseRunOn(lines.join(' '));
   const out = { registration_number: '', registry: '', color_markings: '', notes: [] };
   for (const raw of lines) {
     let t = raw.trim();
-    const akc = t.match(AKC_REG);
-    if (akc && /\d/.test(akc[2]) && !out.registration_number) {
-      out.registration_number = `${akc[1]}${akcDigits(akc[2])}/${akcDigits(akc[3])}`;
+    const akc = findAkc(t);
+    if (akc && !out.registration_number) {
+      out.registration_number = akc.number;
       out.registry = 'AKC';
-      t = t.replace(akc[0], '');
+      t = t.slice(0, akc.at) + t.slice(akc.at + akc.length);
       // The four digits AKC prints after the number ("NP888072/07 03-25") are
       // part of it as breeders record it, so they're kept, as printed.
-      const tail = t.match(AKC_TAIL);
-      if (tail) { out.registration_number += ` ${tail[1]}`; t = t.replace(tail[0], ''); }
+      const tail = t.slice(akc.at).match(AKC_TAIL);
+      if (tail) { out.registration_number += ` ${tail[1] || tail[2]}`; t = t.slice(0, akc.at) + t.slice(akc.at + tail[0].length); }
     } else if (!out.registration_number && isOtherReg(t)) {
       const m = t.match(/^([A-Z]{2,5})\.?\s+(.*)$/);
       out.registry = m[1];
@@ -134,9 +167,31 @@ export function parseDetails(lines) {
     if (!t) continue;
     if (/\bDNA\b/i.test(t)) out.notes.push(t.replace(/\s+/g, ' '));
     else if (/^CHIC/i.test(t)) out.notes.push(t);
-    else if (isColorOnly(t)) { if (!out.color_markings) out.color_markings = t.replace(/\s+/g, ' '); }
+    else if (isColorOnly(t)) { if (!out.color_markings) out.color_markings = expandColor(t); }
     else out.notes.push(t);
   }
+  return out;
+}
+
+// One AKC Certified Pedigree detail paragraph:
+// "<number> (<date>) [OFA…] [CHIC…] <color> [(<country>)] [AKC DNA V…]".
+function parseRunOn(text) {
+  const out = { registration_number: '', registry: 'AKC', color_markings: '', notes: [] };
+  let t = ` ${text.replace(/\s+/g, ' ')} `;
+  const akc = findAkc(t);
+  out.registration_number = akc.number;
+  t = t.slice(0, akc.at) + t.slice(akc.at + akc.length);
+  const tail = t.slice(akc.at).match(AKC_TAIL);
+  if (tail) { out.registration_number += ` ${tail[1] || tail[2]}`; t = t.slice(0, akc.at) + t.slice(akc.at + tail[0].length); }
+  const take = (re, fn) => { t = t.replace(re, (...m) => { fn(...m); return ' '; }); };
+  take(/\(([^)]+)\)/g, (_, c) => out.notes.push(`Registered in ${c.trim()}`));
+  take(/\bOFA\s?#?[A-Z0-9]*\d[A-Z0-9]*\b/g, (m) => out.notes.push(m.replace(/\s+/g, '')));
+  take(/\bCHIC\s?#?\d+\b/g, (m) => out.notes.push(m.replace(/\s+/g, '')));
+  take(/\b(?:AKC\s+)?DNA\s*#?\s*(V?\d+)\b/g, (_, n) => out.notes.push(`AKC DNA ${n}`));
+  // A bare trailing "AKC" (its DNA number on another dog's line, or none).
+  t = t.replace(/\bAKC\b/g, ' ').replace(/\s+/g, ' ').trim();
+  if (t && isColorOnly(t)) out.color_markings = expandColor(t);
+  else if (t) out.notes.push(t);
   return out;
 }
 
@@ -169,9 +224,14 @@ export function parseHeader(segs) {
   const breed = afterLabel(segs, /\bBreed(?:\s*\/\s*Variety)?:\s*(.+)$/i);
   h.breed = breed.replace(/\b(Grandparents|Parents|Dog|Sex:.*|Birth.*)$/i, '').trim();
   h.sex = FEMALE.test(all) ? 'female' : MALE.test(all) ? 'male' : '';
-  const dob = all.match(/Birth\s*Date:?\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})/i);
+  const bs = segs.map((s) => breedSexLine(s.text)).find(Boolean);
+  if (bs) {
+    if (!h.breed) h.breed = bs[1].trim().toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+    if (!h.sex) h.sex = /^(female|bitch)$/i.test(bs[2]) ? 'female' : 'male';
+  }
+  const dob = all.match(/(?:Birth\s*Date|Date\s*Whelped|Whelped):?\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})/i);
   h.date_of_birth = dob ? `${dob[3]}-${dob[1].padStart(2, '0')}-${dob[2].padStart(2, '0')}` : '';
-  h.color_markings = afterLabel(segs, /Colou?rs?\s*\/\s*Markings:\s*(.+)$/i);
+  h.color_markings = afterLabel(segs, /Colou?rs?\s*\/\s*Markings:\s*(.+)$/i) || (bs?.[3] ? expandColor(bs[3]) : '');
   h.breeder = afterLabel(segs, /Breeder\(?s?\)?:\s*(.+)$/i).replace(/\s*\/\s*$/, '').replace(/\s*Report Date.*$/i, '').trim();
   const reg = all.match(/AKC\s*#:?\s*([A-Z]{2})\s?(\d{6})\s?\/\s?(\d{2})(?:[ \t]+(\d{2}[-/]\d{2})(?![\d/-]))?/i);
   h.registration_number = reg ? `${reg[1].toUpperCase()}${reg[2]}/${reg[3]}${reg[4] ? ` ${reg[4]}` : ''}` : '';
@@ -194,7 +254,7 @@ export function parsePedigree(segs, page) {
   const labelTops = segs.filter((s) => /\b(grand-?parents|parents)\b/i.test(s.text)).map((s) => s.y);
   const top = labelTops.length ? Math.min(...labelTops) : 0;
   const body = segs.filter((s) => s.y > top + 0.5
-    && !HEADER.test(s.text.trim()) && !isGenLabel(s.text.trim())
+    && !HEADER.test(s.text.trim()) && !isGenLabel(s.text.trim()) && !breedSexLine(s.text)
     && !/\b(grand-?parents)\b/i.test(s.text)
     && (s.text.match(/[A-Za-z0-9]/g) || []).length >= 3
     // Page-wide prose (a disclaimer, a footer) is wider than any one column, and
@@ -241,7 +301,9 @@ export function parsePedigree(segs, page) {
 
   const dogs = new Map();
   const toDog = (e, path) => {
-    const { name, titles } = splitTitles(e.name.replace(/\s+/g, ' ').replace(/[|_]+/g, '').trim());
+    // A Certified Pedigree's "Sire" / "Dam" label can read as part of the name beside it.
+    const raw = e.name.replace(/\s+/g, ' ').replace(/[|_]+/g, '').trim();
+    const { name, titles } = splitTitles(path.length === 1 ? raw.replace(/^(sire|dam)\b[\s:]*(?=\S)/i, '') : raw);
     const det = parseDetails(e.details);
     const notes = [...(titles.length ? [`Titles: ${titles.join(' ')}`] : []), ...det.notes];
     return {
@@ -254,7 +316,13 @@ export function parsePedigree(segs, page) {
   // two or more boxes it's the parents — the dog's own box went unread (common on
   // an image) — so the dog comes from the header, centred between those parents.
   let root;
-  if (gens[0].length >= 2) {
+  if (gens[0].length === 3 && gens.length > 1 && gens[1].length > 2) {
+    // An AKC Certified Pedigree: the dog's box sits in the parents' column,
+    // between its sire's (above) and its dam's (below).
+    const [sire, dog, dam] = gens[0];
+    root = dog;
+    gens.splice(0, 1, [root], [sire, dam]);
+  } else if (gens[0].length >= 2) {
     const left = clusters.filter((c) => !cols.includes(c) && c.x < cols[0].x - tol)
       .flatMap((c) => c.segs).filter((s) => !isDetail(s.text)).sort((a, b) => a.y - b.y);
     root = { name: left.map((s) => s.text).join(' '), details: [], cy: (gens[0][0].cy + gens[0][gens[0].length - 1].cy) / 2 };

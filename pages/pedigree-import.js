@@ -4,11 +4,14 @@
 // matching and saving are data/pedigreeImport.js. Nothing is written until
 // Import, and the PDFs themselves are dropped afterwards unless a file's
 // "Save to Documents" box is ticked (Pro — Lite has no document storage).
+// Where the edition has contacts, each chart's breeder is saved as one: the
+// contact on file with that name, or a new one (its own control on the file card).
 import { dogRepo, dogName } from '../data/dogRepo.js';
+import { contactRepo } from '../data/contactRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { readPedigreeFile } from '../data/pedigreeReader.js';
 import { wordsToSegments, parsePedigree } from '../data/pedigreeParse.js';
-import { planImport, commitImport } from '../data/pedigreeImport.js';
+import { planImport, commitImport, breederName, matchBreederContacts } from '../data/pedigreeImport.js';
 import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
 import { esc, badge } from '../assets/ui.js';
 import { SEX } from '../data/vocab.js';
@@ -28,7 +31,7 @@ const els = {
 };
 
 // files: [{ id, file, status: 'reading'|'ready'|'failed', progress, source, parsed, breed, store, error }]
-const state = { files: [], existing: [], kennels: [], edits: {}, decisions: {}, plan: null, view: null }; // view null = follow what needs attention
+const state = { files: [], existing: [], kennels: [], contacts: [], edits: {}, decisions: {}, plan: null, view: null }; // view null = follow what needs attention
 let nextId = 1;
 
 const showError = (msg) => { els.error.innerHTML = msg ? `<div class="inline-error">${esc(msg)}</div>` : ''; };
@@ -53,6 +56,8 @@ async function read(f) {
     f.parsed = parsePedigree(wordsToSegments(got.words, { minConf: 30 }), got.page);
     if (got.pages > 1) f.parsed.warnings.unshift(`Only the first of ${got.pages} pages was read.`);
     f.breed = f.parsed.header.breed || '';
+    // pick: null = the default (the one contact of that name, else a new one).
+    f.breeder = { name: breederName(f.parsed.header.breeder), pick: null };
     f.status = f.parsed.dogs.size ? 'ready' : 'failed';
     if (!f.parsed.dogs.size) f.error = f.parsed.warnings[0] || 'No dogs were found in this file.';
   } catch (e) {
@@ -60,10 +65,41 @@ async function read(f) {
     f.error = e?.message || String(e);
   }
   state.existing = await loadExisting();
+  await loadContacts();
   replan();
 }
 
 function readyFiles() { return state.files.filter((f) => f.status === 'ready'); }
+
+// A chart's breeder as it'll be saved: { name, matches, pick } where pick is
+// 'contact:<id>', 'new' or 'skip'.
+const recordsBreeders = () => Boolean(editionFlags.contactsSection);
+function breederChoice(f) {
+  const name = f.breeder?.name || '';
+  const matches = matchBreederContacts(name, state.contacts);
+  let pick = f.breeder?.pick;
+  if (pick?.startsWith('contact:') && !matches.some((c) => `contact:${c.id}` === pick)) pick = null;
+  if (pick === 'new' && !name) pick = null;
+  if (!pick) pick = matches.length ? `contact:${matches[0].id}` : name ? 'new' : 'skip';
+  return { name, matches, pick };
+}
+
+function breederField(f) {
+  if (!recordsBreeders()) return '';
+  const { name, matches, pick } = breederChoice(f);
+  const opt = (v, label) => `<option value="${esc(v)}"${v === pick ? ' selected' : ''}>${esc(label)}</option>`;
+  const extra = (c) => [c.phone, c.email].filter(Boolean).join(', ');
+  return `<label class="field" style="margin:0;">Breeder
+      <input type="text" data-breeder-name="${f.id}" value="${esc(name)}" placeholder="As it reads on the pedigree">
+    </label>
+    <label class="field" style="margin:0;">Save the breeder as
+      <select data-breeder-pick="${f.id}">
+        ${matches.map((c) => opt(`contact:${c.id}`, `Your contact ${c.name}${extra(c) ? ` (${extra(c)})` : ''}`)).join('')}
+        ${name ? opt('new', matches.length ? `A new contact, ${name}` : `A new contact: ${name}`) : ''}
+        ${opt('skip', 'Don’t add a contact')}
+      </select>
+    </label>`;
+}
 
 function replan() {
   const files = readyFiles().map((f) => ({ id: f.id, name: f.file.name, breed: f.breed, dogs: f.parsed.dogs }));
@@ -113,6 +149,7 @@ function fileCard(f) {
       <label class="field" style="margin:0;">Breed <span class="req">*</span>
         <input type="text" data-breed="${f.id}" value="${esc(f.breed)}" placeholder="Breed for every dog on this pedigree">
       </label>
+      ${breederField(f)}
       ${editionFlags.documents ? `<label class="check-inline"><input type="checkbox" data-store="${f.id}"${f.store ? ' checked' : ''}> Save this PDF to ${esc(subject?.registered_name || 'the dog')}’s Documents</label>` : ''}
       ${f.store && state.kennels.length > 1 && !getActiveKennelId() ? `<label class="field" style="margin:0;">File under
         <select data-kennel="${f.id}">${state.kennels.map((k) => `<option value="${esc(k.id)}"${k.id === f.kennelId ? ' selected' : ''}>${esc(k.kennel_name)}</option>`).join('')}</select></label>` : ''}
@@ -147,6 +184,10 @@ els.fileList.addEventListener('click', (e) => {
   }
 });
 els.fileList.addEventListener('change', (e) => {
+  const bn = e.target.closest('[data-breeder-name]');
+  if (bn) { const f = state.files.find((x) => x.id === bn.dataset.breederName); f.breeder = { name: bn.value.trim(), pick: null }; renderFiles(); return; }
+  const bp = e.target.closest('[data-breeder-pick]');
+  if (bp) { state.files.find((x) => x.id === bp.dataset.breederPick).breeder.pick = bp.value; return; }
   const b = e.target.closest('[data-breed]');
   if (b) { state.files.find((f) => f.id === b.dataset.breed).breed = b.value.trim(); replan(); return; }
   const s = e.target.closest('[data-store]');
@@ -265,12 +306,17 @@ els.commit.addEventListener('click', async () => {
   showError('');
   try {
     const storeFiles = readyFiles().filter((f) => f.store).map((f) => ({ fileId: f.id, blob: f.file, filename: f.file.name, kennelId: f.kennelId }));
-    const res = await commitImport(state.plan, { storeFiles });
+    const breeders = recordsBreeders() ? readyFiles().map((f) => {
+      const { name, pick } = breederChoice(f);
+      if (pick.startsWith('contact:')) return { fileId: f.id, contactId: pick.slice(8) };
+      return pick === 'new' ? { fileId: f.id, name } : null;
+    }).filter(Boolean) : [];
+    const res = await commitImport(state.plan, { storeFiles, breeders });
     const subjects = [...new Map(readyFiles().filter((f) => res.subjects[f.id])
       .map((f) => [res.subjects[f.id], { name: f.parsed.dogs.get('')?.registered_name, id: res.subjects[f.id] }])).values()];
     els.done.innerHTML = `<section class="card">
       <h2 style="margin-top:0;">Imported</h2>
-      <p>${res.created} new pedigree-only dog${res.created === 1 ? '' : 's'}${res.updated ? `, ${res.updated} existing dog${res.updated === 1 ? '' : 's'} filled in` : ''}.</p>
+      <p>${res.created} new pedigree-only dog${res.created === 1 ? '' : 's'}${res.updated ? `, ${res.updated} existing dog${res.updated === 1 ? '' : 's'} filled in` : ''}${res.contactsCreated ? `, ${res.contactsCreated} new breeder contact${res.contactsCreated === 1 ? '' : 's'}` : ''}.</p>
       <ul>${subjects.map((s) => `<li><a href="pedigree.html?id=${encodeURIComponent(s.id)}">${esc(s.name)}</a> — view pedigree</li>`).join('')}</ul>
       ${res.fileErrors.length ? `<div class="inline-error">Some PDFs weren’t saved to Documents: ${esc(res.fileErrors.join('; '))}</div>` : ''}
     </section>`;
@@ -280,6 +326,7 @@ els.commit.addEventListener('click', async () => {
     state.decisions = {};
     state.view = null;
     state.existing = await loadExisting();
+    await loadContacts();
     replan();
     els.done.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) {
@@ -306,5 +353,11 @@ function loadExisting() {
   return dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true })
     .catch((e) => { showError(e?.message || String(e)); return state.existing; });
 }
+// Her contacts, to find the breeder a chart names among them (re-read like the dogs).
+async function loadContacts() {
+  if (!recordsBreeders()) return;
+  state.contacts = await contactRepo.getAll({ includeArchived: false }).catch(() => state.contacts);
+}
+
 // Own kennels, for filing a kept PDF when there's more than one and none is active.
 if (editionFlags.documents) ownKennels().then((ks) => { state.kennels = ks; }).catch(() => {});

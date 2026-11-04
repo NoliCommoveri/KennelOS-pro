@@ -1122,7 +1122,10 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
 @media print { .kels-fab { display: none; } }
 
 .kels-main { max-width: 760px; }
-.kels-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; height: calc(100vh - 120px); min-height: 420px; }
+/* Sized to the screen as it is now (dvh: the address bar showing or not), less the
+   support bar when one is on top (--assist-bar-h, set by cloudAssistUI.js), so
+   Back / Next at the foot of her panel are never below the fold. */
+.kels-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; height: calc(100vh - 120px - var(--assist-bar-h, 0px)); height: calc(100dvh - 120px - var(--assist-bar-h, 0px)); min-height: 420px; }
 /* Header: a bigger photo and title in the same 59px, so the chat doesn't move down. */
 .kels-header { display: flex; align-items: center; gap: 10px; padding: 3px 10px; min-height: 59px; box-sizing: border-box; border-bottom: 1px solid var(--border); }
 #kels-avatar { display: flex; flex: none; }
@@ -1213,7 +1216,7 @@ table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2);
 }
 @media (max-width: 520px) {
   .kels-main { padding: 0; }
-  .kels-card { height: calc(100vh - 96px); border-radius: 0; border-left: none; border-right: none; }
+  .kels-card { height: calc(100vh - 96px - var(--assist-bar-h, 0px)); height: calc(100dvh - 96px - var(--assist-bar-h, 0px)); border-radius: 0; border-left: none; border-right: none; }
   .kels-transcript { padding: 8px; }
   .kels-bubble { max-width: 92%; }
 }

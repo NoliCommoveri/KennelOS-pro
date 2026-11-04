@@ -131,6 +131,11 @@ export function renderHelperBar() {
     <button type="button" class="btn btn-sm" style="background:transparent;color:inherit;border:1px solid currentColor;">Hand back</button>`;
   bar.querySelector('button').addEventListener('click', handBack);
   document.body.prepend(bar);
+  // The bar sits in the page flow, so a full-screen layout (Kels's chat card)
+  // takes its height off; it wraps to two lines on a phone, so it's measured.
+  const setHeight = () => document.documentElement.style.setProperty('--assist-bar-h', `${bar.offsetHeight}px`);
+  setHeight();
+  if (typeof ResizeObserver === 'function') new ResizeObserver(setHeight).observe(bar);
 }
 
 async function handBack() {

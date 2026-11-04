@@ -23,6 +23,7 @@
 // the repos inside one Dexie transaction, so a failed save leaves nothing behind.
 import { db } from './db.js';
 import { dogRepo, dogName } from './dogRepo.js';
+import { contactRepo } from './contactRepo.js';
 import { documentRepo } from './documentRepo.js';
 import { fileRepo } from './fileRepo.js';
 import { resolveKennelIdForWrite } from './kennelScope.js';
@@ -40,6 +41,27 @@ export const normName = (n) => String(n || '').replace(/[’‘`´]/g, "'").repl
 // is often saved as "GCH A-K Bella", so its titles come off too.
 
 const srcId = (fileId, path) => `${fileId}:${path}`;
+
+// --- The breeder a chart names ("Breeder: JAMIE COTTON") ----------------------
+// Saved as a contact tagged Breeder: one already on file with that name, or a new
+// one. A dog's breeder is a kennel (`breeder_kennel_id`), so the dog is linked
+// only when the contact has a kennel; otherwise the chart's "Breeder: …" note on
+// the dog is the record of it.
+
+// A chart's breeder as a person's name: an all-caps name in name case
+// ("JAMIE COTTON" → "Jamie Cotton"); anything already mixed-case as printed.
+export function breederName(raw) {
+  const t = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!t || /[a-z]/.test(t)) return t;
+  return t.toLowerCase().replace(/(^|[\s\-'’(&/])([a-z])/g, (m, a, c) => a + c.toUpperCase());
+}
+const personKey = (n) => normName(n).replace(/[^a-z0-9]+/g, ' ').trim();
+
+// Contacts (not archived) with the same name, case, spacing and punctuation ignored.
+export function matchBreederContacts(name, contacts = []) {
+  const k = personKey(name);
+  return k ? contacts.filter((c) => !c.is_archived && personKey(c.name) === k) : [];
+}
 
 // files: [{ id, name, breed, dogs: Map(path → parsed dog) }]
 // existing: every dog in the app (archived and pedigree-only included).
@@ -231,8 +253,12 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
 // A document carries one of the user's own kennels; it's inherited from the dog
 // when the dog has one, else the active/sole kennel, else `kennelId` (the page
 // asks when it can't be worked out — a pedigree-only dog lends none).
-// Returns { created, updated, subjects: { fileId → dogId } }.
-export async function commitImport(plan, { storeFiles = [] } = {}) {
+// breeders: [{ fileId, contactId } | { fileId, name }] — each chart's breeder: a
+// contact on file (tagged Breeder if it isn't), or a name to add as a new contact
+// (the same new name on two charts is one contact). When the contact has a kennel
+// and the chart's dog has no breeder kennel, that kennel becomes it.
+// Returns { created, updated, subjects: { fileId → dogId }, contactsCreated, fileErrors }.
+export async function commitImport(plan, { storeFiles = [], breeders = [] } = {}) {
   if (!plan.ready) throw new Error('Resolve the dogs marked for review before importing.');
   const byKey = new Map(plan.rows.map((r) => [r.key, r]));
   const idOf = new Map();
@@ -252,7 +278,8 @@ export async function commitImport(plan, { storeFiles = [] } = {}) {
   };
   for (const r of plan.rows) visit(r.key);
 
-  const tables = [db.dogs, db.kennels, db.documents, db.files];
+  let contactsCreated = 0;
+  const tables = [db.dogs, db.kennels, db.documents, db.files, db.contacts];
   await db.transaction('rw', tables, async () => {
     for (const r of order) {
       const sire_id = r.sireKey ? idOf.get(r.sireKey) || null : null;
@@ -273,6 +300,28 @@ export async function commitImport(plan, { storeFiles = [] } = {}) {
         });
         idOf.set(r.key, d.id);
         created++;
+      }
+    }
+
+    const made = new Map(); // personKey → contact made by this import
+    for (const b of breeders) {
+      const row = plan.rows.find((r) => r.subjectOf.includes(b.fileId));
+      const dogId = row && idOf.get(row.key);
+      let contact = null;
+      if (b.contactId) {
+        contact = await contactRepo.ensureType(b.contactId, 'breeder');
+      } else if (breederName(b.name)) {
+        const k = personKey(b.name);
+        contact = made.get(k) || null;
+        if (!contact) {
+          contact = await contactRepo.create({ name: breederName(b.name), contact_type: ['breeder'] });
+          made.set(k, contact);
+          contactsCreated++;
+        }
+      }
+      if (contact?.kennel_id && dogId) {
+        const d = await dogRepo.getById(dogId);
+        if (d && !d.breeder_kennel_id) await dogRepo.update(dogId, { breeder_kennel_id: contact.kennel_id });
       }
     }
   });
@@ -297,5 +346,5 @@ export async function commitImport(plan, { storeFiles = [] } = {}) {
       fileErrors.push(`${sf.filename}: ${e.message || e}`);
     }
   }
-  return { created, updated, subjects, fileErrors };
+  return { created, updated, subjects, contactsCreated, fileErrors };
 }
