@@ -21,6 +21,11 @@
 //    KennelOS) only while her site has Use my KennelOS prices on (`prices`).
 //  - Lengths are cut to what KennelPort takes, so one long name never makes the
 //    website refuse the whole update.
+//  - Co-owned dogs (KennelPort's docs/Co_Owned_Dogs_Plan.md), to a Worker that
+//    takes 'partner_kennels': whether each is co-owned and lives with a co-owner
+//    (lives_with_contact_id), and its co-owners' kennels, only outside kennels she
+//    ticked Name this kennel on my website, by name and website. Never a co-owner
+//    as a person: no name, email, phone, address, contract or money.
 import { titlesByDog } from './waitlistProjection.js';
 import { completedTestsByDog } from './healthTestLog.js';
 import { waitlistConfig, waitlistIsSetUp } from './waitlistRules.js';
@@ -32,7 +37,7 @@ export const SITE_BUNDLE_FORMAT = 1;
 
 // KennelPort's caps (bundle.js MAX). Over one, the website would refuse the whole
 // bundle, so siteExport says so first, in words.
-export const SITE_MAX = { dogs: 200, litters: 100, puppies: 30, pairings: 50, heats: 50, health: 60, extras: 100, products: 50, steps: 20, titles: 20 };
+export const SITE_MAX = { dogs: 200, litters: 100, puppies: 30, pairings: 50, heats: 50, health: 60, extras: 100, products: 50, steps: 20, titles: 20, partner_kennels: 50, co_owner_kennels: 10 };
 
 // The website's own heat rules (KennelPort plan 5.3), not the public list's.
 export const HEAT_KEEP_DAYS = 60; // a heat no pairing uses stays this long after its date
@@ -58,7 +63,7 @@ export class SiteExportError extends Error {
 
 // --- the allow-lists ----------------------------------------------------------
 
-export const BUNDLE_KEYS = ['format', 'bundle_id', 'kennel_id', 'sent_at', 'waitlist_public_id', 'dogs', 'litters', 'pairings', 'heats', 'extras', 'products', 'steps', 'payment'];
+export const BUNDLE_KEYS = ['format', 'bundle_id', 'kennel_id', 'sent_at', 'waitlist_public_id', 'dogs', 'litters', 'pairings', 'heats', 'extras', 'products', 'steps', 'payment', 'partner_kennels'];
 export const PRODUCT_KEYS = ['id', 'name', 'link_url', 'code', 'code_note'];
 export const DOG_KEYS = ['id', 'call_name', 'registered_name', 'sex', 'date_of_birth', 'color', 'status', 'died_on', 'titles', 'health'];
 // `registry` (a dog's and a puppy's, "AKC"…) goes only to a Worker whose answer
@@ -69,6 +74,11 @@ const registryOf = (d, on) => (on ? { registry: line(d.registry, 30) } : {});
 // made from that heat carries on as the pairing's, with its photos, wording and
 // address) goes only to a Worker whose answer lists the 'heat_id' section.
 const withHeat = (keys, on) => (on ? [...keys, 'heat_id'] : keys);
+// A dog's co-owned fields and the kennels they name go only to a Worker whose
+// answer lists the 'partner_kennels' section.
+export const CO_OWNED_KEYS = ['co_owned', 'lives_away', 'lives_with_kennel_id', 'co_owner_kennel_ids'];
+export const PARTNER_KENNEL_KEYS = ['id', 'name', 'website'];
+const withCoOwned = (keys, on) => (on ? [...keys, ...CO_OWNED_KEYS] : keys);
 export const HEALTH_KEYS = ['id', 'test', 'result', 'normal', 'date'];
 export const LITTER_KEYS = ['id', 'pairing_id', 'name', 'dam_id', 'sire_id', 'dam_name', 'sire_name', 'expected_on', 'born_on', 'ready_on', 'deposits_on', 'prices', 'puppies'];
 export const PRICE_KEYS = ['price_female', 'price_male', 'full_reg_female', 'full_reg_male', 'deposit_female', 'deposit_male'];
@@ -108,11 +118,55 @@ function money(v) {
   return Number.isFinite(n) && n >= 0 && n <= 100000 ? n : null;
 }
 const dogName = (d) => line(d?.call_name || d?.registered_name, 60);
+// A web address KennelPort takes (http or https), else null; "oakridge.com" reads
+// as https://oakridge.com/.
+export function webAddress(v) {
+  const s = line(v, 500);
+  if (!s) return null;
+  for (const t of [s, `https://${s}`]) {
+    try {
+      const u = new URL(t);
+      if ((u.protocol === 'https:' || u.protocol === 'http:') && u.hostname.includes('.')) return u.toString();
+    } catch { /* try the next */ }
+  }
+  return null;
+}
 const isMarked = (r) => r?.show_on_website === true;
 
 // --- dogs ---------------------------------------------------------------------
 
-function dogEntry(dog, titles, tests, registry = false) {
+// --- co-owned dogs --------------------------------------------------------------
+
+// The kennel a contact belongs to, as the website may name it: an outside kennel,
+// not archived, with a name, that she ticked Name this kennel on my website.
+export function namedKennelOf(contactId, { contactsById, kennelsById }) {
+  const k = kennelsById.get(contactsById.get(contactId)?.kennel_id);
+  return k && !k.is_own_kennel && !k.is_archived && k.name_on_website === true && line(k.kennel_name, 80) ? k : null;
+}
+
+// A dog's co-owned fields for the website. lives_away: it lives with one of its
+// co-owners now (lives_with_contact_id), not with her; then it shows only in the
+// website's Co-owned section. The kennels are its co-owners' named ones, the one
+// it lives with first. → { co_owned, lives_away, lives_with_kennel_id, co_owner_kennel_ids }
+export function coOwnership(dog, maps) {
+  const coOwners = dog.ownership_type === 'co_owned' ? (dog.co_owner_contact_ids || []) : [];
+  const co_owned = dog.ownership_type === 'co_owned';
+  const lives_away = co_owned && Boolean(dog.lives_with_contact_id) && coOwners.includes(dog.lives_with_contact_id);
+  const home = lives_away ? namedKennelOf(dog.lives_with_contact_id, maps) : null;
+  const ids = [...new Set([home?.id, ...coOwners.map((c) => namedKennelOf(c, maps)?.id)].filter(Boolean))].slice(0, SITE_MAX.co_owner_kennels);
+  return { co_owned, lives_away, lives_with_kennel_id: home?.id ?? null, co_owner_kennel_ids: ids };
+}
+
+// The kennels those dogs name, by public name and website only.
+function partnerKennelEntries(entries, kennelsById) {
+  const ids = [...new Set(entries.flatMap((d) => d.co_owner_kennel_ids || []))];
+  return ids.map((id) => {
+    const k = kennelsById.get(id);
+    return assertOnlyKeys({ id: k.id, name: line(k.kennel_name, 80), website: webAddress(k.website) }, PARTNER_KENNEL_KEYS, 'partner kennel');
+  });
+}
+
+function dogEntry(dog, titles, tests, registry = false, coOwned = null) {
   const done = (tests.get(dog.id) || []).slice(0, SITE_MAX.health);
   return assertOnlyKeys({
     id: dog.id,
@@ -135,8 +189,9 @@ function dogEntry(dog, titles, tests, registry = false) {
       // counts as normal (only a result she marked Abnormal is kept off).
       normal: t.outcome === 'Normal' ? true : t.outcome === 'Abnormal' ? false : null,
       date: ymd(t.date)
-    }, HEALTH_KEYS, 'health'))
-  }, withRegistry(DOG_KEYS, registry), 'dog');
+    }, HEALTH_KEYS, 'health')),
+    ...(coOwned ? coOwnership(dog, coOwned) : {})
+  }, withCoOwned(withRegistry(DOG_KEYS, registry), Boolean(coOwned)), 'dog');
 }
 
 // The dogs she shows: her own kennel's, marked, with a status the website has.
@@ -386,9 +441,13 @@ export function websiteProducts(accounts = []) {
 //   as marked here;
 // - accounts: ones with something to share (a referral link, code or
 //   instructions) not marked, for Recommended products (never transport).
-// → { dogs, keptPups, litters, pairings, heats, deposits, accounts }, each a list.
+// - partnerKennels: outside kennels of a shown co-owned dog's co-owners she
+//   hasn't ticked Name this kennel on my website for (asked, unticked to begin);
+// - noKennel: shown dogs living with a co-owner who has no outside kennel, so the
+//   website can't name where they live (said, not asked).
+// → { dogs, keptPups, litters, pairings, heats, deposits, accounts, partnerKennels, noKennel }, each a list.
 export const hasReferral = (a) => Boolean(line(a?.referral_link, 500) || line(a?.referral_code, 40) || line(a?.referral_instructions, 1000));
-export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [], accounts = [] }, { marking = [] } = {}) {
+export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [], accounts = [], contacts = [], kennels = [] }, { marking = [] } = {}) {
   const mine = (r) => !r.is_archived && r.kennel_id === kennel.id;
   const willMark = new Set(marking);
   const pairingsById = new Map(pairings.map((p) => [p.id, p]));
@@ -403,7 +462,27 @@ export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [], ac
     pairings: pairings.filter((p) => mine(p) && !isMarked(p) && LIVE_PAIRING_STATUSES.includes(p.status) && !hasLitter.has(p.id)),
     heats: dogs.filter((d) => ownDog(d) && d.sex === 'female' && d.status === 'active_breeding' && !d.heats_online),
     deposits: liveLitters.filter((l) => l.status !== 'expected' && !ymd(l.accept_deposits_date) && (litterMarked(l, pairingsById) || willMark.has(l.id))),
-    accounts: accounts.filter((a) => a && !a.is_archived && !isMarked(a) && a.account_type !== 'transport' && line(a.name, 80) && hasReferral(a))
+    accounts: accounts.filter((a) => a && !a.is_archived && !isMarked(a) && a.account_type !== 'transport' && line(a.name, 80) && hasReferral(a)),
+    ...coOwnedGaps(kennel, dogs, contacts, kennels)
+  };
+}
+
+function coOwnedGaps(kennel, dogs, contacts, kennels) {
+  const contactsById = new Map(contacts.map((c) => [c.id, c]));
+  const kennelsById = new Map(kennels.map((k) => [k.id, k]));
+  const shown = websiteDogs(kennel, dogs).filter((d) => d.ownership_type === 'co_owned');
+  const outside = (cid) => {
+    const k = kennelsById.get(contactsById.get(cid)?.kennel_id);
+    return k && !k.is_own_kennel && !k.is_archived && line(k.kennel_name, 80) ? k : null;
+  };
+  const unticked = new Map();
+  for (const d of shown) for (const c of d.co_owner_contact_ids || []) {
+    const k = outside(c);
+    if (k && k.name_on_website !== true) unticked.set(k.id, k);
+  }
+  return {
+    partnerKennels: [...unticked.values()],
+    noKennel: shown.filter((d) => d.lives_with_contact_id && (d.co_owner_contact_ids || []).includes(d.lives_with_contact_id) && !outside(d.lives_with_contact_id))
   };
 }
 
@@ -418,7 +497,8 @@ const FIELD_WORDS = {
   call_name: 'name', registered_name: 'registered name', registry: 'registry', sex: 'sex', date_of_birth: 'birthday', color: 'colour', died_on: 'date of death',
   titles: 'titles', health: 'health results', name: 'name', dam_id: 'dam', sire_id: 'sire', dam_name: 'dam', sire_name: 'sire',
   expected_on: 'expected date', born_on: 'birth date', ready_on: 'going-home date', deposits_on: 'deposits date', prices: 'prices',
-  planned_on: 'planned date', month: 'month', pairing_id: 'pairing', registration: 'registration'
+  planned_on: 'planned date', month: 'month', pairing_id: 'pairing', registration: 'registration',
+  co_owned: 'co-owned', co_owner_kennel_ids: 'co-owner kennels'
 };
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 export function bundleChanges(before = {}, after = {}) {
@@ -430,11 +510,16 @@ export function bundleChanges(before = {}, after = {}) {
   const pairName = (p) => (p.dam_name && p.sire_name ? `${p.dam_name} × ${p.sire_name}` : p.dam_name || 'a pairing');
 
   const [d0, d1] = [byId(before.dogs), byId(after.dogs)];
+  const kennelName = (id) => (after.partner_kennels || []).find((k) => k.id === id)?.name || 'a partner kennel';
   for (const [id, d] of d1) {
     const was = d0.get(id);
     if (!was) { out.push(`New dog: ${d.call_name}`); continue; }
     if (was.status !== d.status) out.push(`${d.call_name}: now ${DOG_WORDS[d.status] || d.status}`);
-    const ks = fields(was, d, ['id', 'status']);
+    // Where a co-owned dog lives moves it on the website.
+    if ('lives_away' in d && (Boolean(was.lives_away) !== Boolean(d.lives_away) || (d.lives_away && (was.lives_with_kennel_id ?? null) !== (d.lives_with_kennel_id ?? null)))) {
+      out.push(`${d.call_name}: now living ${d.lives_away ? `with ${kennelName(d.lives_with_kennel_id)}` : 'with you'}`);
+    }
+    const ks = fields(was, d, ['id', 'status', 'lives_away', 'lives_with_kennel_id']);
     if (ks.length) out.push(`${d.call_name}: ${words(ks)} changed`);
   }
   for (const [id, d] of d0) if (!d1.has(id)) out.push(`${d.call_name}: off the site`);
@@ -469,7 +554,7 @@ export function bundleChanges(before = {}, after = {}) {
   for (const [id, h] of h1) if (!h0.has(id)) out.push(`Coming up: ${h.dam_name || 'a girl'}'s heat`);
   for (const [id, h] of h0) if (!h1.has(id)) out.push(`${h.dam_name || 'A girl'}'s heat: off Coming up`);
 
-  const other = { extras: 'Extras', products: 'Recommended products', steps: 'How it works steps', payment: 'How to pay', waitlist_public_id: 'Your waitlist link' };
+  const other = { extras: 'Extras', products: 'Recommended products', partner_kennels: 'Partner kennels', steps: 'How it works steps', payment: 'How to pay', waitlist_public_id: 'Your waitlist link' };
   for (const [k, label] of Object.entries(other)) if (!same(before[k], after[k])) out.push(`${label} changed`);
   return out;
 }
@@ -493,7 +578,7 @@ export function websiteCounts(kennel, { dogs = [], litters = [], pairings = [], 
 // (a retry of the same press reuses it); `sections`: the optional sections the
 // site's Worker takes (its answer's `sections`), so an older one isn't sent a
 // section it would refuse the whole bundle over. → the bundle, every key allow-listed.
-export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = [], events = [], accounts = [], today, sentAt, bundleId, prices = false, sections = [] }) {
+export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = [], events = [], accounts = [], contacts = [], kennels = [], today, sentAt, bundleId, prices = false, sections = [] }) {
   if (!kennel || !kennel.id) throw new SiteExportError('Choose a kennel first.');
   if (!today) throw new Error('buildSiteBundle needs today.');
   if (!/^[\w-]{8,80}$/.test(String(bundleId ?? ''))) throw new Error('buildSiteBundle needs a bundle id.');
@@ -505,9 +590,11 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   const registry = Array.isArray(sections) && sections.includes('registry');
   const heatOf = Array.isArray(sections) && sections.includes('heat_id') ? heatUse(kennel, { dogs, events, pairings, today }).heatOf : null;
   const ctx = { dogsById, pairingsById, dogs, prices, registry, heatOf };
+  const kennelsById = new Map(kennels.map((k) => [k.id, k]));
+  const coOwned = Array.isArray(sections) && sections.includes('partner_kennels') ? { contactsById: new Map(contacts.map((c) => [c.id, c])), kennelsById } : null;
 
   const shown = {
-    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry)),
+    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry, coOwned)),
     litters: websiteLitters(kennel, litters, pairingsById).map((l) => litterEntry(l, ctx)),
     pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById, heatOf)),
     heats: websiteHeats(kennel, { dogs, events, pairings, today }).map((h) => assertOnlyKeys({ ...h, dam_name: dogName(dogsById.get(h.dam_id)) }, HEAT_KEYS, 'heat'))
@@ -518,6 +605,8 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   for (const [k, list] of Object.entries(shown)) {
     if (list.length > SITE_MAX[k]) throw new SiteExportError(`Your website takes at most ${SITE_MAX[k]} ${words[k]}, and ${list.length} are marked Show on website. Untick some, then try again.`);
   }
+  const partnerKennels = coOwned ? partnerKennelEntries(shown.dogs, kennelsById) : null;
+  if (partnerKennels && partnerKennels.length > SITE_MAX.partner_kennels) throw new SiteExportError(`Your website takes at most ${SITE_MAX.partner_kennels} partner kennels, and your co-owned dogs name ${partnerKennels.length}. Untick Name this kennel on my website on some, then try again.`);
 
   const steps = waitlistSteps(kennel);
   const fee = applicationFeePay(kennel, accounts);
@@ -532,6 +621,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
     ...shown,
     extras: extraEntries(kennel, prices),
     ...(products ? { products } : {}),
+    ...(partnerKennels ? { partner_kennels: partnerKennels } : {}),
     ...(steps.length ? { steps } : {}),
     ...(fee ? { payment: assertOnlyKeys({ application_fee: fee }, PAYMENT_KEYS, 'payment') } : {})
   };

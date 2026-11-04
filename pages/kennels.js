@@ -14,6 +14,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { esc, confirmModal } from '../assets/ui.js';
+import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { mountKennelCardImport, maybeOpenCardFromHash } from '../assets/kennelCardUI.js';
 
 const listEl = document.getElementById('kennel-list');
@@ -38,7 +39,7 @@ function linkedBadge(k) {
 function displayRow(k, blocked) {
   const title = blocked.length ? 'Referenced by ' + blocked.map((b) => `${b.label} (${b.count})`).join(', ') : 'Delete kennel';
   return `<tr class="${k.is_archived ? 'row-archived' : ''}">
-    <td><strong>${esc(k.kennel_name)}</strong>${k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : ''}${linkedBadge(k)}</td>
+    <td><strong>${esc(k.kennel_name)}</strong>${k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : ''}${linkedBadge(k)}${!k.is_own_kennel && k.name_on_website ? ' <span class="badge badge-neutral">Named on website</span>' : ''}</td>
     <td class="col-collapse">${k.prefix ? esc(k.prefix) : '<span class="faint">—</span>'}</td>
     <td class="col-collapse">${k.location ? esc(k.location) : '<span class="faint">—</span>'}</td>
     <td class="pill-row" style="justify-content:flex-end;">
@@ -59,6 +60,8 @@ function editRow(k) {
         <div class="field"><label>Location</label><input id="e-location" type="text" value="${esc(k.location || '')}"></div>
         <div class="field"><label>Website</label><input id="e-website" type="url" value="${esc(k.website || '')}" placeholder="https://…"></div>
         <div class="field field-wide"><label class="check-inline"><input id="e-own" type="checkbox"${k.is_own_kennel ? ' checked' : ''}> This is one of my own kennels</label></div>
+        ${websiteLinkOffered() && !k.is_own_kennel ? `<div class="field field-wide"><label class="check-inline"><input id="e-name-on-website" type="checkbox"${k.name_on_website ? ' checked' : ''}> Name this kennel on my website</label>
+          <span class="field-hint">For a dog you co-own with someone from this kennel: your KennelPort website names the kennel, with its website, on the dog's page and under Co-owned. Only the kennel, never the people. Off until you tick it.</span></div>` : ''}
       </div>
       <p class="field-hint">Preferred tests and lifecycle nudges live on the kennel's own page — use <strong>Open →</strong>.</p>
       <div class="form-actions">
@@ -196,8 +199,11 @@ async function saveEdit(kennel) {
   const location = document.getElementById('e-location').value.trim();
   const website = document.getElementById('e-website').value.trim();
   const is_own_kennel = document.getElementById('e-own').checked;
+  // Only an outside kennel is named as a co-owner's; kept as it was when the tick isn't drawn.
+  const tick = document.getElementById('e-name-on-website');
+  const name_on_website = !is_own_kennel && (tick ? tick.checked : kennel.name_on_website === true);
   try {
-    await kennelRepo.update(kennel.id, { kennel_name, prefix, location, website, is_own_kennel });
+    await kennelRepo.update(kennel.id, { kennel_name, prefix, location, website, is_own_kennel, name_on_website });
     editingId = null;
     render();
   } catch (e) {

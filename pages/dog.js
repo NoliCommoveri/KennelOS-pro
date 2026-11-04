@@ -67,7 +67,7 @@ const blankDog = () => ({
   call_name: '', registered_name: '', sex: '', date_of_birth: '', dob_is_estimated: false,
   date_of_death: '', breed: '', color_markings: '', registry: '', registration_number: '',
   microchip_id: '', url: '', photos_online: false, show_on_website: false, heats_online: false, sire_id: '', dam_id: '', ownership_type: '', owner_contact_id: '',
-  co_owner_contact_ids: [], litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_registration: '', notes: '',
+  co_owner_contact_ids: [], lives_with_contact_id: '', litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_registration: '', notes: '',
   planned_tests: [], additional_registrations: []
 });
 
@@ -302,6 +302,7 @@ function renderView() {
       ${d.pedigree_only ? '' : `${row('Ownership', badge(OWNERSHIP_TYPE, d.ownership_type))}
       ${row('Owner', esc(contactName(d.owner_contact_id)))}
       ${row('Co-owners', coOwners)}
+      ${d.ownership_type === 'co_owned' ? row('Lives with', d.lives_with_contact_id ? esc(contactName(d.lives_with_contact_id)) : 'You') : ''}
       ${row('Kennel', esc(kennelName(d.kennel_id)))}
       ${row('Status', badge(DOG_STATUS, d.status) + (d.status_date ? ` <span class="faint">since ${esc(fmtDate(d.status_date))}</span>` : ''))}`}
       ${d.status === 'puppy' ? row('Disposition', d.disposition ? badge(DISPOSITION, d.disposition) : '') : ''}
@@ -364,6 +365,9 @@ function renderEdit() {
       ${field('Breeder kennel', `<select id="f-breeder_kennel_id">${breederKennelOptions(d.breeder_kennel_id)}</select>`, { hint: 'The kennel that produced this dog — your own for an in-house litter, or an outside kennel for a dog you acquired.' })}
       ${field('Owner', `<select id="f-owner_contact_id">${contactOptions(d.owner_contact_id)}</select>`, { hint: 'Required for external / leased-in dogs.' })}
       ${field('Co-owners', `<select id="f-co_owner_contact_ids" multiple size="4">${coOptions}</select>`, { hint: 'Ctrl/Cmd-click to select multiple.' })}
+      ${d.ownership_type === 'co_owned' ? field('Lives with', `<select id="f-lives_with_contact_id"><option value="">Me</option>${[...coSelected].map((id) => `<option value="${esc(id)}"${id === d.lives_with_contact_id ? ' selected' : ''}>${esc(contactName(id) || 'A co-owner')}</option>`).join('')}</select>`, {
+        hint: websiteLinkOffered() ? 'Where this dog lives now. Living with a co-owner, it shows only under Co-owned on your website, with their kennel when you name it; living with you, like your own dogs.' : 'Where this dog lives now.'
+      }) : ''}
       ${editionFlags.multiKennel ? field('Kennel', `<select id="f-kennel_id">${kennelOptions(d.kennel_id, d.ownership_type)}</select>`, {
         required: SCOPED_OWNERSHIP.has(d.ownership_type),
         hint: SCOPED_OWNERSHIP.has(d.ownership_type)
@@ -377,8 +381,15 @@ function renderEdit() {
     </div>
     <div id="form-warn"></div>`;
 
+  // Lives with offers the co-owners chosen above: re-draw as they change.
+  document.getElementById('f-co_owner_contact_ids')?.addEventListener('change', () => {
+    if (ctx.draft.ownership_type !== 'co_owned') return;
+    ctx.draft = readForm();
+    renderEdit();
+  });
+
   if (isPedigreeOnlyEdit()) {
-    for (const id of ['f-ownership_type', 'f-status', 'f-owner_contact_id', 'f-co_owner_contact_ids', 'f-kennel_id']) {
+    for (const id of ['f-ownership_type', 'f-status', 'f-owner_contact_id', 'f-co_owner_contact_ids', 'f-lives_with_contact_id', 'f-kennel_id']) {
       const f = document.getElementById(id)?.closest('.field');
       if (f) f.hidden = true;
     }
@@ -529,6 +540,9 @@ function readForm() {
     breeder_kennel_id: val('f-breeder_kennel_id') || null,
     owner_contact_id: val('f-owner_contact_id') || null,
     co_owner_contact_ids: coSel ? [...coSel.selectedOptions].map((o) => o.value) : [],
+    // Only a co-owned dog lives with a co-owner, and only one of its own (dogRepo
+    // clears any other on save).
+    lives_with_contact_id: document.getElementById('f-lives_with_contact_id') ? (val('f-lives_with_contact_id') || null) : null,
     // The picker is absent in two different situations, which mean opposite
     // things: in a single-kennel edition (Lite) it is never rendered at all and
     // the draft's already-resolved kennel must SURVIVE; anywhere else its absence
@@ -545,7 +559,7 @@ function readForm() {
     const o = ctx.original;
     Object.assign(out, {
       ownership_type: o.ownership_type, status: o.status, owner_contact_id: o.owner_contact_id ?? null,
-      co_owner_contact_ids: o.co_owner_contact_ids || [], kennel_id: o.kennel_id ?? null
+      co_owner_contact_ids: o.co_owner_contact_ids || [], lives_with_contact_id: null, kennel_id: o.kennel_id ?? null
     });
   }
   return out;

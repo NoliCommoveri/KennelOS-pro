@@ -216,6 +216,12 @@ async function boot() {
     // her device reads the forms' submissions with the key it holds.
     import('./data/jotformSigned.js').then((m) => m.bootJotformCheck()).catch(() => {});
   }
+  // Her puppy portal on KennelPort (End-State guide §35.1): the family feed goes by
+  // itself from a device linked to a website whose portal is on. Nothing loads
+  // a request without a link.
+  if (editionFlags.websiteLink && !isDemo()) {
+    import('./data/portalFeedSync.js').then((m) => m.startPortalFeed()).catch(() => {});
+  }
   // Her waitlist closed dates more than 7 days past drop off by themselves.
   if (editionFlags.waitlist && !isDemo()) {
     import('./data/waitlistActions.js').then((m) => m.tidyClosedDates()).catch(() => {});

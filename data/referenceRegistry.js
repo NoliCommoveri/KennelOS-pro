@@ -90,6 +90,7 @@ export const PAIRING_REFERENCES = [
 export const CONTACT_REFERENCES = [
   { table: 'dogs',          field: 'owner_contact_id',     label: 'owner of a dog' },
   { table: 'dogs',          field: 'co_owner_contact_ids', label: 'co-owner of a dog', multiEntry: true },
+  { table: 'dogs',          field: 'lives_with_contact_id', label: 'co-owner a co-owned dog lives with', scan: true },
   { table: 'sales',         field: 'buyer_contact_id',        label: 'buyer on a sale' },
   { table: 'sales',         field: 'referred_by_contact_id',  label: 'referrer on a sale' },
   { table: 'stud_services', field: 'partner_contact_id',      label: 'partner contact in a stud service' },

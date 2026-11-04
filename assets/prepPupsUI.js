@@ -28,6 +28,7 @@ import { contractRepo } from '../data/contractRepo.js';
 import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { portalOn } from '../data/portalFeed.js';
 import { saleExtraCharges, kennelChargeList, newExtraCharge, depositFeeChargeBack } from '../data/extraCharges.js';
 import { depositPaid } from '../data/incomeView.js';
 import { inScopeOnly, resolveKennelIdForWrite } from '../data/kennelScope.js';
@@ -724,7 +725,10 @@ class Prep {
       await this.chat.say(`Nice progress! Here's what's still on the list, whenever you're ready:<br>${lines.join('<br>')}`);
     }
     // The Furever link isn't tracked, so it's only offered, for pups with an open sale.
-    if (editionFlags.furever && this.chosen.some((r) => r.sale && r.sale.status !== 'delivered')) {
+    // Never for a kennel whose families have her puppy portal (KennelPort), which
+    // takes Furever's place there.
+    const portalKennels = new Set((await kennelRepo.getAll({ includeArchived: true })).filter(portalOn).map((k) => k.id));
+    if (editionFlags.furever && this.chosen.some((r) => r.sale && r.sale.status !== 'delivered' && !portalKennels.has(r.sale.kennel_id))) {
       await this.chat.say('One more idea: want to send the families their pup\'s Furever app? It\'s a sweet way to say welcome home.');
       const pick = await this.chat.choose([{ label: 'Open Furever', value: 'yes' }, { label: 'Not now', value: '' }]);
       if (pick === 'yes') {

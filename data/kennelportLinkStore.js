@@ -8,6 +8,9 @@
 // kennelos_prices }, device_label, linked_at, last_sent_at, last_summary, sent }.
 // `sent`: the last bundle this device sent (less its id and time), so Kels can
 // say what an update would change (siteExport.bundleChanges).
+// `portal_sent`, `portal_known`, `portal_sent_at`, `portal_checked_at`: the puppy portal's family feed
+// as this device last sent it (portalFeedSync.js), so an unchanged feed isn't sent
+// again and what has gone since goes as `removed`.
 // `site` is what KennelPort said last (each answer refreshes it). `kept_website`:
 // the site address she said Keep mine to, for the kennel record's website.
 // A device choice, like the rest of the row.
@@ -41,6 +44,20 @@ export async function noteWebsiteAnswer(kennelId, { site, summary, kept_website,
     ...(kept_website ? { kept_website } : {}),
     ...(sent ? { sent } : {}),
     ...(summary ? { last_summary: summary, last_sent_at: new Date().toISOString() } : {})
+  });
+}
+
+// After the portal's family feed was sent (portalFeedSync.js): what went, and
+// what it stands for. `site` refreshes the facts (portal_feed off, say).
+// `checked`: the site was just asked for its facts (portal_checked_at).
+export async function notePortalSent(kennelId, { sent, known, site, checked = false } = {}) {
+  const row = await getWebsiteLink(kennelId);
+  if (!row) return;
+  await db.device_secrets.put({
+    ...row,
+    ...(site ? { site } : {}),
+    ...(checked ? { portal_checked_at: new Date().toISOString() } : {}),
+    ...(sent ? { portal_sent: sent, portal_known: known || [], portal_sent_at: new Date().toISOString() } : {})
   });
 }
 

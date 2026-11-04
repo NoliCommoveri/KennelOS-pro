@@ -15,6 +15,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { portalOn } from '../data/portalFeed.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { getFureverSettings, setFureverSettings, getMyKennelId } from '../data/settings.js';
@@ -184,9 +185,15 @@ function wireIdentity(vets) {
 
 // --- Recipients: one row per pup with an open sale --------------------------
 let ctx = []; // [{ sale, dog, buyer, dropoff }]
+// Kennels whose families have her puppy portal on KennelPort (portalFeed.portalOn):
+// the portal takes Furever's place, so their pups aren't listed here.
+let portalNames = [];
 
 async function loadData() {
-  const sales = (await saleRepo.getAll({ includeArchived: true })).filter(saleRepo.isOpenSale);
+  const portalKennels = (await kennelRepo.getAll({ includeArchived: true })).filter(portalOn);
+  portalNames = portalKennels.map((k) => k.kennel_name || 'Your kennel');
+  const skip = new Set(portalKennels.map((k) => k.id));
+  const sales = (await saleRepo.getAll({ includeArchived: true })).filter(saleRepo.isOpenSale).filter((s) => !skip.has(s.kennel_id));
   const rows = [];
   for (const sale of sales) {
     const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
@@ -279,11 +286,14 @@ function recipientRow({ sale, dog, buyer, dropoff }) {
 }
 
 function renderRecipients() {
+  const portalNote = portalNames.length
+    ? `<p class="muted small">${portalNames.map(esc).join(', ')}: your families have your puppy portal, so their pups aren't listed here.</p>`
+    : '';
   if (!ctx.length) {
-    els.recipients.innerHTML = `<div class="empty-state">No pups with an open sale right now.</div>`;
+    els.recipients.innerHTML = `${portalNote}<div class="empty-state">No pups with an open sale right now.</div>`;
     return;
   }
-  els.recipients.innerHTML = ctx.map(recipientRow).join('');
+  els.recipients.innerHTML = portalNote + ctx.map(recipientRow).join('');
   els.recipients.querySelectorAll('[data-sale]').forEach((row) => {
     const saleId = row.dataset.sale;
     const entry = ctx.find((r) => r.sale.id === saleId);

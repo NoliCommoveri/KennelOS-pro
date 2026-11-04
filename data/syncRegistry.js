@@ -59,6 +59,10 @@ export const SYNC_REGISTRY = Object.freeze({
       // coming heats may show (a month only). Display choices like photos_online, read by
       // whichever device presses Update website.
       'show_on_website', 'heats_online',
+      // Which of its co-owners a co-owned dog lives with now (empty: with her). Where it
+      // shows on her website comes from it (KennelPort's Co_Owned_Dogs_Plan.md); a contact
+      // id, like co_owner_contact_ids.
+      'lives_with_contact_id',
       'pedigree_only', // without it a cloud restore would turn every ancestor into a kennel dog
       'additional_registrations' // the dog's other registries and numbers; the same kind of data as registry/registration_number
     ],
@@ -82,6 +86,16 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: ALL,
     cloud: [
       'kennel_name', 'prefix', 'public_id', 'is_own_kennel', 'location', 'website',
+      // An outside kennel she lets her website name, by name and website, as a
+      // co-owned dog's kennel (KennelPort's Co_Owned_Dogs_Plan.md). A display choice.
+      'name_on_website',
+      // Her puppy portal on KennelPort (End-State guide §35.1; owner decision
+      // 2026-11-04): its address, the one-tap link's key KennelPort derives for her
+      // site (it dies on Unlink), the families it has taken over, and the facts it
+      // sent back that were applied. Cloud so whichever device publishes her waitlist
+      // puts Open your puppy portal on the status page, and Companion and Furever are
+      // off on every device. The key reaches the same server in the projection anyway.
+      'kennelport_portal',
       'logo_data_url', 'preferred_tests', 'preferred_breeds', 'preferred_test_breeds',
       'promote_nudge_enabled', 'promote_age_male_months', 'promote_age_female_months',
       // Her own waitlist setup: rules, application form questions, FAQ, fee and

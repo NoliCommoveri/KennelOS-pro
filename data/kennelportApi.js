@@ -16,6 +16,7 @@
 //   GET    /v1/link    (token) → { linked, site, last_bundle_at }
 //   DELETE /v1/link    (token) → { linked: false }
 //   POST   /v1/bundle  (token, the bundle) → { summary, addresses, site }
+//   POST   /v1/portal  (token, the family feed, portalFeed.js) → { received, summary, facts, portal }
 import { kennelportUrl, devKennelportUrl, editionFlags } from './editionConfig.js';
 import { isCloudTestServerOn } from './settings.js';
 
@@ -87,6 +88,10 @@ export const linkStatus = (token) => call('GET', '/v1/link', { token });
 export const stopLink = (token) => call('DELETE', '/v1/link', { token });
 
 export const sendBundle = (token, bundle) => call('POST', '/v1/bundle', { token, body: bundle });
+
+// Her puppy portal's family feed (portalFeedSync.js), only to a site whose facts
+// say `portal_feed: 1`. Sent on its own, apart from Update website.
+export const sendFamilyFeed = (token, feed) => call('POST', '/v1/portal', { token, body: feed });
 
 // Her settings on the website that KennelOS may change (Kels's Update my website):
 // `{ kennelos_prices }`, only to a site whose facts list it under `settings`.

@@ -20,6 +20,7 @@ import { pairingRepo } from './pairingRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { accountRepo } from './accountRepo.js';
+import { contactRepo } from './contactRepo.js';
 import { TEST_TYPES } from './healthTestLog.js';
 import { waitlistConfig, embedOrigin, EMBED_ORIGINS_MAX } from './waitlistRules.js';
 import { todayYMD } from './dateUtils.js';
@@ -123,14 +124,18 @@ export async function keepKennelWebsite(kennelId) {
 // --- the records a bundle is built from ---------------------------------------
 
 async function records(kennel) {
-  const [dogs, litters, pairings, accounts, events] = await Promise.all([
+  const [dogs, litters, pairings, accounts, events, contacts, kennels] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll(),
     pairingRepo.getAll(),
     editionFlags.accounts ? accountRepo.getAll() : [],
-    Promise.all(['title_earned', 'heat_cycle', ...TEST_TYPES].map((t) => eventRepo.getByType(t))).then((lists) => lists.flat())
+    Promise.all(['title_earned', 'heat_cycle', ...TEST_TYPES].map((t) => eventRepo.getByType(t))).then((lists) => lists.flat()),
+    // Co-owned dogs' co-owners and their kennels (siteExport.coOwnership): only the
+    // kennel a co-owner belongs to is read, and only a ticked one is sent.
+    contactRepo.getAll({ includeArchived: true }),
+    kennelRepo.getAll({ includeArchived: true })
   ]);
-  return { dogs, litters, pairings, accounts, events };
+  return { dogs, litters, pairings, accounts, events, contacts, kennels };
 }
 
 // What Update website would send for this kennel, counted (the Website card).
@@ -145,8 +150,10 @@ export async function websiteGapsFor(kennel, { marking = [] } = {}) {
 }
 
 // Her ticks from those groups: Show on website on the dogs (and kept pups),
-// litters, pairings and accounts named, and heats_online on the girls named.
-export async function markOnWebsite({ dogs = [], litters = [], pairings = [], heats = [], accounts = [] } = {}) {
+// litters, pairings and accounts named, heats_online on the girls named, and Name
+// this kennel on my website on the outside kennels named.
+export async function markOnWebsite({ dogs = [], litters = [], pairings = [], heats = [], accounts = [], kennels = [] } = {}) {
+  for (const id of kennels) await kennelRepo.update(id, { name_on_website: true });
   for (const id of accounts) await accountRepo.update(id, { show_on_website: true });
   for (const id of dogs) await dogRepo.update(id, { show_on_website: true });
   for (const id of litters) await litterRepo.update(id, { show_on_website: true });
@@ -223,7 +230,7 @@ export class LicenseLapsedError extends Error {
   }
 }
 
-async function licenseOk() {
+export async function licenseOk() {
   if (!isLicenseGated()) return true;
   const { state } = await evaluateLicense();
   return state === 'valid' || state === 'grace';

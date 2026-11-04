@@ -40,6 +40,7 @@ import { familyPickupView } from './familyPickup.js';
 import { backOutReasons, backOutPolicyText } from './backOut.js';
 import { standardLocation } from './pickupSlots.js';
 import { EXTRAS_INTRO_DEFAULT, extrasInfoLink } from './waitlistRules.js';
+import { portalEntryView, portalOn } from './portalFeed.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -88,8 +89,11 @@ function requestsView(entry, today) {
 // ask for it; `request` is their last request as their page shows it ('sent' or
 // 'declined' once she's dealt with it). The link itself never comes through here:
 // she sends it from her device (Companion page), so the server never holds it.
+// While her puppy portal is on (portalFeed.portalOn), the portal takes Companion's
+// place: `link: false`, and their page offers no Companion link request.
 function companionView(entry, ctx) {
   if (!ctx.saleFor(entry)) return null;
+  if (ctx.portalOn) return { available: true, link: false, request: null };
   return { available: true, request: requestView(entry.companion_request, ctx.today, () => ({})) };
 }
 
@@ -166,6 +170,11 @@ function entryView(entry, ctx) {
   view.record = ctx.recordFor(entry);
   const companion = companionView(entry, ctx);
   if (companion) view.companion = companion; // absent without an open sale
+  // Her puppy portal (KennelPort portal plan 3.4): from their signed contract on,
+  // Open your puppy portal; once the portal has taken over, only that. Absent
+  // while her portal is off, or without a signed, live sale on this record.
+  const portal = ctx.portalFor(entry);
+  if (portal) view.portal = portal;
   // Extras they may ask for or cancel (Family Requests plan §3): names only, never
   // a price; absent without an open sale or anything to show.
   const extras = companion ? ctx.extrasFor(entry) : null;
@@ -448,7 +457,7 @@ const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by,
 // `ancestors`: her pedigree-only dogs (dogRepo leaves them out of `dogs`). They're
 // only looked up by id: a parent's own sire and dam, or a parent that is itself
 // pedigree-only; never pups, parent choices or breeds.
-export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], ancestors = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0, pickupEvents = [] }) {
+export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], ancestors = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0, pickupEvents = [], contracts = [] }) {
   if (!kennel || !kennel.public_id) throw new Error('This kennel has no public identity yet.');
   if (!today) throw new Error('buildProjection needs today.');
   const config = waitlistConfig(kennel);
@@ -569,6 +578,13 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, kennelOffers, live);
       return (sale?.dog_id && dogsById.get(sale.dog_id)?.call_name) || null;
     },
+    portalOn: portalOn(kennel),
+    // The record's own sale: the one it was placed with, else its open one.
+    portalFor: (entry) => {
+      if (!portalOn(kennel)) return null;
+      const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, kennelOffers, live);
+      return portalEntryView(entry, { sale, contracts, events: pickupEvents, home: kennel.kennelport_portal.home || [], today });
+    },
     pickupFor: (entry) => familyPickupView({ entry, sales, offers: kennelOffers, dogsById, litters, kennel, config, entries: live, events: pickupEvents, today }),
     extrasFor: (entry) => {
       const sale = familySale(entry, sales, kennelOffers, live);
@@ -671,7 +687,17 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     turn_queue: turnQueue,
     events_through: Number.isInteger(eventsThrough) && eventsThrough > 0 ? eventsThrough : 0,
     // For the server only, never in a family's view: her standard location (a public
-    // place near her, Family Requests plan §5), where it measures a family's miles from.
-    ...(standardLocation(kennel) ? { server: { geo_from: standardLocation(kennel).address } } : {})
+    // place near her, Family Requests plan §5), where it measures a family's miles
+    // from; and her puppy portal's one-tap link (KennelPort portal plan 3.4): where it
+    // goes, and the key the server signs each family's link with.
+    ...(standardLocation(kennel) || portalOn(kennel) ? { server: {
+      ...(standardLocation(kennel) ? { geo_from: standardLocation(kennel).address } : {}),
+      ...(portalOn(kennel) ? { portal: {
+        url: kennel.kennelport_portal.url || null,
+        handoff_url: kennel.kennelport_portal.handoff_url,
+        handoff_key: kennel.kennelport_portal.handoff_key,
+        minutes: Number(kennel.kennelport_portal.handoff_minutes) || 10
+      } } : {})
+    } } : {})
   };
 }

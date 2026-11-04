@@ -14,6 +14,7 @@
 import * as api from './cloudApi.js';
 import { isWaitlistOnlineOffered } from './cloudConfig.js';
 import { sessionToken } from './cloudAuth.js';
+import { contractRepo } from '../contractRepo.js';
 import { claimServerWork, inBackground, releaseServerWork } from './serverWork.js';
 import {
   getCloudBackupState, getWaitlistOnlineState, updateWaitlistOnlineState, CLOUD_DATA_CHANGED_EVENT
@@ -456,8 +457,10 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
   // Pickups and stays (Family Requests plan §4): a family's booking, and a training
   // stay their times start after.
   const pickupEvents = [...(await eventRepo.getByType('placement')), ...(await eventRepo.getByType('boarding'))];
+  // Signed contracts: her puppy portal's link from a family's signed contract on.
+  const contracts = await contractRepo.getAll({ includeArchived: true });
   return buildProjection({
-    kennel, entries, offers, programsById, litters, pairings, dogs, ancestors, sales, contacts, events, accounts, today, pickupEvents,
+    kennel, entries, offers, programsById, litters, pairings, dogs, ancestors, sales, contacts, events, accounts, today, pickupEvents, contracts,
     formKey: currentFormKey(kennel.waitlist_form_keys), eventsThrough: getWaitlistOnlineState().eventsCursor || 0
   });
 }

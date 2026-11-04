@@ -137,6 +137,14 @@ function withRegistrations(record) {
     : record;
 }
 
+// Which co-owner a co-owned dog lives with now (empty: with her). Only a co-owned
+// dog has one, and only one of its own co-owners: a value that stops being either
+// (ownership changed, that co-owner taken off) is cleared, here, for every writer.
+export function livesWithOk(record) {
+  const id = record.lives_with_contact_id;
+  return !id || (record.ownership_type === 'co_owned' && (record.co_owner_contact_ids || []).includes(id));
+}
+
 function nullDispositionIfNotPuppy(record) {
   return record.status !== 'puppy' && record.disposition != null
     ? { ...record, disposition: null }
@@ -172,6 +180,7 @@ export const dogRepo = {
     // Edition cap hook (§3/§4 of the cap spec). Default (Pro/shared) is a no-op;
     // Lite throws CapExceededError here when adding a new counting dog at the cap.
     await enforceDogCap({ candidate: data, existing: null, id: null });
+    if (!livesWithOk(data)) data = { ...data, lives_with_contact_id: null };
     return base.create(nullDispositionIfNotPuppy(data));
   },
 
@@ -190,6 +199,7 @@ export const dogRepo = {
     if (merged.status !== 'puppy' && merged.disposition != null) {
       changes = { ...changes, disposition: null };
     }
+    if (!livesWithOk(merged)) changes = { ...changes, lives_with_contact_id: null };
     return base.update(id, changes);
   },
 

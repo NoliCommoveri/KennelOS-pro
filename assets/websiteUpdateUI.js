@@ -134,7 +134,7 @@ async function askWhatsMissing(chat, kennel) {
   const dogName = (d) => esc(d?.call_name || d?.registered_name || 'Unknown');
   const parents = (r) => `${dogName(dogsById.get(r.dam_id))} × ${dogName(dogsById.get(r.sire_id))}`;
   const one = (list, a, b) => (list.length === 1 ? a : b);
-  const picked = { dogs: [], litters: [], pairings: [], heats: [], accounts: [] };
+  const picked = { dogs: [], litters: [], pairings: [], heats: [], accounts: [], kennels: [] };
 
   picked.dogs.push(...await askGroup(chat, {
     title: `You have ${plural(g.dogs.length, 'dog')} that ${one(g.dogs, 'isn\'t', 'aren\'t')} on your website. Want to add ${one(g.dogs, 'it', 'them')}? Each gets a page and a card on your Dogs page.`,
@@ -169,7 +169,19 @@ async function askWhatsMissing(chat, kennel) {
     items: g.accounts,
     label: (a) => `<span><strong>${esc(a.name)}</strong>${a.referral_code ? ` <span class="muted">· code ${esc(a.referral_code)}</span>` : ''}</span>`
   });
-  const n = picked.dogs.length + picked.litters.length + picked.pairings.length + picked.heats.length + picked.accounts.length;
+  // Co-owned dogs (KennelPort's Co_Owned_Dogs_Plan.md): the kennels their co-owners
+  // belong to are named only once she says so, one kennel at a time; unticked to begin.
+  picked.kennels = await askGroup(chat, {
+    title: `${one(g.partnerKennels, 'A co-owner of one of your dogs belongs to a kennel', `Co-owners of your dogs belong to ${plural(g.partnerKennels.length, 'kennel')}`)} your website doesn't name. Name ${one(g.partnerKennels, 'it', 'them')}? Your website shows only the kennel's name and website, with a logo you add there; never the people.`,
+    items: g.partnerKennels,
+    label: (k) => `<span><strong>${esc(k.kennel_name)}</strong>${k.website ? ` <span class="muted">· ${esc(k.website)}</span>` : ''}</span>`,
+    ticked: false,
+    submitLabel: 'Name these'
+  });
+  if (g.noKennel.length) {
+    await chat.say(`${g.noKennel.map(dogName).join(', ')} ${one(g.noKennel, 'lives', 'live')} with a co-owner who has no kennel in KennelOS, so your website says only "Lives with a partner kennel". To name it, add the co-owner's kennel on their contact.`);
+  }
+  const n = picked.dogs.length + picked.litters.length + picked.pairings.length + picked.heats.length + picked.accounts.length + picked.kennels.length;
   if (n) {
     await markOnWebsite(picked);
     await chat.say(`Done, ${plural(n, 'change')} marked for your website.`, { typing: 300 });
