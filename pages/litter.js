@@ -15,7 +15,7 @@ import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATI
 import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { litterMarked, LIVE_LITTER_STATUSES } from '../data/siteExport.js';
-import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { renderTimeline } from '../assets/timeline.js';
@@ -127,14 +127,14 @@ const BREEDING_ELIGIBLE_STATUS = ['active_breeding', 'external_reference'];
 // either way; the CURRENT selection is always listed so an existing litter never
 // becomes uneditable.
 function dogOptions(current, sex) {
-  const opts = ctx.allDogs
+  const dogs = ctx.allDogs
     .filter((d) => ctx.pickerAllKennels || d.id === current || dogInScope(d))
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
     .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
-    .filter((d) => d.id === current || BREEDING_ELIGIBLE_STATUS.includes(d.status))
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
-    .join('');
-  return `<option value="">— select —</option>` + opts;
+    .filter((d) => d.id === current || BREEDING_ELIGIBLE_STATUS.includes(d.status));
+  // Her dogs, then other dogs (then pedigree only), A–Z within each (pickerGroups).
+  const opt = (d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`;
+  return `<option value="">— select —</option>` + dogOptgroups(dogs, opt, (d) => d.call_name || d.registered_name);
 }
 
 // The linked-pairing picker follows the same scope + escape (§9): a pairing

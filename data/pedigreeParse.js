@@ -77,7 +77,7 @@ const COLOR_WORDS = new Set([...Object.keys(COLOR_ABBR), 'white', 'black', 'brin
   'markings', 'and', '&', 'with', 'w/', '/', ',']);
 const TITLES = new Set(['CH', 'GCH', 'GCHB', 'GCHS', 'GCHG', 'GCHP', 'INT', 'MBIS', 'MBISS', 'BIS', 'BISS',
   'RBIS', 'NBISS', 'UCH', 'GRCH', 'DC', 'FC', 'AFC', 'OTCH', 'MACH', 'PACH', 'CT', 'TC', 'BPIS', 'MBPIS']);
-const HEADER = /^(name|akc\s*#|birth\s*date|date of birth|date whelped|breed|sex|colou?rs?\b|breeder|report date|registration|owner|dob|whelped)\b|(american kennel club|research pedigree|certified pedigree|executive secretary|founded 18\d\d|\bgeneration\b|recreated|copyright|©|all rights|reserved|accuracy|warranty)/i;
+const HEADER = /^(name|akc\s*#|birth\s*date|date of birth|date whelped|micro\s*chip|breed|sex|colou?rs?\b|breeder|report date|registration|owner|dob|whelped)\b|(american kennel club|research pedigree|certified pedigree|executive secretary|founded 18\d\d|\bgeneration\b|recreated|copyright|©|all rights|reserved|accuracy|warranty)/i;
 // A column heading is the whole line ("Dog", "Gr-Gr-", "Great-Grandparents"),
 // never just its first word — a dog may well be named "Dog Gone It".
 const GEN_LABEL = /^(dog|parents?|grand-?parents|great-?|gr-?|gr-gr-?|gr-gr-gr-?|great-?grand-?parents|gr-?great-?grand-?parents)$/i;
@@ -231,6 +231,8 @@ export function parseHeader(segs) {
   }
   const dob = all.match(/(?:Birth\s*Date|Date\s*Whelped|Whelped):?\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})/i);
   h.date_of_birth = dob ? `${dob[3]}-${dob[1].padStart(2, '0')}-${dob[2].padStart(2, '0')}` : '';
+  const chip = all.match(/Micro\s*chip(?:\s*(?:#|No\.?|ID))?:?\s*(\d[\d\s-]{7,20}\d)/i);
+  h.microchip_id = chip ? chip[1].replace(/[\s-]/g, '') : '';
   h.color_markings = afterLabel(segs, /Colou?rs?\s*\/\s*Markings:\s*(.+)$/i) || (bs?.[3] ? expandColor(bs[3]) : '');
   h.breeder = afterLabel(segs, /Breeder\(?s?\)?:\s*(.+)$/i).replace(/\s*\/\s*$/, '').replace(/\s*Report Date.*$/i, '').trim();
   const reg = all.match(/AKC\s*#:?\s*([A-Z]{2})\s?(\d{6})\s?\/\s?(\d{2})(?:[ \t]+(\d{2}[-/]\d{2})(?![\d/-]))?/i);
@@ -284,7 +286,11 @@ export function parsePedigree(segs, page) {
     let cur = null;
     let prev = null;
     for (const s of [...c.segs].sort((a, b) => a.y - b.y)) {
-      if (isDetail(s.text)) {
+      // A line after a gap wider than a line space starts the next box, so it's
+      // that dog's name even when it reads like a detail: an all-caps name with
+      // digits in it ("MRF WIGGLES BLUE 17 50-3", "MRF WILBER 13 12-2").
+      const startsBox = !prev || s.y - (prev.y + prev.h) > Math.max(prev.h, s.h);
+      if (isDetail(s.text) && !(startsBox && !isAkcReg(s.text))) {
         if (cur) { cur.details.push(s.text); cur.bottom = Math.max(cur.bottom, s.y + s.h); }
       } else if (cur && prev && !isDetail(prev.text) && s.y - (prev.y + prev.h) < prev.h * 0.9) {
         cur.name += ` ${s.text}`;
@@ -336,6 +342,7 @@ export function parsePedigree(segs, page) {
   if (!subject.color_markings && header.color_markings) subject.color_markings = header.color_markings;
   subject.sex = header.sex || 'unknown';
   subject.date_of_birth = header.date_of_birth;
+  if (header.microchip_id) subject.microchip_id = header.microchip_id;
   if (header.breeder) subject.notes.push(`Breeder: ${header.breeder}`);
   dogs.set('', subject);
   if (!subject.registered_name) warnings.push('The dog’s own name could not be read; type it in on the review screen.');

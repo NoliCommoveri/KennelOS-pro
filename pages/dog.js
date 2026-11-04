@@ -30,7 +30,7 @@ import {
 } from '../data/vocab.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { getShowRecord } from '../data/showPoints.js';
-import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from '../assets/salePrompts.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
@@ -228,13 +228,13 @@ function vocabOptions(vocab, current, placeholder) {
 // in the data, not grounds to make the dog unselectable). The current
 // selection always stays in the list even if it doesn't match, so an existing
 // mismatched record stays visible/editable (updateWarnings flags it instead).
+// Grouped and ordered by pickerGroups: her dogs, other dogs, pedigree only, A–Z.
 function dogOptions(current, excludeId, sex) {
-  const opts = ctx.allDogs
+  const dogs = ctx.allDogs
     .filter((d) => d.id !== excludeId && (ctx.pickerArchived || !d.is_archived))
-    .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(nameOf(d))}${d.call_name && d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.pedigree_only ? ' (pedigree only)' : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
-    .join('');
-  return `<option value="">— none —</option>` + opts;
+    .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown');
+  const opt = (d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(nameOf(d))}${d.call_name && d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`;
+  return `<option value="">— none —</option>` + dogOptgroups(dogs, opt, nameOf);
 }
 
 function contactOptions(current) {
@@ -1571,7 +1571,8 @@ function renderPedigreeSection() {
       mount: document.getElementById('dog-pedigree-mount'),
       rootId: ctx.original.id,
       generations: 3,
-      onNavigate: (id) => { location.href = `pedigree.html?id=${encodeURIComponent(id)}`; }
+      onNavigate: (id) => { location.href = `pedigree.html?id=${encodeURIComponent(id)}`; },
+      editable: true
     }).then(() => {
       // dog.html?id=…#offspring (Kels's "Zeus puppies"): the list draws after the
       // page loads, so the browser's own jump to it has already missed. Once.

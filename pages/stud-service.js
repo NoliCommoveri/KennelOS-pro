@@ -13,7 +13,7 @@ import {
   STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, FEE_STRUCTURE, STUD_SERVICE_STATUS,
   CONTRACT_TYPE, CONTRACT_STATUS, SEX, descriptor
 } from '../data/vocab.js';
-import { esc, badge, fmtDate, param, confirmModal } from '../assets/ui.js';
+import { esc, badge, fmtDate, param, confirmModal, dogOptgroups } from '../assets/ui.js';
 import { getMyContactId } from '../data/kennelSetup.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
@@ -136,10 +136,9 @@ function partnerDogOptions(current, ourDogId) {
   const opts = ctx.allDogs
     .filter((d) => d.ownership_type === 'external' || d.id === current)
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
-    .filter((d) => d.id === current || !ourSex || !d.sex || d.sex !== ourSex)
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${sexLetter(d)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
-    .join('');
-  return `<option value="">— select —</option>` + opts;
+    .filter((d) => d.id === current || !ourSex || !d.sex || d.sex !== ourSex);
+  const opt = (d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${sexLetter(d)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`;
+  return `<option value="">— select —</option>` + dogOptgroups(opts, opt, (d) => d.call_name || d.registered_name);
 }
 
 // Other breeders only — never the user themselves.

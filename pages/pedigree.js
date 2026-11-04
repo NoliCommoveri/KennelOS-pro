@@ -13,7 +13,7 @@
 import { dogRepo, dogName } from '../data/dogRepo.js';
 import { renderPedigree } from '../assets/pedigree.js';
 import { renderKennelTree, focusKennelTreeDog } from '../assets/kennelTree.js';
-import { esc, param } from '../assets/ui.js';
+import { esc, param, dogOptgroups } from '../assets/ui.js';
 import { editionFlags } from '../data/editionConfig.js';
 
 const rootSel = document.getElementById('ped-root');
@@ -34,11 +34,9 @@ function fillPicker(selectedId) {
     .filter((d) => editionFlags.includeArchivedToggles || !d.is_archived)
     // Pedigree-only ancestors aren't offered as roots (there can be hundreds);
     // the one being viewed is, so re-centering onto an ancestor keeps the picker true.
-    .filter((d) => !d.pedigree_only || d.id === selectedId)
-    .sort((a, b) => dogName(a).localeCompare(dogName(b)))
-    .map((d) => `<option value="${esc(d.id)}"${d.id === selectedId ? ' selected' : ''}>${esc(dogName(d) || '(unnamed)')}${d.call_name && d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
-    .join('');
-  rootSel.innerHTML = `<option value="">— select —</option>` + opts;
+    .filter((d) => !d.pedigree_only || d.id === selectedId);
+  const opt = (d) => `<option value="${esc(d.id)}"${d.id === selectedId ? ' selected' : ''}>${esc(dogName(d) || '(unnamed)')}${d.call_name && d.registered_name && d.registered_name !== d.call_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`;
+  rootSel.innerHTML = `<option value="">— select —</option>` + dogOptgroups(opts, opt, dogName);
 }
 
 async function show(id) {
@@ -68,7 +66,8 @@ async function show(id) {
     mount,
     rootId: id,
     generations: Number(gensSel.value),
-    onNavigate: (nextId) => show(nextId)
+    onNavigate: (nextId) => show(nextId),
+    editable: true
   });
 }
 
@@ -81,9 +80,9 @@ async function showKennel() {
   async function draw() {
     const drawn = await renderKennelTree({ mount, includePedigreeOnly: ancestorsBox.checked });
     // Lite: a departed dog isn't findable (it's drawn static, cap spec §7).
-    findSel.innerHTML = `<option value="">— select —</option>` + drawn
-      .filter((d) => editionFlags.archivedDogLinks || !d.is_archived)
-      .map((d) => `<option value="${esc(d.id)}">${esc(dogName(d) || '(unnamed)')}</option>`).join('');
+    findSel.innerHTML = `<option value="">— select —</option>` + dogOptgroups(
+      drawn.filter((d) => editionFlags.archivedDogLinks || !d.is_archived),
+      (d) => `<option value="${esc(d.id)}">${esc(dogName(d) || '(unnamed)')}</option>`, dogName);
   }
   ancestorsBox.addEventListener('change', draw);
   findSel.addEventListener('change', () => findSel.value && focusKennelTreeDog(mount, findSel.value));

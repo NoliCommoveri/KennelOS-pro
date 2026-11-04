@@ -48,10 +48,12 @@ const srcId = (fileId, path) => `${fileId}:${path}`;
 // only when the contact has a kennel; otherwise the chart's "Breeder: …" note on
 // the dog is the record of it.
 
-// A chart's breeder as a person's name: an all-caps name in name case
-// ("JAMIE COTTON" → "Jamie Cotton"); anything already mixed-case as printed.
+// A chart's breeder as a person's name: a leading Mr./Mrs./Ms./Miss/Dr. off, an
+// all-caps name in name case ("MR. JOHNNY W SPENCE" → "Johnny W Spence");
+// anything already mixed-case as printed.
 export function breederName(raw) {
-  const t = String(raw || '').replace(/\s+/g, ' ').trim();
+  // An honorific isn't part of the name a contact is kept (and matched) under.
+  const t = String(raw || '').replace(/\s+/g, ' ').trim().replace(/^(mr|mrs|ms|miss|dr)\.?\s+(?=\S)/i, '');
   if (!t || /[a-z]/.test(t)) return t;
   return t.toLowerCase().replace(/(^|[\s\-'’(&/])([a-z])/g, (m, a, c) => a + c.toUpperCase());
 }
@@ -93,7 +95,7 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
       cands.set(key, c);
     }
     c.sources.push({ fileId: n.fileId, path: n.path });
-    for (const f of ['registered_name', 'registration_number', 'registry', 'color_markings', 'date_of_birth']) {
+    for (const f of ['registered_name', 'registration_number', 'registry', 'color_markings', 'date_of_birth', 'microchip_id']) {
       const v = n.dog[f];
       if (!v) continue;
       if (!c.fields[f]) c.fields[f] = v;
@@ -171,7 +173,7 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
     const nm = nameKey(name);
     const row = {
       key: c.key, name, registration_number: c.fields.registration_number || '', registry: c.fields.registry || '',
-      color_markings: c.fields.color_markings || '', date_of_birth: c.fields.date_of_birth || '',
+      color_markings: c.fields.color_markings || '', date_of_birth: c.fields.date_of_birth || '', microchip_id: c.fields.microchip_id || '',
       notes: c.fields.notes || [], breed: c.breed,
       sex: c.sexes.size === 1 ? [...c.sexes][0] : (c.sexes.size ? [...c.sexes][0] : 'unknown'),
       sources: c.sources, subjectOf: c.subjectOf, issues: [...c.issues],
@@ -288,7 +290,7 @@ export async function commitImport(plan, { storeFiles = [], breeders = [] } = {}
         const ex = await dogRepo.getById(r.existingId);
         const changes = {};
         const fill = { registered_name: r.name, registration_number: r.registration_number, registry: r.registry,
-          color_markings: r.color_markings, date_of_birth: r.date_of_birth, sire_id, dam_id };
+          color_markings: r.color_markings, date_of_birth: r.date_of_birth, microchip_id: r.microchip_id, sire_id, dam_id };
         for (const [f, v] of Object.entries(fill)) if (v && !ex[f]) changes[f] = v;
         if (Object.keys(changes).length) { await dogRepo.update(ex.id, changes); updated++; }
         idOf.set(r.key, ex.id);
@@ -296,7 +298,7 @@ export async function commitImport(plan, { storeFiles = [], breeders = [] } = {}
         const d = await dogRepo.createPedigreeOnly({
           registered_name: r.name, sex: r.sex || 'unknown', breed: r.breed,
           registration_number: r.registration_number, registry: r.registry, color_markings: r.color_markings,
-          date_of_birth: r.date_of_birth || '', notes: r.notes.join('\n'), sire_id, dam_id
+          date_of_birth: r.date_of_birth || '', microchip_id: r.microchip_id || '', notes: r.notes.join('\n'), sire_id, dam_id
         });
         idOf.set(r.key, d.id);
         created++;

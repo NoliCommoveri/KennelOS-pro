@@ -29,7 +29,7 @@ import { studParents, ourRole } from '../data/studRules.js';
 import * as T from '../data/tidyRules.js';
 import { mergeConflicts, suggestKeep, mergeRecords } from '../data/recordMerge.js';
 import { CapExceededError } from '../data/repoBase.js';
-import { esc, fmtDate, todayYMD } from './ui.js';
+import { esc, fmtDate, todayYMD, dogOptgroups } from './ui.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
 import { FindingsTask, plural } from './kelsFindings.js';
@@ -336,19 +336,18 @@ class Tidy extends FindingsTask {
     return this.done(`Done. ${this.b(this.dog(parentId))} is ${esc(dogName(dog))}'s ${R.word}.`);
   }
 
-  // Dogs of the right sex, same breed first; never the dog itself.
+  // Dogs of the right sex, never the dog itself; grouped and A–Z like every dog picker.
   async pickParent(dog, R) {
     const breed = T.normName(dog.breed);
     const options = this.allDogs
-      .filter((d) => !d.is_archived && d.id !== dog.id && (d.sex === R.sex || !d.sex || d.sex === 'unknown'))
-      .sort((a, b) => (T.normName(b.breed) === breed) - (T.normName(a.breed) === breed) || dogName(a).localeCompare(dogName(b)));
+      .filter((d) => !d.is_archived && d.id !== dog.id && (d.sex === R.sex || !d.sex || d.sex === 'unknown'));
     if (!options.length) {
       await this.chat.say(`You don't have any ${R.sex === 'male' ? 'males' : 'females'} in KennelOS yet. Let's add the ${R.word}.`);
       return this.newParent(dog, R);
     }
     const res = await this.chat.form({
       title: '',
-      html: field(`${cap(R.word)}`, `<select id="td-parent">${options.map((d) => `<option value="${esc(d.id)}">${esc(dogName(d))}${d.registered_name && d.call_name ? ` (${esc(d.registered_name)})` : ''}${T.normName(d.breed) !== breed ? ` · ${esc(d.breed || '')}` : ''}</option>`).join('')}</select>`),
+      html: field(`${cap(R.word)}`, `<select id="td-parent">${dogOptgroups(options, (d) => `<option value="${esc(d.id)}">${esc(dogName(d))}${d.registered_name && d.call_name ? ` (${esc(d.registered_name)})` : ''}${T.normName(d.breed) !== breed ? ` · ${esc(d.breed || '')}` : ''}</option>`, dogName)}</select>`),
       submitLabel: 'Use this dog',
       cancelLabel: 'Skip',
       // form() shows a returned string as a problem, so the pick goes back as { id }.

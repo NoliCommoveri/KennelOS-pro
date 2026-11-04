@@ -22,7 +22,7 @@ import { SCOPED_OWNERSHIP } from '../data/kennelScope.js';
 import * as G from '../data/guidedDogs.js';
 import { findDogMatches, matchReason, breedChoices } from '../data/dogSearch.js';
 import { fmt } from '../data/guidedLitter.js';
-import { esc, todayYMD } from './ui.js';
+import { esc, todayYMD, dogOptgroups } from './ui.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
 import { StepConversation, tile, field, input, options, val, plural, pagesPrefix, filePicker, wireFilePicker, kennelPicker, wireKennelPicker, readKennelPicker, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
 
@@ -104,8 +104,8 @@ function screens(draft, data) {
     if (multiKennel) o.kennelId = SCOPED_OWNERSHIP.has(o.ownership_type) ? (val(root, `${prefix}-kennel-pick`) || null) : null;
   }
 
-  // A parent picker: the dogs being added, dogs on file of that sex (same breed
-  // first), or a name typed in.
+  // A parent picker: the dogs being added, dogs on file of that sex (grouped and
+  // A–Z like every dog picker), or a name typed in.
   function parentPicker(d, role) {
     const sex = role === 'dam' ? 'female' : 'male';
     const p = d[role];
@@ -114,14 +114,13 @@ function screens(draft, data) {
     // A dog on file that one of the dogs we're adding is, is listed once, with them.
     const bringing = new Set(draft.dogs.filter((x) => x.match && x.match !== 'none').map((x) => x.match));
     const onFile = data.dogs
-      .filter((x) => !bringing.has(x.id) && (x.sex === sex || !x.sex || x.sex === 'unknown'))
-      .sort((a, b) => ((b.breed || '').trim().toLowerCase() === breed) - ((a.breed || '').trim().toLowerCase() === breed));
+      .filter((x) => !bringing.has(x.id) && (x.sex === sex || !x.sex || x.sex === 'unknown'));
     const opt = (value, text) => `<option value="${esc(value)}"${p.pick === value ? ' selected' : ''}>${esc(text)}</option>`;
     const w = role === 'dam' ? 'Mom' : 'Dad';
     return `${field(w, `<select id="gd-${role}">
         ${opt('', 'Not known')}
         ${batch.length ? `<optgroup label="Dogs we're adding">${batch.map((x) => opt(`batch:${x.key}`, G.dogLabel(x))).join('')}</optgroup>` : ''}
-        ${onFile.length ? `<optgroup label="In KennelOS">${onFile.map((x) => opt(`dog:${x.id}`, `${dogName(x)}${x.registered_name && x.call_name ? ` (${x.registered_name})` : ''}${x.breed && x.breed.trim().toLowerCase() !== breed ? ` · ${x.breed}` : ''}`)).join('')}</optgroup>` : ''}
+        ${dogOptgroups(onFile, (x) => opt(`dog:${x.id}`, `${dogName(x)}${x.registered_name && x.call_name ? ` (${x.registered_name})` : ''}${x.breed && x.breed.trim().toLowerCase() !== breed ? ` · ${x.breed}` : ''}`), dogName)}
         ${opt('new', 'Not in KennelOS: I\'ll type the name')}
       </select>`)}
       <div id="gd-${role}-new"${p.pick === 'new' ? '' : ' hidden'}>

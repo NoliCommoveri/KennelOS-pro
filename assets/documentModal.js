@@ -16,7 +16,7 @@
 // Both entry points are self-contained: they load the dogs/file they need and
 // report back through callbacks (onSaved / onDeleted / onEdit / onChanged) so
 // the caller can refresh its own view — no shared module state.
-import { esc, fmtDate, confirmModal } from './ui.js';
+import { esc, fmtDate, confirmModal, dogOptgroups } from './ui.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -121,7 +121,7 @@ export function openDocumentModal({
             <div class="field"><label>Dog <span class="req">*</span></label>
               <select id="doc-dog" required>
                 <option value="" disabled${selectedDogId ? '' : ' selected'}>Choose a dog…</option>
-                ${dogs_.map((d) => `<option value="${esc(d.id)}"${d.id === selectedDogId ? ' selected' : ''}>${esc(dogName(d))}</option>`).join('')}
+                ${dogOptgroups(dogs_, (d) => `<option value="${esc(d.id)}"${d.id === selectedDogId ? ' selected' : ''}>${esc(dogName(d))}</option>`, dogName)}
               </select></div>
             <div class="field"><label>Type</label>
               <select id="doc-type">${DOC_TYPES.map((t) => `<option value="${t.value}"${t.value === initialType ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}</select></div>

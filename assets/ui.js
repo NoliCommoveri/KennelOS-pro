@@ -3,6 +3,7 @@
 import { descriptor } from '../data/vocab.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { pickerGroups, dogName } from '../data/dogRepo.js';
 
 // Re-exported so pages keep importing todayYMD from here alongside the rest
 // of the shared rendering helpers — the one implementation lives in
@@ -17,6 +18,14 @@ export function esc(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// A dog picker's options, grouped the one way every dog picker lists them
+// (dogRepo.pickerGroups): Your dogs, Other dogs, Pedigree only, A–Z within each.
+// option(d) → one <option>; label(d) → the name it shows, which it's sorted by.
+export function dogOptgroups(dogs, option, label = dogName) {
+  return pickerGroups(dogs, label)
+    .map((g) => `<optgroup label="${esc(g.label)}">${g.dogs.map(option).join('')}</optgroup>`).join('');
 }
 
 // A colored badge for a single vocab value.

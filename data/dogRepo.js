@@ -7,6 +7,7 @@ import { DOG_REFERENCES } from './referenceRegistry.js';
 import { todayYMD } from './dateUtils.js';
 import { enforceDogCap } from './editionConfig.js';
 import { SCOPED_OWNERSHIP, assertOwnKennel } from './kennelScope.js';
+import { splitTitles } from './pedigreeParse.js';
 
 const base = makeRepo('dogs', DOG_REFERENCES);
 
@@ -37,6 +38,28 @@ async function assertDogPublicIdFree(publicId, exceptId) {
 // The name to show for a dog. A pedigree-only ancestor usually has no call name
 // (a pedigree gives registered names), so it shows its registered name instead.
 export const dogName = (d) => (d && (d.call_name || d.registered_name)) || '';
+
+// The order every sire/dam picker lists dogs in: her own (owned, co-owned), then
+// other full dogs (external, leased), then pedigree-only ancestors; A–Z by the
+// name shown within each group, titles in front ignored ("CH Zara" under Z).
+// `label` is the name the picker shows. → [{ key, label, dogs }], empty groups left out.
+export const PICKER_GROUPS = [
+  { key: 'own', label: 'Your dogs' },
+  { key: 'other', label: 'Other dogs' },
+  { key: 'pedigree', label: 'Pedigree only' }
+];
+const sortName = (n) => splitTitles(String(n || '')).name;
+export function pickerGroups(dogs, label = dogName) {
+  const groups = PICKER_GROUPS.map((g) => ({ ...g, dogs: [] }));
+  for (const d of dogs) {
+    const i = d.pedigree_only ? 2 : SCOPED_OWNERSHIP.has(d.ownership_type) ? 0 : 1;
+    groups[i].dogs.push(d);
+  }
+  for (const g of groups) {
+    g.dogs.sort((a, b) => sortName(label(a)).localeCompare(sortName(label(b)), undefined, { sensitivity: 'base', numeric: true }));
+  }
+  return groups.filter((g) => g.dogs.length);
+}
 
 // Registrations beyond the main one (`registry` + `registration_number`): a dog
 // also registered with UKC, CKC, FCI… Each entry is `{ registry,

@@ -16,7 +16,7 @@ import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TER
 import { restoresFamily, businessDays, waitlistConfig } from '../data/waitlistRules.js';
 import { litterCloseDue, litterLabel } from '../data/litterCheckin.js';
 import { promptDisposition, promptReleasedPup, askRegistrationPrice } from '../assets/salePrompts.js';
-import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -149,12 +149,11 @@ function vocabOptions(vocab, current, placeholder) {
 // sale there, which should be a deliberate act. The current selection is always
 // listed so an existing sale never becomes uneditable.
 function dogOptions(current) {
-  const opts = ctx.allDogs
+  const dogs = ctx.allDogs
     .filter((d) => ctx.pickerAllKennels || d.id === current || dogInScope(d))
-    .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
-    .join('');
-  return `<option value="">— select —</option>` + opts;
+    .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current);
+  const opt = (d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`;
+  return `<option value="">— select —</option>` + dogOptgroups(dogs, opt, (d) => d.call_name || d.registered_name);
 }
 
 // NOT scoped, deliberately (§7): buyers are program-wide — one person who may

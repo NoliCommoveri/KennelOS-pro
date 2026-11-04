@@ -16,7 +16,7 @@ import { rankForms, splitName, signatureMessage } from '../data/contractForms.js
 import { SENDABLE_STATUSES, loadContractForms, gatherContractFacts, buildSignatureLink, markContractSent } from '../data/contractSend.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { CONTRACT_TYPE, CONTRACT_STATUS, CONTRACT_FORM_TYPE, SEX, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate, param, confirmModal, alertModal } from '../assets/ui.js';
+import { esc, badge, fmtDate, param, confirmModal, alertModal, dogOptgroups } from '../assets/ui.js';
 import { openComposer } from '../assets/messageComposer.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 import { resolveKennelIdForWrite } from '../data/kennelScope.js';
@@ -92,12 +92,9 @@ function studServiceOptions(current) {
 }
 
 function dogOptions(current) {
-  const opts = ctx.allDogs
-    .filter((d) => !d.is_archived || d.id === current)
-    .sort((a, b) => (a.call_name || '').localeCompare(b.call_name || '', undefined, { numeric: true }))
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${sexLetter(d)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
-    .join('');
-  return `<option value="">— none —</option>` + opts;
+  const dogs = ctx.allDogs.filter((d) => !d.is_archived || d.id === current);
+  const opt = (d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${sexLetter(d)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`;
+  return `<option value="">— none —</option>` + dogOptgroups(dogs, opt, (d) => d.call_name || d.registered_name);
 }
 
 function contactOptions(current) {

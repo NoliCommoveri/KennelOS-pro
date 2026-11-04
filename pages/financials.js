@@ -30,7 +30,7 @@ import { createReportView } from '../assets/reportView.js';
 import { buildMileageFields, wireMileageMode, loadAccountChoices, buildAccountField, wireAccountField } from '../assets/expensePanel.js';
 import { buildReceiptField, wireReceiptField } from '../assets/receiptCapture.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { esc, badge, fmtDate, fmtMoney, todayYMD, param } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, dogOptgroups } from '../assets/ui.js';
 import {
   EXPENSE_CATEGORIES, EXPENSE_SUBJECT_TYPES, INCOME_SOURCE_TYPES, INCOME_COMPONENTS,
   INCOME_STATES, SALE_STATUS, STUD_SERVICE_STATUS, BOARDING_FREQUENCY_OPTIONS,
@@ -131,8 +131,9 @@ function subjectOptionsFor(type, allKennels = false) {
   const recOk = (r) => allKennels || inScope(r);
   const kennelOk = (k) => allKennels || !isScoped() || k.id === getActiveKennelId();
   if (type === 'dog') {
-    return head + ref.dogs.filter((d) => !d.is_archived).filter(dogOk)
-      .map((d) => `<option value="${esc(d.id)}">${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}</option>`).join('');
+    return head + dogOptgroups(ref.dogs.filter((d) => !d.is_archived).filter(dogOk),
+      (d) => `<option value="${esc(d.id)}">${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}</option>`,
+      (d) => d.call_name || d.registered_name);
   }
   if (type === 'kennel') {
     return head + ref.kennels.filter((k) => !k.is_archived).filter(kennelOk)

@@ -15,7 +15,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { inScopeOnly, dogsInScope } from '../data/kennelScope.js';
 import { PAIRING_STATUS, PAIRING_TYPE, LITTER_STATUS, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate, cardShell } from '../assets/ui.js';
+import { esc, badge, fmtDate, cardShell, dogOptgroups } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
 
 const PAGE_SIZE = 5; // recent pairings shown before "Show more"
@@ -110,9 +110,9 @@ function openDamPicker(females) {
     <h2 style="margin-top:0;">Log heat cycle — choose the dam</h2>
     <div class="form-grid">
       <div class="field field-wide"><label>Dam <span class="req">*</span></label>
-        <select id="hc-dam">${females
-          .slice().sort((a, b) => (a.call_name || '').localeCompare(b.call_name || ''))
-          .map((d) => `<option value="${esc(d.id)}">${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}</option>`).join('')}</select></div>
+        <select id="hc-dam">${dogOptgroups(females,
+          (d) => `<option value="${esc(d.id)}">${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}</option>`,
+          (d) => d.call_name || d.registered_name)}</select></div>
     </div>
     <div class="form-actions">
       <button class="btn btn-primary" id="hc-continue">Continue</button>

@@ -8,7 +8,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS, LITTER_STATUS, STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, STUD_SERVICE_STATUS, PAIRING_ENDED_STATUSES, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate, param, confirmModal, dogRefHtml } from '../assets/ui.js';
+import { esc, badge, fmtDate, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { ourStudPairingIds, studParents, ourRole } from '../data/studRules.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -105,14 +105,14 @@ const BREEDING_ELIGIBLE_STATUS = ['active_breeding', 'external_reference'];
 // scope-transparent and stay listed either way, and the CURRENT selection is
 // always listed so an existing record never becomes uneditable.
 function dogOptions(current, sex) {
-  const opts = ctx.allDogs
+  const dogs = ctx.allDogs
     .filter((d) => ctx.pickerAllKennels || d.id === current || dogInScope(d))
     .filter((d) => ctx.pickerArchived || !d.is_archived || d.id === current)
     .filter((d) => !sex || d.id === current || d.sex === sex || d.sex === 'unknown')
-    .filter((d) => d.id === current || BREEDING_ELIGIBLE_STATUS.includes(d.status))
-    .map((d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`)
-    .join('');
-  return `<option value="">— select —</option>` + opts;
+    .filter((d) => d.id === current || BREEDING_ELIGIBLE_STATUS.includes(d.status));
+  // Her dogs, then other dogs (then pedigree only), A–Z within each (pickerGroups).
+  const opt = (d) => `<option value="${esc(d.id)}"${d.id === current ? ' selected' : ''}>${esc(d.call_name)}${d.registered_name ? ' — ' + esc(d.registered_name) : ''}${d.is_archived ? ' (archived)' : ''}</option>`;
+  return `<option value="">— select —</option>` + dogOptgroups(dogs, opt, (d) => d.call_name || d.registered_name);
 }
 
 // --- Read-only view ------------------------------------------------------

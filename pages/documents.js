@@ -4,7 +4,7 @@
 // view dialogs live in the shared assets/documentModal.js so this page and the
 // Contract detail page drive the same modal; this controller only owns the
 // grouped list, filters, and refresh.
-import { esc, fmtDate, param } from '../assets/ui.js';
+import { esc, fmtDate, param, dogOptgroups } from '../assets/ui.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -41,11 +41,9 @@ function renderTypeChips() {
 
 function renderDogFilterOptions() {
   const sel = document.getElementById('dog-filter');
-  const live = [...dogsById.values()]
-    .filter((d) => !d.is_archived)
-    .sort((a, b) => dogName(a).localeCompare(dogName(b), undefined, { sensitivity: 'base' }));
+  const live = [...dogsById.values()].filter((d) => !d.is_archived);
   sel.innerHTML = '<option value="">All dogs</option>'
-    + live.map((d) => `<option value="${esc(d.id)}"${filters.dog === d.id ? ' selected' : ''}>${esc(dogName(d))}</option>`).join('');
+    + dogOptgroups(live, (d) => `<option value="${esc(d.id)}"${filters.dog === d.id ? ' selected' : ''}>${esc(dogName(d))}</option>`, dogName);
 }
 
 function matchesText(doc, dogLabel, q) {
