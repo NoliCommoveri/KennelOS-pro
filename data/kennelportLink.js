@@ -8,7 +8,8 @@
 // - One link per own kennel, per device: the token is in device_secrets
 //   (kennelportLinkStore.js), never in a backup or the cloud.
 // - Update website sends nothing on its own: only when she presses it (KennelPort
-//   decision 5), and never while a Pro license has lapsed (decision 27).
+//   decision 5), and never while a Pro license has lapsed (decision 27), except
+//   on support's helper device, which runs on her license (licenseOk).
 // - What comes back fills, never overwrites what she typed: a dog's `url` and a
 //   litter's `photos_url` get their page's address only when blank or holding an
 //   address KennelPort wrote (any kennelport.com page, or her site's own); one that
@@ -26,6 +27,7 @@ import { waitlistConfig, embedOrigin, EMBED_ORIGINS_MAX } from './waitlistRules.
 import { todayYMD } from './dateUtils.js';
 import { isLicenseGated, evaluateLicense } from './license.js';
 import { editionFlags } from './editionConfig.js';
+import { getCloudSession } from './settings.js';
 import { buildSiteBundle, websiteCounts, websiteGaps, bundleChanges } from './siteExport.js';
 import { redeemLinkCode, linkStatus, stopLink, sendBundle, setSiteSettings, websiteLinkOffered, KennelportError } from './kennelportApi.js';
 import { getWebsiteLink, setWebsiteLink, noteWebsiteAnswer, clearWebsiteLink, anyWebsiteLink } from './kennelportLinkStore.js';
@@ -230,8 +232,12 @@ export class LicenseLapsedError extends Error {
   }
 }
 
+// Support's helper device (docs/KennelOS_Assisted_Setup_Plan.md §3) has no license
+// of its own: like the app's license gate (app.js), it runs on hers, so support can
+// Update website (and send the puppy portal's feed) while setting her up.
 export async function licenseOk() {
   if (!isLicenseGated()) return true;
+  if (getCloudSession()?.role === 'helper') return true;
   const { state } = await evaluateLicense();
   return state === 'valid' || state === 'grace';
 }
