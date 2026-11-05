@@ -194,6 +194,14 @@ db.version(6).stores({
   dogs: 'id, sire_id, dam_id, litter_id, breeder_kennel_id, owner_contact_id, *co_owner_contact_ids, status, ownership_type, sex, breed, kennel_id, public_id, is_archived'
 });
 
+// version(7), 2026-11-05: `do_not_sell`, her list of people she won't sell to (name,
+// email, phone, reason, `contact_id` when it came from a contact, `source_entry_id`
+// when it came from a waitlist application). New applications are matched against it
+// (data/doNotSell.js). Indexed on contact_id: the Contacts list hides a contact on it.
+db.version(7).stores({
+  do_not_sell: 'id, contact_id, is_archived'
+});
+
 // --- Schema upgrade hand-off between open copies ---------------------------
 // A new version(N) can only install once every other open copy of the app on
 // this device lets go of the older database. A live copy does that by itself

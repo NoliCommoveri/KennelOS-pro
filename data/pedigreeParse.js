@@ -308,8 +308,10 @@ export function parsePedigree(segs, page) {
   const dogs = new Map();
   const toDog = (e, path) => {
     // A Certified Pedigree's "Sire" / "Dam" label can read as part of the name beside it.
+    // The label is printed in that case and the name in capitals, so only that is a
+    // label: "DAM PRESTIGE TINA" is a name.
     const raw = e.name.replace(/\s+/g, ' ').replace(/[|_]+/g, '').trim();
-    const { name, titles } = splitTitles(path.length === 1 ? raw.replace(/^(sire|dam)\b[\s:]*(?=\S)/i, '') : raw);
+    const { name, titles } = splitTitles(path.length === 1 ? raw.replace(/^(Sire|Dam)[\s:]+(?=[^a-z]*$)/, '') : raw);
     const det = parseDetails(e.details);
     const notes = [...(titles.length ? [`Titles: ${titles.join(' ')}`] : []), ...det.notes];
     return {

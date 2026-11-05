@@ -35,6 +35,9 @@ import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
 import { MILEAGE_BASIS } from '../data/transportFee.js';
 import { backOutReasons, backOutPolicy, BACK_OUT_OUTCOMES, BACK_OUT_POLICY_TEXT_DEFAULT } from '../data/backOut.js';
 import { waitlistConfig, waitlistConfigProblem, openDays, closedDates, liveClosedDates, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
+import { waitlistPolicies, validatePolicies, newPolicy } from '../data/waitlistForm.js';
+import { policyStarters, policyHint, basisChanges } from '../data/waitlistPolicies.js';
+import { qaListHtml, wireQaList } from '../assets/qaListEditor.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD } from '../assets/ui.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
@@ -377,14 +380,60 @@ async function renderOverview() {
 function renderConfig() {
   if (!kennel.is_own_kennel) { els.config.innerHTML = ''; return; }
   openWaitlistGroups = new Set([...els.config.querySelectorAll('details[data-wl-group][open]')].map((d) => d.dataset.wlGroup));
+  // A link may open one group (?open=policies: Today's "Add your waitlist policies").
+  const asked = openFirst;
+  if (asked) { openWaitlistGroups.add(asked); openFirst = null; }
   // The waitlist online's card moved to the waitlist's Publish list page (2026-10-08).
   els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + waitlistCard(kennel) + pickupCard(kennel);
   wireConfig();
+  if (asked) els.config.querySelector(`details[data-wl-group="${CSS.escape(asked)}"]`)?.scrollIntoView({ block: 'start' });
 }
+let openFirst = param('open');
 
 // Which Waitlist settings groups are open, kept across a re-render (Save redraws
 // the config cards).
 let openWaitlistGroups = new Set();
+
+// Her waitlist policies while she edits them (Waitlist Policies plan §2): a working
+// copy, redrawn on its own so adding or moving one keeps her other unsaved settings;
+// saved with the rest by the card's one Save.
+let policiesDraft = null;
+let policiesUnsaved = false; // she's changed the list since it was loaded (or saved)
+const POLICY_LIST = { name: 'policies', a: 'heading', b: 'body', aPlaceholder: 'Heading, e.g. Passes and not responding', aLabel: 'Policy heading', bLabel: 'What families read', noun: 'policy', empty: 'No policies yet. Families see none, and your application doesn\'t ask about them.' };
+function policyNote(c) {
+  return (x) => {
+    const changed = basisChanges(x, c);
+    const hint = policyHint(x, c);
+    return `${hint ? `<p class="qa-note">${esc(hint)}</p>` : ''}${changed.length ? `<p class="qa-note changed">Your settings changed since this was written: ${esc(changed.join('; '))}. Check the wording still fits.</p>` : ''}`;
+  };
+}
+function policiesListHtml(c) {
+  const unsaved = policiesUnsaved ? '<p class="qa-note changed" role="status">Suggestions only until you tap Save below: nothing is on your application or shown to families yet. Edit or delete any of them first.</p>' : '';
+  return `${unsaved}${qaListHtml(policiesDraft, { ...POLICY_LIST, note: policyNote(c) })}
+    <div class="pill-row" style="margin-top:12px;"><button type="button" class="btn btn-sm" data-qa-add="policies">+ Add a policy</button>
+      ${policiesDraft.length ? '' : '<button type="button" class="btn btn-sm btn-primary" data-act="policies-start">Start from common topics</button>'}</div>`;
+}
+function policiesGroupBody(k, c) {
+  return `
+        <div class="field field-wide">
+          <p class="field-hint" style="margin-top:0;">How your waitlist runs, in your words: shown on your public list, the application and every family's page${c.website_feed ? ', and on your KennelPort website' : ''}. While you have any, the online application asks families to tick that they've read them. Your contract is the final word: keep these in step with it.</p>
+          <div id="wl-policies-list">${policiesListHtml(c)}</div>
+        </div>
+`;
+}
+function wirePolicies() {
+  const box = els.config.querySelector('#wl-policies-list');
+  if (!box) return;
+  const c = waitlistConfig(kennel);
+  const redraw = () => { box.innerHTML = policiesListHtml(c); wirePolicies(); };
+  const touched = () => { if (!policiesUnsaved) { policiesUnsaved = true; box.insertAdjacentHTML('afterbegin', '<p class="qa-note changed" role="status">Not saved yet: tap Save below to put these on your application and show them to families.</p>'); } };
+  wireQaList(box, policiesDraft, POLICY_LIST, { onChange: touched, rerender: redraw, newItem: () => newPolicy() });
+  box.querySelector('[data-act="policies-start"]')?.addEventListener('click', () => {
+    policiesDraft.push(...policyStarters(c, kennel));
+    policiesUnsaved = true;
+    redraw();
+  });
+}
 
 // Waitlist settings (Waitlist Spec §4.6) — stored as one Kennel.waitlist_config
 // object so they ride the JSON backup (never settings.js/localStorage). One list
@@ -392,6 +441,8 @@ let openWaitlistGroups = new Set();
 function waitlistCard(k) {
   if (!editionFlags.waitlist) return '';
   const c = waitlistConfig(k);
+  policiesDraft = waitlistPolicies(c).map((x) => ({ ...x }));
+  policiesUnsaved = false;
   const online = isWaitlistOnlineOffered();
   const policyOpts = FEE_CREDIT_POLICY.map((o) => `<option value="${esc(o.value)}"${o.value === c.fee_credit_policy ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
   // Folded groups, all closed at first; one Save for the lot. A group only the
@@ -424,6 +475,7 @@ ${group('fees', 'Fees & payment', 'Application fee, when it is due, how families
             <option value="approved"${c.fee_link_when === 'approved' ? ' selected' : ''}>Once I approve them</option></select>
           <span class="field-hint">Paid before you approve them: approving puts them on the list from the day they paid.</span></div>` : ''}
 `)}
+${online ? group('policies', 'Policies', policiesDraft.length ? `${policiesDraft.length} polic${policiesDraft.length === 1 ? 'y' : 'ies'} families agree to` : 'What families agree to: your fee, turns, passes, pausing', policiesGroupBody(k, c)) : ''}
 ${group('turns', 'Turns & offers', 'Time to respond, passes, color matching, automatic offers', `
         <div class="field field-wide"><label>Days you do business</label>
           <div class="pill-row">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, n) => `<label class="check-inline"><input type="checkbox" data-wl-open="${n}"${openDays(c).includes(n) ? ' checked' : ''}> ${d}</label>`).join('')}</div>
@@ -691,6 +743,15 @@ async function onSaveWaitlist() {
       show[stage][where] = b.checked;
     }
     waitlist_config.show_upcoming = show;
+  }
+  if (els.config.querySelector('#wl-policies-list')) {
+    const problems = validatePolicies(policiesDraft);
+    if (problems.length) { showError(problems.join(' ')); return; }
+    const before = JSON.stringify(waitlistPolicies(kennel.waitlist_config || {}).map(({ heading, body }) => [heading, body]));
+    const policies = waitlistPolicies({ policies: policiesDraft });
+    waitlist_config.policies = policies;
+    // The day families who applied before it see "updated" (status page).
+    if (JSON.stringify(policies.map(({ heading, body }) => [heading, body])) !== before) waitlist_config.policies_updated = todayYMD();
   }
   delete waitlist_config.auto_offer_next; // replaced by auto_offer_on (2026-10-08)
   const problem = waitlistConfigProblem(waitlist_config);
@@ -974,6 +1035,7 @@ function wireConfig() {
     els.config.querySelector('#bo-rows').insertAdjacentHTML('beforeend', policyRowHtml(null, backOutReasons(kennel.waitlist_config || {})));
   });
   els.config.querySelector('#bo-rows')?.addEventListener('click', (ev) => { if (ev.target.closest('[data-act="bo-remove"]')) ev.target.closest('.bo-row').remove(); });
+  wirePolicies();
   const saveWaitlist = els.config.querySelector('[data-act="save-waitlist"]');
   if (saveWaitlist) saveWaitlist.addEventListener('click', onSaveWaitlist);
   // Closed dates: added and removed here, saved with the rest.

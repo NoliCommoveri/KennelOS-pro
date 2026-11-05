@@ -9,7 +9,7 @@ const NOUNS = {
   sales: 'a sale', stud_services: 'a stud service', contracts: 'a contract', events: 'an event',
   waitlist_entries: 'a waitlist entry', waitlist_programs: 'a waitlist program', waitlist_offers: 'a waitlist offer',
   expenses: 'an expense', documents: 'a document', files: 'a file', accounts: 'an account',
-  breed_feeding_schedules: 'a feeding schedule'
+  breed_feeding_schedules: 'a feeding schedule', do_not_sell: 'a do-not-sell listing'
 };
 
 // The name she'd know it by, or what kind of record it is.

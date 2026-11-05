@@ -98,7 +98,8 @@ export const CONTACT_REFERENCES = [
   { table: 'events',        field: 'related_contact_id',      label: 'contact on a boarding, placement, show, vet visit, or surgery event' },
   { table: 'contracts',     field: 'related_contact_id',      label: 'counterparty on a contract' },
   { table: 'litters',       field: 'foster_partner_contact_id', label: 'foster partner on a litter' },
-  { table: 'waitlist_entries', field: 'contact_id',             label: 'family on a waitlist' }
+  { table: 'waitlist_entries', field: 'contact_id',             label: 'family on a waitlist' },
+  { table: 'do_not_sell', field: 'contact_id', label: 'person on your do-not-sell list' }
 ];
 
 // --- Kennel: what can point at a Kennel -------------------------------------
@@ -158,7 +159,9 @@ export const EVENT_REFERENCES = [
 // --- Waitlist (Waitlist Spec §4.5): an entry's offers point at it, and a
 // program is pointed at by the entries assigned to it. Offers are leaves.
 export const WAITLIST_ENTRY_REFERENCES = [
-  { table: 'waitlist_offers', field: 'entry_id', label: 'offer to this family' }
+  { table: 'waitlist_offers', field: 'entry_id', label: 'offer to this family' },
+  // The application a do-not-sell row was added from. Not indexed (only a delete asks).
+  { table: 'do_not_sell', field: 'source_entry_id', label: 'application a do-not-sell listing came from', scan: true }
 ];
 
 export const WAITLIST_PROGRAM_REFERENCES = [
@@ -166,6 +169,10 @@ export const WAITLIST_PROGRAM_REFERENCES = [
 ];
 
 export const WAITLIST_OFFER_REFERENCES = [];
+
+// --- Do-not-sell: a leaf entity — nothing points at a do-not-sell row. Its own
+// FKs (contact_id, source_entry_id) are guarded on contacts and waitlist entries.
+export const DO_NOT_SELL_REFERENCES = [];
 
 // --- Expense: a leaf entity — nothing points at an Expense. Its own FKs
 // (event_id, subject_id) point OUTWARD and are guarded on those targets above.

@@ -39,7 +39,9 @@ import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boarding
 import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
-import { dogsInScope, inScopeOnly, subjectInScope } from './kennelScope.js';
+import { dogsInScope, inScopeOnly, subjectInScope, getActiveKennelId } from './kennelScope.js';
+import { hasPolicies } from './waitlistForm.js';
+import { isWaitlistOnlineOffered } from './cloud/cloudConfig.js';
 import { todayYMD, monthsBetween, addDaysToYMD } from './dateUtils.js';
 import { descriptor, PAIRING_STATUS, LITTER_STATUS, SALE_STATUS, isOpenSale, PAIRING_ENDED_STATUSES, WHELPED_OR_LATER } from './vocab.js';
 import { editionFlags } from './editionConfig.js';
@@ -928,6 +930,23 @@ export async function extraDueItems(sales, today = todayYMD()) {
 // rule (the waitlist is per kennel, so entries/offers carry kennel_id).
 // A waitlist action's `run` returns the message Today shows afterwards (the turn
 // can move on to another family, who she must contact — never silently).
+// "Add your waitlist policies" (Waitlist Policies plan §3.2): each of her kennels with
+// the list online and no policies. Dismiss and Snooze as any nudge; it goes by itself
+// once she adds one. Until then her application doesn't ask about them, so nothing waits on it.
+export function policiesNudges(kennels, { online = true, scopedTo = null } = {}) {
+  if (!online) return [];
+  return kennels
+    .filter((k) => k.is_own_kennel && !k.is_archived && (!scopedTo || k.id === scopedTo))
+    .filter((k) => { const c = waitlistConfig(k); return c.online && !hasPolicies(c); })
+    .map((k) => ({
+      key: `waitlist-policies:${k.id}`,
+      title: kennels.filter((x) => x.is_own_kennel && !x.is_archived).length > 1 ? `Add your waitlist policies for ${k.kennel_name || 'your kennel'}` : 'Add your waitlist policies',
+      detail: 'Families on your list see them, and applicants tick that they\'ve read them. Until you add one, your application doesn\'t ask.',
+      subjectHref: `kennel.html?id=${encodeURIComponent(k.id)}&open=policies#waitlist-settings`,
+      actions: [{ label: 'Add policies', run: async () => { location.href = `kennel.html?id=${encodeURIComponent(k.id)}&open=policies#waitlist-settings`; } }]
+    }));
+}
+
 async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] } = {}) {
   const [entriesAll, offersAll, contacts, kennels] = await Promise.all([
     waitlistEntryRepo.getAll(),
@@ -943,6 +962,8 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
   const littersById = new Map(litters.map((l) => [l.id, l]));
   const name = (e) => entryName(e, contactsById.get(e.contact_id));
   const out = [];
+
+  out.push(...policiesNudges(kennels, { online: isWaitlistOnlineOffered(), scopedTo: getActiveKennelId() }));
 
   // New applications — one nudge per kennel's queue. The key carries the newest
   // application's id, so dismissing it hides this batch but a new one resurfaces.

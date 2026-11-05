@@ -15,7 +15,10 @@ import {
   proposeQuestionImport, applyQuestionImport, formFaq, validateFaq, newFaqItem, LOCKED_TYPE_LABEL
 } from '../data/waitlistForm.js';
 import { esc, param, confirmModal, alertModal } from '../assets/ui.js';
+import { qaListHtml, wireQaList } from '../assets/qaListEditor.js';
 import { resolveWaitlistKennel, mountKennelPicker } from '../assets/waitlistUI.js';
+import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
+import { LINKABLE_TYPES, linkAnswerChoices, cleanProgramLink } from '../data/programSuggest.js';
 
 const els = {
   back: document.getElementById('back-link'),
@@ -28,7 +31,7 @@ const els = {
   csv: document.getElementById('wf-csv')
 };
 
-const ctx = { kennel: null, questions: [], faq: [], dirty: false, proposals: null, csvRows: [] };
+const ctx = { kennel: null, questions: [], faq: [], dirty: false, proposals: null, csvRows: [], programs: [] };
 const showError = (msg) => { els.error.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; };
 const clearError = () => { els.error.innerHTML = ''; };
 
@@ -62,7 +65,9 @@ function questionHtml(x, i, total) {
     ? `<span class="faint" style="flex:0 1 auto;">${esc(LOCKED_TYPE_LABEL[x.key] || descriptor(WAITLIST_QUESTION_TYPE, x.type).label)}</span>`
     : `<select data-f="type" aria-label="Answer type">${typeOptions(x.type)}</select>`;
   const options = isChoice(x)
-    ? `<div class="field"><label>Options (one per line)</label><textarea data-f="options">${esc((x.options || []).join('\n'))}</textarea></div>`
+    ? (locked
+      ? `<div class="field"><label>Box</label><p class="field-hint" style="margin:0;">☐ ${esc((x.options || []).join(' · '))}</p></div>`
+      : `<div class="field"><label>Options (one per line)</label><textarea data-f="options">${esc((x.options || []).join('\n'))}</textarea></div>`)
     : '';
   return `<div class="wf-q" data-i="${i}">
       <div class="wf-q-head"><span class="wf-num">${i + 1}</span>${locked ? '<span title="Locked: reword only">🔒</span>' : ''}
@@ -71,54 +76,45 @@ function questionHtml(x, i, total) {
       <div class="wf-q-body">
         <div class="field"><label>Help text</label><input data-f="help" type="text" value="${esc(x.help || '')}" placeholder="Optional"></div>
         ${options}
+        ${programLinkHtml(x)}
         <div class="field"><label class="check-inline"><input data-f="required" type="checkbox"${x.required ? ' checked' : ''}${locked ? ' disabled' : ''}> Required</label>
           ${x.source_header ? `<span class="field-hint">Imported from the "${esc(x.source_header)}" column.</span>` : ''}</div>
       </div>
     </div>`;
 }
 
+// "Suggest a program" (programSuggest.js): a yes/no or choice question of hers can
+// point at one of her programs, so an application answering it gets "Add to
+// [program]?" on the family's page. Families never see it.
+function programLinkHtml(x) {
+  if (isLocked(x) || !LINKABLE_TYPES.includes(x.type)) return '';
+  const live = ctx.programs.filter((p) => !p.is_archived || p.id === x.program_link?.program_id);
+  if (!live.length) return `<div class="field field-wide"><label>Suggest a program</label><span class="field-hint">Add a program on Programs and you can have this question suggest it (say, a military program for "Are you a military member?").</span></div>`;
+  const link = x.program_link || null;
+  const progOpts = `<option value="">— none —</option>` + live.map((p) => `<option value="${esc(p.id)}"${link && link.program_id === p.id ? ' selected' : ''}>${esc(p.name)}${p.is_archived ? ' (archived)' : ''}</option>`).join('');
+  const answers = link ? linkAnswerChoices(x).map((a) => `<label class="check-inline"><input type="checkbox" data-link-answer value="${esc(a)}"${(link.answers || []).includes(a) ? ' checked' : ''}> ${esc(a)}</label>`).join('') : '';
+  return `<div class="field field-wide wf-link"><label>Suggest a program</label>
+      <select data-link-program aria-label="Program this question suggests">${progOpts}</select>
+      ${link ? `<div class="check-group" style="margin-top:6px;"><span class="faint">When they answer:</span> ${answers}</div>` : ''}
+      <span class="field-hint">${link ? 'Their application asks you "Add to this program?" before you review it, and until their fee is received. Only you see this.' : 'Optional. Families never see it.'}</span></div>`;
+}
+
 // --- The FAQ -----------------------------------------------------------------------
 
+const FAQ_LIST = { name: 'faq', a: 'question', b: 'answer', aPlaceholder: "Question, e.g. What's your price range?", aLabel: 'FAQ question', bLabel: 'Answer', noun: 'FAQ', empty: 'No FAQ yet.' };
+
 function faqHtml() {
-  const items = ctx.faq.map((x, i) => `
-    <div class="wf-q" data-faq="${i}">
-      <div class="wf-q-head"><span class="wf-num">${i + 1}</span>
-        <input class="wf-label" data-ff="question" type="text" value="${esc(x.question)}" placeholder="Question, e.g. What's your price range?" aria-label="FAQ question">
-        <div class="wf-move">
-          <button class="btn btn-sm" data-faq-up="${i}" title="Move up"${i === 0 ? ' disabled' : ''}>↑</button>
-          <button class="btn btn-sm" data-faq-down="${i}" title="Move down"${i === ctx.faq.length - 1 ? ' disabled' : ''}>↓</button>
-          <button class="btn btn-sm btn-danger" data-faq-del="${i}" title="Delete this FAQ">✕</button>
-        </div></div>
-      <div class="field" style="margin-top:8px;"><label>Answer</label><textarea data-ff="answer">${esc(x.answer)}</textarea></div>
-    </div>`).join('');
   return `
     <section class="card" style="margin-bottom:16px;">
       <h2 style="margin:0;">FAQ</h2>
       <p class="field-hint" style="margin-top:4px;">Shown at the top of the application, before the questions: your usual price range, how the waitlist works, anything families always ask.</p>
-      <div id="wf-faq">${items || '<p class="faint" style="margin:8px 0 0;">No FAQ yet.</p>'}</div>
-      <div class="pill-row" style="margin-top:12px;"><button class="btn btn-sm" id="wf-faq-add">+ Add a question &amp; answer</button></div>
+      <div id="wf-faq">${qaListHtml(ctx.faq, FAQ_LIST)}</div>
+      <div class="pill-row" style="margin-top:12px;"><button class="btn btn-sm" data-qa-add="faq">+ Add a question &amp; answer</button></div>
     </section>`;
 }
 
 function wireFaq() {
-  els.body.querySelectorAll('[data-faq]').forEach((box) => {
-    const x = ctx.faq[Number(box.dataset.faq)];
-    box.querySelectorAll('[data-ff]').forEach((input) => input.addEventListener('input', () => { x[input.dataset.ff] = input.value; markDirty(); }));
-  });
-  const swap = (a, b) => { [ctx.faq[a], ctx.faq[b]] = [ctx.faq[b], ctx.faq[a]]; markDirty(); render(); };
-  els.body.querySelectorAll('[data-faq-up]').forEach((b) => b.addEventListener('click', () => swap(Number(b.dataset.faqUp), Number(b.dataset.faqUp) - 1)));
-  els.body.querySelectorAll('[data-faq-down]').forEach((b) => b.addEventListener('click', () => swap(Number(b.dataset.faqDown), Number(b.dataset.faqDown) + 1)));
-  els.body.querySelectorAll('[data-faq-del]').forEach((b) => b.addEventListener('click', () => {
-    ctx.faq.splice(Number(b.dataset.faqDel), 1);
-    markDirty();
-    render();
-  }));
-  els.body.querySelector('#wf-faq-add').addEventListener('click', () => {
-    ctx.faq.push(newFaqItem());
-    markDirty();
-    render();
-    els.body.querySelector(`[data-faq="${ctx.faq.length - 1}"] input`)?.focus();
-  });
+  wireQaList(els.body, ctx.faq, FAQ_LIST, { onChange: markDirty, rerender: render, newItem: () => newFaqItem() });
 }
 
 function render() {
@@ -159,6 +155,21 @@ function render() {
       });
     });
   });
+  list.querySelectorAll('.wf-q').forEach((box) => {
+    const x = ctx.questions[Number(box.dataset.i)];
+    box.querySelector('[data-link-program]')?.addEventListener('change', (ev) => {
+      const id = ev.target.value;
+      // A new link starts on "Yes" for a yes/no question; a choice question's answers she ticks.
+      x.program_link = id ? { program_id: id, answers: x.program_link?.answers?.length ? x.program_link.answers : (x.type === 'yes_no' ? ['Yes'] : []) } : null;
+      if (!id) delete x.program_link;
+      markDirty();
+      render();
+    });
+    box.querySelectorAll('[data-link-answer]').forEach((cb) => cb.addEventListener('change', () => {
+      x.program_link = { ...x.program_link, answers: [...box.querySelectorAll('[data-link-answer]:checked')].map((c) => c.value) };
+      markDirty();
+    }));
+  });
   const swap = (a, b) => {
     [ctx.questions[a], ctx.questions[b]] = [ctx.questions[b], ctx.questions[a]];
     markDirty();
@@ -193,6 +204,9 @@ function render() {
 async function save() {
   clearError();
   const problems = [...validateFaq(ctx.faq), ...validateQuestions(ctx.questions)];
+  ctx.questions.forEach((x, i) => {
+    if (x.program_link && LINKABLE_TYPES.includes(x.type) && !cleanProgramLink(x)) problems.push(`Question ${i + 1} ("${x.label || 'untitled'}") suggests a program: tick the answer that suggests it, or set it to none.`);
+  });
   if (problems.length) { showError(problems.join(' ')); return; }
   els.save.disabled = true;
   try {
@@ -303,6 +317,7 @@ async function main() {
   if (own.length > 1) els.title.textContent = `Application form — ${kennel.kennel_name}`;
   ctx.questions = formQuestions(kennel.waitlist_config);
   ctx.faq = formFaq(kennel.waitlist_config);
+  ctx.programs = (await waitlistProgramRepo.getAll({ includeArchived: true })).filter((p) => p.kennel_id === kennel.id);
   els.save.addEventListener('click', save);
   els.csv.addEventListener('change', () => {
     const file = els.csv.files && els.csv.files[0];

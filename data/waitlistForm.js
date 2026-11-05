@@ -21,6 +21,8 @@
 
 // Her wording, kept as given (decided 2026-10-06). Default text for the locked
 // notice; she can edit it but not remove it.
+import { cleanProgramLink } from './programSuggest.js';
+
 export const PUBLIC_LIST_NOTICE = 'Please note that to ensures transparency and give our applicants peace of mind that their position in line is being honored, our waitlist is publicly available for viewing by prospective and waiting families. Your contact information will never be displayed, but some data like first name and gender preference will appear on the public list once you are added.';
 
 // Types only locked questions use. `preference` answers live on the entry's pref_*
@@ -86,7 +88,8 @@ export const LOCKED_TYPE_LABEL = {
   pref_colors: 'Colors · notes, or matching if you turn color matching on',
   ready_timing: 'ASAP / 1 month / 3 months / 6+ months · anything but ASAP is on hold that long',
   public_notice: 'Shown to every applicant · no answer',
-  location: 'Short answer, required · where they live, for your transport distance rule'
+  location: 'Short answer, required · where they live, for your transport distance rule',
+  policies_read: 'One box, required online · shown only while you have waitlist policies; "policies" links to them'
 };
 
 // City / state while her "families must live at least N miles away" rule is on
@@ -94,6 +97,15 @@ export const LOCKED_TYPE_LABEL = {
 // says where they live. Off, it's an ordinary question again.
 export const LOCATION_LOCK = Object.freeze({ id: 'location', key: 'location', label: 'City / state', type: 'short_text', required: true, help: '', options: [] });
 export const locationRuleOn = (config) => Number(config?.transport_min_home_miles) > 0;
+
+// "I've read the policies" (Waitlist Policies plan §3.1): locked, last, and on the
+// form only while she has at least one waitlist policy, so a kennel without any
+// never shows it or requires it. `link`: the renderers that know it make the word
+// "policies" in the label a link to the page's Our policies section.
+export const POLICIES_READ_LOCK = Object.freeze({
+  id: 'policies_read', key: 'policies_read', label: 'Please read our waitlist policies.', type: 'checkboxes', required: true,
+  help: '', options: Object.freeze(["I've read and agree to the policies"]), link: 'policies'
+});
 
 const LOCKED_DEFAULTS = DEFAULT_FORM_QUESTIONS.filter((x) => x.key);
 
@@ -126,9 +138,16 @@ export function formQuestions(config) {
   const out = [];
   const seenIds = new Set();
   const seenKeys = new Set();
+  let policiesWording = null;
   for (const stale of stored) {
     if (!stale || typeof stale !== 'object') continue;
     let raw = upgradeLegacy(stale);
+    // Her wording for "I've read the policies" is kept; the question itself is put
+    // back below, last, only while she has a policy.
+    if (raw.key === 'policies_read' || raw.id === 'policies_read') {
+      if (raw.key === 'policies_read') policiesWording = { label: clean(raw.label), help: raw.help != null ? String(raw.help) : '' };
+      continue;
+    }
     // A City / state saved while the distance rule locked it reads as hers again;
     // the rule (below) locks it afresh while it's on.
     // Its "required" came from the rule, so it goes back to optional with the lock.
@@ -150,6 +169,11 @@ export function formQuestions(config) {
     if (locked && locked.type === 'notice' && !clean(item.help)) item.help = PUBLIC_LIST_NOTICE;
     if (!locked && isChoice(item)) item.options = (Array.isArray(raw.options) ? raw.options : []).map(clean).filter(Boolean);
     if (raw.source_header) item.source_header = clean(raw.source_header);
+    // Her link from this question to one of her programs (programSuggest.js).
+    if (!locked && raw.program_link) {
+      const link = cleanProgramLink(item, raw.program_link);
+      if (link) item.program_link = link;
+    }
     seenIds.add(id);
     if (locked) seenKeys.add(locked.key);
     out.push(item);
@@ -166,6 +190,9 @@ export function formQuestions(config) {
     const at = out.findIndex((q) => q.id === 'location');
     if (at >= 0) out[at] = { ...LOCATION_LOCK, label: out[at].label || LOCATION_LOCK.label, help: out[at].help || '' };
     else out.splice(Math.max(0, out.findIndex((q) => q.key === 'email') + 1), 0, { ...LOCATION_LOCK });
+  }
+  if (hasPolicies(config)) {
+    out.push({ ...POLICIES_READ_LOCK, options: [...POLICIES_READ_LOCK.options], label: policiesWording?.label || POLICIES_READ_LOCK.label, help: policiesWording?.help ?? '' });
   }
   return out;
 }
@@ -224,7 +251,9 @@ export function entryQuestions(entry, questions) {
       push({ ...(now || {}), ...s, key: now ? now.key : undefined, required: now ? now.required : false, help: now ? now.help : '' });
     }
   }
-  for (const c of current) push(c);
+  // "I've read the policies" only on applications that answered it: an entry from
+  // before she had policies (or typed in without it) doesn't show a blank box.
+  for (const c of current) if (c.key !== 'policies_read' || hasValue(app[c.id])) push(c);
   for (const k of Object.keys(app)) {
     if (!ids.has(k) && hasValue(app[k])) push({ id: k, label: humanize(k), type: String(app[k]).length > 80 ? 'long_text' : 'short_text', required: false, help: '', options: [] });
   }
@@ -400,3 +429,37 @@ export function validateFaq(items) {
 export function newFaqItem(makeId = () => crypto.randomUUID().slice(0, 8)) {
   return { id: `faq_${makeId()}`, question: '', answer: '' };
 }
+
+// --- Her waitlist policies (Waitlist Policies plan §2) -------------------------------
+
+// `waitlist_config.policies`: an ordered list of { id, heading, body, topic?, basis? }.
+// topic: the starter topic a row came from (waitlistPolicies.js POLICY_TOPICS); basis:
+// the settings its starter wording quoted, to say when they've changed since. Both
+// optional. The cleaned list: rows with neither a heading nor a body are dropped.
+export function waitlistPolicies(config) {
+  const stored = config && Array.isArray(config.policies) ? config.policies : [];
+  return stored
+    .filter((x) => x && typeof x === 'object')
+    .map((x, i) => ({
+      id: clean(x.id) || `pol_${i + 1}`, heading: clean(x.heading), body: String(x.body ?? '').trim(),
+      ...(clean(x.topic) ? { topic: clean(x.topic) } : {}),
+      ...(x.basis && typeof x.basis === 'object' && !Array.isArray(x.basis) ? { basis: { ...x.basis } } : {})
+    }))
+    .filter((x) => x.heading || x.body);
+}
+export const hasPolicies = (config) => waitlistPolicies(config).length > 0;
+
+// Problems that block saving: a heading with no wording, or the reverse.
+export function validatePolicies(items) {
+  const problems = [];
+  items.forEach((x, i) => {
+    const has = (v) => clean(v) !== '';
+    if (has(x.heading) !== has(x.body)) problems.push(`Policy ${i + 1} needs both a heading and its wording.`);
+  });
+  return problems;
+}
+
+export function newPolicy(makeId = () => crypto.randomUUID().slice(0, 8)) {
+  return { id: `pol_${makeId()}`, heading: '', body: '' };
+}
+

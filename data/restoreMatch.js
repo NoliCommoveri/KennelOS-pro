@@ -143,7 +143,13 @@ const RULES = {
     return !open(l) && !open(f) && eqSet(l.applied_date, f.applied_date) ? 'same' : null;
   },
   waitlist_offers: (l, f, { fk }) => (eqSet(l.entry_id, fk(f.entry_id)) && eqSet(l.litter_id, fk(f.litter_id))
-    && eqSet(l.offered_date, f.offered_date) ? 'same' : null)
+    && eqSet(l.offered_date, f.offered_date) ? 'same' : null),
+  // Her do-not-sell list: the same contact, or the same person by name and an email
+  // or phone that agrees (the contacts rule).
+  do_not_sell(l, f, { fk }) {
+    if (l.contact_id && f.contact_id) return l.contact_id === fk(f.contact_id) ? 'same' : null;
+    return RULES.contacts(l, f);
+  }
 };
 
 // The rules, for the on-device duplicate scan (data/duplicateScan.js), which runs
@@ -174,7 +180,8 @@ export const MATCH_ORDER = [
   ['dogs', 'dogs'], ['pairings', 'pairings'], ['litters', 'litters'], ['dogs_late', 'dogs'],
   ['sales', 'sales'], ['stud_services', 'stud_services'], ['contracts', 'contracts'],
   ['events', 'events'], ['expenses', 'expenses'], ['documents', 'documents'],
-  ['waitlist_entries', 'waitlist_entries'], ['waitlist_offers', 'waitlist_offers']
+  ['waitlist_entries', 'waitlist_entries'], ['waitlist_offers', 'waitlist_offers'],
+  ['do_not_sell', 'do_not_sell']
 ];
 
 export const askKey = (table, fileId) => `${table}:${fileId}`;
@@ -396,6 +403,7 @@ export function describeRecord(table, r, nameOf = () => '') {
   switch (table) {
     case 'kennels': return bits(r.kennel_name, r.is_own_kennel ? 'your kennel' : '', r.location, r.website);
     case 'contacts': return bits(r.name, r.email, r.phone);
+    case 'do_not_sell': return bits(r.name, r.email, r.phone, 'do not sell');
     case 'dogs': return bits(r.call_name, r.registered_name, r.sex && descriptor(SEX, r.sex).label, r.breed, r.date_of_birth && `born ${r.date_of_birth}`, r.registration_number, r.litter_id && nameOf('litters', r.litter_id) && `litter ${nameOf('litters', r.litter_id)}`);
     case 'pairings': return bits(dogs(r.dam_id, r.sire_id), r.planned_date && `planned ${r.planned_date}`, r.status && descriptor(PAIRING_STATUS, r.status).label);
     case 'litters': return bits(dogs(r.dam_id, r.sire_id), r.whelp_date ? `whelped ${r.whelp_date}` : r.status && descriptor(LITTER_STATUS, r.status).label);

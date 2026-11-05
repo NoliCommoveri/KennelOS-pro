@@ -375,6 +375,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'pause_request', 'listen_change_request', 'messages',
       // "Not this litter" with the family's reason (Spec §16.2): private like a pass reason.
       'prepasses',
+      // The programs she said No to when their answers suggested one (programSuggest.js).
+      'program_suggestions_declined',
       // "Ready now?" (Spec §16.7): their answer and a not-yet reason, private like pause_reason.
       'ready_check',
       // A Companion link request from their status page (Spec §8.3), with their
@@ -435,6 +437,15 @@ export const SYNC_REGISTRY = Object.freeze({
       'passes_count', 'respond_days_override', 'public_description', 'public_icon'
     ],
     private: ['fee_override', 'notes'],
+    pending: []
+  },
+
+  // Her do-not-sell list (owner decision 2026-11-05: private). Like expenses, no row
+  // is readable by the server; live sync and the vault carry it sealed.
+  do_not_sell: {
+    rows: NONE,
+    cloud: [],
+    private: ['name', 'email', 'phone', 'reason', 'added_date', 'contact_id', 'source_entry_id'],
     pending: []
   }
 });

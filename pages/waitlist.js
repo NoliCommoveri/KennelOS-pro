@@ -25,6 +25,10 @@ import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, ope
 import { offerEmails } from '../assets/waitlistEmailUI.js';
 import { programIconHtml } from '../assets/programIcons.js';
 import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
+import { formQuestions } from '../data/waitlistForm.js';
+import { programSuggestions } from '../data/programSuggest.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { entryDoNotSellMatches } from '../data/doNotSell.js';
 
 const els = {
   title: document.getElementById('wl-title'),
@@ -71,16 +75,28 @@ async function main() {
     </div>`;
   wireActionMenu(document.getElementById('wl-manage'));
 
-  const [entries, offers, programs, contacts, litters, dogs, sales] = await Promise.all([
+  const [entries, offers, programs, contacts, litters, dogs, sales, doNotSell] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
     waitlistOfferRepo.getByKennel(kennel.id),
     waitlistProgramRepo.getMapForKennel(kennel.id),
     contactRepo.getAll({ includeArchived: true }),
     litterRepo.getAll(),
     dogRepo.getAll({ includeArchived: true }),
-    saleRepo.getAll({ includeArchived: true })
+    saleRepo.getAll({ includeArchived: true }),
+    doNotSellRepo.getAll()
   ]);
   const config = waitlistConfig(kennel);
+  // Before she opens an application: whether it's on her do-not-sell list, and the
+  // programs its answers suggest ("Add to …?" waits on the family's page).
+  const form = formQuestions(config);
+  const reviewFlags = (e) => {
+    const dns = entryDoNotSellMatches(e, doNotSell);
+    const flags = [
+      ...(dns.length ? [`<span class="badge badge-red" title="Open the application to see who it matches">${dns[0].strength === 'certain' ? 'Do not sell' : 'Maybe do not sell'}</span>`] : []),
+      ...programSuggestions(e, form, programs).map((s) => `<span class="badge badge-green" title="Their answers suggest this program: open the application to add them">Add to ${esc(s.program.name)}?</span>`)
+    ];
+    return flags.length ? `<div class="row-flags">${flags.join('')}</div>` : '';
+  };
   // A breed preference that isn't one of this kennel's breeds matches no pup: flag it.
   const breeds = kennelBreeds(kennel, dogs);
   const breedFlag = (e) => (e.pref_breed && resolveBreed(e.pref_breed, breeds) === null
@@ -105,7 +121,7 @@ async function main() {
         const match = e.contact_id
           ? '<span class="badge badge-neutral">Existing contact</span>'
           : matches.length ? `<span class="badge badge-amber">${esc(matches[0].contact.name)}${matches.length > 1 ? ` +${matches.length - 1}` : ''}</span>` : none;
-        return row(e, [`<strong>${nameOf(e)}</strong>${programBadge(e)}`, e.applied_date ? esc(fmtDate(e.applied_date)) : none, prefsSummary(e), match]);
+        return row(e, [`<strong>${nameOf(e)}</strong>${programBadge(e)}${reviewFlags(e)}`, e.applied_date ? esc(fmtDate(e.applied_date)) : none, prefsSummary(e), match]);
       }))
     : '<div class="empty-state">No new applications.</div>';
 
@@ -115,7 +131,7 @@ async function main() {
   const overdue = new Set(overdueFees(approved, today).map((e) => e.id));
   const approvedHtml = approved.length
     ? table(['Family', 'Approved', 'Fee', 'Pay by'], approved.map((e) => row(e, [
-        `<strong>${nameOf(e)}</strong>${programBadge(e)}`,
+        `<strong>${nameOf(e)}</strong>${programBadge(e)}${reviewFlags(e)}`,
         e.approved_date ? esc(fmtDate(e.approved_date)) : none,
         e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : none,
         e.fee_due_date ? `${esc(fmtDate(e.fee_due_date))}${overdue.has(e.id) ? ' <span class="badge badge-red">Past due</span>' : ''}` : none

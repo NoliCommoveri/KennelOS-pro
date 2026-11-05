@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Do not sell — KennelOS</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="manifest" href="../manifest.json">
+  <link rel="icon" href="../assets/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#122138">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KennelOS">
+</head>
+<body>
+  <div id="app-nav"></div>
+  <main>
+    <div class="page-header">
+      <div>
+        <h1>Do not sell</h1>
+        <p class="page-subtitle">People you won't sell to. New waitlist applications with the same name, email or phone are flagged before you review them. Only you see this list.</p>
+      </div>
+      <div class="pill-row">
+        <button class="btn btn-primary" id="dns-add" type="button">+ Add someone</button>
+        <button class="btn" id="dns-add-contact" type="button">Move a contact here…</button>
+      </div>
+    </div>
+    <nav class="seg-tabs" id="people-hub-tabs" aria-label="People">
+      <a class="seg-tab" href="contacts.html">Contacts</a>
+      <a class="seg-tab" href="waitlist.html">Waitlist</a>
+    </nav>
+    <nav class="seg-tabs seg-tabs-sub" aria-label="Contact groups" style="margin-bottom:14px;">
+      <a class="seg-tab" href="contacts.html?group=clients">Clients</a>
+      <a class="seg-tab" href="contacts.html?group=network">Network</a>
+      <a class="seg-tab" href="contacts.html?group=care">Care team</a>
+      <a class="seg-tab" href="contacts.html?group=other">Other</a>
+      <a class="seg-tab" href="contacts.html">All</a>
+      <span class="seg-tab active" aria-current="page">Do not sell</span>
+    </nav>
+    <div id="page-error"></div>
+    <div id="dns-body"><p class="muted">Loading…</p></div>
+  </main>
+
+  <script type="module" src="../app.js"></script>
+  <script type="module" src="./do-not-sell.js"></script>
+</body>
+</html>

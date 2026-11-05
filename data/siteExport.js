@@ -65,6 +65,9 @@ export class SiteExportError extends Error {
 
 export const BUNDLE_KEYS = ['format', 'bundle_id', 'kennel_id', 'sent_at', 'waitlist_public_id', 'dogs', 'litters', 'pairings', 'heats', 'extras', 'products', 'steps', 'payment', 'partner_kennels'];
 export const PRODUCT_KEYS = ['id', 'name', 'link_url', 'code', 'code_note'];
+// With a Worker that takes the 'transport' section: whether it's a transport
+// service (for her Getting your pup home page) and its website (shown under its badge).
+export const PRODUCT_TRANSPORT_KEYS = [...PRODUCT_KEYS, 'website', 'transport'];
 export const DOG_KEYS = ['id', 'call_name', 'registered_name', 'sex', 'date_of_birth', 'color', 'status', 'died_on', 'titles', 'health'];
 // `registry` (a dog's and a puppy's, "AKC"…) goes only to a Worker whose answer
 // lists the 'registry' section: an older one refuses a field it doesn't know.
@@ -407,22 +410,34 @@ const webLink = (v) => {
 // name, the referral link (else the account's website), the code, and her
 // instructions when they fit the line after the code (120 characters; longer ones
 // aren't cut, she words them in KennelPort). Copied by name: never a login, a
-// customer id, notes, fees, contract forms or payment details. Transport accounts
-// never (they're shown to a family with a picked pup, not to the public). Accounts
+// customer id, notes, fees, contract forms or payment details. Which accounts go
+// (owner decision 2026-11-05): those marked with something to share (a referral
+// link, code or instructions, `hasReferral`), and transport accounts marked even
+// without one. Transport ones go only to a Worker that takes the 'transport'
+// section (`transport: true`), flagged `transport` with their `website`: they show
+// on her Getting your pup home page, never with her Recommended products. Accounts
 // are program-wide, so every linked kennel's website gets the same ones.
-export function websiteProducts(accounts = []) {
+const isTransportAccount = (a) => a.account_type === 'transport';
+const siteAddress = (v) => {
+  const s = String(v ?? '').trim();
+  return webLink(s) || (/^[\w.-]+\.[a-z]{2,}(\/\S*)?$/i.test(s) ? webLink(`https://${s}`) : null);
+};
+export function websiteProducts(accounts = [], { transport = false } = {}) {
   return accounts
-    .filter((a) => a && !a.is_archived && a.show_on_website === true && a.account_type !== 'transport' && line(a.name, 80))
+    .filter((a) => a && !a.is_archived && a.show_on_website === true && line(a.name, 80)
+      && (isTransportAccount(a) ? transport : hasReferral(a)))
     .sort((x, y) => String(x.name).localeCompare(String(y.name), undefined, { sensitivity: 'base' }) || String(x.id).localeCompare(String(y.id)))
     .map((a) => {
       const note = line(a.referral_instructions, 1000);
-      return assertOnlyKeys({
+      const out = {
         id: String(a.id).slice(0, 80),
         name: line(a.name, 80),
-        link_url: webLink(a.referral_link) || webLink(a.website),
+        link_url: webLink(a.referral_link) || siteAddress(a.website),
         code: line(a.referral_code, 40),
         code_note: note && note.length <= 120 ? note : null
-      }, PRODUCT_KEYS, 'product');
+      };
+      if (!transport) return assertOnlyKeys(out, PRODUCT_KEYS, 'product');
+      return assertOnlyKeys({ ...out, website: siteAddress(a.website), transport: isTransportAccount(a) }, PRODUCT_TRANSPORT_KEYS, 'product');
     });
 }
 
@@ -462,7 +477,7 @@ export function websiteGaps(kennel, { dogs = [], litters = [], pairings = [], ac
     pairings: pairings.filter((p) => mine(p) && !isMarked(p) && LIVE_PAIRING_STATUSES.includes(p.status) && !hasLitter.has(p.id)),
     heats: dogs.filter((d) => ownDog(d) && d.sex === 'female' && d.status === 'active_breeding' && !d.heats_online),
     deposits: liveLitters.filter((l) => l.status !== 'expected' && !ymd(l.accept_deposits_date) && (litterMarked(l, pairingsById) || willMark.has(l.id))),
-    accounts: accounts.filter((a) => a && !a.is_archived && !isMarked(a) && a.account_type !== 'transport' && line(a.name, 80) && hasReferral(a)),
+    accounts: accounts.filter((a) => a && !a.is_archived && !isMarked(a) && line(a.name, 80) && (hasReferral(a) || (isTransportAccount(a) && siteAddress(a.website)))),
     ...coOwnedGaps(kennel, dogs, contacts, kennels)
   };
 }
@@ -599,7 +614,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
     pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById, heatOf)),
     heats: websiteHeats(kennel, { dogs, events, pairings, today }).map((h) => assertOnlyKeys({ ...h, dam_name: dogName(dogsById.get(h.dam_id)) }, HEAT_KEYS, 'heat'))
   };
-  const products = Array.isArray(sections) && sections.includes('products') ? websiteProducts(accounts) : null;
+  const products = Array.isArray(sections) && sections.includes('products') ? websiteProducts(accounts, { transport: sections.includes('transport') }) : null;
   if (products && products.length > SITE_MAX.products) throw new SiteExportError(`Your website takes at most ${SITE_MAX.products} recommended products, and ${products.length} accounts are marked Show on website. Untick some, then try again.`);
   const words = { dogs: 'dogs', litters: 'litters', pairings: 'pairings', heats: 'planned heats' };
   for (const [k, list] of Object.entries(shown)) {

@@ -92,6 +92,8 @@ export const PLACES = [
     where: (nav) => `The Waitlist is under ${nav('pages/contacts.html')}, on the Waitlist tab: applications, families owing their fee, and your list.` },
   { id: 'waitlist-form', title: 'Application form', href: 'waitlist-form.html', flag: 'waitlist', keywords: ['application form', 'questions', 'faq', 'apply form'],
     where: 'Your application form (the questions families answer, and your FAQ) is on the Waitlist page.' },
+  { id: 'waitlist-policies', title: 'Waitlist policies', href: 'kennel.html?id={kennel}&open=policies#waitlist-settings', flag: 'waitlist', keywords: ['policies', 'policy', 'waitlist policies', 'rules', 'terms', 'non-refundable', 'removal', 'agree to policies'],
+    where: 'Your waitlist policies are in your kennel\'s Waitlist settings, under Policies. Start from common topics writes them from your own settings, for you to edit.' },
   { id: 'waitlist-publish', title: 'Publish your list', href: 'waitlist-publish.html', flag: 'waitlist', keywords: ['publish waitlist', 'online waitlist', 'share list', 'facebook'],
     where: 'Publish your list is on the Waitlist page: put it online, or copy it as text for Facebook or your website.' },
   { id: 'waitlist-programs', title: 'Waitlist programs', href: 'waitlist-programs.html', flag: 'waitlist', keywords: ['programs', 'waived fee', 'discount', 'priority'],

@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v108';
+const CACHE_NAME = 'kennelos-pro-shell-v109';
 
 const PRECACHE_URLS = [
   './',
@@ -45,6 +45,7 @@ const PRECACHE_URLS = [
   'assets/kelsSetupUI.js',
   'assets/kennelSettingsFields.js',
   'assets/priceListEditor.js',
+  'assets/qaListEditor.js',
   'assets/pickupTimesPanel.js',
   'assets/waitlistFeeStep.js',
   'assets/websiteCard.js',
@@ -198,6 +199,8 @@ const PRECACHE_URLS = [
   'data/guidedPeople.js',
   'data/guidedForm.js',
   'data/contactSearch.js',
+  'data/doNotSell.js',
+  'data/doNotSellRepo.js',
   'data/guidedLitter.js',
   'data/litterCheckin.js',
   'data/goHome.js',
@@ -256,6 +259,8 @@ const PRECACHE_URLS = [
   'data/waitlistFeeLinks.js',
   'data/waitlistFeePay.js',
   'data/waitlistForm.js',
+  'data/waitlistPolicies.js',
+  'data/programSuggest.js',
   'data/waitlistInbox.js',
   'data/waitlistEmails.js',
   'data/waitlistOutbox.js',
@@ -294,6 +299,8 @@ const PRECACHE_URLS = [
   'pages/contact.js',
   'pages/contacts.html',
   'pages/contacts.js',
+  'pages/do-not-sell.html',
+  'pages/do-not-sell.js',
   'pages/contract.html',
   'pages/contract.js',
   'pages/contracts.html',

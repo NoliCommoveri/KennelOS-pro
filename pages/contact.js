@@ -11,6 +11,8 @@ import { CONTACT_TYPE, DOG_STATUS, WAITLIST_STATUS, SALE_STATUS, REGISTRATION_TY
 import { esc, badge, badges, param, confirmModal, promptModal, selectModal } from '../assets/ui.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { sharedReferrals, referralThanksMessage } from '../data/referralShare.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { formModal } from '../assets/waitlistUI.js';
 
 const els = {
   title: document.getElementById('contact-title'),
@@ -34,6 +36,8 @@ const ctx = {
   // kept in step by waitlistEntryRepo (Waitlist Spec §0), so the form's dropdown
   // goes read-only rather than letting a hand edit fight the derived value.
   waitlistEntries: [],
+  // Her do-not-sell listing made from this contact (not taken off), or null.
+  listing: null,
   // Collapsible card state — tracks which cards are expanded (mirrors dog.js)
   expandedCards: new Set()
 };
@@ -121,6 +125,7 @@ function renderView() {
       ${row('Email', esc(c.email))}
       ${row('FB Profile', facebookHtml(c.facebook_profile))}
       ${row('Address', c.address ? esc(c.address).replace(/\n/g, '<br>') : '')}
+      ${row('Do not sell', ctx.listing ? `<span class="badge badge-red">On your do-not-sell list</span>${ctx.listing.reason ? ` ${esc(ctx.listing.reason)}` : ''} <a href="do-not-sell.html">See the list →</a>` : '')}
       ${row('Notes', c.notes ? esc(c.notes).replace(/\n/g, '<br>') : '')}
       ${row('Companion note', c.companion_note ? esc(c.companion_note).replace(/\n/g, '<br>') : '')}
     </dl>`;
@@ -288,9 +293,13 @@ async function renderHeaderActions() {
     : 'Permanently delete this contact.';
   els.headerActions.innerHTML = `
     ${editionFlags.accounts ? '<button class="btn btn-sm" id="btn-thanks" title="A thank-you note for using your referral link or code, or for recommending you">Send a thank-you</button>' : ''}
+    ${ctx.listing ? '<button class="btn btn-sm" id="btn-dns-off">Take off do-not-sell list…</button>' : '<button class="btn btn-sm" id="btn-dns">Move to do-not-sell list…</button>'}
     <button class="btn btn-sm" id="btn-archive">${c.is_archived ? 'Unarchive' : 'Archive'}</button>
     <button class="btn btn-danger btn-sm" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete</button>`;
   document.getElementById('btn-archive').onclick = toggleArchive;
+  const fail = (err) => showError(err.message || String(err));
+  document.getElementById('btn-dns')?.addEventListener('click', () => moveToDoNotSell().catch(fail));
+  document.getElementById('btn-dns-off')?.addEventListener('click', () => takeOffDoNotSell().catch(fail));
   if (!blockers.length) document.getElementById('btn-delete').onclick = doDelete;
   const thanks = document.getElementById('btn-thanks');
   if (thanks) thanks.onclick = () => sendThanks(c).catch((err) => showError(err.message || String(err)));
@@ -380,6 +389,34 @@ async function doSave() {
   }
 }
 
+// Her do-not-sell list (data/doNotSell.js): a contact moved there leaves the
+// Contacts list and is matched against new waitlist applications. Their record,
+// sales and history stay as they are.
+async function moveToDoNotSell() {
+  const c = ctx.original;
+  const ok = await formModal({
+    title: `Move ${c.name} to your do-not-sell list?`,
+    confirmLabel: 'Move to the list',
+    danger: true,
+    bodyHtml: `<p style="margin-top:0;">They leave your Contacts list (find them under Contacts › Do not sell), and any new application with the same name, email or phone is flagged before you review it. Nothing else about them changes.</p>
+      <div class="field field-wide"><label>Reason <span class="faint">(only you see it)</span></label><textarea id="dns-reason"></textarea></div>`,
+    onConfirm: async (o) => { await doNotSellRepo.addContact(c, { reason: o.querySelector('#dns-reason').value }); }
+  });
+  if (ok) await loadListing(), renderAll();
+}
+
+async function takeOffDoNotSell() {
+  const c = ctx.original;
+  if (!(await confirmModal({ title: `Take ${c.name} off your do-not-sell list?`, message: 'They show in your Contacts list again, and new applications from them are no longer flagged.', confirmLabel: 'Take them off' }))) return;
+  await doNotSellRepo.archive(ctx.listing.id);
+  await loadListing();
+  renderAll();
+}
+
+async function loadListing() {
+  ctx.listing = ctx.original ? (await doNotSellRepo.forContact(ctx.original.id)).find((l) => !l.is_archived) || null : null;
+}
+
 async function toggleArchive() {
   const c = ctx.original;
   const verb = c.is_archived ? 'Unarchive' : 'Archive';
@@ -404,7 +441,8 @@ async function doDelete() {
 function renderTitle() {
   if (ctx.mode === 'new') { els.title.textContent = 'New Contact'; return; }
   const c = ctx.original;
-  els.title.innerHTML = esc(c.name) + (c.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
+  els.title.innerHTML = esc(c.name) + (c.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '')
+    + (ctx.listing ? ` <span class="badge badge-red" title="${esc(ctx.listing.reason || 'On your do-not-sell list')}">Do not sell</span>` : '');
 }
 
 function renderAll() {
@@ -434,6 +472,7 @@ async function main() {
   if (!contact) { showError('Contact not found.'); return; }
   ctx.original = contact;
   ctx.waitlistEntries = await waitlistEntryRepo.getByContact(contact.id);
+  await loadListing();
   ctx.mode = 'view';
   renderAll();
 }

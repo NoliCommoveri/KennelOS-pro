@@ -30,7 +30,7 @@ import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
 import { isWebsiteAddress } from './websiteAddress.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
-import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE } from './waitlistForm.js';
+import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE, waitlistPolicies } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
 import { sharedReferrals, sharedTransport } from './referralShare.js';
 import { feePay, withClientRef } from './waitlistFeePay.js';
@@ -308,7 +308,7 @@ function formSection(kennel, config, formKey, dogs) {
     public_key: formKey.public_key,
     questions: formQuestions(config).map((q) => ({
       id: q.id, ...(q.key ? { key: q.key } : {}), label: q.label, type: q.type, required: Boolean(q.required),
-      help: q.help || '', options: [...(q.options || [])]
+      help: q.help || '', options: [...(q.options || [])], ...(q.link ? { link: q.link } : {})
     })),
     faq: formFaq(config).map((x) => ({ id: x.id, question: x.question, answer: x.answer })),
     breeds: kennelBreeds(kennel, dogs),
@@ -642,6 +642,12 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       breeds: kennelBreeds(kennel, dogs),
       // Her pass reasons and the message each shows the family (§16.5).
       pass_reasons: passReasons(config),
+      // Her waitlist policies (Waitlist Policies plan §3): every family page, the
+      // application and her website; absent when she has none. Never her editing notes.
+      ...(waitlistPolicies(config).length ? {
+        policies: waitlistPolicies(config).map((x) => ({ id: x.id, heading: x.heading, body: x.body, ...(x.topic ? { topic: x.topic } : {}) })),
+        policies_updated: orNull(config.policies_updated)
+      } : {}),
       color_matching: Boolean(config.color_matching),
       // "Message us on Facebook" (Spec §11): only while she has it switched on.
       ...(config.facebook_button && messengerLink(config.facebook_page) ? { messenger: messengerLink(config.facebook_page) } : {}),

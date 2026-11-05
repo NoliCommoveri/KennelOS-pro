@@ -31,6 +31,9 @@ import { pendingPickupRequests, requestText as pickupRequestText, ownPlaceAllowe
 import { standardLocation, timeRange } from '../data/pickupSlots.js';
 import { transportQuote, mapsLink } from '../data/transportFee.js';
 import { locationRuleOn } from '../data/waitlistForm.js';
+import { programSuggestions, suggestionWhy } from '../data/programSuggest.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { entryDoNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { PLACEMENT_METHODS } from '../data/vocab.js';
 import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf, boardingChargeText } from '../data/goHome.js';
 import { eventRepo } from '../data/eventRepo.js';
@@ -93,7 +96,8 @@ const LISTEN_STATUSES = ['active'];
 const ctx = {
   mode: 'view', tab: null, entry: null, draft: null, kennel: null, config: null,
   contact: null, contacts: [], programs: new Map(), kennelEntries: [], offers: [],
-  litters: [], pairings: [], dogsById: new Map(), breeds: [], form: [], kennelOffers: [], sales: []
+  litters: [], pairings: [], dogsById: new Map(), breeds: [], form: [], kennelOffers: [], sales: [],
+  doNotSell: []
 };
 
 const none = '<span class="faint">—</span>';
@@ -115,7 +119,7 @@ const programOptions = (current) => `<option value="">— none —</option>` + [
 // --- Loading ------------------------------------------------------------------
 
 async function loadKennelContext(kennelId) {
-  const [kennel, programs, kennelEntries, contacts, litters, pairings, dogs, kennelOffers, sales] = await Promise.all([
+  const [kennel, programs, kennelEntries, contacts, litters, pairings, dogs, kennelOffers, sales, doNotSell] = await Promise.all([
     kennelRepo.getById(kennelId),
     waitlistProgramRepo.getMapForKennel(kennelId),
     waitlistEntryRepo.getByKennel(kennelId),
@@ -124,9 +128,11 @@ async function loadKennelContext(kennelId) {
     pairingRepo.getAll({ includeArchived: true }),
     dogRepo.getAll({ includeArchived: true }),
     waitlistOfferRepo.getByKennel(kennelId),
-    saleRepo.getAll({ includeArchived: true })
+    saleRepo.getAll({ includeArchived: true }),
+    doNotSellRepo.getAll()
   ]);
   Object.assign(ctx, {
+    doNotSell,
     kennel, config: waitlistConfig(kennel), form: formQuestions(waitlistConfig(kennel)), programs, kennelEntries, contacts,
     litters: litters.filter((l) => l.kennel_id === kennelId),
     pairings: pairings.filter((p) => p.kennel_id === kennelId),
@@ -794,6 +800,79 @@ async function reportNextInLine() {
   await alertModal({ title: `${name} is next in line`, message: `${name} is next for ${list}. No offer has been made. Use "Offer pups…" on Interact when you're ready.` });
 }
 
+// --- Before she reviews: the do-not-sell list and a suggested program ------------
+
+// The do-not-sell warning for this family ('' when they don't match).
+const dnsMatches = (e) => entryDoNotSellMatches(e, ctx.doNotSell);
+
+function dnsWarningHtml(e) {
+  const m = dnsMatches(e);
+  if (!m.length) return '';
+  return `<section class="card dns-alert" role="alert">
+      <p style="margin:0;"><span class="badge badge-red">Do not sell</span> ${esc(doNotSellWarning(m))}</p>
+      <p class="field-hint" style="margin:6px 0 0;">Only a warning: nothing is declined for you. <a href="do-not-sell.html">Your do-not-sell list →</a></p>
+    </section>`;
+}
+
+// "Add to [program]?" as a Yes / No dropdown, one per program their answers suggest
+// (programSuggest.js): open applications and approved ones still waiting for the fee.
+const suggestions = (e) => programSuggestions(e, ctx.form, ctx.programs);
+
+function suggestionSelect(s, attr = 'data-suggest') {
+  return `<select ${attr}="${esc(s.program.id)}" aria-label="Add to ${esc(s.program.name)}?">
+      <option value="">Choose…</option><option value="yes">Yes</option><option value="no">No</option></select>`;
+}
+
+function suggestionsHtml(e) {
+  const list = suggestions(e);
+  if (!list.length) return '';
+  const current = ctx.programs.get(e.waitlist_program_id) || null;
+  return list.map((s) => `<section class="card program-suggest">
+      <label class="program-suggest-row"><span>${programIconHtml(s.program) ? `${programIconHtml(s.program)} ` : ''}<strong>Add to ${esc(s.program.name)}?</strong></span>
+        ${suggestionSelect(s)}</label>
+      <p class="field-hint" style="margin:4px 0 0;">${esc(suggestionWhy(s, current))}${e.status === 'approved' ? ' Asked until their fee is received.' : ''}</p>
+    </section>`).join('');
+}
+
+function wireSuggestions(root) {
+  root.querySelectorAll('[data-suggest]').forEach((sel) => sel.addEventListener('change', () => {
+    const answer = sel.value;
+    if (!answer) return;
+    const programId = sel.dataset.suggest;
+    sel.disabled = true;
+    (answer === 'yes' ? onAddSuggested(programId) : actions.declineSuggestedProgram(ctx.entry.id, programId).then(afterAction))
+      .catch((err) => { sel.disabled = false; sel.value = ''; showError(err.message || String(err)); });
+  }));
+}
+
+async function onAddSuggested(programId) {
+  const name = entryName(ctx.entry, ctx.contact);
+  const program = ctx.programs.get(programId);
+  const res = await actions.addSuggestedProgram(ctx.entry.id, programId);
+  await afterAction();
+  if (res.onList) {
+    await alertModal({ title: `${name} is on the list`, message: `${program.name} waives the application fee, so they're on the list from today.` });
+    await emailThem('on_list');
+    await reportNextInLine();
+  } else if (res.feeBefore !== res.feeAfter && ctx.entry.status === 'approved') {
+    await alertModal({ title: `Added to ${program.name}`, message: `Their fee is now ${fmtMoney(res.feeAfter)} (it was ${fmtMoney(res.feeBefore)}). If you already asked them for the fee, let them know.` });
+  }
+}
+
+async function onAddDoNotSell() {
+  const e = ctx.entry;
+  const name = entryName(e, ctx.contact);
+  await formModal({
+    title: `Add ${name} to your do-not-sell list?`,
+    confirmLabel: 'Add to the list',
+    danger: true,
+    bodyHtml: `<p style="margin-top:0;">New applications with the same name, email or phone are flagged so you know before you review them.${e.contact_id ? ' Their contact leaves your Contacts list while they\'re on it.' : ''}</p>
+      <div class="field field-wide"><label>Reason <span class="faint">(only you see it)</span></label><textarea id="dns-reason"></textarea></div>
+      <p class="field-hint">This doesn't change their application: close it or take them off the list yourself if you want to.</p>`,
+    onConfirm: async (o) => { await doNotSellRepo.addApplicant(e, { reason: o.querySelector('#dns-reason').value }); }
+  }) && await afterAction();
+}
+
 async function onApprove() {
   const e = ctx.entry;
   const matches = e.contact_id ? [] : contactMatches(e.application || {}, ctx.contacts);
@@ -806,6 +885,11 @@ async function onApprove() {
       </div>`;
   // Their request on the application to list privately (Spec §15.3): she answers it here.
   const full = entryName(e, ctx.contact);
+  const dns = dnsMatches(e);
+  const dnsLine = dns.length ? `<p class="dns-alert-line"><span class="badge badge-red">Do not sell</span> ${esc(doNotSellWarning(dns))}</p>` : '';
+  const suggested = suggestions(e);
+  const suggestLines = suggested.map((s) => `<div class="field field-wide"><label>Add to ${esc(s.program.name)}?</label>${suggestionSelect(s, 'data-ap-suggest')}
+      <span class="field-hint">${esc(suggestionWhy(s))} Left on Choose…, it's asked again until their fee is received.</span></div>`).join('');
   const asksPrivate = actions.hasPendingRequest(e, 'private_request');
   const privateAsk = asksPrivate ? `<div class="card" style="margin:10px 0 0;padding:10px 12px;">
       <strong>Applicant requests to not display their full name on the waitlist</strong>
@@ -816,8 +900,9 @@ async function onApprove() {
   await formModal({
     title: `Approve ${full}?`,
     confirmLabel: 'Approve',
-    bodyHtml: `<div class="form-grid">
+    bodyHtml: `${dnsLine}<div class="form-grid">
         <div class="field"><label>Approval date</label><input id="ap-date" type="date" value="${esc(todayYMD())}"></div>
+        ${suggestLines}
         <div class="field"><label>Program</label><select id="ap-program">${programOptions(e.waitlist_program_id)}</select></div>
         ${contactChoices}
       </div>${privateAsk}
@@ -826,6 +911,9 @@ async function onApprove() {
       const picked = o.querySelector('input[name="ap-contact"]:checked');
       const privateChoice = o.querySelector('input[name="ap-private"]:checked');
       if (asksPrivate && !privateChoice) throw new Error('Please approve or decline their request to not display their full name.');
+      for (const sel of o.querySelectorAll('[data-ap-suggest]')) {
+        if (sel.value === 'no') await actions.declineSuggestedProgram(e.id, sel.dataset.apSuggest);
+      }
       await actions.approve(e.id, {
         ...(asksPrivate ? { privateListing: privateChoice.value === 'yes' } : {}),
         date: o.querySelector('#ap-date').value || todayYMD(),
@@ -833,6 +921,16 @@ async function onApprove() {
         contactId: picked ? picked.value || null : null
       });
     }
+  }, (o) => {
+    // Yes fills in the program (and No clears it, if it was that one), so the
+    // Program dropdown always shows what Approve will do.
+    const prog = o.querySelector('#ap-program');
+    o.querySelectorAll('[data-ap-suggest]').forEach((sel) => sel.addEventListener('change', () => {
+      if (sel.value === 'yes') {
+        prog.value = sel.dataset.apSuggest;
+        o.querySelectorAll('[data-ap-suggest]').forEach((other) => { if (other !== sel && other.value === 'yes') other.value = ''; });
+      } else if (prog.value === sel.dataset.apSuggest) prog.value = e.waitlist_program_id || '';
+    }));
   }) && (await afterAction(), await emailThem(ctx.entry.status === 'active' ? 'on_list' : 'approved'), await reportNextInLine());
 }
 
@@ -1836,7 +1934,8 @@ const TABS = [
 function interactCount(e) {
   return pendingRequests(e).length
     + (ctx.offers.some((o) => o.outcome === 'open' && !o.is_archived) ? 1 : 0)
-    + (lostSale(e) ? 1 : 0);
+    + (lostSale(e) ? 1 : 0)
+    + suggestions(e).length;
 }
 
 // The tab a family's page opens on: Interact when something waits on her there,
@@ -1866,9 +1965,13 @@ function renderTabs() {
 // off the list for their status.
 function renderDetails() {
   const e = ctx.entry;
-  const leave = LEAVE_CHOICES[e.status] ? `<div class="pill-row" style="margin-top:12px;"><button class="btn btn-danger btn-sm" data-act="leave">${esc(leaveLabel(e))}</button></div>` : '';
+  const listed = dnsMatches(e).some((m) => m.strength === 'certain');
+  const dnsBtn = listed ? '' : '<button class="btn btn-sm" data-act="dns">Add to do-not-sell list…</button>';
+  const leave = LEAVE_CHOICES[e.status] || dnsBtn ? `<div class="pill-row" style="margin-top:12px;">${LEAVE_CHOICES[e.status] ? `<button class="btn btn-danger btn-sm" data-act="leave">${esc(leaveLabel(e))}</button>` : ''}${dnsBtn}</div>` : '';
   const pane = els.panes.details;
   pane.innerHTML = `
+    ${dnsWarningHtml(e)}
+    ${suggestionsHtml(e)}
     <section class="card">
       <h2 style="margin:0 0 6px;">${badge(WAITLIST_ENTRY_STATUS, e.status)}</h2>
       ${statusLines(e).map((l) => `<p style="margin:4px 0;">${l}</p>`).join('')}
@@ -1885,6 +1988,8 @@ function renderDetails() {
   pane.querySelectorAll('[data-credit-edit]').forEach((b) => b.addEventListener('click', () => onAddCredit(creditsOf(ctx.entry).find((c) => c.id === b.dataset.creditEdit)).catch(fail)));
   pane.querySelectorAll('[data-credit-remove]').forEach((b) => b.addEventListener('click', () => onRemoveCredit(b.dataset.creditRemove).catch(fail)));
   pane.querySelector('[data-act="leave"]')?.addEventListener('click', () => onLeave().catch((err) => showError(err.message || String(err))));
+  pane.querySelector('[data-act="dns"]')?.addEventListener('click', () => onAddDoNotSell().catch(fail));
+  wireSuggestions(pane);
   // "Ready now?" answered for them (they told her by phone or message).
   pane.querySelector('[data-ready="yes"]')?.addEventListener('click', () => actions.recordReadyAnswer(e.id, { answer: 'yes', by: 'breeder' })
     .then(afterAction).catch((err) => showError(err.message || String(err))));
@@ -1914,6 +2019,8 @@ function renderInteract() {
   const lost = lostLine(e);
   const pane = els.panes.interact;
   pane.innerHTML = `
+    ${dnsWarningHtml(e)}
+    ${['applied', 'approved'].includes(e.status) ? suggestionsHtml(e) : ''}
     ${requestsHtml(e)}
     ${lost ? `<section class="card"><p style="margin:0;">${lost}</p><p class="field-hint" style="margin-bottom:0;">Their place in line can come back for a pup lost through no fault of theirs.</p></section>` : ''}
     ${liveOffersHtml()}
@@ -1923,6 +2030,7 @@ function renderInteract() {
     </section>`;
   wireRequests(pane);
   wireOffers(pane);
+  wireSuggestions(pane);
   const handlers = { offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));

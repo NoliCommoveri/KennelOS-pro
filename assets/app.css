@@ -1311,3 +1311,24 @@ body:has(> .kels-fab) main { padding-bottom: 104px; }
 .settings-group > summary .field-hint { margin: 0; }
 .settings-group[open] > summary { border-bottom: 1px solid var(--border); }
 .settings-group > .form-grid { padding: 12px; }
+
+/* qaListEditor.js: her FAQ and her waitlist policies, rows of heading + text. */
+.qa-row { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-top: 10px; background: var(--surface); }
+.qa-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.qa-num { font-weight: 700; color: var(--text-muted); min-width: 1.6em; }
+.qa-head input.qa-a { flex: 1 1 220px; min-width: 0; }
+.qa-move { display: flex; gap: 4px; margin-left: auto; }
+.qa-row textarea { min-height: 90px; }
+#wl-policies-list .qa-row textarea { min-height: 170px; }
+.qa-note { margin: 6px 0 0; font-size: 13px; color: var(--text-muted); }
+.qa-note.changed { color: var(--warn, #8a5f17); font-weight: 600; }
+
+
+/* Do-not-sell warnings and "Add to [program]?" (waitlist family page, Approve dialog,
+   the Waitlist page's new applications). */
+.dns-alert { border-left: 4px solid var(--danger); background: var(--danger-soft); }
+.dns-alert-line { margin: 0 0 10px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: 13px; }
+.program-suggest { border-left: 4px solid var(--accent); background: var(--accent-soft); }
+.program-suggest-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 0; font-weight: normal; }
+.program-suggest-row select { min-width: 9em; flex: 0 0 auto; }
+.row-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }

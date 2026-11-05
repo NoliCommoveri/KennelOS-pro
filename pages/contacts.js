@@ -8,6 +8,8 @@ import { createListView } from '../assets/listView.js';
 import { badges, badge, esc, param } from '../assets/ui.js';
 import { CONTACT_TYPE, WAITLIST_STATUS } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { listedContactIds } from '../data/doNotSell.js';
 
 const mount = document.getElementById('contact-list');
 const group = param('group');
@@ -45,8 +47,9 @@ function renderTabs() {
   if (!editionFlags.waitlist) document.getElementById('people-hub-tabs')?.remove();
   const active = GROUPS[group] ? group : null;
   document.querySelectorAll('#contacts-group-tabs .seg-tab').forEach((tab) => {
-    const tabGroup = new URL(tab.href).searchParams.get('group');
-    const isActive = tabGroup === active;
+    const url = new URL(tab.href);
+    const tabGroup = url.searchParams.get('group');
+    const isActive = url.pathname.endsWith('/contacts.html') && tabGroup === active;
     tab.classList.toggle('active', isActive);
     if (isActive) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
   });
@@ -92,7 +95,13 @@ async function init() {
       { header: 'Email', sortable: true, sortFn: emailAsc, collapse: true, cell: (c) => c.email ? esc(c.email) : '<span class="faint">—</span>' }
     ],
     onRowClick: (c) => { location.href = `contact.html?id=${encodeURIComponent(c.id)}`; },
-    load: (o) => contactRepo.getAll(o),
+    // A contact on her do-not-sell list lives on that list instead (do-not-sell.html),
+    // until she takes them off it.
+    load: async (o) => {
+      const [all, listings] = await Promise.all([contactRepo.getAll(o), doNotSellRepo.getAll()]);
+      const listed = listedContactIds(listings);
+      return all.filter((c) => !listed.has(c.id));
+    },
     emptyText: GROUPS[group] ? `No ${GROUPS[group].title.toLowerCase()} yet.` : 'No contacts yet. Click “+ Add Contact” to create the first one.'
   });
   // The bucket row sits under the search bar and filters, with the list it narrows,

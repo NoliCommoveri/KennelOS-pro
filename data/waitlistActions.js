@@ -141,6 +141,41 @@ export async function approve(entryId, { date = todayYMD(), contactId = null, pr
   return waitlistEntryRepo.update(entryId, changes);
 }
 
+// "Add to [program]?" answered Yes (programSuggest.js): while the application is
+// open it just takes the program; once approved and waiting for its fee, the fee
+// follows the program (feeForEntry), and a program that waives it puts them on the
+// list today, as approving into it would. → { entry, feeBefore, feeAfter, onList }.
+export async function addSuggestedProgram(entryId, programId, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  requireStatus(entry, ['applied', 'approved'], 'add a program to');
+  const { config, program } = await feeContext(entry, programId);
+  if (!program || program.is_archived) throw new Error('That program is no longer one of yours.');
+  const changes = { waitlist_program_id: program.id };
+  const feeBefore = entry.fee_amount ?? null;
+  let feeAfter = feeBefore;
+  let onList = false;
+  if (entry.status === 'approved') {
+    feeAfter = feeForEntry(config, program);
+    changes.fee_amount = feeAfter;
+    if (feeAfter === 0) {
+      Object.assign(changes, { status: 'active', fee_due_date: null, fee_received_date: date, fee_received_at: nowISO(), fee_payment_method: 'Waived' });
+      onList = true;
+    } else if (feeBefore === 0 || entry.fee_due_date == null) {
+      changes.fee_due_date = feeDueDate(entry.approved_date || date, config);
+    }
+  }
+  const saved = await waitlistEntryRepo.update(entryId, changes);
+  return { entry: saved, feeBefore, feeAfter, onList };
+}
+
+// "Add to [program]?" answered No: not asked again on this application.
+export async function declineSuggestedProgram(entryId, programId) {
+  const entry = await load(entryId);
+  const declined = new Set(entry.program_suggestions_declined || []);
+  declined.add(programId);
+  return waitlistEntryRepo.update(entryId, { program_suggestions_declined: [...declined] });
+}
+
 export async function decline(entryId, { date = todayYMD() } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['applied'], 'decline');

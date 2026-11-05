@@ -74,7 +74,12 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   // Backing out (Family Requests plan §7; backOut.js):
   back_out_reasons: null, // [{ id, label }]; null = BACK_OUT_REASONS_DEFAULT ("Something else" always added)
   back_out_policy: [], // [{ reason_id, from_weeks?, until_weeks?, outcome: 'keep' | 'move' }]; first row that fits suggests
-  back_out_policy_text: '' // what families read before sending; blank = BACK_OUT_POLICY_TEXT_DEFAULT
+  back_out_policy_text: '', // what families read before sending; blank = BACK_OUT_POLICY_TEXT_DEFAULT
+  // Her waitlist policies (Waitlist Policies plan; waitlistForm.waitlistPolicies): an
+  // ordered [{ id, heading, body, topic?, basis? }], shown on every family page and her
+  // website; while any exist, the online application asks "I've read the policies".
+  policies: [],
+  policies_updated: null // YYYY-MM-DD she last changed them; families who applied before see "updated"
 });
 
 // The default message above the extras on a family's status page (the owner's wording).

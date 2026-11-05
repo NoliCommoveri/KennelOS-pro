@@ -111,7 +111,7 @@ function cardHtml(a) {
       ${a.account_type ? badge(ACCOUNT_TYPE, a.account_type) : ''}
     </div>
     ${login ? `<div class="acct-section"><div class="acct-section-title">Your login</div>${login}</div>` : ''}
-    ${referral || a.referral_instructions || sharedTransport([a]).length ? `<div class="acct-section"><div class="acct-section-title">${a.account_type === 'transport' ? 'For families' : 'Referral — to share'}${sharedReferrals([a]).length || sharedTransport([a]).length ? ` <span class="badge badge-green">${a.account_type === 'transport' ? 'Shown to families with a picked pup' : 'Shown to families'}</span>` : ''}${websiteLinkOffered() && websiteProducts([a]).length ? ' <span class="badge badge-blue">Shown on website</span>' : ''}</div>${referral}
+    ${referral || a.referral_instructions || sharedTransport([a]).length ? `<div class="acct-section"><div class="acct-section-title">${a.account_type === 'transport' ? 'For families' : 'Referral — to share'}${sharedReferrals([a]).length || sharedTransport([a]).length ? ` <span class="badge badge-green">${a.account_type === 'transport' ? 'Shown to families with a picked pup' : 'Shown to families'}</span>` : ''}${websiteLinkOffered() && websiteProducts([a], { transport: true }).length ? ` <span class="badge badge-blue">${a.account_type === 'transport' ? 'On your website\'s Getting home page' : 'Shown on website'}</span>` : ''}</div>${referral}
       ${a.referral_instructions ? `<div class="acct-instructions">${esc(a.referral_instructions)}</div>` : ''}</div>` : ''}
     ${a.notes ? `<div class="acct-section"><div class="acct-instructions">${esc(a.notes)}</div></div>` : ''}
     ${payHtml(a)}
@@ -415,7 +415,7 @@ function openForm(existing = null) {
       <div class="field field-wide"><label class="check-inline"><input id="af-ref-share" type="checkbox"${a.share_with_families ? ' checked' : ''}> Share with families</label>
         <span class="field-hint" id="af-share-hint">${shareHint(a.account_type)}</span></div>
       ${websiteLinkOffered() ? `<div class="field field-wide"><label class="check-inline"><input id="af-ref-website" type="checkbox"${a.show_on_website ? ' checked' : ''}> Show on website</label>
-        <span class="field-hint">On your KennelPort website's Recommended products page, from your next Update website (Settings): its name, referral link, code, and the instructions when they're short. The picture and a home-page badge you add in KennelPort. Never your login. Not for transport accounts.</span></div>` : ''}
+        <span class="field-hint">On your KennelPort website, from your next Update website (Settings): its name, referral link (else its website), code, and the instructions when they're short. Goes when it has a referral link, code or instructions, and for a transport account always. Others show on Recommended products; transport ones as a badge on your Getting your pup home page. The picture and where its badge shows you choose in KennelPort. Never your login.</span></div>` : ''}
     </div>
     <div id="af-pay-section"${a.account_type === 'payment_service' ? '' : ' hidden'}>
     <h3 style="font-size:15px; margin:14px 0 4px;">Payment link — if buyers pay you through it</h3>

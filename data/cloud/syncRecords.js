@@ -37,7 +37,8 @@ export const SYNC_TABLES = REGISTRY_TABLES;
 export const APPLY_ORDER = Object.freeze([
   'kennels', 'contacts', 'accounts', 'files', 'dogs', 'pairings', 'litters', 'sales',
   'stud_services', 'contracts', 'documents', 'events', 'expenses',
-  'breed_feeding_schedules', 'waitlist_programs', 'waitlist_entries', 'waitlist_offers'
+  'breed_feeding_schedules', 'waitlist_programs', 'waitlist_entries', 'waitlist_offers',
+  'do_not_sell'
 ]);
 
 const enc = new TextEncoder();

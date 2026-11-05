@@ -57,6 +57,8 @@ export const PRO_ONLY_PAGES = [
   'waitlist-form.html',
   // ...and publishing the list: online, or as text to copy (Spec §15.3)
   'waitlist-publish.html',
+  // Her do-not-sell list (a tab of Contacts; matched against waitlist applications)
+  'do-not-sell.html',
 ];
 
 // Standalone Pro files that live outside pages/ (no nav entry) — also excluded from
