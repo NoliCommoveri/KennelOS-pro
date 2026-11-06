@@ -73,6 +73,11 @@ export const DOG_KEYS = ['id', 'call_name', 'registered_name', 'sex', 'date_of_b
 // lists the 'registry' section: an older one refuses a field it doesn't know.
 const withRegistry = (keys, on) => (on ? [...keys, 'registry'] : keys);
 const registryOf = (d, on) => (on ? { registry: line(d.registry, 30) } : {});
+// `disposition` (a puppy-status dog's: keeping, available, placed, health_hold,
+// undecided) goes only to a Worker whose answer lists the 'disposition' section. The
+// website doesn't show it: its owner's rule picks which puppies go on the site by it.
+const withDisposition = (keys, on) => (on ? [...keys, 'disposition'] : keys);
+const dispositionOf = (d, on) => (on && d.status === 'puppy' ? { disposition: d.disposition || 'undecided' } : {});
 // `heat_id` (on a pairing and a litter: the heat it uses, so the website litter
 // made from that heat carries on as the pairing's, with its photos, wording and
 // address) goes only to a Worker whose answer lists the 'heat_id' section.
@@ -169,7 +174,7 @@ function partnerKennelEntries(entries, kennelsById) {
   });
 }
 
-function dogEntry(dog, titles, tests, registry = false, coOwned = null) {
+function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposition = false) {
   const done = (tests.get(dog.id) || []).slice(0, SITE_MAX.health);
   return assertOnlyKeys({
     id: dog.id,
@@ -193,8 +198,9 @@ function dogEntry(dog, titles, tests, registry = false, coOwned = null) {
       normal: t.outcome === 'Normal' ? true : t.outcome === 'Abnormal' ? false : null,
       date: ymd(t.date)
     }, HEALTH_KEYS, 'health')),
-    ...(coOwned ? coOwnership(dog, coOwned) : {})
-  }, withCoOwned(withRegistry(DOG_KEYS, registry), Boolean(coOwned)), 'dog');
+    ...(coOwned ? coOwnership(dog, coOwned) : {}),
+    ...dispositionOf(dog, disposition)
+  }, withDisposition(withCoOwned(withRegistry(DOG_KEYS, registry), Boolean(coOwned)), disposition), 'dog');
 }
 
 // The dogs she shows: her own kennel's, marked, with a status the website has.
@@ -609,7 +615,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   const coOwned = Array.isArray(sections) && sections.includes('partner_kennels') ? { contactsById: new Map(contacts.map((c) => [c.id, c])), kennelsById } : null;
 
   const shown = {
-    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry, coOwned)),
+    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry, coOwned, Array.isArray(sections) && sections.includes('disposition'))),
     litters: websiteLitters(kennel, litters, pairingsById).map((l) => litterEntry(l, ctx)),
     pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById, heatOf)),
     heats: websiteHeats(kennel, { dogs, events, pairings, today }).map((h) => assertOnlyKeys({ ...h, dam_name: dogName(dogsById.get(h.dam_id)) }, HEAT_KEYS, 'heat'))
