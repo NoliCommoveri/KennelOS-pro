@@ -46,8 +46,10 @@ import {
   eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
-  PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces
+  PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
+  sideSaleOf, pupClaims
 } from '../data/waitlistRules.js';
+import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq
 } from '../data/waitlistForm.js';
@@ -1995,6 +1997,89 @@ function renderDetails() {
     .then(afterAction).catch((err) => showError(err.message || String(err))));
 }
 
+// --- Side sale (Side Sale Spec) ----------------------------------------------------
+// Their pending side sale: a sale she made outside the turn order. To them it looks
+// like a turn pick; here it says what it is, with its deposit and cancel.
+function sideSaleHtml(e) {
+  const sale = sideSaleOf(e, ctx.sales);
+  if (!sale) return '';
+  const today = todayYMD();
+  const overdue = sale.side_deposit_due && sale.side_deposit_due < today;
+  const claims = pupClaims(sale.dog_id, { sales: ctx.sales, offers: ctx.kennelOffers });
+  const dog = ctx.dogsById.get(sale.dog_id);
+  const litter = dog ? ctx.litters.find((l) => l.id === dog.litter_id) : null;
+  const send = canPickToSend();
+  return `<section class="card"><h2 style="margin-top:0;">Side sale</h2>
+    <div><strong>${litter ? litterLink(litter.id) : none}</strong> · <span class="badge badge-purple">Picked ${esc(dogName(sale.dog_id))}</span> <span class="faint">deposit pending · <a href="sale.html?id=${encodeURIComponent(sale.id)}">sale</a></span>${sale.side_request_sent_date ? ` <span class="badge badge-blue">Deposit request sent ${esc(fmtDate(sale.side_request_sent_date))}</span>` : ''}${claims.length > 1 ? ' <span class="badge badge-red">Two sales on this pup</span>' : ''}</div>
+    <div class="faint">Recorded ${esc(fmtDate(sale.sale_date))} · deposit due ${esc(fmtDate(sale.side_deposit_due))}${overdue ? ' <span class="badge badge-red">Deposit overdue</span>' : ''}${sale.side_holds_pup ? ` · ${esc(dogName(sale.dog_id))} is held for them` : ` · ${esc(dogName(sale.dog_id))} is still offered to other families until the deposit`}</div>
+    <div class="pill-row" style="margin-top:6px;">
+      ${send ? `<button class="btn btn-primary btn-sm" data-side="send">${sale.side_request_sent_date ? 'Review sale & send again…' : 'Review sale & send…'}</button>` : ''}
+      <button class="btn btn-sm${send ? '' : ' btn-primary'}" data-side="deposit">Deposit received…</button>
+      <button class="btn btn-sm" data-side="cancel">Cancel side sale…</button>
+    </div>
+    <p class="field-hint" style="margin-bottom:0;">Outside the turn order: no turn moves on for it and it never counts as a pass. Their status page shows it like a pick on their turn.</p>
+  </section>`;
+}
+
+// The shape openPickToSend reads, for a side sale.
+const sideSaleOffer = (sale) => ({ side: true, id: sale.id, sale_id: sale.id, respond_by_date: sale.side_deposit_due, deposit_request_sent_date: sale.side_request_sent_date || null });
+
+function wireSideSale(root) {
+  const fail = (err) => showError(err.message || String(err));
+  const sale = sideSaleOf(ctx.entry, ctx.sales);
+  if (!sale) return;
+  const name = entryName(ctx.entry, ctx.contact);
+  const pupName = dogName(sale.dog_id);
+  root.querySelector('[data-side="send"]')?.addEventListener('click', async () => {
+    try {
+      const { openPickToSend } = await import('../assets/pickToSend.js');
+      const dog = ctx.dogsById.get(sale.dog_id);
+      const litter = dog ? ctx.litters.find((l) => l.id === dog.litter_id) : null;
+      if (await openPickToSend({ offer: sideSaleOffer(sale), entry: ctx.entry, contact: ctx.contact, litterLabel: litter ? litterLabel(litter) : '', paymentText: ctx.config.payment_instructions || '', kennelName: ctx.kennel?.kennel_name || '' })) await afterAction();
+    } catch (err) { fail(err); }
+  });
+  root.querySelector('[data-side="deposit"]')?.addEventListener('click', async () => {
+    try {
+      const res = await sideDepositDialog({ sale, name, pupName });
+      if (!res) return;
+      await afterAction();
+      await alertModal({ title: `${name} is placed`, message: [`Deposit recorded for ${pupName}.`, ...offerChangeLines(res)].join('\n\n') });
+    } catch (err) { fail(err); }
+  });
+  root.querySelector('[data-side="cancel"]')?.addEventListener('click', async () => {
+    try {
+      const res = await cancelSideSaleDialog({ sale, name, pupName });
+      if (!res) return;
+      await afterAction();
+      await alertModal({ title: 'Side sale cancelled', message: `${name} keeps their place on the list.${res.restored ? ` ${pupName} is back to ${res.restored.replace('_', ' ')}.` : ''} Let them know.` });
+    } catch (err) { fail(err); }
+  });
+}
+
+async function onSideSale() {
+  const res = await sideSaleDialog({ kennelId: ctx.entry.kennel_id, entryId: ctx.entry.id });
+  if (!res) return;
+  await afterAction();
+  const name = entryName(ctx.entry, ctx.contact);
+  if (res.depositDone) {
+    await alertModal({ title: `${name} is placed`, message: `Their deposit carried over from the pup they lost is recorded as paid for ${res.dog.call_name}.` });
+    return;
+  }
+  const held = `${res.dog.call_name} is ${res.sale.side_holds_pup ? 'held for' : 'set aside for'} ${name} until ${fmtDate(res.sale.side_deposit_due)}${res.sale.side_holds_pup ? '' : ' (still offered to other families until the deposit)'}.`;
+  if (canPickToSend()) {
+    if (await confirmModal({ title: 'Side sale recorded', message: `${held}\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' })) {
+      const fresh = await saleRepo.getById(res.sale.id);
+      const { openPickToSend } = await import('../assets/pickToSend.js');
+      const litter = ctx.litters.find((l) => l.id === res.dog.litter_id);
+      if (await openPickToSend({ offer: sideSaleOffer(fresh), entry: ctx.entry, contact: ctx.contact, litterLabel: litter ? litterLabel(litter) : '', paymentText: ctx.config.payment_instructions || '', kennelName: ctx.kennel?.kennel_name || '' })) await afterAction();
+    }
+    return;
+  }
+  if (await confirmModal({ title: 'Side sale recorded', message: `${held} Send them the deposit details, and record "Deposit received" when it arrives.\n\nOpen the sale?`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
+    location.href = `sale.html?id=${encodeURIComponent(res.sale.id)}`;
+  }
+}
+
 // Interact: what waits on her first, then what she can start for their status.
 function interactButtons(e) {
   const b = (act, label, cls = '') => `<button class="btn ${cls}" data-act="${act}">${esc(label)}</button>`;
@@ -2003,7 +2088,10 @@ function interactButtons(e) {
   switch (e.status) {
     case 'applied': main = b('approve', 'Approve…', 'btn-primary'); break;
     case 'approved': main = b('fee', e.fee_amount == null ? 'Add to the list…' : 'Fee received…', 'btn-primary'); break;
-    case 'active': main = b('offer', 'Offer pups…', lost ? '' : 'btn-primary') + b('move', 'Move place…') + (canUndoFeeReceived(e, ctx.offers, todayYMD()) ? b('undofee', 'Undo fee received…') : ''); break;
+    case 'active': main = b('offer', 'Offer pups…', lost ? '' : 'btn-primary')
+      // A side sale (Side Sale Spec): outside the turn order; not while they hold the turn or already buy one.
+      + (!ctx.offers.some((o) => o.outcome === 'open' && !o.is_archived) && !sideSaleOf(e, ctx.sales) ? b('side', 'Record a side sale…') : '')
+      + b('move', 'Move place…') + (canUndoFeeReceived(e, ctx.offers, todayYMD()) ? b('undofee', 'Undo fee received…') : ''); break;
     case 'declined': main = (canUndoDecline(e, todayYMD()) ? b('undo', 'Undo decline', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     case 'expired': main = (canUndoExpire(e, todayYMD()) ? b('undo', 'Reopen application', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     case 'removed': main = (canUndoRemoval(e, todayYMD()) ? b('undo', 'Undo removal', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
@@ -2023,6 +2111,7 @@ function renderInteract() {
     ${['applied', 'approved'].includes(e.status) ? suggestionsHtml(e) : ''}
     ${requestsHtml(e)}
     ${lost ? `<section class="card"><p style="margin:0;">${lost}</p><p class="field-hint" style="margin-bottom:0;">Their place in line can come back for a pup lost through no fault of theirs.</p></section>` : ''}
+    ${sideSaleHtml(e)}
     ${liveOffersHtml()}
     <section class="card">
       <h2 style="margin-top:0;">Do something</h2>
@@ -2030,8 +2119,9 @@ function renderInteract() {
     </section>`;
   wireRequests(pane);
   wireOffers(pane);
+  wireSideSale(pane);
   wireSuggestions(pane);
-  const handlers = { offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate };
+  const handlers = { side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });

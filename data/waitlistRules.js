@@ -487,11 +487,94 @@ const UNOFFERED_DISPOSITIONS = ['undecided', 'keeping', 'placed', 'health_hold']
 // other non-archived sale (open OR delivered) means it's spoken for.
 // Only an `available` disposition is offered: the breeder marks a pup Available
 // once she's decided to sell it, and Kels's Tidy up asks about pups left unset.
+// A side sale (Side Sale Spec) still waiting on its deposit takes the pup only when
+// it holds it (`side_holds_pup`: she pulled the pup from Undecided / Keeping /
+// Health hold for that family); otherwise the pup stays offered until the deposit.
 export function isPupAvailable(dog, sales = []) {
   if (!dog || dog.is_archived) return false;
   if (GONE_DOG_STATUSES.includes(dog.status)) return false;
   if (UNOFFERED_DISPOSITIONS.includes(dog.disposition || 'undecided')) return false;
-  return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status));
+  return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status)
+    && !(isSideSalePending(s) && !s.side_holds_pup));
+}
+
+// --- Side sales (Side Sale Spec) -------------------------------------------------
+// She sells a pup to a family on her list outside the turn order. A deposit-pending
+// Sale carrying `side_entry_id`; never a waitlist_offers row, so no turn rule sees it.
+
+// A side sale still waiting on its deposit.
+export const isSideSalePending = (s) => Boolean(s) && Boolean(s.side_entry_id) && !s.is_archived && s.status === 'deposit_pending';
+
+// This family's pending side sale, or null.
+export function sideSaleOf(entry, sales = []) {
+  return (entry && sales.find((s) => isSideSalePending(s) && s.side_entry_id === entry.id)) || null;
+}
+
+// Every live claim on a pup: its live sales (side or not) and open turn picks whose
+// sale isn't among them. Two or more is a conflict she's warned about.
+// → [{ kind: 'sale' | 'side' | 'pick', sale_id?, entry_id?, offer_id? }]
+export function pupClaims(dogId, { sales = [], offers = [] } = {}) {
+  const live = sales.filter((s) => s.dog_id === dogId && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status));
+  const ids = new Set(live.map((s) => s.id));
+  const pickOf = (saleId) => offers.find((o) => !o.is_archived && o.outcome === 'open' && o.sale_id === saleId) || null;
+  return [
+    ...live.map((s) => {
+      const pick = pickOf(s.id);
+      if (isSideSalePending(s)) return { kind: 'side', sale_id: s.id, entry_id: s.side_entry_id };
+      return pick ? { kind: 'pick', sale_id: s.id, entry_id: pick.entry_id, offer_id: pick.id } : { kind: 'sale', sale_id: s.id, entry_id: s.side_entry_id || null };
+    }),
+    ...offers.filter((o) => !o.is_archived && o.outcome === 'open' && o.chosen_dog_id === dogId && !(o.sale_id && ids.has(o.sale_id)))
+      .map((o) => ({ kind: 'pick', entry_id: o.entry_id, offer_id: o.id }))
+  ];
+}
+
+// The pups a side sale can't be made on: placed, gone (deceased, gone home, an
+// outside dog now) or archived. Anything else she may sell, told what doesn't fit.
+export function sideSaleBlocker(dog) {
+  if (!dog) return 'That pup no longer exists.';
+  if (dog.is_archived) return `${dog.call_name} is archived.`;
+  if (dog.status === 'deceased') return `${dog.call_name} is recorded as deceased.`;
+  if (dog.status === 'pet_home') return `${dog.call_name} has gone home.`;
+  if (dog.status === 'external_reference') return `${dog.call_name} is an outside dog now.`;
+  if ((dog.disposition || 'undecided') === 'placed') return `${dog.call_name} is already placed.`;
+  return '';
+}
+
+// What doesn't fit a side sale of `dog` to `entry`, for her to read before she
+// records it (each is allowed): the pup's disposition, the family's answers that
+// rule it out (sex, breed, purposes, colors; via pupMatchesPrefs with the others
+// opened), their pause or readiness hold, listen-only, and other live claims on it.
+// → { disposition: null | 'undecided' | 'keeping' | 'health_hold', fields: [],
+//      paused: bool, listening: bool, claims: [...] }
+export function sideSaleIssues(entry, dog, litter, { sales = [], offers = [], today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
+  const disp = dog.disposition || 'undecided';
+  const fields = WHELP_NOTE_FIELDS.filter((f) => {
+    const only = Object.assign({ ...entry }, ...WHELP_NOTE_FIELDS.filter((g) => g !== f).map((g) => g.open));
+    return !pupMatchesPrefs(only, dog, config);
+  }).map((f) => f.why);
+  return {
+    disposition: disp === 'available' ? null : disp,
+    fields,
+    paused: isPaused(entry, today, config),
+    listening: litter ? !isListeningFor(entry, litter) : false,
+    claims: pupClaims(dog.id, { sales, offers })
+  };
+}
+
+// The answers to write so a family's answers fit `dog` sold at `registration`
+// ("Also update their answers to match"): only the fields that rule it out.
+// sex → the pup's sex; breed → the pup's breed; purposes → theirs plus the first
+// purpose that fits the registration; colors → none (any).
+export function answersToFit(entry, dog, registration, fields = []) {
+  const out = {};
+  if (fields.includes('sex') && (dog.sex === 'male' || dog.sex === 'female')) out.pref_sex = dog.sex;
+  if (fields.includes('breed')) out.pref_breed = dog.breed || '';
+  if (fields.includes('purposes')) {
+    const fit = PLACEMENT_PURPOSE.find((p) => p.registrations.includes(registration || dog.intended_registration));
+    out.pref_purposes = fit ? [...new Set([...cleanPurposes(entry.pref_purposes), fit.value])] : [];
+  }
+  if (fields.includes('colors')) out.pref_colors = [];
+  return out;
 }
 
 // --- A lost pup (Spec §16.11) ----------------------------------------------------
@@ -863,6 +946,8 @@ export function listenChangeKind(entry, next) {
 export function eligiblePupsFor(entry, litter, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
   if (!isOnList(entry) || entry.kennel_id !== litter.kennel_id) return [];
   if (isPaused(entry, today, config)) return [];
+  // A family buying a pup through a side sale isn't offered turns meanwhile.
+  if (sideSaleOf(entry, sales)) return [];
   if (!isListeningFor(entry, litter)) return [];
   return pups.filter((d) => d.litter_id === litter.id && isPupAvailable(d, sales) && pupMatchesPrefs(entry, d, config));
 }
@@ -1538,8 +1623,13 @@ export function nextTurnPrepassNote(entry, ls, { offers = [], config = WAITLIST_
   return `They said "Not this litter" to ${prepassed.length === 1 ? names : `all of these (${names})`}. "Offer to them" records their turn as a pass${counts ? ` (pass ${used} of ${max})` : ''} and offers the next family.${last}`;
 }
 
-export function describeOfferChanges({ next = null, voided = [], offered = [], waiting = [], auto_passed = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {
+export function describeOfferChanges({ next = null, voided = [], offered = [], waiting = [], auto_passed = [], resolved = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {
   const lines = [];
+  // A second claim on the same pup, ended by this deposit (Side Sale Spec §5).
+  for (const r of resolved) {
+    if (r.kind === 'side_cancelled') lines.push(`${nameOf(r.entry_id)}'s side sale on the same pup was cancelled. They keep their place; let them know.${r.restored ? ' The pup was put back to what it was before.' : ''}`);
+    else if (r.kind === 'pick_released') lines.push(`${nameOf(r.entry_id)} had picked the same pup: their pick was let go. ${r.voided ? 'No pup was left for them, so their turn ended (not a pass).' : 'Their turn stays open on the pups left.'} Let them know.`);
+  }
   // Families whose turn was passed at once ("Not this litter" to all of it, §16.2):
   // always said, so a pass never happens out of her sight.
   for (const a of [...auto_passed, ...((next && next.auto_passed) || [])]) {

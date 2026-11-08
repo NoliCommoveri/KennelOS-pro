@@ -290,7 +290,14 @@ class Review {
   // Run a nudge action as Today does: its message, then its emails.
   async runNudgeAction(action) {
     try {
-      const report = await action.run();
+      let report = await action.run();
+      // Open picks goes through the picks preview (its emails are offered there).
+      if (report?.openPicks) {
+        const [{ openPicksFromCheckin }, { litterRepo }] = await Promise.all([import('./waitlistPicksPanel.js'), import('../data/litterRepo.js')]);
+        const litter = await litterRepo.getById(report.openPicks);
+        report = litter ? await openPicksFromCheckin(litter) : null;
+        if (!report) { await this.chat.say('Okay, picks aren\'t open.'); return; }
+      }
       if (report?.message) await this.chat.say(esc(report.message).replace(/\n\n/g, '<br><br>'));
       else await this.chat.say('Done.');
       if (report?.emails?.length) await this.emails(report.emails);

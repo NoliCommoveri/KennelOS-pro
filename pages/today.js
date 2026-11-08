@@ -198,7 +198,14 @@ async function renderNudges() {
           const action = nudge.actions[Number(btn.dataset.nudgeAction)];
           // An action that can't be undone asks first (Lite's permanent departure).
           if (action.confirm && !(await confirmModal(action.ask))) return;
-          const report = await action.run();
+          let report = await action.run();
+          // ...or `openPicks`: a litter id to open picks on through the picks preview
+          // (waitlist, Pro only); null when she closes it without opening.
+          if (report && report.openPicks) {
+            const [{ openPicksFromCheckin }, { litterRepo }] = await Promise.all([import('../assets/waitlistPicksPanel.js'), import('../data/litterRepo.js')]);
+            const litter = await litterRepo.getById(report.openPicks);
+            report = litter ? await openPicksFromCheckin(litter) : null;
+          }
           renderNudges();
           if (report && report.message) await alertModal(report);
           // ...or `compose`: a note for her to send herself (the follow-up a week after

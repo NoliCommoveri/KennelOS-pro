@@ -51,7 +51,7 @@ import {
   respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
-  splitPrepassed, prepassFor, lostSaleFamily
+  splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit
 } from './waitlistRules.js';
 
 const nowISO = () => new Date().toISOString();
@@ -864,11 +864,164 @@ export async function confirmDeposit(offerId, { date = todayYMD(), amount, paidD
   result.sale = await saleRepo.update(sale.id, saleChanges);
   await dogRepo.update(offer.chosen_dog_id, { disposition: 'placed' });
   result.offer = await waitlistOfferRepo.update(offerId, { outcome: 'accepted', outcome_date: date, counts_as_pass: false });
+  // Another family's side sale on the same pup ends: they keep their place (Side Sale Spec §5).
+  result.resolved = await resolveOtherClaims(offer.chosen_dog_id, { keepSaleId: sale.id, date, who: 'another family\'s deposit arrived first' });
   await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, carried_payment: null });
   const released = await releaseOpenOffers(entry.id, { date, why: 'the family accepted a pup', exceptOfferId: offerId, moveOn: false });
   // The other litters of this same turn closing is just the turn ending: not news.
   result.voided = released.voided.filter((o) => turnIdOf(o) !== turnIdOf(offer));
   return finishTurn(result, offer.kennel_id, date, 'accepted');
+}
+
+// --- Side sales (Side Sale Spec) ---------------------------------------------------
+// She sells a pup to a family on her list outside the turn order. A deposit-pending
+// Sale with `side_entry_id`: never a turn, never a pass, and no turn moves on for it.
+// To the family it looks exactly like a turn pick (waitlistProjection).
+
+// Record a side sale. `dogId`: the pup (any but placed, gone or archived);
+// `registration`: what she's selling at (required); `depositDue`: YYYY-MM-DD, default
+// her days to pick and pay; `updateAnswers`: write their answers to fit the pup;
+// `updateRegistration`: set the pup's intended registration to `registration`.
+// A pup that wasn't Available becomes Available and is held for this family until
+// the deposit or a cancel (then it goes back). Returns { sale, issues, depositDone }
+// (a carried-over deposit from a pup they lost places them at once).
+export async function recordSideSale(entryId, { dogId, registration, depositDue = null, updateAnswers = false, updateRegistration = false, date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  if (entry.status !== 'active') throw new Error('Only families on the list can have a side sale.');
+  if (!entry.contact_id) throw new Error('This family has no contact record.');
+  if (!registration) throw new Error('Pick the registration you\'re selling at.');
+  const dog = await dogRepo.getById(dogId);
+  const blocked = sideSaleBlocker(dog);
+  if (blocked) throw new Error(blocked);
+  if (!dog.litter_id) throw new Error(`${dog.call_name} isn't in a litter.`);
+  const c = await kennelContext(entry.kennel_id);
+  if (openTurns(c.offers, c.kennel.id).some((t) => t.entry_id === entry.id)) {
+    throw new Error('They hold the turn now. Use "Picked a pup…" on their turn instead.');
+  }
+  const pending = sideSaleOf(entry, c.sales);
+  if (pending) throw new Error('They already have a side sale waiting on its deposit. Cancel it or record that deposit first.');
+  const litter = c.litters.find((l) => l.id === dog.litter_id) || await litterRepo.getById(dog.litter_id);
+  const issues = sideSaleIssues(entry, dog, litter, { sales: c.sales, offers: c.offers, today: date, config: c.config });
+  const program = c.programsById.get(entry.waitlist_program_id) || null;
+  const due = depositDue || respondByDate(date, c.config, program);
+  if (due < date) throw new Error('The deposit due date can\'t be before today.');
+  const prior = dog.disposition || 'undecided';
+  const holds = prior !== 'available';
+
+  if (updateAnswers && issues.fields.length) {
+    const fit = answersToFit(entry, dog, registration, issues.fields);
+    if (Object.keys(fit).length) await waitlistEntryRepo.update(entry.id, fit);
+  }
+  const dogChanges = {};
+  if (holds) dogChanges.disposition = 'available';
+  if (updateRegistration && dog.intended_registration !== registration) dogChanges.intended_registration = registration;
+  if (Object.keys(dogChanges).length) await dogRepo.update(dog.id, dogChanges);
+
+  const sale = await saleRepo.create({
+    dog_id: dog.id,
+    buyer_contact_id: entry.contact_id,
+    registration_type: registration,
+    status: 'deposit_pending',
+    kennel_id: dog.kennel_id || litter?.kennel_id || entry.kennel_id,
+    sale_date: date,
+    lead_source: 'Waitlist',
+    ...expectedPricing({ ...dog, ...dogChanges }, litter, registration),
+    side_entry_id: entry.id,
+    side_deposit_due: due,
+    side_holds_pup: holds,
+    side_prior_disposition: prior,
+    ...(entry.carried_payment ? {
+      deposit_amount: Number(entry.carried_payment.amount),
+      notes: `Deposit: ${money(entry.carried_payment.amount)} carried over from a pup they lost (paid ${entry.carried_payment.date}).`
+    } : {})
+  });
+  await addFamilyActivity(entry.id, [{
+    id: `side-sale-${sale.id}`, kind: 'action',
+    body: `You recorded a side sale of ${dog.call_name} to them, deposit due ${due}.${holds ? ` ${dog.call_name} was ${prior.replace('_', ' ')}: now Available and held for them until the deposit.` : ''}`
+  }]);
+  if (entry.carried_payment) {
+    const carried = entry.carried_payment;
+    const placed = await confirmSideDeposit(sale.id, { date, amount: carried.amount, paidDate: carried.date || date });
+    return { ...placed, issues, depositDone: true };
+  }
+  return { sale, issues, depositDone: false };
+}
+
+// The deposit for a side sale arrived: the sale is deposit paid, the pup placed, the
+// family placed. No turn moves on. Any other claim on the pup is resolved (§5): a
+// side sale is cancelled, a turn pick is let go (their turn stays open on what's
+// left; with nothing left, it's voided, never a pass). → { sale, entry, resolved }
+export async function confirmSideDeposit(saleId, { date = todayYMD(), amount, paidDate = null } = {}) {
+  const sale = await saleRepo.getById(saleId);
+  if (!sale || !sale.side_entry_id) throw new Error('That isn\'t a side sale.');
+  if (sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) throw new Error('That side sale was cancelled or archived.');
+  const entry = await load(sale.side_entry_id);
+  const changes = { deposit_date: paidDate || date };
+  if (sale.status === 'deposit_pending') changes.status = 'deposit_paid';
+  if (amount !== undefined && amount !== null && amount !== '') changes.deposit_amount = Number(amount);
+  const saved = await saleRepo.update(sale.id, changes);
+  await dogRepo.update(sale.dog_id, { disposition: 'placed' });
+  const placed = await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, carried_payment: null });
+  await releaseOpenOffers(entry.id, { date, why: 'the family bought a pup', moveOn: false });
+  const resolved = await resolveOtherClaims(sale.dog_id, { keepSaleId: sale.id, date, who: 'another family\'s deposit arrived first' });
+  return { sale: saved, entry: placed, resolved };
+}
+
+// Cancel a side sale (hers, or its deposit never came): the sale is cancelled and the
+// family keeps their place (never a pass). A pup it held goes back to what it was.
+// → { sale, restored: the disposition restored, or null }
+export async function cancelSideSale(saleId, { date = todayYMD(), why = 'you cancelled it' } = {}) {
+  const sale = await saleRepo.getById(saleId);
+  if (!sale || !sale.side_entry_id) throw new Error('That isn\'t a side sale.');
+  if (!isSideSalePending(sale)) throw new Error('Only a side sale still waiting on its deposit can be cancelled here. Open the sale to end it.');
+  const saved = await saleRepo.update(sale.id, { status: 'cancelled', notes: appendNote(sale.notes, `Side sale cancelled ${date}: ${why}.`) });
+  let restored = null;
+  if (sale.side_holds_pup && sale.side_prior_disposition && sale.side_prior_disposition !== 'available') {
+    const dog = await dogRepo.getById(sale.dog_id);
+    if (dog && (dog.disposition || 'undecided') === 'available') {
+      await dogRepo.update(dog.id, { disposition: sale.side_prior_disposition });
+      restored = sale.side_prior_disposition;
+    }
+  }
+  const entry = await waitlistEntryRepo.getById(sale.side_entry_id);
+  if (entry) {
+    await addFamilyActivity(entry.id, [{ id: `side-sale-cancel-${sale.id}`, kind: 'action', body: `The side sale was cancelled (${why}). They keep their place on the list.` }]);
+  }
+  return { sale: saved, restored };
+}
+
+// Two claims on one pup, one deposit in (§5): end the rest. `keepSaleId` is the sale
+// that won. → [{ kind: 'side_cancelled', entry_id, sale_id, restored } |
+//              { kind: 'pick_released', entry_id, offer_id, voided }]
+async function resolveOtherClaims(dogId, { keepSaleId, date, who }) {
+  const out = [];
+  for (const s of await saleRepo.getByDog(dogId)) {
+    if (s.id === keepSaleId || !isSideSalePending(s)) continue;
+    const r = await cancelSideSale(s.id, { date, why: who });
+    out.push({ kind: 'side_cancelled', entry_id: s.side_entry_id, sale_id: s.id, restored: r.restored });
+  }
+  const picks = (await waitlistOfferRepo.getAll()).filter((o) => !o.is_archived && o.outcome === 'open' && o.chosen_dog_id === dogId && o.sale_id !== keepSaleId);
+  for (const o of picks) {
+    await releasePick(o, { date, why: who, strict: false });
+    await waitlistOfferRepo.update(o.id, {
+      chosen_dog_id: null, picked_date: null, sale_id: null,
+      notes: appendNote(o.notes, `Pick let go on ${date}: ${who}.`)
+    });
+    // Their turn stays open on what's left; with nothing left anywhere, it ends (never a pass).
+    const c = await kennelContext(o.kennel_id);
+    const entry = c.entries.find((e) => e.id === o.entry_id);
+    const rows = turnOffers(c.offers, turnIdOf(o)).filter((x) => x.outcome === 'open');
+    const left = entry ? rows.some((x) => {
+      const litter = c.litters.find((l) => l.id === x.litter_id);
+      return litter && c.pups.some((d) => d.litter_id === litter.id && (x.eligible_dog_ids || []).includes(d.id) && isPupAvailable(d, c.sales));
+    }) : false;
+    if (!left) {
+      for (const x of rows) await waitlistOfferRepo.update(x.id, { outcome: 'voided', outcome_date: date, counts_as_pass: false, notes: appendNote(x.notes, `Voided automatically: no pup left for them after ${who}. Not a pass.`) });
+    }
+    if (entry) await addFamilyActivity(entry.id, [{ id: `pick-released-${o.id}-${date}`, kind: 'action', body: `Their pick was let go: ${who}.${left ? ' Their turn stays open on the pups left.' : ' No pup was left for them, so their turn ended (not a pass).'}` }]);
+    out.push({ kind: 'pick_released', entry_id: o.entry_id, offer_id: o.id, voided: !left });
+  }
+  return out;
 }
 
 // Undo a pass or no response (Spec §6.4): the family's turn is back. Every litter

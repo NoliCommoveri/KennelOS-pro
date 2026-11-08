@@ -286,8 +286,12 @@ class Checkin {
     if (pick === 'open') {
       const { openPicksFromCheckin } = await import('./waitlistPicksPanel.js');
       const said = await openPicksFromCheckin(l);
-      this.didSomething = true;
-      await this.chat.say(`<strong>${esc(said.title)}</strong><br>${paragraphs(said.message)}`);
+      if (!said) {
+        await this.chat.say('Okay, picks aren\'t open. You can open them from the Litter page whenever you\'re ready.');
+      } else {
+        this.didSomething = true;
+        await this.chat.say(`<strong>${esc(said.title)}</strong><br>${paragraphs(said.message)}`);
+      }
     } else if (pick === 'move') {
       await this.moveDepositDate();
     }

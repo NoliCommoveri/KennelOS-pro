@@ -28,6 +28,8 @@ import { esc, badge, fmtDate, todayYMD, confirmModal, alertModal } from './ui.js
 import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink } from './waitlistUI.js';
 import { offerEmails } from './waitlistEmailUI.js';
 import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
+import { openPicksPreview, previewParam } from './picksPreviewModal.js';
+import { sideSaleDialog } from './sideSaleUI.js';
 
 const none = '<span class="faint">—</span>';
 const QUEUE_PREVIEW = 5;
@@ -92,14 +94,18 @@ export async function openLitterWaitlistNotice(litter) {
 }
 
 // Open picks from outside the panel: Kels's litter check-in
-// (assets/litterCheckinUI.js), when the accept-deposits date has come. The same
-// action and "Email the family?" preview as the panel's button; returns what
-// happened as { title, message } for Kels to say.
+// (assets/litterCheckinUI.js), Today's "Open picks" nudge and Kels's Review my
+// waitlist (pages/today.js, assets/waitlistReviewUI.js), when the accept-deposits
+// date has come. Through the picks preview, like the panel's button, then the same
+// "Email the family?" preview; returns what happened as { title, message }, or
+// null when she closed the preview without opening picks.
 export async function openPicksFromCheckin(litter) {
   const d = await loadData(litter);
   const familyName = (entry) => entryName(entry, d.contactsById.get(entry.contact_id));
   const heldElsewhere = openTurns(d.kennelOffers, litter.kennel_id).length > 0;
-  const turn = await actions.openPicks(litter.id);
+  const res = await openPicksPreview({ litterId: litter.id });
+  if (!res) return null;
+  const turn = res.turn;
   if (!turn) {
     return { title: 'Picks are open', message: heldElsewhere
       ? 'Another family holds the turn and isn\'t first in line for this litter, so it waits for the next turn.'
@@ -225,8 +231,8 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     <section class="card" style="margin-top:16px;">
       <div class="row-between">
         <h2 style="margin:0;">Waitlist picks</h2>
-        <div class="pill-row">${soon.some((r) => !r.inFlight) ? '<button class="btn btn-sm" data-pk="soon" title="Tell the families whose turn is coming up for these pups">Almost your turn…</button>' : ''}${picksOpen
-          ? '<button class="btn btn-sm" data-pk="close">Close picks</button>'
+        <div class="pill-row">${soon.some((r) => !r.inFlight) ? '<button class="btn btn-sm" data-pk="soon" title="Tell the families whose turn is coming up for these pups">Almost your turn…</button>' : ''}<button class="btn btn-sm" data-pk="side" title="Sell a pup to a family on your list outside the turn order">Sell to a waitlist family…</button>${picksOpen
+          ? '<button class="btn btn-sm" data-pk="preview" title="Who\'s in line across your open litters, who\'s left out and why">Who\'s in line…</button><button class="btn btn-sm" data-pk="close">Close picks</button>'
           : `<button class="btn btn-primary btn-sm" data-pk="open"${available.length ? '' : ' disabled title="No pups available to offer."'}>Open picks</button>`}</div>
       </div>
       <p class="field-hint" style="margin:6px 0 0;">${picksOpen
@@ -246,14 +252,34 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   };
   const on = (key, fn) => mount.querySelector(`[data-pk="${key}"]`)?.addEventListener('click', run(fn));
 
+  // Open picks goes through the picks preview first (Picks Preview Spec §3): it
+  // opens them only when she taps "Open picks now" there.
   on('open', async () => {
-    const turn = await actions.openPicks(litter.id);
+    const res = await openPicksPreview({ litterId: litter.id });
+    if (!res) return;
+    const turn = res.turn;
     await alertModal(turn ? offeredMessage(turn, entriesById, familyName, d.litterName)
       : { title: 'Picks are open', message: heldElsewhere || kennelTurns.length
         ? 'Another family holds the turn and isn\'t first in line for this litter, so it waits for the next turn.'
         : 'Nobody on the list is eligible for the available pups yet. A family is offered as soon as one becomes eligible and you tap "Offer to them".' });
     if (turn && !turn.none) await offerEmails(offerSpecs({ next: turn }));
   });
+  // A side sale (Side Sale Spec): a pup of this litter to a family on the list.
+  on('side', async () => {
+    const res = await sideSaleDialog({ kennelId: litter.kennel_id, litterId: litter.id });
+    if (!res) return;
+    const name = familyName(res.entry);
+    await alertModal({ title: res.depositDone ? `${name} is placed` : 'Side sale recorded', message: res.depositDone
+      ? `Their deposit carried over from the pup they lost is recorded as paid for ${res.dog.call_name}.`
+      : `${res.dog.call_name} is ${res.sale.side_holds_pup ? 'held for' : 'set aside for'} ${name} until ${fmtDate(res.sale.side_deposit_due)}${res.sale.side_holds_pup ? '' : ' (still offered to other families until the deposit)'}. Their page shows it like a pick on their turn. Send them the deposit details from their page (Review sale & send).` });
+  });
+  // "Who's in line…" may save settings or a pup, so it re-renders after.
+  on('preview', async () => { await openPicksPreview({ litterId: litter.id }); });
+  // Back from fixing a family or a pup the preview linked to: reopen it.
+  if (previewParam() === litter.id && !mount.dataset.previewReopened) {
+    mount.dataset.previewReopened = '1';
+    setTimeout(() => mount.querySelector(picksOpen ? '[data-pk="preview"]' : '[data-pk="open"]')?.click(), 0);
+  }
   // Not wrapped in run(): the dialog writes nothing, so there's nothing to re-render.
   mount.querySelector('[data-pk="soon"]')?.addEventListener('click', () => openNotice(d, litter, soon, opts));
   on('close', async () => {

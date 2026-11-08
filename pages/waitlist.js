@@ -25,6 +25,7 @@ import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, ope
 import { offerEmails } from '../assets/waitlistEmailUI.js';
 import { programIconHtml } from '../assets/programIcons.js';
 import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
+import { openPicksPreview, previewParam } from '../assets/picksPreviewModal.js';
 import { formQuestions } from '../data/waitlistForm.js';
 import { programSuggestions } from '../data/programSuggest.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
@@ -47,6 +48,9 @@ function table(headers, rows) {
   return `<table class="data"><thead><tr>${headers.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
 }
 const row = (e, cells) => `<tr class="clickable" data-href="${esc(entryHref(e))}">${cells.map((c) => `<td>${c}</td>`).join('')}</tr>`;
+
+// The picks preview reopens once per page load (?preview=<litter id>).
+let previewReopened = false;
 
 async function main() {
   const { kennel, own } = await resolveWaitlistKennel(param('kennel'));
@@ -237,7 +241,14 @@ async function main() {
       btn.disabled = true;
       try {
         const l = litters.find((x) => x.id === btn.dataset.offerLitter);
-        const turn = l.picks_opened_date ? await actions.offerNext(l.id) : await actions.openPicks(l.id);
+        // Opening picks goes through the picks preview first (Picks Preview Spec §3).
+        let turn;
+        if (l.picks_opened_date) turn = await actions.offerNext(l.id);
+        else {
+          const res = await openPicksPreview({ litterId: l.id });
+          if (!res) { btn.disabled = false; await main(); return; }
+          turn = res.turn;
+        }
         // Families passed on the way ("Not this litter" to their whole turn, §16.2).
         const passedLines = describeOfferChanges({ auto_passed: turn?.auto_passed || [] }, {
           nameOf: (id) => { const e = entriesById.get(id); return e ? entryName(e, contactsById.get(e.contact_id)) : 'A family'; },
@@ -262,6 +273,16 @@ async function main() {
       }
     });
   });
+
+  // Back from fixing a family or a pup the picks preview linked to: reopen it.
+  const again = previewParam();
+  if (again && !previewReopened) {
+    previewReopened = true;
+    const l = litters.find((x) => x.id === again && x.kennel_id === kennel.id);
+    const rowBtn = l && !l.picks_opened_date ? els.body.querySelector(`[data-offer-litter="${CSS.escape(l.id)}"][title="Open picks on this litter"]`) : null;
+    if (rowBtn) setTimeout(() => rowBtn.click(), 0);
+    else if (l) setTimeout(async () => { await openPicksPreview({ litterId: l.id }); await main(); }, 0);
+  }
 
   // "It's almost your turn" (Spec §15.5): every live litter of this kennel at once.
   // Families with an open offer anywhere are left out but still count toward the

@@ -191,7 +191,13 @@ export const SYNC_REGISTRY = Object.freeze({
       // Her open one-use Stripe link (Integrations plan §4, D9: payment-link refs are
       // cloud, so any device can match a payment): the link, Stripe's id for it,
       // which payment it's for and when it was made. Its amount is private.
-      'payment_link_url', 'payment_link_ref', 'payment_link_component', 'payment_link_date'
+      'payment_link_url', 'payment_link_ref', 'payment_link_component', 'payment_link_date',
+      // A side sale (Side Sale Spec; owner approved 2026-11-08: synced with the rest of
+      // the sale): the waitlist family, the deposit's due date, whether it holds the
+      // pup, and the disposition to put back on a cancel.
+      'side_entry_id', 'side_deposit_due', 'side_holds_pup', 'side_prior_disposition',
+      // When she sent its deposit request (Review sale & send), as an offer row keeps it.
+      'side_request_sent_date'
     ],
     private: [
       'price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount',

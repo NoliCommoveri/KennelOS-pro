@@ -12,7 +12,8 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal, promptModal } from './ui.js';
 import { PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
-import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges, restoresFamily } from '../data/waitlistRules.js';
+import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges, restoresFamily, pupClaims } from '../data/waitlistRules.js';
+import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale } from '../data/waitlistActions.js';
@@ -336,6 +337,30 @@ const pupOptions = (pups, pupLabel) => pups.map((p) => `<option value="${esc(p.i
 // `carried` (the entry's carried_payment, Spec §16.11): what they'd paid on a pup
 // they lost. It's already in hand, so there's no deposit box: recording the pick
 // marks the deposit paid and places them (recordPick).
+// Before a turn pick (or a switch, or a side sale) onto a pup that already has a
+// claim (Side Sale Spec §5): "Record a second sale anyway?". Resolves true to go ahead.
+// Family names by entry id, for a warning that names who else claims a pup.
+async function familyNamer() {
+  const [entries, contacts] = await Promise.all([waitlistEntryRepo.getAll({ includeArchived: true }), contactRepo.getAll({ includeArchived: true })]);
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const cById = new Map(contacts.map((c) => [c.id, c]));
+  return (id) => { const e = byId.get(id); return e ? entryName(e, cById.get(e.contact_id)) : 'Another family'; };
+}
+
+export async function confirmSecondClaim(dogId, { exceptSaleId = null, pupName = 'This pup', nameOf = () => 'Another family' } = {}) {
+  const [sales, offers] = await Promise.all([saleRepo.getByDog(dogId), waitlistOfferRepo.getAll()]);
+  const others = pupClaims(dogId, { sales, offers }).filter((c) => c.sale_id !== exceptSaleId);
+  if (!others.length) return true;
+  const lines = others.map((c) => (c.kind === 'side'
+    ? `${nameOf(c.entry_id)} has a side sale on ${pupName}${sales.find((s) => s.id === c.sale_id)?.side_deposit_due ? `, deposit due ${fmtDate(sales.find((s) => s.id === c.sale_id).side_deposit_due)}` : ''}.`
+    : c.kind === 'pick' ? `${nameOf(c.entry_id)} picked ${pupName} in their turn (deposit pending).` : `${pupName} already has a sale.`));
+  return confirmModal({
+    title: `Two sales on ${pupName}?`,
+    message: `${lines.join('\n')}\n\nRecord a second sale anyway? Whichever deposit you record first wins; the other is ended then.`,
+    confirmLabel: 'Record it anyway'
+  });
+}
+
 export async function pickDialog({ offer, name, pups, pupLabel, carried = null }) {
   let out = null;
   const carriedHint = carried ? `<p class="field-hint">${esc(fmtMoney(carried.amount))} they paid on a pup they lost (${esc(fmtDate(carried.date))}) is their deposit on this one. Recording the pick marks it paid, places ${esc(name)} and moves the turn on.</p>` : '';
@@ -358,6 +383,8 @@ export async function pickDialog({ offer, name, pups, pupLabel, carried = null }
     onConfirm: async (o) => {
       const chosenDogId = o.querySelector('#pk-dog').value;
       const date = o.querySelector('#pk-date').value || todayYMD();
+      const pupName = pups.find((p) => p.id === chosenDogId)?.call_name || 'This pup';
+      if (!(await confirmSecondClaim(chosenDogId, { pupName, nameOf: await familyNamer() }))) throw new Error('Not recorded. Pick another pup, or cancel.');
       if (o.querySelector('#pk-paid')?.checked) {
         out = { depositDone: true, res: await recordOutcome(offer.id, 'accepted', {
           chosenDogId, date,
@@ -399,10 +426,14 @@ export async function depositDialog({ offer, name, pupName, sale, carried = null
   // was born) means the deposit came in on the credit's date, not today.
   const creditDate = credited > 0 && sale?.deposit_amount != null
     && Number(sale.deposit_amount) - feePart - credited <= 0 ? (sc.credit.received.date || null) : null;
+  // A second claim on the pup (Side Sale Spec §5) ends when this deposit is recorded.
+  const otherClaims = offer.chosen_dog_id
+    ? pupClaims(offer.chosen_dog_id, { sales: await saleRepo.getByDog(offer.chosen_dog_id), offers: await waitlistOfferRepo.getAll() }).filter((c) => c.sale_id !== offer.sale_id && c.offer_id !== offer.id).length
+    : 0;
   const ok = await formModal({
     title: `${name}'s deposit received`,
     confirmLabel: 'Deposit received',
-    bodyHtml: `<p style="margin-top:0;">For <strong>${esc(pupName)}</strong>.</p>
+    bodyHtml: `<p style="margin-top:0;">For <strong>${esc(pupName)}</strong>.</p>${otherClaims ? `<div class="inline-warn">Another family also has a claim on ${esc(pupName)}. Recording this deposit ends it: a side sale is cancelled (they keep their place), another pick is let go.</div>` : ''}
       <div class="form-grid">
         <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || carried?.date || creditDate || todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
@@ -433,7 +464,12 @@ export async function changePickDialog({ offer, name, currentName, pups, pupLabe
     bodyHtml: `<p style="margin-top:0;">They picked <strong>${esc(currentName)}</strong>.</p>
       <div class="field"><label>Switch to</label><select id="cp-dog">${pupOptions(pups, pupLabel)}</select></div>
       <p class="field-hint">The same sale moves to the new pup, and ${esc(currentName)} is available again. The price and deposit follow the new pup's expected amounts unless you changed them on the sale.</p>`,
-    onConfirm: async (o) => { res = await changePick(offer.id, { chosenDogId: o.querySelector('#cp-dog').value }); }
+    onConfirm: async (o) => {
+      const chosenDogId = o.querySelector('#cp-dog').value;
+      const pupName = pups.find((p) => p.id === chosenDogId)?.call_name || 'This pup';
+      if (!(await confirmSecondClaim(chosenDogId, { exceptSaleId: offer.sale_id, pupName, nameOf: await familyNamer() }))) throw new Error('Not changed. Pick another pup, or cancel.');
+      res = await changePick(offer.id, { chosenDogId });
+    }
   });
   return ok ? res : null;
 }

@@ -23,7 +23,7 @@ import { expectedPricing } from './saleDefaults.js';
 import {
   waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, publicWantsMore, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
-  rankedList, turnLittersFor, turnIdOf, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
+  rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink, embedOrigins
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
@@ -282,6 +282,8 @@ function entryView(entry, ctx) {
         respond_by_date: orNull(o.respond_by_date),
         eligible_dog_ids: [...(o.eligible_dog_ids || [])],
         picked_dog_id: orNull(o.chosen_dog_id),
+        // Server only (never shown): a side sale, not a turn (Side Sale Spec §6).
+        ...(o.direct ? { direct: true } : {}),
         // Sending the deposit (their turn card, once they pick): her payment
         // instructions (already on their page for the fee), and the deposit on the
         // sale their pick made, else her listed deposit for that pup.
@@ -536,16 +538,29 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     });
   }
 
-  const hidden = new Map(live.map((e) => [e.id, placeHidden(e, kennelOffers)]));
+  // A pending side sale (Side Sale Spec) reads to the family exactly as a turn with a
+  // pick: an open row in the same shape, from the sale. `direct: true` is for the
+  // server only (it never counts as a turn there, and the family isn't "Currently
+  // deciding" on the public list); no family-facing word differs. Turn decisions
+  // (the litters' open offer, the turn queue) never see these rows.
+  const liveIds = new Set(live.map((e) => e.id));
+  const sideOffers = sales.filter((x) => isSideSalePending(x) && liveIds.has(x.side_entry_id) && dogsById.get(x.dog_id)?.litter_id)
+    .map((x) => ({
+      id: x.id, turn_id: x.id, entry_id: x.side_entry_id, kennel_id: kennel.id, litter_id: dogsById.get(x.dog_id).litter_id,
+      offered_date: x.sale_date || null, respond_by_date: x.side_deposit_due || null,
+      eligible_dog_ids: [x.dog_id], chosen_dog_id: x.dog_id, sale_id: x.id, outcome: 'open', direct: true
+    }));
+  const familyOffers = [...kennelOffers, ...sideOffers];
+  const hidden = new Map(live.map((e) => [e.id, placeHidden(e, familyOffers)]));
   const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today });
   const creditMemo = new Map();
   const ctx = {
-    config, contactsById, programsById, offers: kennelOffers, today, upcoming,
+    config, contactsById, programsById, offers: familyOffers, today, upcoming,
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
     positions: overallPositions(live, kennel.id, programsById), prefPlaces: prefPlaces(live, kennel.id, programsById, config), matches, litterLabels, hidden, notes,
     // Each record's own pup's sale (familySale): a family back on the list for a
     // second pup gets its first pup's cards only on that pup's record.
-    saleFor: (entry) => familySale(entry, sales, kennelOffers, live),
+    saleFor: (entry) => familySale(entry, sales, familyOffers, live),
     pickedPup: (id) => (dogsById.get(id) ? publicPup(dogsById.get(id), kennel) : null),
     // The deposit for a family's pick: on its sale, else her listed one for the pup.
     depositFor: (o) => {
@@ -561,7 +576,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Where this record stands, in the family's terms, for the list of their
     // records on each status page: { state, until? }. Facts their own page shows.
     recordFor: (entry) => {
-      const own = kennelOffers.filter((o) => o.entry_id === entry.id && o.outcome === 'open' && !o.is_archived);
+      const own = familyOffers.filter((o) => o.entry_id === entry.id && o.outcome === 'open' && !o.is_archived);
       const placedSale = entry.placed_sale_id ? sales.find((x) => x.id === entry.placed_sale_id) : null;
       switch (entry.status) {
         case 'active':
@@ -575,19 +590,19 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       }
     },
     pupFor: (entry) => {
-      const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, kennelOffers, live);
+      const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, familyOffers, live);
       return (sale?.dog_id && dogsById.get(sale.dog_id)?.call_name) || null;
     },
     portalOn: portalOn(kennel),
     // The record's own sale: the one it was placed with, else its open one.
     portalFor: (entry) => {
       if (!portalOn(kennel)) return null;
-      const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, kennelOffers, live);
+      const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, familyOffers, live);
       return portalEntryView(entry, { sale, contracts, events: pickupEvents, home: kennel.kennelport_portal.home || [], today });
     },
-    pickupFor: (entry) => familyPickupView({ entry, sales, offers: kennelOffers, dogsById, litters, kennel, config, entries: live, events: pickupEvents, today }),
+    pickupFor: (entry) => familyPickupView({ entry, sales, offers: familyOffers, dogsById, litters, kennel, config, entries: live, events: pickupEvents, today }),
     extrasFor: (entry) => {
-      const sale = familySale(entry, sales, kennelOffers, live);
+      const sale = familySale(entry, sales, familyOffers, live);
       if (!sale) return null;
       const dog = dogsById.get(sale.dog_id) || null;
       const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) : null;
@@ -599,7 +614,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     feeCreditFor: (entry) => (entry.fee_received_date && Number(entry.fee_amount) > 0 && entry.fee_credit_policy === 'credited_to_purchase'
       ? { amount: Number(entry.fee_amount), toward: config.fee_credit_toward === 'deposit' ? 'deposit' : 'balance' } : 0),
     creditFor: (entry) => {
-      if (!creditMemo.has(entry.id)) creditMemo.set(entry.id, familyCredit(entry, creditSale(entry, sales, kennelOffers, live), ctx.feeCreditFor(entry)));
+      if (!creditMemo.has(entry.id)) creditMemo.set(entry.id, familyCredit(entry, creditSale(entry, sales, familyOffers, live), ctx.feeCreditFor(entry)));
       return creditMemo.get(entry.id);
     },
     feeDepositFor: (entry, o) => {

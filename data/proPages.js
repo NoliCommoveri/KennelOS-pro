@@ -79,6 +79,11 @@ export const PRO_ONLY_STANDALONE = [
   // The Litter page's waitlist picks panel — litter.js imports it dynamically only
   // when editionFlags.waitlist is on, so Lite never requests it.
   'assets/waitlistPicksPanel.js',
+  // The picks preview (Picks Preview Spec), opened by the picks panel and the
+  // Waitlist page before Open picks. Its rules, data/picksPreview.js, stay shared.
+  'assets/picksPreviewModal.js',
+  // Side sales (Side Sale Spec): the family page and the picks panel.
+  'assets/sideSaleUI.js',
   // The Litter page's pickup times (Family Requests plan §4), imported the same way.
   'assets/pickupTimesPanel.js',
   // The Kennel page's "Online list" card (Waitlist W2 Plan §9), imported only when

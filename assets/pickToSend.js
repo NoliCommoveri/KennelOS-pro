@@ -44,7 +44,8 @@ function canShareFile(file) {
 }
 
 // → Promise<boolean>: true when something was saved or sent (the page reloads).
-//   offer: the turn row with the pick (sale_id, respond_by_date)
+//   offer: the turn row with the pick (sale_id, respond_by_date), or for a side sale
+//          { side: true, id, sale_id, respond_by_date, deposit_request_sent_date } (sideSaleOffer)
 //   entry, contact: the family; litterLabel: the litter's label
 //   paymentText: her payment instructions (the waitlist's, plan D21); kennelName signs it
 export async function openPickToSend({ offer, entry, contact, litterLabel = '', paymentText = '', kennelName = '' }) {
@@ -109,7 +110,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           ${field('Price', `<input id="ps-price" type="number" min="0" step="0.01" value="${esc(s.price ?? '')}">`)}
           ${field('Deposit', `<input id="ps-deposit" type="number" min="0" step="0.01" value="${esc(s.deposit_amount ?? '')}">`, depositPaid(s)
             ? `Already received${s.deposit_date ? ` ${fmtDate(s.deposit_date)}` : ''}. The message thanks them for it instead of asking.`
-            : offer.respond_by_date ? `Due by ${fmtDate(offer.respond_by_date)}, the end of their turn.` : '')}
+            : offer.respond_by_date ? `Due by ${fmtDate(offer.respond_by_date)}${offer.side ? '' : ', the end of their turn'}.` : '')}
           ${field('Transport fee', `<input id="ps-transport" type="number" min="0" step="0.01" value="${esc(s.transport_fee ?? '')}">`)}
           ${field('Sold through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.')}
           ${field('Deposit paid via', `<select id="ps-deposit-via"><option value="">— not set —</option>${accounts
@@ -366,7 +367,11 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       try {
         const msg = message || { subject: '', body: '' };
         if (chosen && contract) contract = await markContractSent(contract, chosen.form, chosen.url);
-        offer = await waitlistOfferRepo.update(offer.id, { deposit_request_sent_date: todayYMD() });
+        // A side sale (Side Sale Spec) has no offer row: the date is kept on its sale.
+        if (offer.side) {
+          await saleRepo.update(offer.sale_id, { side_request_sent_date: todayYMD() });
+          offer = { ...offer, deposit_request_sent_date: todayYMD() };
+        } else offer = await waitlistOfferRepo.update(offer.id, { deposit_request_sent_date: todayYMD() });
         await logOwnMessage(entry.id, { kind: 'deposit_request', subject: msg.subject, body: msg.body });
         const close = $('#ps-cancel');
         if (close) close.textContent = 'Done';

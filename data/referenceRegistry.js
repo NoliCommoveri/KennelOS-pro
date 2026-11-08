@@ -161,7 +161,9 @@ export const EVENT_REFERENCES = [
 export const WAITLIST_ENTRY_REFERENCES = [
   { table: 'waitlist_offers', field: 'entry_id', label: 'offer to this family' },
   // The application a do-not-sell row was added from. Not indexed (only a delete asks).
-  { table: 'do_not_sell', field: 'source_entry_id', label: 'application a do-not-sell listing came from', scan: true }
+  { table: 'do_not_sell', field: 'source_entry_id', label: 'application a do-not-sell listing came from', scan: true },
+  // A side sale to this family (Side Sale Spec). Not indexed (only a delete asks).
+  { table: 'sales', field: 'side_entry_id', label: 'a side sale to this family', scan: true }
 ];
 
 export const WAITLIST_PROGRAM_REFERENCES = [

@@ -670,6 +670,8 @@ table.data tr.row-detail .dl-meta { margin: 0; }
   width: 100%;
   max-width: 640px;
 }
+/* A wide modal for a page's worth of content (the picks preview). */
+.modal.modal-wide { max-width: 920px; }
 
 /* --- Timeline ----------------------------------------------------------- */
 .timeline { list-style: none; margin: 0; padding: 0; }
