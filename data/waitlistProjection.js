@@ -36,6 +36,7 @@ import { sharedReferrals, sharedTransport } from './referralShare.js';
 import { feePay, withClientRef } from './waitlistFeePay.js';
 import { familySale, familyExtrasView, pupBirthDate, creditSale } from './familyExtras.js';
 import { familyCredit, feeCreditSplit } from './incomeView.js';
+import { creditsOf, allocateCredits, feeCharge } from './receivedCredits.js';
 import { familyPickupView } from './familyPickup.js';
 import { backOutReasons, backOutPolicyText } from './backOut.js';
 import { standardLocation } from './pickupSlots.js';
@@ -242,6 +243,9 @@ function entryView(entry, ctx) {
       ...(p.litter_id ? { litter_id: p.litter_id } : { pairing_id: p.pairing_id }), date: orNull(p.date)
     })),
     fee_received_date: orNull(entry.fee_received_date),
+    // What's credited toward their pup (their Current Position card, and their
+    // deposit while a pick they sent waits for her device): null when nothing.
+    credits: ctx.creditsView(entry),
     // They paid the fee online before she approved them (Integrations plan §4): the
     // day, so their page says so instead of asking again.
     fee_paid_online: orNull(entry.fee_paid_online?.date),
@@ -616,6 +620,23 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     creditFor: (entry) => {
       if (!creditMemo.has(entry.id)) creditMemo.set(entry.id, familyCredit(entry, creditSale(entry, sales, familyOffers, live), ctx.feeCreditFor(entry)));
       return creditMemo.get(entry.id);
+    },
+    // A family's credits as their own page shows them, whatever the pup or sale:
+    // { fee, fee_toward, received, deposit } or null. `fee` is their received
+    // application fee credited to the purchase price (`fee_toward` deposit or
+    // balance); `received` is what their credits for funds already received can
+    // pay toward the pup, after the fee; `deposit` is the most of it a deposit
+    // takes (a credit not ticked for the deposit can't pay it).
+    creditsView: (entry) => {
+      const fc = ctx.feeCreditFor(entry);
+      const credits = creditsOf(entry);
+      const BIG = 1e9;
+      const pup = credits.length ? allocateCredits(credits, [...feeCharge(entry),
+        { key: 'deposit', use: 'deposit', amount: BIG }, { key: 'price', use: 'price', amount: BIG }, { key: 'extras', use: 'extras', amount: BIG }]) : null;
+      const deposit = credits.length ? allocateCredits(credits, [...feeCharge(entry), { key: 'deposit', use: 'deposit', amount: BIG }]).byKey.deposit || 0 : 0;
+      const received = pup ? Math.round((pup.applied - (pup.byKey.fee || 0)) * 100) / 100 : 0;
+      if (!fc && !(received > 0)) return null;
+      return { fee: fc ? fc.amount : 0, fee_toward: fc ? fc.toward : null, received, deposit };
     },
     feeDepositFor: (entry, o) => {
       const sale = sales.find((x) => x.id === o.sale_id);

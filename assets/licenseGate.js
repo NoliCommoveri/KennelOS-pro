@@ -170,6 +170,8 @@ function wireRenewalWall(card) {
       location.reload();
       return;
     }
+    // The store no longer knows this activation (validate cleared it): ask for the key.
+    if (!getProLicense()) { renderActivationWall(); return; }
     recheck.disabled = false;
     recheck.textContent = 'Check again';
     errorSlot.textContent = refreshed

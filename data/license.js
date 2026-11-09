@@ -174,9 +174,30 @@ export async function activate(rawKey, deviceLabel) {
   return setProLicense(recordFromPayload(key, data, data.instance?.id, instanceName));
 }
 
+// Is `record` still the activation this device holds? validate() is a network
+// round trip, and in that time the record can be cleared or replaced: a remote
+// erase wipes it and releases its slot (cloudDevices.js runs at boot alongside
+// the gate), or the owner switches keys. Writing the answer back regardless put a
+// wiped license back on the device, with its slot already released.
+function stillHeld(record) {
+  const now = getProLicense();
+  return Boolean(now && now.key === record.key && (now.instanceId || null) === (record.instanceId || null));
+}
+
+// Lemon Squeezy's own "no such key / activation" answer: a 4xx (not a rate limit)
+// whose JSON says valid:false. That is the store speaking, not a network blip, so
+// it must not fall back to the cache: a released activation answers this way, and
+// treating it as "offline" kept the device running on its old record for the
+// whole offline window (90 days for a lifetime key).
+export function isGoneAnswer(status, data) {
+  return status >= 400 && status < 500 && status !== 429 && data?.valid === false;
+}
+
 // Silent re-validation of a stored record. Returns the refreshed (and re-cached)
 // record on success, or null on a network/HTTP failure so the caller can fall
 // back to the cached verdict (offline-first — don't lock a breeder out on a blip).
+// When the store says the activation is gone (isGoneAnswer), the record is
+// cleared so the device asks for its key again (evaluateLicense → 'unactivated').
 export async function validate(record) {
   if (!record?.key) return null;
   let res, data;
@@ -188,7 +209,11 @@ export async function validate(record) {
   } catch {
     return null; // offline / DNS / CORS blip — keep the cache
   }
-  if (!res.ok) return null;
+  if (!res.ok) {
+    if (isGoneAnswer(res.status, data) && stillHeld(record)) clearProLicense();
+    return null;
+  }
+  if (!stillHeld(record)) return null; // erased or replaced meanwhile: don't bring it back
   return setProLicense(recordFromPayload(record.key, data, record.instanceId, record.instanceName));
 }
 
@@ -315,5 +340,7 @@ export async function evaluateLicense() {
     record = refreshed;
     return { state: onlineVerdict(record), record };
   }
+  // Released at the store (validate cleared it), or erased meanwhile: ask for the key.
+  if (!getProLicense()) return { state: 'unactivated', record: null };
   return { state: offlineVerdict(record), record };
 }
