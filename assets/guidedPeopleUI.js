@@ -572,8 +572,8 @@ class PeopleConversation extends StepConversation {
         rows = await fresh();
       }
     }
-    const all = await waitlistEntryRepo.getByKennel(kennel.id);
-    const places = overallPositions(all, kennel.id, programsById);
+    const [all, sales, dogs] = await Promise.all([waitlistEntryRepo.getByKennel(kennel.id), saleRepo.getAll({ includeArchived: true }), dogRepo.getAll({ includeArchived: true })]);
+    const places = overallPositions(all, kennel.id, programsById, { sales, dogs });
     rows.sort((a, b) => (places.get(a.entry.id) || 0) - (places.get(b.entry.id) || 0));
     await this.chat.say(`Added! ${rows.map((x) => `${esc(x.contact.name)} is <strong>#${places.get(x.entry.id)}</strong>`).join(', ')} on your list.`, { typing: 500 });
   }

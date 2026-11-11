@@ -37,7 +37,7 @@ import { snooze, snoozedUntil } from '../data/nudgeState.js';
 import { readNudgeKey, STEP_OF, REVIEW_STEPS, reviewSummary, readinessProblems, outcomeReport } from '../data/waitlistReview.js';
 import * as actions from '../data/waitlistActions.js';
 import {
-  waitlistConfig, waitlistIsSetUp, entryName, describeOfferChanges, contactMatches, contactMatchReason, privateName, publicName,
+  waitlistConfig, waitlistIsSetUp, entryName, describeOfferChanges, contactMatches, contactMatchReason, privateName, publicName, publicSourceName, listedName,
   isPupAvailable, eligiblePupsFor, rankedList, turnIdOf, restoresFamily, overallPositions
 } from '../data/waitlistRules.js';
 import { hasOwnForm } from '../data/guidedForm.js';
@@ -629,7 +629,7 @@ class Review {
     const changes = this.changeLines(res);
     await this.chat.say(lines([`Done. ${outcome === 'move' ? `${this.name(e)} is back on the list at the end of the line.` : `${this.name(e)}'s sale is ${outcome === 'refund' ? 'voided and refunded' : 'cancelled'}.`}`, ...changes]));
     await this.emails([
-      ...(request ? [{ entryId: e.id, kind: 'request_approved', extra: { request: { field: 'back_out_request', request } } }] : []),
+      ...(request ? [{ entryId: e.id, kind: `backed_out_${outcome}`, extra: { request: { field: 'back_out_request', request } } }] : []),
       ...offerSpecs(res)
     ]);
     if (done.result.pup === 'available') await this.offerPupOnward(sale.dog_id);
@@ -883,7 +883,7 @@ class Review {
     const progs = new Map(this.programs.map((p) => [p.id, p]));
     const fits = rankedList(this.entries, this.kennel.id, progs).filter((x) => eligiblePupsFor(x, litter, pups, this.sales, { today: this.today, config: this.config }).length);
     if (!fits.length) { await this.chat.say('Nobody on the list has a pup in that litter they could take right now.'); return; }
-    const pos = overallPositions(this.entries, this.kennel.id, progs);
+    const pos = overallPositions(this.entries, this.kennel.id, progs, { sales: this.sales, dogs: this.dogsById });
     await this.chat.say('<strong>Who should have it?</strong>');
     const id = await this.chat.choose([...fits.map((x) => ({ label: this.name(x), note: pos.get(x.id) ? `#${pos.get(x.id)}` : '', value: x.id })), { label: 'Never mind', value: '' }],
       { search: fits.length > 8 ? { placeholder: 'Find a family' } : null });
@@ -952,6 +952,8 @@ class Review {
   async approveForm(e) {
     const matches = e.contact_id ? [] : contactMatches(e.application || {}, [...this.contactsById.values()].filter((c) => !c.is_archived));
     const full = this.name(e);
+    // The name the public list is built from (K7-8).
+    const listed = publicSourceName(e, this.contactOf(e));
     const asksPrivate = actions.hasPendingRequest(e, 'private_request');
     const fee = this.config.fee_amount;
     const res = await this.chat.form({
@@ -965,8 +967,8 @@ class Review {
           <label class="ck-check"><input type="radio" name="wr-ap-c" value=""${matches.length && matches[0].strength === 'certain' ? '' : ' checked'}> A new contact for ${esc(entryName(e, null))}</label></div>
           ${matches.length ? '<p class="field-hint">A match is only a suggestion. Pick it if it\'s the same family.</p>' : ''}`}
         ${asksPrivate ? `<p class="gl-q">They asked not to show their full name on your public list</p><div class="ck-checks">
-          <label class="ck-check"><input type="radio" name="wr-ap-p" value="yes"> Approve: shown as <strong>${esc(privateName(full))}</strong></label>
-          <label class="ck-check"><input type="radio" name="wr-ap-p" value="no"> Decline: shown as <strong>${esc(publicName(full))}</strong></label></div>` : ''}
+          <label class="ck-check"><input type="radio" name="wr-ap-p" value="yes"> Approve: shown as <strong>${esc(privateName(listed))}</strong></label>
+          <label class="ck-check"><input type="radio" name="wr-ap-p" value="no"> Decline: shown as <strong>${esc(publicName(listed))}</strong></label></div>` : `<p class="field-hint">On your public list they show as <strong>${esc(listedName(e, listed))}</strong>.</p>`}
         <p class="field-hint">A program that waives the fee puts them straight on the list. Otherwise they owe ${esc(fee != null ? fmtMoney(fee) : 'the fee')} and join the list when you mark it received.</p>`,
       submitLabel: 'Approve',
       cancelLabel: 'Not now',

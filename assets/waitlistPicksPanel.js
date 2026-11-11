@@ -56,6 +56,8 @@ async function loadData(litter) {
   return {
     kennel, entries, pups, programsById, kennelLitters, kennelPups,
     kennelSales: allSales.filter((s) => kennelPupIds.has(s.dog_id)),
+    // Every sale and dog: a family's number counts families with a pup selected.
+    allSales, dogsById,
     litterName: (id) => {
       const l = kennelLitters.find((x) => x.id === id);
       return l ? (l.nickname || `${dogsById.get(l.dam_id)?.call_name || 'Unknown'} × ${dogsById.get(l.sire_id)?.call_name || 'Unknown'}`) : 'another litter';
@@ -130,7 +132,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
 
   const available = d.pups.filter((p) => isPupAvailable(p, d.sales));
   const queue = litterQueue(d.entries, litter, d.pups, d.sales, opts);
-  const positions = overallPositions(d.entries, litter.kennel_id, d.programsById);
+  const positions = overallPositions(d.entries, litter.kennel_id, d.programsById, { sales: d.allSales, dogs: d.dogsById });
   const open = d.offers.find((o) => o.outcome === 'open' && !o.is_archived) || null;
   // The turn open in the kennel (at most one since §16.1; older offers may leave more).
   const kennelTurns = openTurns(d.kennelOffers, litter.kennel_id);

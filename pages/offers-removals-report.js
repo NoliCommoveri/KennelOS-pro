@@ -19,6 +19,7 @@ import { SERIES_COLORS } from '../assets/chartView.js';
 
 const WHAT = [
   ...WAITLIST_OFFER_OUTCOME.filter((o) => ['accepted', 'passed', 'no_response'].includes(o.value)).map((o) => ({ value: o.value, label: `Offer ${o.label.toLowerCase()}` })),
+  { value: 'accepted_backed_out', label: 'Offer accepted, then backed out' },
   ...EXIT_GROUPS
 ];
 const whatLabel = (v) => WHAT.find((w) => w.value === v)?.label || v;
@@ -70,7 +71,7 @@ async function init() {
       ] });
       return [
         { type: 'hbar', title: 'How offers ended', sort: false, showZero: true, color: SERIES_COLORS[2], format: ofOffers,
-          rows: [{ label: 'Accepted', value: s.accepted }, { label: 'Passed', value: s.passed }, { label: 'No response', value: s.noResponse }],
+          rows: [{ label: 'Accepted', value: s.accepted }, { label: 'Accepted, then backed out', value: s.backedOut }, { label: 'Passed', value: s.passed }, { label: 'No response', value: s.noResponse }],
           emptyText: 'No offers closed in this range.' },
         { type: 'hbar', title: 'Why families passed', color: SERIES_COLORS[6],
           rows: count(list.filter((r) => r.what === 'passed'), reason), emptyText: 'No passes in this range.' },

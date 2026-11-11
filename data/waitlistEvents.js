@@ -35,7 +35,7 @@
 // so her device doesn't offer a second family.
 import { familySale } from './familyExtras.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
-import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf } from './waitlistRules.js';
+import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf, sideSaleOf } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
 import { backOutReasons, BACK_OUT_OTHER } from './backOut.js';
 
@@ -298,6 +298,9 @@ export function planServerEvent(event, ctx) {
   if (offers.some((o) => turnIdOf(o) === p.turn_id)) return skip('already_applied');
   const why = (reason) => note(`${what}, but ${reason}, so it wasn't recorded here. Their status page showed the offer until your next update: let them know where things stand.`);
   if (entry.status !== 'active') return why(`they're no longer on the list (${entry.status})`);
+  // A family buying a pup through a side sale is never offered a turn meanwhile
+  // (Side Sale Spec §2): the server's queue was published before you recorded it.
+  if (sideSaleOf(entry, sales)) return why(`you'd recorded a side sale to them (${pupName(sideSaleOf(entry, sales).dog_id)}, waiting on the deposit)`);
   const open = kennelOffers.filter((o) => !o.is_archived && o.outcome === 'open');
   if (open.length) return why('another turn is open on your records');
   const turnRows = [];

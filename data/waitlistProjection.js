@@ -24,7 +24,7 @@ import {
   waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, publicWantsMore, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
-  messengerLink, embedOrigins
+  messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, LISTEN_LIVE_LITTER
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
@@ -45,8 +45,8 @@ import { portalEntryView, portalOn } from './portalFeed.js';
 
 export const PROJECTION_FORMAT = 1;
 
-// The litter statuses the waitlist works with (as on the Waitlist and family pages).
-export const LIVE_LITTER = ['expected', 'whelped', 'weaning', 'ready'];
+// The litter statuses the waitlist works with: waitlistRules' one list (isWaitlistLitter).
+export const LIVE_LITTER = LISTEN_LIVE_LITTER;
 
 const byId = (a, b) => String(a.id).localeCompare(String(b.id));
 const orNull = (v) => (v === undefined || v === '' ? null : v);
@@ -186,9 +186,14 @@ function entryView(entry, ctx) {
   if (pickup) view.pickup = pickup;
   // Backing out (Family Requests plan §7): with an open sale they can tell her; their
   // request as their page shows it (her reason list and policy text are the kennel's).
-  if (companion) {
-    view.back_out = { available: true, request: requestView(entry.back_out_request, ctx.today, (r) => ({ reason: r.reason?.label || '', outcome: r.outcome || null })) };
-  }
+  // A back-out she approved ends that sale, so it shows without one too, for the
+  // days a decided request stays (what happened to their deposit), never as a form.
+  const backOut = requestView(entry.back_out_request, ctx.today, (r) => ({ reason: r.reason?.label || '', outcome: r.outcome || null }));
+  if (companion) view.back_out = { available: true, request: backOut };
+  else if (backOut && backOut.decided === 'approved') view.back_out = { available: false, request: backOut };
+  // Her policies banner (it compares her last change with the day they applied) for a
+  // placed family with an open sale too: a back-out policy matters most to them.
+  if (companion && entry.applied_date && !WAITLIST_OPEN_STATUSES.includes(entry.status)) view.applied_date = entry.applied_date;
   if (!WAITLIST_OPEN_STATUSES.includes(entry.status)) return view;
 
   const program = ctx.programsById.get(entry.waitlist_program_id) || null;
@@ -482,7 +487,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const litterLabels = new Map();
   const notes = new Map();
   const litterViews = {};
-  for (const litter of litters.filter((l) => l.kennel_id === kennel.id && !l.is_archived && LIVE_LITTER.includes(l.status)).sort(byId)) {
+  for (const litter of litters.filter((l) => isWaitlistLitter(l, kennel)).sort(byId)) {
     const pups = dogs.filter((d) => d.litter_id === litter.id);
     const queue = litterQueue(live, litter, pups, sales, opts);
     for (const q of queue) {
@@ -515,7 +520,11 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       ...litterLink(litter, kennel),
       ...(config.turn_prices !== false ? { prices: litterPrices(litter, pups.filter((d) => isPupAvailable(d, sales))) } : {}),
       pairing_id: orNull(litter.pairing_id),
+      // Only available pups: what a turn is picked from (the turn card, the server's
+      // automatic offers and the prices read this, never `reserved`).
       pups: pups.filter((d) => isPupAvailable(d, sales)).sort(byId).map((d) => publicPup(d, kennel)),
+      // Already Reserved (E2): pups whose disposition is Placed, the website's rule.
+      reserved: pups.filter(isPupReserved).sort(byId).map((d) => publicPup(d, kennel)),
       open_offer_entry_id: open ? open.entry_id : null
     };
   }
@@ -561,7 +570,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const ctx = {
     config, contactsById, programsById, offers: familyOffers, today, upcoming,
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
-    positions: overallPositions(live, kennel.id, programsById), prefPlaces: prefPlaces(live, kennel.id, programsById, config), matches, litterLabels, hidden, notes,
+    positions: overallPositions(live, kennel.id, programsById, { sales, dogs: dogsById }), prefPlaces: prefPlaces(live, kennel.id, programsById, config, { sales, dogs: dogsById }), matches, litterLabels, hidden, notes,
     // Each record's own pup's sale (familySale): a family back on the list for a
     // second pup gets its first pup's cards only on that pup's record.
     saleFor: (entry) => familySale(entry, sales, familyOffers, live),
@@ -706,7 +715,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       // Above the extras on a family's page (Family Requests plan §3): her message
       // and her own page with the details and prices (opened in a new tab).
       // Backing out: her reasons and what families read first, while any family can.
-      ...(Object.values(entryViews).some((v) => v.back_out) ? {
+      ...(Object.values(entryViews).some((v) => v.back_out?.available) ? {
         back_out_reasons: backOutReasons(config).map((r) => ({ id: r.id, label: r.label })),
         back_out_policy_text: backOutPolicyText(config, kennel.kennel_name)
       } : {}),
@@ -720,8 +729,13 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
     // the page is served (publicList, familyPages.listView).
     public_list: publicList(live, kennel.id, programsById, {
-      today, nameOf: (e) => entryName(e, contactsById.get(e.contact_id)), config,
+      today, nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), config, sales, dogs: dogsById,
       wantsMore: (e) => publicWantsMore(e, { config, breeds: kennelBreeds(kennel, dogs), dogsById })
+    }),
+    // Families with a pup selected (E1), at the numbers they hold: the public list
+    // has gaps there. Names as public_list's (private names masked).
+    public_selected: publicSelected(live, kennel.id, programsById, {
+      nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), config, sales, dogs: dogsById
     }),
     entries: entryViews,
     litters: litterViews,

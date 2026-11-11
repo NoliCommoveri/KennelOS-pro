@@ -5,7 +5,7 @@
 // waitlist's own rule (waitlistRules.pupMatchesPrefs), so "families who'd take this
 // pup" here is exactly who the waitlist would offer it to — minus the listen-only
 // parent choices, which are about litters, not pups.
-import { pupMatchesPrefs, isPupAvailable, prefColorTokens, WAITLIST_CONFIG_DEFAULTS } from './waitlistRules.js';
+import { pupMatchesPrefs, isPupAvailable, prefColorTokens, isPlacedFamily, WAITLIST_CONFIG_DEFAULTS } from './waitlistRules.js';
 import { REGISTRATION_TYPE, WAITLIST_REMOVED_REASON, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, registrationsForPurposes, cleanPurposes, descriptor } from './vocab.js';
 import { daysBetween } from './breedingReports.js';
 
@@ -22,8 +22,11 @@ export const FUNNEL_STAGES = [
 ];
 
 // How far one entry got: the index into FUNNEL_STAGES of its furthest stage.
-export function funnelStage(entry, offeredEntryIds = new Set()) {
-  if (entry.status === 'placed' || entry.placed_sale_id) return 4;
+// Placed is waitlistRules.isPlacedFamily: a family that backed out (its sale
+// cancelled or voided) got as far as Offered. `sales`: array or Map by id.
+export function funnelStage(entry, offeredEntryIds = new Set(), sales = []) {
+  if (isPlacedFamily(entry, sales)) return 4;
+  if (entry.placed_sale_id) return 3;
   if (offeredEntryIds.has(entry.id)) return 3;
   const listed = Boolean(entry.fee_received_date) || entry.status === 'active'
     || (entry.status === 'removed' && entry.removed_reason !== 'fee_expired');
@@ -33,11 +36,11 @@ export function funnelStage(entry, offeredEntryIds = new Set()) {
 }
 
 // Counts per stage: [{ value, label, count }].
-export function funnelCounts(entries, offers = []) {
+export function funnelCounts(entries, offers = [], sales = []) {
   const offered = new Set(offers.map((o) => o.entry_id));
   const counts = FUNNEL_STAGES.map((s) => ({ ...s, count: 0 }));
   for (const e of entries) {
-    const at = funnelStage(e, offered);
+    const at = funnelStage(e, offered, sales);
     for (let i = 0; i <= at; i++) counts[i].count += 1;
   }
   return counts;
@@ -55,8 +58,11 @@ export function exitReasons(entries) {
 }
 
 // Why one entry left the list, as a label; null while it's open or placed.
+// A back-out she approved (Keep or Refund) is its own exit, not a withdrawal.
+const backedOut = (e) => e.status === 'withdrawn' && e.back_out_request?.decided === 'approved';
 export function exitLabel(e) {
   if (e.status === 'declined') return 'Declined by you';
+  if (backedOut(e)) return 'Backed out';
   if (e.status === 'withdrawn') return 'Withdrew';
   if (e.status === 'expired') return 'Fee expired';
   if (e.status === 'removed') return e.removed_reason ? descriptor(WAITLIST_REMOVED_REASON, e.removed_reason).label : 'Removed';
@@ -70,7 +76,9 @@ export function offerOutcomes(offers) {
   const reasons = new Map();
   for (const o of offers) {
     if (o.outcome === 'open' || o.outcome === 'voided') continue;
-    const label = { accepted: 'Accepted', passed: 'Passed', no_response: 'No response' }[o.outcome] || o.outcome;
+    // An accepted offer the family later backed out of is its own outcome.
+    const label = o.outcome === 'accepted' && o.backed_out_date ? 'Backed out'
+      : { accepted: 'Accepted', passed: 'Passed', no_response: 'No response' }[o.outcome] || o.outcome;
     outcomes.set(label, (outcomes.get(label) || 0) + 1);
     if (o.outcome === 'passed') {
       const r = o.pass_reason?.label || 'Recorded by you';
@@ -80,10 +88,11 @@ export function offerOutcomes(offers) {
   return { outcomes: [...outcomes].map(([label, value]) => ({ label, value })), reasons: [...reasons].map(([label, value]) => ({ label, value })) };
 }
 
-// Days from applying to the placement's sale date, per placed family (sales by id).
+// Days from applying to the placement's sale date, per placed family (sales by id;
+// a family that backed out isn't placed: isPlacedFamily).
 export function daysToPlacement(entries, salesById) {
   return entries
-    .filter((e) => e.applied_date && e.placed_sale_id && salesById.get(e.placed_sale_id)?.sale_date)
+    .filter((e) => e.applied_date && isPlacedFamily(e, salesById) && salesById.get(e.placed_sale_id)?.sale_date)
     .map((e) => daysBetween(e.applied_date, salesById.get(e.placed_sale_id).sale_date))
     .filter((d) => d >= 0);
 }
@@ -245,7 +254,8 @@ export const EXIT_GROUPS = [
   { value: 'rules',      label: 'Didn’t follow the list’s rules' },
   { value: 'by_breeder', label: 'Removed by you' },
   { value: 'declined',   label: 'Declined by you' },
-  { value: 'withdrew',   label: 'Withdrew' }
+  { value: 'withdrew',   label: 'Withdrew' },
+  { value: 'backed_out', label: 'Backed out' }
 ];
 
 // Which EXIT_GROUPS value an entry left under; null while open or placed. A
@@ -254,6 +264,7 @@ export function exitGroup(e) {
   if (e.status === 'expired') return 'rules';
   if (e.status === 'removed') return RULE_REMOVAL_REASONS.includes(e.removed_reason) ? 'rules' : 'by_breeder';
   if (e.status === 'declined') return 'declined';
+  if (backedOut(e)) return 'backed_out';
   if (e.status === 'withdrawn') return 'withdrew';
   return null;
 }
@@ -271,13 +282,16 @@ export const CLOSED_OUTCOMES = ['accepted', 'passed', 'no_response'];
 
 // One row per closed offer and per family that left, for the Offers & Removals
 // report: { id, kind: 'offer'|'exit', date, entry, offer?, what }, newest first.
-// `what` is the outcome (accepted / passed / no_response) or the exit group.
+// `what` is the outcome (accepted / accepted_backed_out / passed / no_response) or
+// the exit group.
 export function offerAndExitRows(entries, offers) {
   const byId = new Map(entries.map((e) => [e.id, e]));
   const rows = [];
   for (const o of offers) {
     if (!CLOSED_OUTCOMES.includes(o.outcome) || !byId.has(o.entry_id)) continue;
-    rows.push({ id: `o:${o.id}`, kind: 'offer', date: o.outcome_date || o.offered_date || null, entry: byId.get(o.entry_id), offer: o, what: o.outcome });
+    // Accepted, then backed out: its own outcome, not an acceptance.
+    const what = o.outcome === 'accepted' && o.backed_out_date ? 'accepted_backed_out' : o.outcome;
+    rows.push({ id: `o:${o.id}`, kind: 'offer', date: o.outcome_date || o.offered_date || null, entry: byId.get(o.entry_id), offer: o, what });
   }
   for (const e of entries) {
     const g = exitGroup(e);
@@ -297,6 +311,7 @@ export function offerAndExitStats(rows) {
   return {
     closed: offers.length,
     accepted: n(offers, 'accepted'),
+    backedOut: n(offers, 'accepted_backed_out'),
     passed: n(offers, 'passed'),
     noResponse: n(offers, 'no_response'),
     countedPasses: offers.filter((r) => r.offer.counts_as_pass === true).length,

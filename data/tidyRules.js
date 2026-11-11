@@ -162,11 +162,15 @@ export function dogParentFindings(dogs, littersById) {
 }
 
 // Pups with a sale that's going ahead (open or delivered) whose plan isn't Placed.
+// Asked only once the deposit is in: a sale still at Deposit pending (a waitlist
+// pick, a side sale, or one from the Sale page) may yet fall through, and marking
+// the pup Placed early takes it away from the family whose turn it is.
 export function pupPlacedFindings(dogs, sales) {
-  const live = new Set(sales.filter((s) => !s.is_archived && s.status && !RELEASED_SALE_STATUSES.includes(s.status)).map((s) => s.dog_id));
+  const paid = (s) => !s.is_archived && s.status && s.status !== 'deposit_pending' && !RELEASED_SALE_STATUSES.includes(s.status);
+  const live = new Set(sales.filter(paid).map((s) => s.dog_id));
   return dogs
     .filter((d) => !d.is_archived && d.status === 'puppy' && d.disposition !== 'placed' && live.has(d.id))
-    .map((d) => ({ key: `placed:${d.id}`, kind: 'pup-placed', dog: d, sale: sales.find((s) => s.dog_id === d.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status)) }));
+    .map((d) => ({ key: `placed:${d.id}`, kind: 'pup-placed', dog: d, sale: sales.find((s) => s.dog_id === d.id && paid(s)) }));
 }
 
 // Pups of hers (owned) with no plan at all: blank reads as Undecided, which the

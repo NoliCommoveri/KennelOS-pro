@@ -199,7 +199,7 @@ export function previewPicks(data, { litterId, today, view = 'combined', eitherA
 
   const seen = withEitherAs(entries, eitherAs);
   const ranked = rankedList(seen, kennelId, programsById);
-  const positions = overallPositions(entries, kennelId, programsById);
+  const positions = overallPositions(entries, kennelId, programsById, { sales, dogs });
   const [openTurn] = openTurns(kennelOffers, kennelId);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const breeds = kennelBreeds(kennel, dogs);

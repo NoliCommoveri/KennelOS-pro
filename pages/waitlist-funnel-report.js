@@ -41,10 +41,10 @@ async function init() {
     dateRange: { label: 'Applied', date: (e) => e.applied_date },
     filters: [
       { id: 'status', label: 'Status', options: WAITLIST_ENTRY_STATUS, match: (e, v) => e.status === v },
-      { id: 'stage', label: 'Got as far as', options: FUNNEL_STAGES.map((s, i) => ({ value: String(i), label: s.label })), match: (e, v) => funnelStage(e, offered) === Number(v) }
+      { id: 'stage', label: 'Got as far as', options: FUNNEL_STAGES.map((s, i) => ({ value: String(i), label: s.label })), match: (e, v) => funnelStage(e, offered, salesById) === Number(v) }
     ],
     kpis: (list) => {
-      const placed = list.filter((e) => funnelStage(e, offered) === 4).length;
+      const placed = list.filter((e) => funnelStage(e, offered, salesById) === 4).length;
       const days = median(daysToPlacement(list, salesById));
       return [
         { label: 'Applied', value: String(list.length) },
@@ -57,7 +57,7 @@ async function init() {
       const { outcomes, reasons } = offerOutcomes(offersFor(list));
       return [
         { type: 'hbar', title: 'How far families got', sort: false, showZero: true,
-          rows: funnelCounts(list, offersFor(list)).map((s) => ({ label: s.label, value: s.count })) },
+          rows: funnelCounts(list, offersFor(list), salesById).map((s) => ({ label: s.label, value: s.count })) },
         { type: 'hbar', title: 'Why families left', color: SERIES_COLORS[1], rows: exitReasons(list), emptyText: 'No one has left the list in this range.' },
         { type: 'hbar', title: 'How offers ended', color: SERIES_COLORS[2], rows: outcomes, emptyText: 'No offers have closed yet.' },
         { type: 'hbar', title: 'Why families passed', color: SERIES_COLORS[6], rows: reasons, emptyText: 'No passes in this range.' }
@@ -67,7 +67,7 @@ async function init() {
       { header: 'Applied', value: (e) => (e.applied_date ? fmtDate(e.applied_date) : ''), csv: (e) => e.applied_date || '' },
       { header: 'Family', value: name },
       { header: 'Status', value: (e) => e.status || '', badge: WAITLIST_ENTRY_STATUS, csv: (e) => (e.status ? descriptor(WAITLIST_ENTRY_STATUS, e.status).label : '') },
-      { header: 'Got as far as', value: (e) => FUNNEL_STAGES[funnelStage(e, offered)].label },
+      { header: 'Got as far as', value: (e) => FUNNEL_STAGES[funnelStage(e, offered, salesById)].label },
       { header: 'Days', value: (e) => {
         const sale = e.placed_sale_id ? salesById.get(e.placed_sale_id) : null;
         if (sale?.sale_date && e.applied_date) return `${daysBetween(e.applied_date, sale.sale_date)} to placement`;

@@ -112,10 +112,10 @@ export function prefsSummary(entry) {
 // Small flags for the list row: paused / not ready yet / listen-only. Escaped HTML.
 export function entryFlags(entry, today, config = null) {
   const out = [];
-  if (isManuallyPaused(entry, today)) out.push(`<span class="badge badge-amber" title="${esc(entry.pause_reason || '')}">Paused to ${esc(entry.paused_until)}</span>`);
+  if (isManuallyPaused(entry, today)) out.push(`<span class="badge badge-amber" title="${esc(entry.pause_reason || '')}">Paused to ${esc(fmtDate(entry.paused_until))}</span>`);
   if (isReadyHeld(entry, today, config)) {
     out.push(today < readyFromDate(entry)
-      ? `<span class="badge badge-amber" title="They said they won't be ready to buy yet, so they aren't offered pups until then.">Not ready until ${esc(readyFromDate(entry))}</span>`
+      ? `<span class="badge badge-amber" title="They said they won't be ready to buy yet, so they aren't offered pups until then.">Not ready until ${esc(fmtDate(readyFromDate(entry)))}</span>`
       : `<span class="badge badge-amber" title="${esc(readyHoldText(entry, today, config))}">Ready now? ${entry.ready_check?.answer === 'no' ? 'Not yet' : 'No answer'}</span>`);
   }
   if (isListenOnly(entry)) out.push(`<span class="badge badge-blue">${entry.listen_mode === 'except' ? 'Skips some litters' : 'Listen-only'}</span>`);
@@ -500,13 +500,15 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
   const found = await lostSaleFamilyFor(saleId);
   if (!found) return null;
   const { kind, entry, sale } = found;
-  const [kennel, contact, pup, programsById, kennelEntries, feeCredit] = await Promise.all([
+  const [kennel, contact, pup, programsById, kennelEntries, feeCredit, allSales, allDogs] = await Promise.all([
     kennelRepo.getById(entry.kennel_id),
     entry.contact_id ? contactRepo.getById(entry.contact_id) : null,
     dogRepo.getById(sale.dog_id),
     waitlistProgramRepo.getMapForKennel(entry.kennel_id),
     waitlistEntryRepo.getByKennel(entry.kennel_id),
-    getSaleFeeCredit(sale.id)
+    getSaleFeeCredit(sale.id),
+    saleRepo.getAll({ includeArchived: true }),
+    dogRepo.getAll({ includeArchived: true })
   ]);
   const config = waitlistConfig(kennel);
   const name = entryName(entry, contact);
@@ -515,8 +517,9 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
   // what they paid beyond it is carried.
   const paid = paidBesidesCredits(sale, entry, { feeCredit, asStatus });
   const asActive = kennelEntries.map((e) => (e.id === entry.id ? { ...e, status: 'active' } : e));
-  const pos = overallPositions(asActive, entry.kennel_id, programsById).get(entry.id);
-  const total = overallPositions(asActive, entry.kennel_id, programsById).size;
+  const places = overallPositions(asActive, entry.kennel_id, programsById, { sales: allSales, dogs: allDogs });
+  const pos = places.get(entry.id);
+  const total = places.size;
   const intro = kind === 'placed'
     ? `${esc(name)} goes back on the list in their original place, <strong>#${esc(pos)} of ${esc(total)}</strong> by the date their fee came in, with their passes as they were. They can be offered ${esc(pupName)}'s litter again.`
     : `${esc(name)} picked ${esc(pupName)} and still holds the turn. Their pick is cleared and the turn gets a new respond-by date so they can pick another pup.`;
@@ -686,3 +689,27 @@ export async function creditDialog({ entry, name, credit = null }) {
   return ok ? saved : null;
 }
 
+
+// A turn ended because no pup was left in it (waitlistActions.watchEmptiedTurns,
+// started by app.js after any change to her data): whose turn, and who holds the
+// turn now or is next, so she knows who to contact. Never silent.
+export async function reportEmptiedTurns(result) {
+  const [{ litterLabel }, entries, contacts, litters, dogs] = await Promise.all([
+    import('../data/litterCheckin.js'),
+    waitlistEntryRepo.getAll({ includeArchived: true }),
+    contactRepo.getAll({ includeArchived: true }),
+    litterRepo.getAll({ includeArchived: true }),
+    dogRepo.getAll({ includeArchived: true })
+  ]);
+  const entriesById = new Map(entries.map((e) => [e.id, e]));
+  const contactsById = new Map(contacts.map((c) => [c.id, c]));
+  const littersById = new Map(litters.map((l) => [l.id, l]));
+  const dogsById = new Map(dogs.map((d) => [d.id, d]));
+  const lines = describeOfferChanges(result, {
+    nameOf: (id) => { const e = entriesById.get(id); return e ? entryName(e, contactsById.get(e.contact_id)) : 'A family'; },
+    litterOf: (id) => (littersById.get(id) ? litterLabel(littersById.get(id), dogsById) : 'A litter'),
+    fmtDate
+  });
+  if (!lines.length) return;
+  await alertModal({ title: result.ended.length === 1 ? 'A turn ended: no pup left in it' : 'Turns ended: no pup left in them', message: lines.join('\n\n') });
+}

@@ -56,7 +56,7 @@ import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import {
   overdueTurns, overdueFees, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, businessDays, autoOffers, closingTrigger,
   prefChangeSummary, prefChangeEffect, PREF_FIELD_LABEL, depositsDueLitters,
-  readyCheck, readyCheckOverdue, isSideSalePending, pupClaims
+  readyCheck, readyCheckOverdue, isSideSalePending, pupClaims, waitlistLitters
 } from './waitlistRules.js';
 import {
   recordOutcome, markFeeExpired, recordReadyAnswer, undoRemoval, cancelSideSale, hasPendingRequest, markMessagesRead,
@@ -1154,7 +1154,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
       const config = waitlistConfig(kennel);
       sales ??= await saleRepo.getAll({ includeArchived: true });
       if (!programs.has(e.kennel_id)) programs.set(e.kennel_id, await waitlistProgramRepo.getMapForKennel(e.kennel_id));
-      const live = litters.filter((l) => l.kennel_id === e.kennel_id && !l.is_archived && ['expected', 'whelped', 'weaning', 'ready'].includes(l.status));
+      const live = waitlistLitters(e.kennel_id, litters);
       const fx = prefChangeEffect(e, r.changes || {}, {
         litters: live, entries: entries.filter((x) => x.kennel_id === e.kennel_id), offers, pups: [...dogsById.values()], sales, today, config, programsById: programs.get(e.kennel_id)
       });

@@ -93,8 +93,11 @@ export async function draftFor(entryId, kind, extra = {}) {
     facts.transport = editionFlags.accounts ? sharedTransport(await accountRepo.getAll()) : [];
   }
   if (entry.status === 'active') {
-    const [entries, programs] = await Promise.all([waitlistEntryRepo.getByKennel(kennel.id), waitlistProgramRepo.getMapForKennel(kennel.id)]);
-    facts.position = overallPositions(entries, kennel.id, programs).get(entry.id) || null;
+    const [entries, programs, sales, dogs] = await Promise.all([
+      waitlistEntryRepo.getByKennel(kennel.id), waitlistProgramRepo.getMapForKennel(kennel.id),
+      saleRepo.getAll({ includeArchived: true }), dogRepo.getAll({ includeArchived: true })
+    ]);
+    facts.position = overallPositions(entries, kennel.id, programs, { sales, dogs }).get(entry.id) || null;
   }
   return { entryId, name: facts.family, email, ...draftEmail(kind, facts, config) };
 }

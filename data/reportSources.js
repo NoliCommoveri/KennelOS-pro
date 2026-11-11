@@ -235,12 +235,14 @@ export async function loadApplications() {
 // `paused(e)` and `waited(e)` (days on the list) as the report shows them;
 // `pipeline`: the in-scope entries, for those still to review or with a fee due.
 export async function loadWaitlistToday(today) {
-  const [entries, offers, programs, contacts, kennels] = await Promise.all([
+  const [entries, offers, programs, contacts, kennels, sales, dogs] = await Promise.all([
     waitlistEntryRepo.getAll({ includeArchived: false }),
     waitlistOfferRepo.getAll({ includeArchived: false }),
     waitlistProgramRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
-    kennelRepo.getAll({ includeArchived: true })
+    kennelRepo.getAll({ includeArchived: true }),
+    saleRepo.getAll({ includeArchived: true }),
+    dogRepo.getAll({ includeArchived: true })
   ]);
   const programsById = new Map(programs.map((p) => [p.id, p]));
   const kennelsById = new Map(kennels.map((k) => [k.id, k]));
@@ -249,7 +251,7 @@ export async function loadWaitlistToday(today) {
   const waited = (e) => { const s = listedSince(e); return s ? Math.max(0, daysBetween(s, today)) : null; };
   const place = new Map();
   for (const kennelId of new Set(entries.map((e) => e.kennel_id))) {
-    for (const [id, n] of overallPositions(entries, kennelId, programsById)) place.set(id, n);
+    for (const [id, n] of overallPositions(entries, kennelId, programsById, { sales, dogs })) place.set(id, n);
   }
   const rows = entries.filter((e) => e.status === 'active' && place.has(e.id))
     .sort((a, b) => kennelName(a).localeCompare(kennelName(b)) || place.get(a.id) - place.get(b.id));

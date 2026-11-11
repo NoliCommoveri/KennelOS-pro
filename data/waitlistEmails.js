@@ -18,6 +18,8 @@ export const EMAIL_KINDS = Object.freeze([
   'request_approved', 'request_declined', 'status_link', 'note',
   // Getting their pup home (Family Requests plan §5.1): she sends it, never the server.
   'transport_options',
+  // A back-out she approved, one wording per outcome (what happened to the deposit).
+  'backed_out_keep', 'backed_out_move', 'backed_out_refund',
   // Sent by the server itself while her phone is off (W2 step 7).
   'offer_reminder', 'fee_reminder', 'ready_check'
 ]);
@@ -55,6 +57,9 @@ export const EMAIL_TEMPLATE_KINDS = Object.freeze([
   { kind: 'litter_born', label: 'A litter you match was born' },
   { kind: 'request_approved', label: 'Their request approved' },
   { kind: 'request_declined', label: 'Their request declined' },
+  { kind: 'backed_out_keep', label: 'Backing out approved: deposit kept' },
+  { kind: 'backed_out_move', label: 'Backing out approved: deposit moves to their next pup' },
+  { kind: 'backed_out_refund', label: 'Backing out approved: deposit refunded' },
   { kind: 'status_link', label: 'Their status page link' },
   { kind: 'transport_options', label: 'Transport options (getting their pup home)' },
   { kind: 'offer_reminder', label: 'Reminder: their turn ends soon (sent by KennelOS)' },
@@ -102,6 +107,18 @@ export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
   request_approved: {
     subject: 'Your request to [Kennel Name]',
     body: 'Hi [Family],\n\nWe\'ve approved your request [Request]. Your status page shows the change.\n\n[Kennel Name]'
+  },
+  backed_out_keep: {
+    subject: 'Your puppy sale with [Kennel Name] is cancelled',
+    body: 'Hi [Family],\n\nAs you asked, we\'ve cancelled your puppy\'s sale. Your deposit is kept and isn\'t refunded. Your status page shows the change. If you\'d like to talk it over, send us a message from your status page.\n\n[Kennel Name]'
+  },
+  backed_out_move: {
+    subject: 'Your puppy sale with [Kennel Name] is cancelled',
+    body: 'Hi [Family],\n\nAs you asked, we\'ve cancelled your puppy\'s sale. Your deposit moves to your next puppy, and you\'re back on our waitlist. Your status page shows your place.\n\n[Kennel Name]'
+  },
+  backed_out_refund: {
+    subject: 'Your puppy sale with [Kennel Name] is cancelled',
+    body: 'Hi [Family],\n\nAs you asked, we\'ve cancelled your puppy\'s sale, and we\'re refunding your deposit. Your status page shows the change.\n\n[Kennel Name]'
   },
   request_declined: {
     subject: 'Your request to [Kennel Name]',

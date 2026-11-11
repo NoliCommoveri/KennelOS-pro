@@ -42,7 +42,7 @@ import { programIconHtml } from '../assets/programIcons.js';
 import { offerSpecs, retryEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
-  entryName, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
+  entryName, publicSourceName, holdsPlace, waitlistLitters, isWaitlistLitter, LISTEN_LIVE_PAIRING, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, isPaused, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
   eligiblePupsFor, nextFamilyForLitter, turnSpent, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, isPupAvailable,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
@@ -87,8 +87,8 @@ const els = {
   error: document.getElementById('page-error')
 };
 
-const LIVE_PAIRING = ['planned', 'bred', 'confirmed_pregnant'];
-const LIVE_LITTER = ['expected', 'whelped', 'weaning', 'ready'];
+// The family's sales and dogs, for their number (a family with a pup selected keeps theirs).
+const numbering = () => ({ sales: ctx.sales, dogs: ctx.dogsById });
 // A family picks which sires and dams they're listening for only once they're ON
 // the list: approved AND their fee received (or waived, which makes them active at
 // approval). Before that there's nothing to listen for, and after they leave the
@@ -182,7 +182,7 @@ function endableSale(e) {
 // for all their narrowed answers together, then each one, skipping a number
 // already shown. Escaped HTML, or '' for a family whose answers are all open.
 function prefPlacesText(e, overall) {
-  const places = prefPlaces(ctx.kennelEntries, ctx.kennel.id, ctx.programs, ctx.config).get(e.id) || {};
+  const places = prefPlaces(ctx.kennelEntries, ctx.kennel.id, ctx.programs, ctx.config, numbering()).get(e.id) || {};
   const label = {
     all: 'for their preferences',
     sex: `for ${descriptor(WAITLIST_PREF_SEX, e.pref_sex).label}`,
@@ -233,14 +233,15 @@ function statusLines(e) {
     if (e.fee_due_date && e.fee_due_date < today) lines.push('<span class="badge badge-red">The pay-by date has passed</span>');
     if (ctx.config.payment_instructions) lines.push(`<span class="faint">Your payment instructions: ${esc(ctx.config.payment_instructions)}</span>`);
   } else if (e.status === 'active') {
-    const pos = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs).get(e.id);
-    const total = rankedList(ctx.kennelEntries, ctx.kennel.id, ctx.programs).length;
+    const places = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering());
+    const pos = places.get(e.id);
+    const total = places.size;
     lines.push(`<strong style="font-size:1.3em;">#${esc(pos)}</strong> of ${esc(total)} on the list.`);
     lines.push(`In line since ${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ` <span class="badge badge-purple">Moved by you</span> <span class="faint">(fee received ${esc(fmtDate(e.fee_received_date))})</span>` : ''}.`);
     const placesLine = prefPlacesText(e, pos);
     if (placesLine) lines.push(placesLine);
     lines.push(`Passes used: ${passesUsed(e, ctx.offers)} of ${esc(ctx.config.max_passes)}.`);
-    if (canUndoFeeReceived(e, ctx.offers, today)) lines.push(`<span class="badge badge-amber">Fee marked received by mistake? You can undo it until ${esc(fmtDate(addDaysToYMD(String(e.fee_received_at).slice(0, 10), REMOVAL_UNDO_DAYS)))}, until they're offered a turn</span>`);
+    if (canUndoFeeReceived(e, ctx.offers, today, ctx.sales)) lines.push(`<span class="badge badge-amber">Fee marked received by mistake? You can undo it until ${esc(fmtDate(addDaysToYMD(String(e.fee_received_at).slice(0, 10), REMOVAL_UNDO_DAYS)))}, until they're offered a turn</span>`);
     const flags = entryFlags(e, today, ctx.config);
     const why = isReadyHeld(e, today, ctx.config)
       ? `${esc(readyHoldText(e, today, ctx.config))} They aren't offered pups (or charged passes) until then, and keep their place.`
@@ -254,6 +255,11 @@ function statusLines(e) {
   } else if (e.status === 'placed') {
     const placedPup = ctx.sales.find((x) => x.id === e.placed_sale_id)?.dog_id;
     lines.push(e.placed_sale_id ? `Placed${placedPup ? ` with ${esc(dogName(placedPup))}` : ''} — <a href="sale.html?id=${encodeURIComponent(e.placed_sale_id)}">open the sale →</a>` : 'Placed.');
+    // Pup selected (E1): they keep their place and number until the pup goes home.
+    if (holdsPlace(e, numbering())) {
+      const places = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering());
+      lines.push(`<span class="badge badge-green">Pup selected</span> <strong>#${esc(places.get(e.id))}</strong> of ${esc(places.size)} on the list. <span class="faint">They keep this number until ${placedPup ? esc(dogName(placedPup)) : 'their pup'} goes home (the sale marked Delivered), so nobody behind them moves back if a pup is lost.</span>`);
+    }
   } else if (e.status === 'withdrawn') {
     lines.push(`Withdrew${e.withdrawn_date ? ` ${esc(fmtDate(e.withdrawn_date))}` : ''}.`);
     if (canUndoWithdrawal(e, today)) lines.push(`<span class="badge badge-amber">You can undo this until ${esc(fmtDate(addDaysToYMD(e.withdrawn_date, REMOVAL_UNDO_DAYS)))}</span>`);
@@ -309,7 +315,7 @@ function suggestedText(e) {
     return `Hi ${first}, this is ${kennel}. You're approved for our waitlist!${fee ? ` Your application fee of ${fee} is due${e.fee_due_date ? ` by ${fmtDate(e.fee_due_date)}` : ''}, and you join the list as soon as it's received.` : ''}${ctx.config.payment_instructions ? `\n\n${ctx.config.payment_instructions}` : ''}${linkLine}`;
   }
   if (e.status === 'active') {
-    const pos = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs).get(e.id);
+    const pos = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering()).get(e.id);
     return `Hi ${first}, this is ${kennel} with a waitlist update: you're #${pos} on our list.${linkLine}`;
   }
   return `Hi ${first}, this is ${kennel}. ${linkLine}`.trim();
@@ -590,7 +596,8 @@ async function onBackOut(decision) {
       typed.addEventListener('input', () => { confirm.disabled = typed.value.trim() !== 'REFUND'; });
     }
   });
-  if (ok) await emailThem('request_approved', { request: { field: 'back_out_request', request } });
+  // Its own wording per outcome: what happened to their deposit.
+  if (ok) await emailThem(`backed_out_${outcome}`, { request: { field: 'back_out_request', request } });
 }
 
 // After approving a time or a cancel: nothing she typed on the sale changes without
@@ -886,7 +893,8 @@ async function onApprove() {
         ${matches.length ? '<span class="field-hint">A match is only a suggestion. Pick it if it\'s the same family.</span>' : ''}
       </div>`;
   // Their request on the application to list privately (Spec §15.3): she answers it here.
-  const full = entryName(e, ctx.contact);
+  // `full` is the name the public list is built from (publicSourceName, K7-8).
+  const full = publicSourceName(e, ctx.contact);
   const dns = dnsMatches(e);
   const dnsLine = dns.length ? `<p class="dns-alert-line"><span class="badge badge-red">Do not sell</span> ${esc(doNotSellWarning(dns))}</p>` : '';
   const suggested = suggestions(e);
@@ -898,9 +906,9 @@ async function onApprove() {
       <p style="margin:6px 0;">On your public list, approve shows them as <strong>${esc(privateName(full))}</strong> and decline as <strong>${esc(publicName(full))}</strong> (their place in line is the same either way)</p>
       <label class="check-inline" style="display:block;"><input type="radio" name="ap-private" value="yes"> Approve</label>
       <label class="check-inline" style="display:block;"><input type="radio" name="ap-private" value="no"> Decline</label>
-    </div>` : '';
+    </div>` : `<p class="field-hint" style="margin:10px 0 0;">On your public list they show as <strong>${esc(listedName(e, full))}</strong>.</p>`;
   await formModal({
-    title: `Approve ${full}?`,
+    title: `Approve ${entryName(e, ctx.contact)}?`,
     confirmLabel: 'Approve',
     bodyHtml: `${dnsLine}<div class="form-grid">
         <div class="field"><label>Approval date</label><input id="ap-date" type="date" value="${esc(todayYMD())}"></div>
@@ -1053,7 +1061,7 @@ async function onMove() {
   const e = ctx.entry;
   const others = rankedList(ctx.kennelEntries, ctx.kennel.id, ctx.programs).filter((x) => x.id !== e.id);
   const contactsById = new Map(ctx.contacts.map((c) => [c.id, c]));
-  const positions = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs);
+  const positions = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering());
   const otherOpts = others.map((x) => `<option value="${esc(x.id)}">#${esc(positions.get(x.id))} ${esc(entryName(x, contactsById.get(x.contact_id)))}</option>`).join('');
   await formModal({
     title: 'Move their place',
@@ -1099,15 +1107,15 @@ function listenSummary(e) {
   if (!parts.length) return esc('Only: no sires or dams chosen yet, so no litter is offered to them');
   if (except) {
     const skipped = [
-      ...ctx.litters.filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status) && !isListeningFor(e, l)).map(litterLabel),
-      ...ctx.pairings.filter((p) => !p.is_archived && LIVE_PAIRING.includes(p.status) && !isListeningFor(e, p)
+      ...waitlistLitters(ctx.kennel, ctx.litters).filter((l) => !isListeningFor(e, l)).map(litterLabel),
+      ...ctx.pairings.filter((p) => !p.is_archived && LISTEN_LIVE_PAIRING.includes(p.status) && !isListeningFor(e, p)
         && !ctx.litters.some((l) => l.pairing_id === p.id)).map((p) => `${pairingLabel(p)} (pairing)`)
     ];
     return `${esc(`All except: ${parts.join(' · ')}`)}<br><span class="faint">${esc(skipped.length ? `Right now that skips: ${skipped.join(', ')}` : 'No current litter or upcoming pairing has these parents.')}</span>`;
   }
   const covers = [
-    ...ctx.litters.filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status) && isListeningFor(e, l)).map(litterLabel),
-    ...ctx.pairings.filter((p) => !p.is_archived && LIVE_PAIRING.includes(p.status) && isListeningFor(e, p)
+    ...waitlistLitters(ctx.kennel, ctx.litters).filter((l) => isListeningFor(e, l)).map(litterLabel),
+    ...ctx.pairings.filter((p) => !p.is_archived && LISTEN_LIVE_PAIRING.includes(p.status) && isListeningFor(e, p)
       && !ctx.litters.some((l) => l.pairing_id === p.id)).map((p) => `${pairingLabel(p)} (pairing)`)
   ];
   return `${esc(`Only: ${parts.join(' · ')}`)}<br><span class="faint">${esc(covers.length ? `Right now that's: ${covers.join(', ')}` : 'No current litter or upcoming pairing from these parents.')}</span>`;
@@ -1151,7 +1159,7 @@ function publicListNameHtml(e) {
     ? (req.decided ? ` <span class="faint">— they asked to list privately; you ${req.decided === 'approved' ? 'approved' : 'declined'} it ${esc(fmtDate(req.decided_date))}</span>`
       : ' <span class="badge badge-blue">Asked to list privately — you decide when you approve</span>')
     : '';
-  return `${esc(listedName(e, entryName(e, ctx.contact)))}${e.private_listing ? ' <span class="faint">(private)</span>' : ''}${asked}`;
+  return `${esc(listedName(e, publicSourceName(e, ctx.contact)))}${e.private_listing ? ' <span class="faint">(private)</span>' : ''}${asked}`;
 }
 
 // Credits for funds already received (receivedCredits.js): each one, what it can pay
@@ -1383,7 +1391,7 @@ function litterChoices(e) {
   const opts = { today, config: ctx.config, programsById: ctx.programs };
   const [held] = openTurns(ctx.kennelOffers, ctx.kennel.id);
   return ctx.litters
-    .filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status))
+    .filter((l) => isWaitlistLitter(l, ctx.kennel))
     .map((l) => {
       const pups = kennelLitterPups(l);
       const offers = ctx.kennelOffers.filter((o) => o.litter_id === l.id);
@@ -1825,7 +1833,7 @@ function renderProfileActions() {
 async function confirmNarrowing(changes) {
   const e = ctx.entry;
   const fx = prefChangeEffect(e, changes, {
-    litters: ctx.litters.filter((l) => !l.is_archived && LIVE_LITTER.includes(l.status)),
+    litters: waitlistLitters(ctx.kennel, ctx.litters),
     entries: ctx.kennelEntries, offers: ctx.kennelOffers, pups: [...ctx.dogsById.values()], sales: ctx.sales,
     today: todayYMD(), config: ctx.config, programsById: ctx.programs
   });
@@ -2091,7 +2099,7 @@ function interactButtons(e) {
     case 'active': main = b('offer', 'Offer pups…', lost ? '' : 'btn-primary')
       // A side sale (Side Sale Spec): outside the turn order; not while they hold the turn or already buy one.
       + (!ctx.offers.some((o) => o.outcome === 'open' && !o.is_archived) && !sideSaleOf(e, ctx.sales) ? b('side', 'Record a side sale…') : '')
-      + b('move', 'Move place…') + (canUndoFeeReceived(e, ctx.offers, todayYMD()) ? b('undofee', 'Undo fee received…') : ''); break;
+      + b('move', 'Move place…') + (canUndoFeeReceived(e, ctx.offers, todayYMD(), ctx.sales) ? b('undofee', 'Undo fee received…') : ''); break;
     case 'declined': main = (canUndoDecline(e, todayYMD()) ? b('undo', 'Undo decline', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     case 'expired': main = (canUndoExpire(e, todayYMD()) ? b('undo', 'Reopen application', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     case 'removed': main = (canUndoRemoval(e, todayYMD()) ? b('undo', 'Undo removal', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;

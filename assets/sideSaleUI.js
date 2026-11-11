@@ -13,13 +13,12 @@ import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, entryName, overallPositions, openTurns, sideSaleOf, sideSaleBlocker, sideSaleIssues,
-  pupClaims, respondByDate
+  pupClaims, respondByDate, waitlistLitters
 } from '../data/waitlistRules.js';
 import { DISPOSITION, REGISTRATION_TYPE, SEX, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, registrationsForPurposes, cleanPurposes, descriptor } from '../data/vocab.js';
 import { esc, fmtDate, todayYMD, alertModal, confirmModal } from './ui.js';
 import { formModal } from './waitlistUI.js';
 
-const LIVE = ['expected', 'whelped', 'weaning', 'ready'];
 const label = (vocab, v) => descriptor(vocab, v)?.label || v || '—';
 
 async function kennelData(kennelId) {
@@ -30,7 +29,7 @@ async function kennelData(kennelId) {
   ]);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
-  const kennelLitters = litters.filter((l) => l.kennel_id === kennelId && LIVE.includes(l.status));
+  const kennelLitters = waitlistLitters(kennelId, litters);
   const litterLabel = (l) => (l ? (l.nickname || `${dogsById.get(l.dam_id)?.call_name || 'Unknown'} × ${dogsById.get(l.sire_id)?.call_name || 'Unknown'}`) : '');
   return {
     kennel, config: waitlistConfig(kennel), entries, offers, kennelLitters, dogs, dogsById, sales, contactsById, programsById,
@@ -43,7 +42,7 @@ async function kennelData(kennelId) {
 // sale already waiting. → [entry] in list order.
 function eligibleFamilies(d) {
   const holders = new Set(openTurns(d.offers, d.kennel.id).map((t) => t.entry_id));
-  const pos = overallPositions(d.entries, d.kennel.id, d.programsById);
+  const pos = overallPositions(d.entries, d.kennel.id, d.programsById, { sales: d.sales, dogs: d.dogsById });
   return d.entries.filter((e) => e.status === 'active' && !e.is_archived && !holders.has(e.id) && !sideSaleOf(e, d.sales))
     .sort((a, b) => (pos.get(a.id) || 0) - (pos.get(b.id) || 0))
     .map((e) => ({ entry: e, position: pos.get(e.id) }));
