@@ -183,7 +183,7 @@ export async function setWebsitePrices(kennel, on) {
     if (out?.site) await noteWebsiteAnswer(kennel.id, { site: out.site });
     return out?.site || link.site;
   } catch (err) {
-    if (err instanceof KennelportError && err.kind === 'not_linked') await clearWebsiteLink(kennel.id);
+    if (err instanceof KennelportError && err.kind === 'not_linked') { await clearWebsiteLink(kennel.id); await turnPortalOff(kennel.id); }
     throw err;
   }
 }
@@ -208,19 +208,34 @@ export async function connectWebsite(kennel, code, deviceLabel) {
   return out.site;
 }
 
+// The puppy portal off on the kennel (K7-3): the families' status pages stop
+// offering it, and Companion and Furever come back. What it had learned (who was
+// handed over, the facts applied) is kept, so a device still linked turns it back on
+// with its next send as it was. → whether it was on.
+export async function turnPortalOff(kennelId) {
+  const k = await kennelRepo.getById(kennelId);
+  const p = k?.kennelport_portal;
+  if (!p) return false;
+  const keep = (Array.isArray(p.home) && p.home.length) || (p.facts && Object.keys(p.facts).length);
+  await kennelRepo.update(kennelId, { kennelport_portal: keep ? { url: null, handoff_url: null, handoff_key: null, handoff_minutes: p.handoff_minutes || 10, home: p.home || [], facts: p.facts || {} } : null });
+  return Boolean(p.handoff_url && p.handoff_key);
+}
+
 // Stop this device. KennelPort stops this device's token; the last device to stop
 // is an Unlink there. Forgets the link here even when KennelPort can't be reached.
+// This device can't tell whether it was the last, so the puppy portal goes off the
+// kennel (K7-3); a device still connected turns it back on within the hour.
+// → { reached, portal_off }.
 export async function disconnectWebsite(kennelId) {
   const link = await getWebsiteLink(kennelId);
   if (!link) return;
+  let reached = true;
   try { await stopLink(link.token); } catch (err) {
-    if (!(err instanceof KennelportError) || err.kind !== 'not_linked') {
-      await clearWebsiteLink(kennelId);
-      return { reached: false };
-    }
+    if (!(err instanceof KennelportError) || err.kind !== 'not_linked') reached = false;
   }
   await clearWebsiteLink(kennelId);
-  return { reached: true };
+  const portalOff = await turnPortalOff(kennelId);
+  return { reached, portal_off: portalOff };
 }
 
 // --- Update website -------------------------------------------------------------
@@ -287,7 +302,7 @@ export async function updateWebsite(kennel, { bundleId = crypto.randomUUID(), to
   if (!link) throw new KennelportError('not_linked', 'Connect your website first.', 'not_linked');
   if (!(await licenseOk())) throw new LicenseLapsedError();
   const forget = async (err) => {
-    if (err instanceof KennelportError && err.kind === 'not_linked') await clearWebsiteLink(kennel.id);
+    if (err instanceof KennelportError && err.kind === 'not_linked') { await clearWebsiteLink(kennel.id); await turnPortalOff(kennel.id); }
     throw err;
   };
   // The site's facts first: whether it takes her prices now (Use my KennelOS

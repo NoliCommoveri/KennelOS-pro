@@ -184,9 +184,10 @@ export function previewPicks(data, { litterId, today, view = 'combined', eitherA
   const kennelOffers = offers.filter((o) => !o.is_archived && (!o.kennel_id || o.kennel_id === kennelId));
   const base = litters.find((l) => l.id === litterId);
   if (!base) throw new Error('That litter no longer exists.');
+  if (base.waitlist_off) throw new Error('This litter is kept off the waitlist (Non-Waitlist Sales). Put it back on the waitlist from its page first.');
   const alreadyOpen = Boolean(base.picks_opened_date);
   const target = alreadyOpen ? base : { ...base, picks_opened_date: today };
-  const kennelLitters = litters.filter((l) => l.kennel_id === kennelId && !l.is_archived).map((l) => (l.id === litterId ? target : l));
+  const kennelLitters = litters.filter((l) => l.kennel_id === kennelId && !l.is_archived && !l.waitlist_off).map((l) => (l.id === litterId ? target : l));
   const openLitters = kennelLitters.filter((l) => l.picks_opened_date);
   const otherOpen = openLitters.filter((l) => l.id !== litterId);
   const shown = view === 'alone' ? [target] : [...otherOpen.sort((a, b) => String(a.picks_opened_date).localeCompare(String(b.picks_opened_date)) || String(a.id).localeCompare(String(b.id))), target];

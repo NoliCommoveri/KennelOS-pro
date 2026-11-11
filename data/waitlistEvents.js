@@ -306,7 +306,7 @@ export function planServerEvent(event, ctx) {
   const turnRows = [];
   for (const r of rows) {
     const litter = litters.get(r.litter_id);
-    if (!litter || litter.is_archived || !litter.picks_opened_date) continue;
+    if (!litter || litter.is_archived || litter.waitlist_off || !litter.picks_opened_date) continue;
     const dogIds = (r.dog_ids || []).filter((id) => {
       const d = pups.find((x) => x.id === id);
       return d && d.litter_id === r.litter_id && isPupAvailable(d, sales);

@@ -9,6 +9,9 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
+import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
+import { saleRepo } from '../data/saleRepo.js';
+import { familySale } from '../data/familyExtras.js';
 import { pickupLocations, cleanSlots, makeSlots, timeRange, slotBookings, ruleFor, withDateRule } from '../data/pickupSlots.js';
 import { kennelChargeList } from '../data/extraCharges.js';
 import { waitlistConfig } from '../data/waitlistRules.js';
@@ -21,8 +24,11 @@ export async function renderPickupTimesPanel({ mount, litter, onChange = async (
   const slots = cleanSlots(litter.pickup_slots);
   const pups = (await dogRepo.getAll()).filter((d) => d.litter_id === litter.id);
   const events = (await Promise.all(pups.map((p) => eventRepo.getForSubject('dog', p.id)))).flat();
-  const entries = await waitlistEntryRepo.getByKennel(litter.kennel_id);
-  const booked = slotBookings(events, entries);
+  const [entries, offers, sales] = await Promise.all([
+    waitlistEntryRepo.getByKennel(litter.kennel_id), waitlistOfferRepo.getByKennel(litter.kennel_id), saleRepo.getAll()
+  ]);
+  // A family who backed out holds no time (K8-8).
+  const booked = slotBookings(events, entries, { live: (en) => Boolean(familySale(en, sales, offers, entries)) });
   const pupName = new Map(pups.map((p) => [p.id, p.call_name || 'a pup']));
   const whoBooked = (slotId) => events.filter((e) => !e.is_archived && e.event_type === 'placement' && e.details?.pickup_slot_id === slotId).map((e) => pupName.get(e.subject_id));
   const placeName = (id) => places.find((l) => l.id === id)?.label || 'a place that\'s gone';

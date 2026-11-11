@@ -19,7 +19,7 @@ import {
   waitlistConfig, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, openTurns, isPupAvailable,
   soonFamiliesForKennel, kennelBreeds, resolveBreed, whelpNotes, nextTurnPrepassNote, describeOfferChanges,
-  numberedList, holdsPlace, isPupReserved, waitlistLitters
+  numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly
 } from '../data/waitlistRules.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, cardShell, alertModal, wireActionMenu } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, openSoonNotice } from '../assets/waitlistUI.js';
@@ -225,9 +225,25 @@ async function main() {
       }))
     : '<div class="empty-state">No litters with pups to offer right now.</div>';
 
+  // --- Family pages only (E3, D6): families with a status page and no place ---
+  const pageOnly = entries.filter(isFamilyPageOnly)
+    .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  const pageOnlyHtml = pageOnly.length
+    ? table(['Family', 'Pup', 'Gone home?'], pageOnly.map((e) => {
+        const sale = salesById.get(e.placed_sale_id);
+        const pup = sale ? dogsById.get(sale.dog_id) : null;
+        const home = e.status !== 'placed' ? '<span class="badge badge-neutral">Backed out</span>'
+          : sale?.status === 'delivered' ? '<span class="badge badge-green">Home</span>'
+            : ['returned', 'cancelled', 'voided'].includes(sale?.status) ? `<span class="badge badge-neutral">Sale ${esc(sale.status)}</span>`
+              : '<span class="faint">Not yet</span>';
+        return row(e, [`<strong>${nameOf(e)}</strong>`, pup ? esc(pup.call_name || '—') : none, home]);
+      }))
+    : '<div class="empty-state">No family pages. A litter sold outside the waitlist can give its families a status page from its Litter page (Non-Waitlist Sales…).</div>';
+
   // --- Closed runs ---
-  // A family with a pup selected is still on the list, not closed.
-  const closed = entries.filter((e) => CLOSED.includes(e.status) && !holdsPlace(e, { sales, dogs }))
+  // A family with a pup selected is still on the list, not closed; a family page only
+  // has its own section.
+  const closed = entries.filter((e) => CLOSED.includes(e.status) && !holdsPlace(e, { sales, dogs }) && !isFamilyPageOnly(e))
     .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
   const closedHtml = closed.length
     ? table(['Family', 'Status', 'Why'], closed.map((e) => row(e, [
@@ -243,6 +259,7 @@ async function main() {
     cardShell('Fee due' + count(approved.length), approvedHtml, { key: 'approved', isEmpty: !approved.length, marginTop: true }) +
     cardShell('On the list' + count(numbered.length), listHtml, { key: 'list', marginTop: true }) +
     cardShell('Litters' + count(litterRows.length), littersHtml, { key: 'litters', isEmpty: !litterRows.length, marginTop: true }) +
+    cardShell('Family pages only' + count(pageOnly.length), pageOnlyHtml, { key: 'pageonly', isEmpty: !pageOnly.length, marginTop: true }) +
     cardShell('Closed' + count(closed.length), closedHtml, { key: 'closed', isEmpty: true, marginTop: true });
 
   els.body.querySelectorAll('tr[data-href]').forEach((tr) => {

@@ -7,7 +7,7 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
-import { entryName } from '../data/waitlistRules.js';
+import { entryName, listRecords } from '../data/waitlistRules.js';
 import { FUNNEL_STAGES, funnelStage, funnelCounts, exitReasons, offerOutcomes, daysToPlacement, median } from '../data/waitlistReports.js';
 import { createReportView } from '../assets/reportView.js';
 import { inScope } from '../data/kennelScope.js';
@@ -19,12 +19,14 @@ import { pct } from '../data/reportMath.js';
 import { SERIES_COLORS } from '../assets/chartView.js';
 
 async function init() {
-  const [entries, offers, contacts, sales] = await Promise.all([
+  const [allEntries, offers, contacts, sales] = await Promise.all([
     waitlistEntryRepo.getAll({ includeArchived: false }),
     waitlistOfferRepo.getAll({ includeArchived: false }),
     contactRepo.getAll({ includeArchived: true }),
     saleRepo.getAll({ includeArchived: true })
   ]);
+  // A family page only (E3) was never in the funnel.
+  const entries = listRecords(allEntries);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const salesById = new Map(sales.map((s) => [s.id, s]));
   const offered = new Set(offers.map((o) => o.entry_id));

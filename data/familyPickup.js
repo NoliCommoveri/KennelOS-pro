@@ -63,7 +63,7 @@ export function familyPickupView({ entry, sales, offers = [], dogsById, litters,
   const pending = pendingPickupRequests(entry);
   const pendingSlot = pending.find((r) => r.kind === 'slot')?.slot_id || null;
   const litterPups = new Set([...dogsById.values()].filter((d) => d.litter_id === pup.litter_id).map((d) => d.id));
-  const bookings = slotBookings(events.filter((e) => litterPups.has(e.subject_id)), entries);
+  const bookings = slotBookings(events.filter((e) => litterPups.has(e.subject_id)), entries, { live: (en) => Boolean(familySale(en, sales, offers, entries)) });
   const from = pickupFrom(sale, litter, events);
   const slots = litter ? familySlots({ slots: litter.pickup_slots, locations, bookings, from, today, mine: mine || pendingSlot }) : [];
   const days = Number(config.pickup_change_days) || 0;
@@ -79,7 +79,7 @@ export function familyPickupView({ entry, sales, offers = [], dogsById, litters,
     };
   }
   const requests = (Array.isArray(entry.pickup_requests) ? entry.pickup_requests : [])
-    .filter((r) => r && r.requested_date && (!r.decided || (r.decided_date && addDaysToYMD(r.decided_date, PICKUP_REQUEST_SHOWN_DAYS) >= today)))
+    .filter((r) => r && r.requested_date && r.decided !== 'closed' && (!r.decided || (r.decided_date && addDaysToYMD(r.decided_date, PICKUP_REQUEST_SHOWN_DAYS) >= today)))
     .map((r) => ({ id: r.id, kind: r.kind, date: r.date || null, start_time: r.start_time || '', place: r.place || '', address: r.address || '',
       miles: Number.isFinite(r.miles) ? r.miles : null, far: r.far === true, requested_date: r.requested_date, decided: r.decided || null, decided_date: r.decided_date || null }));
   // The rules on the dates they can see: a package they need first (blocked until

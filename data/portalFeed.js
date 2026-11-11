@@ -148,12 +148,21 @@ export function portalSales({ kennel, sales = [], contracts = [], dogsById, cont
   return out;
 }
 
-// A voided or cancelled sale, as the portal reads it (feed.js `voided`).
+// A voided, cancelled or returned sale, as the portal reads it (feed.js `voided`):
+// a returned pup isn't the family's any more either (K7-1), so it goes as `other`.
 const VOID_REASON = { pup_died: 'died', failed_health_check: 'failed_health', buyer_backed_out: 'backed_out' };
 export function voidedOf(sale, today) {
-  if (sale.status === 'voided') return { reason: VOID_REASON[sale.end_reason] || 'other', on: dayOf(sale.updated_at) || today };
-  if (sale.status === 'cancelled') return { reason: 'backed_out', on: dayOf(sale.updated_at) || today };
+  if (sale.status === 'voided') return { reason: VOID_REASON[sale.end_reason] || 'other', on: saleEndDay(sale, today) };
+  if (sale.status === 'cancelled') return { reason: 'backed_out', on: saleEndDay(sale, today) };
+  if (sale.status === 'returned') return { reason: 'other', on: saleEndDay(sale, today) };
   return null;
+}
+
+// The day a released sale ended (its last edit, never after today), else null.
+export function saleEndDay(sale, today) {
+  if (!RELEASED_SALE_STATUSES.includes(sale?.status)) return null;
+  const d = dayOf(sale.updated_at) || today;
+  return d > today ? today : d;
 }
 
 // The puppy's shots, deworming (her preventatives) and vet visits, newest first:
@@ -247,10 +256,16 @@ export function buildPortalFeed({
     const pickup = pickupEventFor(sale, events, today);
     const goHome = pickup?.event_date || pickupFrom(sale, litter, events) || null;
     const clock = pickup ? parseClock(pickup.details?.placement_time) : null;
-    const health = healthOf(pup.id, events, today);
-    now.push({ type: 'placement', id: sale.id }, ...health.map((h) => ({ type: 'health', id: h.id })));
-    const keep = (!RELEASED_SALE_STATUSES.includes(sale.status) && sale.status !== 'delivered')
+    const released = RELEASED_SALE_STATUSES.includes(sale.status);
+    // A released sale's health stops at its end (K7-1): a returned pup's next home's
+    // vet visits never reach this family.
+    const health = healthOf(pup.id, events, released ? saleEndDay(sale, today) : today);
+    const keep = (!released && sale.status !== 'delivered')
       || addDaysToYMD(lastDay(sale, contract, goHome) || today, PORTAL_KEEP_DAYS) >= today;
+    // A released placement that has aged out isn't left in the portal: it stops being
+    // `now`, so it goes in `removed` (K7-1).
+    if (released && !keep) continue;
+    now.push({ type: 'placement', id: sale.id }, ...health.map((h) => ({ type: 'health', id: h.id })));
     const placement = assertOnlyKeys({
       id: String(sale.id),
       puppy_id: String(pup.id),

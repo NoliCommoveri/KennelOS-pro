@@ -87,11 +87,16 @@ export function timeRange(slot) {
 
 // How many families each time holds now: confirmed bookings (placement events with
 // `details.pickup_slot_id`, not archived) and requests still waiting. → Map slot id → n
-export function slotBookings(events, entries) {
+// A waiting request counts only on a record that still has an open sale (`live`,
+// a test on the entry; K8-8): a family who backed out holds no time.
+export function slotBookings(events, entries, { live = () => true } = {}) {
   const out = new Map();
   const add = (id) => { if (id) out.set(id, (out.get(id) || 0) + 1); };
   for (const e of events) if (!e.is_archived && e.event_type === 'placement') add(e.details?.pickup_slot_id);
-  for (const en of entries) for (const r of en.pickup_requests || []) if (!r.decided && r.kind === 'slot') add(r.slot_id);
+  for (const en of entries) {
+    if (en.is_archived || !live(en)) continue;
+    for (const r of en.pickup_requests || []) if (!r.decided && r.kind === 'slot') add(r.slot_id);
+  }
   return out;
 }
 

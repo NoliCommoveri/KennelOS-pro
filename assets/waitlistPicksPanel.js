@@ -21,11 +21,13 @@ import {
   waitlistConfig, litterQueue, nextTurn, openTurns, turnOffers, turnIdOf, eligiblePupsFor, isPupAvailable,
   overallPositions, entryName, describeOfferChanges, soonFamiliesForLitter, whelpNotes,
   isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker, autoOffers, autoOfferSummary, closingTrigger,
-  nextTurnPrepassNote
+  nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly
 } from '../data/waitlistRules.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { WAITLIST_OFFER_OUTCOME, SEX } from '../data/vocab.js';
 import { esc, badge, fmtDate, todayYMD, confirmModal, alertModal } from './ui.js';
-import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink } from './waitlistUI.js';
+import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink, formModal } from './waitlistUI.js';
 import { offerEmails } from './waitlistEmailUI.js';
 import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
 import { openPicksPreview, previewParam } from './picksPreviewModal.js';
@@ -140,9 +142,24 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   const picksOpen = Boolean(litter.picks_opened_date);
   const soon = soonFamiliesForLitter(d.entries, d.kennelOffers, litter, d.pups, d.sales, opts);
 
+  // Kept off the waitlist (E3): its family pages, and the way back.
+  if (litter.waitlist_off) return renderKeptOff({ mount, litter, d, familyLink, onChange });
+  // "Non-Waitlist Sales…" (E3): while picks aren't open and nobody holds a turn
+  // or a side sale here, and some pup has a sale with a buyer.
+  const plan = familyPagePlan(litter, { pups: d.pups, sales: d.sales, entries: d.entries, offers: d.kennelOffers });
+  const canSoldBefore = !picksOpen && !d.offers.some((o) => o.outcome === 'open' && !o.is_archived) && plan.rows.length > 0;
+  const soldBeforeBtn = canSoldBefore ? '<button class="btn btn-sm" data-pk="sold-before" title="These pups were sold outside the waitlist: give their families a status page and keep this litter off the waitlist">Non-Waitlist Sales…</button>' : '';
+
   // Nothing to show for a kennel that has never used the waitlist on this litter.
   if (!picksOpen && !d.offers.length && !queue.length && !d.entries.some((e) => e.status === 'active')) {
-    mount.innerHTML = '';
+    if (!canSoldBefore) { mount.innerHTML = ''; return; }
+    mount.innerHTML = `<section class="card" style="margin-top:16px;">
+      <div class="row-between"><h2 style="margin:0;">Waitlist</h2><div class="pill-row">${soldBeforeBtn}</div></div>
+      <p class="field-hint" style="margin:6px 0 0;">Sold these pups outside the waitlist? Their families can still get a status page (pickup times, extras, the puppy portal link and your messages) without being on the list.</p>
+    </section>`;
+    mount.querySelector('[data-pk="sold-before"]').addEventListener('click', async () => {
+      try { if (await soldBeforeDialog(litter)) await onChange(); } catch (e) { await alertModal({ title: 'Couldn\'t do that', message: e.message || String(e) }); }
+    });
     return;
   }
 
@@ -233,7 +250,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     <section class="card" style="margin-top:16px;">
       <div class="row-between">
         <h2 style="margin:0;">Waitlist picks</h2>
-        <div class="pill-row">${soon.some((r) => !r.inFlight) ? '<button class="btn btn-sm" data-pk="soon" title="Tell the families whose turn is coming up for these pups">Almost your turn…</button>' : ''}<button class="btn btn-sm" data-pk="side" title="Sell a pup to a family on your list outside the turn order">Sell to a waitlist family…</button>${picksOpen
+        <div class="pill-row">${soldBeforeBtn}${soon.some((r) => !r.inFlight) ? '<button class="btn btn-sm" data-pk="soon" title="Tell the families whose turn is coming up for these pups">Almost your turn…</button>' : ''}<button class="btn btn-sm" data-pk="side" title="Sell a pup to a family on your list outside the turn order">Sell to a waitlist family…</button>${picksOpen
           ? '<button class="btn btn-sm" data-pk="preview" title="Who\'s in line across your open litters, who\'s left out and why">Who\'s in line…</button><button class="btn btn-sm" data-pk="close">Close picks</button>'
           : `<button class="btn btn-primary btn-sm" data-pk="open"${available.length ? '' : ' disabled title="No pups available to offer."'}>Open picks</button>`}</div>
       </div>
@@ -275,6 +292,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       ? `Their deposit carried over from the pup they lost is recorded as paid for ${res.dog.call_name}.`
       : `${res.dog.call_name} is ${res.sale.side_holds_pup ? 'held for' : 'set aside for'} ${name} until ${fmtDate(res.sale.side_deposit_due)}${res.sale.side_holds_pup ? '' : ' (still offered to other families until the deposit)'}. Their page shows it like a pick on their turn. Send them the deposit details from their page (Review sale & send).` });
   });
+  on('sold-before', async () => { await soldBeforeDialog(litter); });
   // "Who's in line…" may save settings or a pup, so it re-renders after.
   on('preview', async () => { await openPicksPreview({ litterId: litter.id }); });
   // Back from fixing a family or a pup the preview linked to: reopen it.
@@ -373,6 +391,57 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${res.offers.map((x) => d.litterName(x.litter_id)).join(', ')}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know.`, ...(await changeLines(res, await freshEntries(litter), familyName))].join('\n\n') });
     await offerEmails([{ entryId: o.entry_id, kind: 'offer', extra: { litterIds: res.offers.map((x) => x.litter_id), respondBy: res.offer.respond_by_date } }, ...offerSpecs(res)]);
   })));
+}
+
+// --- Non-Waitlist Sales (E3, Waitlist Fixes Plan §3.3) ------------------------
+
+// What it will do, listed first: each pup with a buyer (a family page, or why not),
+// any pup with no sale, and a buyer on her do-not-sell list (K7-9). Resolves the
+// result of soldBeforeWaitlist, or null.
+async function soldBeforeDialog(litter) {
+  const [plan, listings] = await Promise.all([actions.soldBeforeWaitlistPlan(litter.id), doNotSellRepo.getAll()]);
+  const buyer = (r) => r.contact?.name || 'their buyer';
+  const dns = (r) => (r.contact ? doNotSellWarning(doNotSellMatches({ name: r.contact.name, email: r.contact.email, phone: r.contact.phone }, listings, { contactId: r.contact.id })) : '');
+  const made = plan.rows.filter((r) => !r.blocker);
+  const lines = plan.rows.map((r) => `<li><strong>${esc(r.dog.call_name || 'A pup')}</strong> → ${esc(buyer(r))}${r.blocker ? ` <span class="faint">(no new page: ${esc(r.blocker)})</span>` : ''}${dns(r) ? `<div class="inline-warn" style="margin:4px 0;">${esc(dns(r))}</div>` : ''}</li>`).join('');
+  let res = null;
+  const ok = await formModal({
+    title: 'Non-Waitlist Sales',
+    bodyHtml: `<p style="margin-top:0;">This litter is kept off the waitlist: no picks or turns, and it isn't shown on your waitlist pages (Available Puppies, Coming up). ${made.length ? `${made.length === 1 ? 'Its family gets' : `${made.length} families get`} a status page without being on the list:` : 'Nobody new gets a status page:'}</p>
+      <ul style="margin:4px 0 8px; padding-left:18px;">${lines}</ul>
+      ${plan.unsold.length ? `<p class="field-hint">No sale yet: ${esc(plan.unsold.map((x) => x.call_name || 'a pup').join(', '))}. ${plan.unsold.length === 1 ? 'It isn\'t' : 'They aren\'t'} offered on the waitlist either; give a sale a family page from the Sale page later.</p>` : ''}
+      <p class="field-hint">Their pages show pickup times, extras, the puppy portal link and your messages, never the list. Publish your list to send their links. You can put the litter back on the waitlist from here.</p>`,
+    confirmLabel: made.length ? `Keep off the waitlist and make ${made.length} page${made.length === 1 ? '' : 's'}` : 'Keep off the waitlist',
+    onConfirm: async () => { res = await actions.soldBeforeWaitlist(litter.id); }
+  });
+  return ok ? res : null;
+}
+
+// The panel of a litter kept off the waitlist: its family pages, a sale still without
+// one, and "Put back on the waitlist".
+function renderKeptOff({ mount, litter, d, familyLink, onChange }) {
+  const pupIds = new Set(d.pups.map((p) => p.id));
+  const salesById = new Map(d.allSales.map((x) => [x.id, x]));
+  const pages = d.entries.filter((e) => isFamilyPageOnly(e) && !e.is_archived && pupIds.has(salesById.get(e.placed_sale_id)?.dog_id));
+  const plan = familyPagePlan(litter, { pups: d.pups, sales: d.sales, entries: d.entries, offers: d.kennelOffers });
+  const more = plan.rows.filter((r) => !r.blocker);
+  const pupName = (e) => d.pups.find((p) => p.id === salesById.get(e.placed_sale_id)?.dog_id)?.call_name || '';
+  mount.innerHTML = `<section class="card" style="margin-top:16px;">
+    <div class="row-between"><h2 style="margin:0;">Waitlist</h2><div class="pill-row">
+      ${more.length ? `<button class="btn btn-sm" data-pk="sold-before" title="${esc(more.map((r) => r.dog.call_name).join(', '))}">Make ${more.length} more family page${more.length === 1 ? '' : 's'}…</button>` : ''}
+      <button class="btn btn-sm" data-pk="on-waitlist">Put back on the waitlist…</button></div></div>
+    <p class="field-hint" style="margin:6px 0 0;"><span class="badge badge-blue">Kept off the waitlist</span> Non-Waitlist Sales: no picks or turns, and it isn't on your waitlist pages. Its families have a status page only (Pickup times below is what they book from).</p>
+    ${pages.length ? `<ul style="margin:8px 0 0; padding-left:18px;">${pages.map((e) => `<li>${familyLink(e)}${pupName(e) ? ` · ${esc(pupName(e))}` : ''}${e.status !== 'placed' ? ' <span class="faint">(backed out)</span>' : ''}</li>`).join('')}</ul>` : '<p class="muted" style="margin:8px 0 0;">No family pages yet.</p>'}
+  </section>`;
+  const run = (fn) => async () => {
+    try { await fn(); } catch (e) { await alertModal({ title: 'Couldn\'t do that', message: e.message || String(e) }); }
+    await onChange();
+  };
+  mount.querySelector('[data-pk="sold-before"]')?.addEventListener('click', run(() => soldBeforeDialog(litter)));
+  mount.querySelector('[data-pk="on-waitlist"]').addEventListener('click', run(async () => {
+    if (!(await confirmModal({ title: 'Put this litter back on the waitlist?', message: 'It shows on your waitlist pages again and picks can be opened on it. Its families\' status pages stay as they are (they still aren\'t on the list).', confirmLabel: 'Put it back' }))) return;
+    await actions.putLitterOnWaitlist(litter.id);
+  }));
 }
 
 async function freshEntries(litter) {

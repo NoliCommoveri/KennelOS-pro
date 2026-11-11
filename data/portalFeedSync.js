@@ -16,7 +16,12 @@
 //   the real pickup time on the pup's pickup event and the sale Delivered; the
 //   microchip; a death after pickup. Each fact is applied once (kept in
 //   `kennelport_portal.facts`), so a later change in KennelOS isn't undone by the
-//   portal's older value. Money never comes back this way.
+//   portal's older value. Money never comes back this way. Checked first (K7-2):
+//   only for a placement the feed carries, on a sale the fact fits, with dates in
+//   bounds; each applied fact leaves a Note on the pup (`details.portal_fact`), which
+//   Today shows her once (nudges.portalFactNudges).
+// - Sent by one device (K7-14): with her cloud program on, the device doing its
+//   server work (serverWork.js); a device without a cloud session sends as before.
 import { dogRepo } from './dogRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { eventRepo } from './eventRepo.js';
@@ -33,7 +38,9 @@ import { statusPageLink } from './cloud/cloudConfig.js';
 import { buildPortalFeed, feedCopy, pickupEventFor, zonedParts, clockText } from './portalFeed.js';
 import { sendFamilyFeed, linkStatus, websiteLinkOffered, KennelportError } from './kennelportApi.js';
 import { getWebsiteLink, notePortalSent, noteWebsiteAnswer, clearWebsiteLink } from './kennelportLinkStore.js';
-import { licenseOk } from './kennelportLink.js';
+import { licenseOk, turnPortalOff } from './kennelportLink.js';
+import { isCloudAvailable } from './cloud/cloudConfig.js';
+import { addDaysToYMD } from './dateUtils.js';
 
 // After a change, wait this long for more before sending (a save often writes
 // several records).
@@ -79,27 +86,58 @@ export function portalFromAnswer(prev, portal) {
   };
 }
 
+// A fact's Note on the pup (K7-2): what came from the portal, when, for which sale.
+const FACT_TEXT = {
+  picked_up: (v) => `Your puppy portal says they picked up on ${v}.`,
+  microchip: (v) => `Your puppy portal set the microchip to ${v}.`,
+  died: (v) => `Your puppy portal recorded a death on ${v}.`
+};
+async function noteFact(pup, sale, what, value, today) {
+  await eventRepo.create({
+    subject_type: 'dog', subject_id: pup.id, event_type: 'note', event_date: today,
+    title: 'From your puppy portal', notes: FACT_TEXT[what](value),
+    related_contact_id: sale.buyer_contact_id || null,
+    details: { portal_fact: what, sale_id: sale.id }
+  });
+}
+
 // Apply the facts she recorded in the portal (plan 3.4, "A few facts go back").
-// → { portal (the kennel's value with `facts` and `home` brought up to date),
-// applied: [{ sale_id, what }] }.
-export async function applyPortalFacts(kennel, portal, facts = []) {
+// Only a fact about a placement in `known` (what the feed carries), on a sale it
+// fits (K7-2): picked up and the microchip on a sale not ended; picked up no earlier
+// than the sale (or the pup's birth) and no later than tomorrow; a death on a pup that
+// has gone home or is going, on or before today and not before its birth; handed
+// over only for the sale's own buyer. → { portal (the kennel's value with `facts`
+// and `home` brought up to date), applied: [{ sale_id, what }], refused: [{ sale_id,
+// what, why }] }.
+export async function applyPortalFacts(kennel, portal, facts = [], { known = null, today = todayYMD() } = {}) {
   const out = { ...portal, facts: { ...(portal?.facts || {}) }, home: [...(portal?.home || [])] };
   const applied = [];
+  const refused = [];
   const tz = kennel.time_zone || null;
+  const sent = known ? new Set(known.filter((k) => k.type === 'placement').map((k) => String(k.id))) : null;
   for (const f of Array.isArray(facts) ? facts : []) {
     if (!f || typeof f.id !== 'string') continue;
     const sale = await saleRepo.getById(f.id);
     if (!sale || sale.kennel_id !== kennel.id) continue;
+    if (sent && !sent.has(sale.id)) { refused.push({ sale_id: sale.id, what: 'any', why: 'not_sent' }); continue; }
     const pup = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
+    const ended = RELEASED_SALE_STATUSES.includes(sale.status);
+    const born = pup?.date_of_birth || null;
     const prev = out.facts[sale.id] || {};
     const next = { ...prev };
     // Handed over: their status page shows only Your puppy portal.
-    if (f.portal_only === true && typeof f.family_id === 'string' && !out.home.includes(f.family_id)) out.home.push(f.family_id);
+    if (f.portal_only === true && typeof f.family_id === 'string' && !out.home.includes(f.family_id)) {
+      if (f.family_id === sale.buyer_contact_id && !ended) out.home.push(f.family_id);
+      else refused.push({ sale_id: sale.id, what: 'portal_only', why: 'not_theirs' });
+    }
 
     // Picked up, and when: the pup's pickup event gets the real time, and the sale
     // is Delivered, so KennelOS's own go-home nudges stop.
     const at = typeof f.picked_up_at === 'string' && !Number.isNaN(Date.parse(f.picked_up_at)) ? new Date(f.picked_up_at).toISOString() : null;
-    if (at && at !== prev.picked_up_at && pup) {
+    const atDay = at ? zonedParts(at, tz)?.date : null;
+    const atFits = atDay && !ended && atDay <= addDaysToYMD(today, 1) && (!sale.sale_date || atDay >= sale.sale_date) && (!born || atDay >= born);
+    if (at && at !== prev.picked_up_at && pup && !atFits) refused.push({ sale_id: sale.id, what: 'picked_up', why: ended ? 'sale_ended' : 'date' });
+    if (at && at !== prev.picked_up_at && pup && atFits) {
       const when = zonedParts(at, tz);
       const events = await eventRepo.getForSubject('dog', pup.id);
       const ev = pickupEventFor(sale, events, when.date);
@@ -113,42 +151,65 @@ export async function applyPortalFacts(kennel, portal, facts = []) {
       }
       if (sale.status !== 'delivered' && !RELEASED_SALE_STATUSES.includes(sale.status)) await saleRepo.update(sale.id, { status: 'delivered' });
       next.picked_up_at = at;
+      await noteFact(pup, sale, 'picked_up', `${when.date} at ${time}`, today);
       applied.push({ sale_id: sale.id, what: 'picked_up' });
     }
     // The microchip she entered or corrected in the portal.
     const chip = typeof f.microchip === 'string' ? f.microchip.trim().slice(0, 40) : '';
-    if (chip && chip !== prev.microchip && pup) {
+    if (chip && chip !== prev.microchip && pup && ended) refused.push({ sale_id: sale.id, what: 'microchip', why: 'sale_ended' });
+    if (chip && chip !== prev.microchip && pup && !ended) {
       if (String(pup.microchip_id ?? '').trim() !== chip) await dogRepo.update(pup.id, { microchip_id: chip });
       next.microchip = chip;
+      await noteFact(pup, sale, 'microchip', chip, today);
       applied.push({ sale_id: sale.id, what: 'microchip' });
     }
     // A death after pickup she recorded: the dog is marked deceased, with its date.
+    // Only for a pup this family has (a sale not ended), on a real past day.
     const died = typeof f.died_on === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f.died_on) ? f.died_on : null;
-    if (died && died !== prev.died_on && pup) {
+    const diedFits = died && !ended && died <= today && (!born || died >= born);
+    if (died && died !== prev.died_on && pup && !diedFits) refused.push({ sale_id: sale.id, what: 'died', why: ended ? 'sale_ended' : 'date' });
+    if (died && died !== prev.died_on && pup && diedFits) {
       if (pup.status !== 'deceased' || pup.date_of_death !== died) await dogRepo.update(pup.id, { status: 'deceased', date_of_death: died });
       next.died_on = died;
+      await noteFact(pup, sale, 'died', died, today);
       applied.push({ sale_id: sale.id, what: 'died' });
     }
     if (!same(next, prev)) out.facts[sale.id] = next;
   }
-  return { portal: out, applied };
+  return { portal: out, applied, refused };
 }
 
 // Forget the portal on the kennel (the site switched it off, or is no longer
 // linked): the status page stops offering it, Companion and Furever come back.
-async function dropPortal(kennel) {
-  const fresh = await kennelRepo.getById(kennel.id);
-  if (fresh?.kennelport_portal) await kennelRepo.update(kennel.id, { kennelport_portal: null });
+const dropPortal = (kennel) => turnPortalOff(kennel.id);
+
+// May this device send the feed (K7-14)? Without a cloud session: yes (it's the
+// only one that could). With one: only the device doing the program's server work;
+// another device's claim, or this one in the background, says no. A cloud that
+// can't be reached doesn't stop it.
+export async function mayFeedHere() {
+  if (!isCloudAvailable()) return true;
+  const [{ sessionToken }, { claimServerWork, inBackground }] = await Promise.all([import('./cloud/cloudAuth.js'), import('./cloud/serverWork.js')]);
+  const token = sessionToken();
+  if (!token) return true;
+  if (inBackground()) return false;
+  try {
+    await claimServerWork(token);
+    return true;
+  } catch (err) {
+    return err?.name !== 'ServerWorkError';
+  }
 }
 
 // Send this kennel's family feed when it changed (or `force`). → { status:
 // 'sent' | 'skipped' | 'error', reason?, summary?, applied? }.
 // `opening`: a page load; force and refresh then when the last check is over
 // FEED_OPEN_EVERY_MS old.
-export async function sendPortalFeed(kennel, { force = false, refresh = false, opening = false, today = todayYMD(), feedId = crypto.randomUUID() } = {}) {
+export async function sendPortalFeed(kennel, { force = false, refresh = false, opening = false, today = todayYMD(), feedId = crypto.randomUUID(), mayFeed = mayFeedHere } = {}) {
   if (!websiteLinkOffered() || !kennel?.id) return { status: 'skipped', reason: 'unavailable' };
   const link = await getWebsiteLink(kennel.id);
   if (!link) return { status: 'skipped', reason: 'not_linked' };
+  if (!(await mayFeed())) return { status: 'skipped', reason: 'other_device' };
   if (opening && !(Date.parse(link.portal_checked_at || '') > Date.now() - FEED_OPEN_EVERY_MS)) {
     force = true;
     refresh = true;
@@ -197,7 +258,8 @@ export async function sendPortalFeed(kennel, { force = false, refresh = false, o
     const base = portalFromAnswer(fresh.kennelport_portal, answer?.portal);
     let applied = [];
     if (base) {
-      const done = await applyPortalFacts(fresh, base, answer?.facts);
+      // What the feed carries now and carried before: a fact about anything else is refused.
+      const done = await applyPortalFacts(fresh, base, answer?.facts, { known: [...(link.portal_known || []), ...known], today });
       applied = done.applied;
       if (!same(done.portal, fresh.kennelport_portal)) await kennelRepo.update(kennel.id, { kennelport_portal: done.portal });
     }

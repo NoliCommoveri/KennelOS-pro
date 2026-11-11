@@ -53,7 +53,7 @@ import {
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
   splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit,
-  turnIsEmpty, emptiedTurns
+  turnIsEmpty, emptiedTurns, isFamilyPageOnly, familyPageBlocker, familyPagePlan
 } from './waitlistRules.js';
 
 const nowISO = () => new Date().toISOString();
@@ -577,7 +577,13 @@ export async function extendTurn(turnId, { until, date = todayYMD() } = {}) {
 export async function offerNext(litterId, { today = todayYMD() } = {}) {
   const litter = await litterRepo.getById(litterId);
   if (!litter) throw new Error('That litter no longer exists.');
+  assertOnWaitlist(litter);
   return offerNextTurn(litter.kennel_id, { today });
+}
+
+// A litter kept off the waitlist (E3) is never offered: no picks, no turn.
+function assertOnWaitlist(litter) {
+  if (litter.waitlist_off) throw new Error(`${litter.nickname || 'This litter'} is kept off the waitlist (Non-Waitlist Sales). Put it back on the waitlist from its page first.`);
 }
 
 // Offer one family a turn from their own page (Spec §15.2): the waitlist as the
@@ -589,6 +595,7 @@ export async function offerTo(litterId, entryId, { today = todayYMD(), note = ''
   const litter = await litterRepo.getById(litterId);
   if (!litter) throw new Error('That litter no longer exists.');
   if (litter.is_archived) throw new Error('That litter is archived.');
+  assertOnWaitlist(litter);
   let c = await kennelContext(litter.kennel_id);
   const entry = c.entries.find((e) => e.id === entryId);
   if (!entry || entry.status !== 'active') throw new Error('Only families on the list can be offered a turn.');
@@ -615,6 +622,9 @@ export async function offerTo(litterId, entryId, { today = todayYMD(), note = ''
 // restarts for the whole turn), and otherwise waits for the next turn.
 // Returns the turn offered or joined (`joined: true`), or null.
 export async function openPicks(litterId, { date = todayYMD() } = {}) {
+  const before = await litterRepo.getById(litterId);
+  if (!before) throw new Error('That litter no longer exists.');
+  assertOnWaitlist(before);
   await litterRepo.update(litterId, { picks_opened_date: date });
   const litter = await litterRepo.getById(litterId);
   const c = await kennelContext(litter.kennel_id);
@@ -1730,6 +1740,8 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
   const req = pending(entry.back_out_request) ? entry.back_out_request
     : told ? { requested_date: date, by: 'breeder', reason: told.reason || { id: 'told', label: 'They told you' } } : null;
   if (!pending(req)) throw new Error('There\'s no back-out request waiting for this family.');
+  // A family page only (E3, D8): Keep or Refund, never back in line.
+  if (outcome === 'move' && isFamilyPageOnly(entry)) throw new Error('This family has a status page only, not a place on the list: keep or refund their deposit. To join the list they apply.');
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
   const sale = await ownSale(entry, sales);
   if (!sale) throw new Error('They have no open sale to back out of any more.');
@@ -1774,20 +1786,37 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
   }
 
   const decided = { ...req, decided: 'approved', decided_date: date, outcome };
+  // Their pickup and extras requests still waiting close with the sale (K8-8): never
+  // a "we weren't able to approve" to a family who's gone, and a time they asked for
+  // is free again.
+  const closed = closeRequests(entry, date);
   if (outcome === 'move') {
     result.entry = await waitlistEntryRepo.update(entry.id, {
+      ...closed,
       status: 'active', placed_sale_id: null, position_anchor_date: date, back_out_request: decided,
       ...(depositIn && movedDeposit > 0 ? { carried_payment: { amount: movedDeposit, date, from_sale_id: sale.id } } : {}),
       notes: appendNote(entry.notes, `${note} Their deposit moves to their next pup; back on the list at the end of the line.`)
     });
   } else {
     result.entry = await waitlistEntryRepo.update(entry.id, {
+      ...closed,
       status: 'withdrawn', withdrawn_date: date, withdrawn_from: null, placed_sale_id: entry.placed_sale_id || null, back_out_request: decided,
       notes: appendNote(entry.notes, `${note} ${outcome === 'refund' ? 'Deposit refunded.' : 'Deposit kept.'}`)
     });
   }
   result.sale = await saleRepo.getById(sale.id);
   return openTurn ? finishTurn(result, entry.kennel_id, date, 'left') : result;
+}
+
+// The family's waiting pickup and extras requests, closed by a back-out (K8-8):
+// `decided: 'closed'`, so nothing counts them, nothing offers them to her, and no
+// email is offered for them. → the changed fields (none when nothing waits).
+export function closeRequests(entry, date) {
+  const close = (rs) => (rs || []).map((r) => (r && !r.decided ? { ...r, decided: 'closed', decided_date: date, closed_by: 'back_out' } : r));
+  const out = {};
+  if ((entry.pickup_requests || []).some((r) => r && !r.decided)) out.pickup_requests = close(entry.pickup_requests);
+  if ((entry.extra_requests || []).some((r) => r && !r.decided)) out.extra_requests = close(entry.extra_requests);
+  return out;
 }
 
 export async function declineBackOut(entryId, { date = todayYMD() } = {}) {
@@ -1826,4 +1855,90 @@ export async function tidyClosedDates(today = todayYMD()) {
     changed++;
   }
   return changed;
+}
+
+// --- Family pages without the list (E3, Waitlist Fixes Plan §3.3) -------------------
+//
+// A family who bought before she used the waitlist (or outside it) gets a status page
+// (pickup times, the puppy portal link, extras, her messages) without ever being on
+// the list: a record `placed`, `off_list`, linked to their sale, with no application,
+// fee or place. It shows on no list and holds no number (waitlistRules.holdsPlace).
+// A litter sold that way is kept off the waitlist (`Litter.waitlist_off`): no picks,
+// no turns, no Available Puppies card, nothing on Coming up.
+
+// One sale's family page. Refuses an ended sale, a sale with no buyer, and a sale
+// another record already claims (familyPageBlocker). Its status link is minted when
+// she publishes, as for any record. → the new entry.
+export async function addFamilyPage(saleId, { date = todayYMD() } = {}) {
+  const sale = await saleRepo.getById(saleId);
+  const dog = sale ? await dogRepo.getById(sale.dog_id) : null;
+  const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+  const kennelId = litter?.kennel_id || sale?.kennel_id || dog?.kennel_id || null;
+  if (!kennelId) throw new Error('This sale\'s pup isn\'t in one of your kennels\' litters.');
+  const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(kennelId), waitlistOfferRepo.getByKennel(kennelId)]);
+  const blocker = familyPageBlocker(sale, entries, offers);
+  if (blocker) throw new Error(blocker);
+  return waitlistEntryRepo.create({
+    kennel_id: kennelId, contact_id: sale.buyer_contact_id, status: 'placed', placed_sale_id: sale.id, off_list: true,
+    notes: `Family page only from ${date}: ${dog?.call_name || 'their pup'}'s sale, not a place on the list.`
+  });
+}
+
+// "Keep off the list (family page only)": a placed family she put through a side sale
+// (or any placed record) stops holding a place and shows on no list; `on: false` puts
+// them back as an ordinary placed family. Only while their sale is still open.
+export async function setFamilyPageOnly(entryId, on = true, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  if (Boolean(entry.off_list) === Boolean(on)) return entry;
+  if (entry.status !== 'placed' || !entry.placed_sale_id) throw new Error('Only a placed family, once their deposit is recorded, can be kept off the list.');
+  const sale = await saleRepo.getById(entry.placed_sale_id);
+  if (!sale || RELEASED_SALE_STATUSES.includes(sale.status)) throw new Error('Their sale has ended, so there\'s no place to keep or give back.');
+  return waitlistEntryRepo.update(entryId, {
+    off_list: Boolean(on),
+    notes: appendNote(entry.notes, on ? `Kept off the list on ${date}: a family page only.` : `Back on the list on ${date}, at the place they held.`)
+  });
+}
+
+// What "Non-Waitlist Sales…" would do on this litter (waitlistRules.familyPagePlan),
+// with each buyer's contact: { litter, rows: [{ dog, sale, contact, blocker }], unsold }.
+export async function soldBeforeWaitlistPlan(litterId) {
+  const litter = await litterRepo.getById(litterId);
+  if (!litter) throw new Error('That litter no longer exists.');
+  const [pups, entries, offers] = await Promise.all([
+    dogRepo.getByLitter(litterId), waitlistEntryRepo.getByKennel(litter.kennel_id), waitlistOfferRepo.getByKennel(litter.kennel_id)
+  ]);
+  const sales = (await Promise.all(pups.map((d) => saleRepo.getByDog(d.id)))).flat();
+  const plan = familyPagePlan(litter, { pups, sales, entries, offers });
+  const rows = await Promise.all(plan.rows.map(async (r) => ({ ...r, contact: await contactRepo.getById(r.sale.buyer_contact_id) })));
+  return { litter, rows, unsold: plan.unsold };
+}
+
+// "Non-Waitlist Sales…" (her case): the litter is kept off the waitlist and each
+// live sale of its pups with a buyer gets a family page. Refused while picks are open
+// or a family holds a turn or a side sale on it: close those first.
+// → { litter, created: [entry], skipped: [{ dog, sale, blocker }] }
+export async function soldBeforeWaitlist(litterId, { date = todayYMD() } = {}) {
+  const litter = await litterRepo.getById(litterId);
+  if (!litter) throw new Error('That litter no longer exists.');
+  if (litter.picks_opened_date) throw new Error('Picks are open on this litter. Close picks first.');
+  const pups = await dogRepo.getByLitter(litterId);
+  const pupIds = new Set(pups.map((d) => d.id));
+  const offers = await waitlistOfferRepo.getByLitter(litterId);
+  if (offers.some((o) => !o.is_archived && o.outcome === 'open')) throw new Error('A family holds a turn on this litter. Record how it ended first.');
+  const sales = (await Promise.all(pups.map((d) => saleRepo.getByDog(d.id)))).flat();
+  if (sales.some((x) => pupIds.has(x.dog_id) && isSideSalePending(x))) throw new Error('A side sale on this litter is waiting on its deposit. Record or cancel it first.');
+  const plan = await soldBeforeWaitlistPlan(litterId);
+  const saved = await litterRepo.update(litterId, { waitlist_off: true });
+  const created = [];
+  const skipped = [];
+  for (const r of plan.rows) {
+    if (r.blocker) { skipped.push(r); continue; }
+    created.push(await addFamilyPage(r.sale.id, { date }));
+  }
+  return { litter: saved, created, skipped };
+}
+
+// Put a litter kept off the waitlist back on it. Its family pages stay as they are.
+export async function putLitterOnWaitlist(litterId) {
+  return litterRepo.update(litterId, { waitlist_off: false });
 }

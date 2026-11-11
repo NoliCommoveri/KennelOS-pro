@@ -25,7 +25,7 @@ import { getLitterFinances } from './litterFinances.js';
 import { expectedPricing } from './saleDefaults.js';
 import { loadMoney, incomeEntries, plByPeriod, receivableRows, pricingRows, dogReturnRows } from './moneyReport.js';
 import { productionRowsIn, pairingRows, heatRows, testGapRows, studResultRows } from './breedingReports.js';
-import { overallPositions, isPaused, waitlistConfig, kennelBreeds } from './waitlistRules.js';
+import { overallPositions, isPaused, waitlistConfig, kennelBreeds, listRecords } from './waitlistRules.js';
 import { offerAndExitRows, demandSupply, listedSince } from './waitlistReports.js';
 import { inScope, inScopeOnly, dogInScope, subjectInScope, ownKennels, isScoped, getActiveKennelId } from './kennelScope.js';
 import { ourRole } from './studRules.js';
@@ -227,8 +227,9 @@ export async function loadApplications() {
     dogRepo.getAll({ includeArchived: true }),
     kennelRepo.getAll({ includeArchived: true })
   ]);
-  entries.sort(byNewest((e) => e.applied_date));
-  return { href: 'applications-report.html', rows: entries, scope: inScope, date: (e) => e.applied_date, programs, contacts, dogs, kennels };
+  // A family page only (E3) never applied: it isn't an application.
+  const apps = listRecords(entries).sort(byNewest((e) => e.applied_date));
+  return { href: 'applications-report.html', rows: apps, scope: inScope, date: (e) => e.applied_date, programs, contacts, dogs, kennels };
 }
 
 // Waitlist Today: the families on a list now, by kennel then place, as of today.
@@ -257,7 +258,7 @@ export async function loadWaitlistToday(today) {
     .sort((a, b) => kennelName(a).localeCompare(kennelName(b)) || place.get(a.id) - place.get(b.id));
   return {
     href: 'waitlist-today-report.html', rows, scope: inScope, paused, waited, place, kennelName, offers, programs, programsById, contacts,
-    pipeline: entries.filter(inScope)
+    pipeline: listRecords(entries).filter(inScope)
   };
 }
 
@@ -270,7 +271,7 @@ export async function loadOffersRemovals() {
     litterRepo.getAll({ includeArchived: true }),
     dogRepo.getAll({ includeArchived: true })
   ]);
-  return { href: 'offers-removals-report.html', rows: offerAndExitRows(entries, offers), scope: (r) => inScope(r.entry), date: (r) => r.date, contacts, litters, dogs };
+  return { href: 'offers-removals-report.html', rows: offerAndExitRows(listRecords(entries), offers), scope: (r) => inScope(r.entry), date: (r) => r.date, contacts, litters, dogs };
 }
 
 // Demand vs Supply: families on the list against pups available, now.

@@ -390,6 +390,14 @@ export function chosenOrderChanges(entries, now = new Date()) {
 // Is this entry ON the list (the rolling list's members)?
 export const isOnList = (entry) => Boolean(entry) && !entry.is_archived && entry.status === 'active';
 
+// A family page only (E3, Waitlist Fixes Plan §3.3): a record that gives a family who
+// bought before the waitlist (or outside it) a status page, never a place. Always
+// `placed` (or, once they back out, `withdrawn`); it never ranks, holds no number and
+// shows on no list, funnel, report, year review or Kels review. `listRecords` drops
+// them for every reader that counts the waitlist's families.
+export const isFamilyPageOnly = (entry) => Boolean(entry && entry.off_list);
+export const listRecords = (entries) => (entries || []).filter((e) => !isFamilyPageOnly(e));
+
 // The rolling list for ONE kennel, in order. Callers pass every entry; this keeps
 // the active, non-archived ones for `kennelId`.
 export function rankedList(entries, kennelId, programsById = new Map()) {
@@ -649,10 +657,11 @@ export function restoresFamily(sale) {
 //  - { kind: 'placed', entry, offer }: they were placed with it (deposit in). `offer`
 //    is the accepted offer for it (null on an entry placed some other way).
 //  - { kind: 'picked', entry, offer }: they picked it and their turn is still open.
+// A family page only (E3) is never put back in line (D8): to join the list they apply.
 export function lostSaleFamily(sale, entries, offers) {
   if (!restoresFamily(sale)) return null;
   const live = (o) => !o.is_archived && o.sale_id === sale.id;
-  const placed = entries.find((e) => !e.is_archived && e.status === 'placed' && e.placed_sale_id === sale.id);
+  const placed = entries.find((e) => !e.is_archived && e.status === 'placed' && e.placed_sale_id === sale.id && !isFamilyPageOnly(e));
   if (placed) {
     const offer = offers.find((o) => live(o) && o.entry_id === placed.id && o.outcome === 'accepted')
       || offers.find((o) => !o.is_archived && o.entry_id === placed.id && o.outcome === 'accepted' && o.chosen_dog_id === sale.dog_id)
@@ -669,7 +678,7 @@ export function lostSaleFamily(sale, entries, offers) {
 // picks not open, at least one pup available. Today suggests Open picks for each;
 // nothing opens by itself.
 export function depositsDueLitters(litters, pups, sales, today) {
-  return litters.filter((l) => !l.is_archived && ['whelped', 'weaning', 'ready'].includes(l.status)
+  return litters.filter((l) => !l.is_archived && !l.waitlist_off && ['whelped', 'weaning', 'ready'].includes(l.status)
     && l.accept_deposits_date && l.accept_deposits_date <= today && !l.picks_opened_date
     && pups.some((d) => d.litter_id === l.id && isPupAvailable(d, sales)));
 }
@@ -699,7 +708,7 @@ export const WHELP_NOTE_FIELDS = Object.freeze([
   { why: 'colors', open: { pref_colors: [] } }
 ]);
 export function isWhelpNoteLitter(litter) {
-  return Boolean(litter) && !litter.is_archived && ['whelped', 'weaning', 'ready'].includes(litter.status) && !litter.picks_opened_date;
+  return Boolean(litter) && !litter.is_archived && !litter.waitlist_off && ['whelped', 'weaning', 'ready'].includes(litter.status) && !litter.picks_opened_date;
 }
 export function whelpNotes(entries, litter, pups, sales = [], { today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
   if (!isWhelpNoteLitter(litter)) return [];
@@ -904,11 +913,50 @@ export const LISTEN_LIVE_LITTER = ['expected', 'whelped', 'weaning', 'ready'];
 export const LISTEN_LIVE_PAIRING = ['planned', 'bred', 'confirmed_pregnant'];
 
 // A litter the waitlist shows (one rule for the engine, the projection, Today and the
-// waitlist pages): a live stage (LISTEN_LIVE_LITTER), not archived, this kennel.
+// waitlist pages): a live stage (LISTEN_LIVE_LITTER), not archived, this kennel, and
+// not kept off the waitlist (`waitlist_off`, E3: sold before she used the list).
 // `kennel`: the kennel or its id (null: any kennel).
 export function isWaitlistLitter(litter, kennel = null) {
   const kid = kennel && typeof kennel === 'object' ? kennel.id : kennel;
-  return Boolean(litter) && !litter.is_archived && LISTEN_LIVE_LITTER.includes(litter.status) && (!kid || litter.kennel_id === kid);
+  return Boolean(litter) && !litter.is_archived && !litter.waitlist_off && LISTEN_LIVE_LITTER.includes(litter.status) && (!kid || litter.kennel_id === kid);
+}
+
+// A litter whose picks are open, as every turn rule reads it: a `waitlist_off` litter
+// never is, even with a stale picks date.
+export const isPicksOpen = (litter) => Boolean(litter) && !litter.is_archived && !litter.waitlist_off && Boolean(litter.picks_opened_date);
+
+// --- Family pages without the list (E3, Waitlist Fixes Plan §3.3) -------------------
+
+// Why a sale can't be given a family page, or '' when it can: it has ended, it has no
+// buyer, or another live record already claims it (its placed sale, or a pick on an
+// open turn or a side sale). `entries`: the kennel's records.
+export function familyPageBlocker(sale, entries = [], offers = []) {
+  if (!sale || sale.is_archived) return 'That sale no longer exists.';
+  if (RELEASED_SALE_STATUSES.includes(sale.status)) return 'That sale has ended (cancelled, voided or returned).';
+  if (!sale.buyer_contact_id) return 'That sale has no buyer.';
+  if (entries.some((e) => !e.is_archived && e.placed_sale_id === sale.id && ['placed', 'withdrawn'].includes(e.status) && (e.status === 'placed' || e.off_list))) {
+    return 'That family already has a status page for this sale.';
+  }
+  if (sale.side_entry_id && entries.some((e) => e.id === sale.side_entry_id && !e.is_archived)) return 'That sale is a side sale to a family on your list.';
+  if (offers.some((o) => !o.is_archived && o.outcome === 'open' && o.sale_id === sale.id)) return 'That sale is a pick on a family\'s turn.';
+  return '';
+}
+
+// What "Non-Waitlist Sales…" would do on a litter, for her to read first:
+// `rows` each pup with a live sale and a buyer ({ dog, sale, blocker }: blocker '' =
+// a family page is made), `unsold` each pup with no live sale (a pup that has gone
+// home without one isn't listed). Pups in name order.
+export function familyPagePlan(litter, { pups = [], sales = [], entries = [], offers = [] } = {}) {
+  const mine = pups.filter((d) => d.litter_id === litter.id && !d.is_archived)
+    .sort((a, b) => String(a.call_name || '').localeCompare(String(b.call_name || '')));
+  const rows = [];
+  const unsold = [];
+  for (const dog of mine) {
+    const sale = sales.find((x) => x.dog_id === dog.id && !x.is_archived && !RELEASED_SALE_STATUSES.includes(x.status) && x.buyer_contact_id);
+    if (sale) rows.push({ dog, sale, blocker: familyPageBlocker(sale, entries, offers) });
+    else if (!sales.some((x) => x.dog_id === dog.id && !x.is_archived && !RELEASED_SALE_STATUSES.includes(x.status))) unsold.push(dog);
+  }
+  return { rows, unsold };
 }
 export const waitlistLitters = (kennel, litters) => (litters || []).filter((l) => isWaitlistLitter(l, kennel));
 
@@ -1217,7 +1265,7 @@ export function openTurns(offers, kennelId) {
 // turn. → [{ litter, eligibleDogs }] in litter-id order.
 export function turnLittersFor(entry, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
   return litters
-    .filter((l) => !l.is_archived && l.picks_opened_date && l.kennel_id === entry.kennel_id)
+    .filter((l) => isPicksOpen(l) && l.kennel_id === entry.kennel_id)
     .filter((l) => !turnSpent(offers, l.id, entry.id))
     .map((litter) => ({ litter, eligibleDogs: eligiblePupsFor(entry, litter, pups, sales, { today, config }) }))
     .filter((x) => x.eligibleDogs.length)
@@ -1232,7 +1280,7 @@ export function turnLittersFor(entry, offers, litters, pups, sales, { today, con
 // `litters` / `pups` may be every litter and dog; offers must be the kennel's.
 // → { entry, litters: [{ litter, eligibleDogs }] }
 export function nextTurn(entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null } = {}) {
-  const kid = kennelId || litters.find((l) => l.picks_opened_date)?.kennel_id || null;
+  const kid = kennelId || litters.find(isPicksOpen)?.kennel_id || null;
   if (!kid || openTurns(offers, kid).length) return null;
   for (const entry of rankedList(entries, kid, programsById)) {
     const ls = turnLittersFor(entry, offers, litters.filter((l) => l.kennel_id === kid), pups, sales, { today, config });
@@ -1530,8 +1578,9 @@ export function overdueFees(entries, today) {
 // The value a contact's waitlist_status should hold given all their entries:
 // `active` while any run is still open; `fulfilled` when their latest run ended
 // placed; otherwise `none`. Archived entries are ignored.
+// A family page only (E3) was never on the list: it doesn't count.
 export function deriveContactWaitlistStatus(entries) {
-  const live = entries.filter((e) => !e.is_archived);
+  const live = entries.filter((e) => !e.is_archived && !isFamilyPageOnly(e));
   if (live.some((e) => WAITLIST_OPEN_STATUSES.includes(e.status))) return 'active';
   const latest = [...live].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
   return latest && latest.status === 'placed' ? 'fulfilled' : 'none';

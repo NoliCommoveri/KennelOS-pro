@@ -17,6 +17,7 @@ import { wirePrintHeader, printButton } from '../assets/printView.js';
 import { esc, fmtDate, fmtMoney, param } from '../assets/ui.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { REGISTRATION_TYPE } from '../data/vocab.js';
+import { listRecords } from '../data/waitlistRules.js';
 
 const money = (v) => fmtMoney(Math.round((Number(v) || 0) * 100) / 100);
 const charts = [];
@@ -36,7 +37,8 @@ async function load() {
     litters: inScopeOnly(litters),
     sales: inScopeOnly(sales),
     events: events.filter((e) => e.subject_type === 'dog' && subjectInScope('dog', e.subject_id, { dog: dogsById })),
-    waitlist: inScopeOnly(waitlist),
+    // A family page only (E3) isn't a waitlist family.
+    waitlist: listRecords(inScopeOnly(waitlist)),
     moneyEntries: incomeEntries(incomeRows),
     expenses
   };

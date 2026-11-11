@@ -38,7 +38,7 @@ import { readNudgeKey, STEP_OF, REVIEW_STEPS, reviewSummary, readinessProblems, 
 import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, waitlistIsSetUp, entryName, describeOfferChanges, contactMatches, contactMatchReason, privateName, publicName, publicSourceName, listedName,
-  isPupAvailable, eligiblePupsFor, rankedList, turnIdOf, restoresFamily, overallPositions
+  isPupAvailable, eligiblePupsFor, rankedList, turnIdOf, restoresFamily, overallPositions, isFamilyPageOnly
 } from '../data/waitlistRules.js';
 import { hasOwnForm } from '../data/guidedForm.js';
 import { entryQuestions, formQuestions, answerText } from '../data/waitlistForm.js';
@@ -152,7 +152,8 @@ class Review {
       waitlistProgramRepo.getByKennel(k.id),
       waitlistNudgeItems(this.today)
     ]);
-    const live = entries.filter((e) => !e.is_archived);
+    // A family page only (E3) is never part of reviewing the list.
+    const live = entries.filter((e) => !e.is_archived && !isFamilyPageOnly(e));
     const entriesById = new Map(live.map((e) => [e.id, e]));
     const contactsById = new Map(contacts.map((c) => [c.id, c]));
     const kennelLitters = litters.filter((l) => l.kennel_id === k.id);

@@ -159,7 +159,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'foster_partner_contact_id',
       'picks_opened_date', // a waitlist date: the auto-offer flow needs it after a restore
       'photos_url', // the litter's photos link: like a dog's url, and the publishing device shows it on waitlist pages
-      'show_on_website' // this litter and its puppies show on her KennelPort website (KennelPort plan 5.3); a display choice
+      'show_on_website', // this litter and its puppies show on her KennelPort website (KennelPort plan 5.3); a display choice
+      'waitlist_off' // kept off the waitlist (Waitlist Fixes Plan E3, D7: cloud): which litters the waitlist shows; a flag, nothing personal
     ],
     // Plan §5: "every price/deposit/foster-money field" — the foster comp model
     // and split basis are the terms of that money, so they stay with it.
@@ -336,6 +337,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // the same-day tie-breaker of the list order (waitlistRules), so cloud for
       // the reason fee_received_date is: a restore must not re-order the list
       'fee_received_at',
+      // a family page only, never on the list (Waitlist Fixes Plan E3, D7: cloud):
+      // without it a restore would put the family on the list
+      'off_list',
       // The Payment service account the application fee was paid via (plan §4): an id.
       'fee_paid_via_account_id',
       'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors',

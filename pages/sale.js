@@ -20,6 +20,8 @@ import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtm
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
 import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 import { deliveredOwnershipChanges } from '../data/goHome.js';
@@ -58,19 +60,23 @@ const ctx = {
   // she typed stays put.
   accounts: [], accountsById: new Map(), suggestedFee: null,
   // Own kennels, for the extra charges price list (Pro, §21.2).
-  kennels: []
+  kennels: [],
+  // Her do-not-sell list (Pro, with the waitlist): the chosen buyer is checked (K7-9).
+  doNotSell: []
 };
 
 async function loadRefs() {
-  const [dogs, contacts, leadSources, litters, accounts, kennels] = await Promise.all([
+  const [dogs, contacts, leadSources, litters, accounts, kennels, doNotSell] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
     saleRepo.getLeadSources(),
     litterRepo.getAll({ includeArchived: true }),
     // Accounts are a Pro page; Lite records the fee on the sale alone.
     editionFlags.accounts ? accountRepo.getAll({ includeArchived: true }) : [],
-    editionFlags.extraCharges ? kennelRepo.getAll() : []
+    editionFlags.extraCharges ? kennelRepo.getAll() : [],
+    editionFlags.waitlist ? doNotSellRepo.getAll() : []
   ]);
+  ctx.doNotSell = doNotSell;
   ctx.kennels = kennels.filter((k) => k.is_own_kennel);
   ctx.accounts = accounts;
   ctx.accountsById = new Map(accounts.map((a) => [a.id, a]));
@@ -485,6 +491,17 @@ function endReasonFields(s) {
   return `${field('Why it ended', `<select id="f-end_reason">${vocabOptions(reasons, s.end_reason, 'Select…')}</select>`, { required: true, hint })}
       ${field('About it', `<input id="f-end_note" type="text" value="${esc(s.end_note)}" placeholder="e.g. what the vet found">`)}`;
 }
+// The chosen buyer against her do-not-sell list (K7-9): only a warning, as everywhere.
+function buyerDoNotSellText(contactId) {
+  const c = contactId ? ctx.contactsById.get(contactId) : null;
+  if (!c || !ctx.doNotSell.length) return '';
+  return doNotSellWarning(doNotSellMatches({ name: c.name, email: c.email, phone: c.phone }, ctx.doNotSell, { contactId: c.id }));
+}
+function buyerDoNotSellHtml(contactId) {
+  const warn = buyerDoNotSellText(contactId);
+  return warn ? `<div class="inline-warn field-wide" role="status">${esc(/[.!?]$/.test(warn) ? warn : `${warn}.`)} You can still record the sale.</div>` : '';
+}
+
 function field(label, inner, { required = false, hint = '', wide = false } = {}) {
   return `<div class="field${wide ? ' field-wide' : ''}">
     <label>${esc(label)}${required ? ' <span class="req">*</span>' : ''}</label>
@@ -500,6 +517,7 @@ function renderEdit() {
     <div class="form-grid" id="sale-form" style="margin-top:14px;">
       ${field('Dog', `<select id="f-dog_id">${dogOptions(s.dog_id)}</select>`, { required: true })}
       ${field('Buyer', `<select id="f-buyer_contact_id">${contactOptions(s.buyer_contact_id)}</select>`, { required: true })}
+      ${buyerDoNotSellHtml(s.buyer_contact_id)}
       ${field('Registration', `<select id="f-registration_type">${vocabOptions(REGISTRATION_TYPE, s.registration_type, 'Select…')}</select>`, { required: true, hint: 'Full adds the litter\'s Full-registration surcharge to a prefilled price.' })}
       ${field('Status', `<select id="f-status">${vocabOptions(SALE_STATUS, s.status, 'Select…')}</select>`, { required: true })}
       ${endReasonFields(s)}
@@ -682,7 +700,14 @@ async function renderHeaderActions() {
   const payBtn = editionFlags.accounts && isOpenSale(s)
     ? '<button class="btn btn-sm" id="btn-pay-link">Send payment link</button>'
     : '';
+  // A family page without the list (E3, Pro with the waitlist): her link to this sale's
+  // family page, or the way to give them one.
+  const famPage = editionFlags.waitlist ? await familyPageFor(s) : null;
+  const famBtn = famPage?.entry
+    ? `<a class="btn btn-sm" href="waitlist-entry.html?id=${encodeURIComponent(famPage.entry.id)}">${famPage.entry.off_list ? 'Family page' : 'Waitlist family'}</a>`
+    : famPage?.can ? '<button class="btn btn-sm" id="btn-family-page" title="Their own status page (pickup times, extras, the puppy portal link, your messages) without being on the waitlist">Give this family a status page</button>' : '';
   els.headerActions.innerHTML = `
+    ${famBtn}
     ${payBtn}
     ${invoiceBtn}
     ${puppyRecordBtn}
@@ -712,8 +737,38 @@ async function renderHeaderActions() {
       } catch (err) { showError(err.message || String(err)); }
     };
   }
+  const fam = document.getElementById('btn-family-page');
+  if (fam) {
+    fam.onclick = async () => {
+      clearError();
+      try {
+        const { addFamilyPage } = await import('../data/waitlistActions.js');
+        const buyer = contactName(s.buyer_contact_id) || 'This family';
+        const warn = ctx.doNotSell.length ? buyerDoNotSellText(s.buyer_contact_id) : '';
+        if (!(await confirmModal({ title: 'Give this family a status page?', message: `This gives ${buyer} their own status page, with their pickup times, extras, the puppy portal link and your messages. They aren't put on the waitlist and show on no list.${warn ? `\n\n${warn}` : ''}\n\nPublish your list (Waitlist, Publish list) to make their link.`, confirmLabel: 'Make their page' }))) return;
+        const entry = await addFamilyPage(s.id);
+        location.href = `waitlist-entry.html?id=${encodeURIComponent(entry.id)}`;
+      } catch (err) { showError(err.message || String(err)); }
+    };
+  }
   const del = document.getElementById('btn-delete');
   if (!blockers.length) del.onclick = doDelete;
+}
+
+// This sale's waitlist record (one claiming it), or whether it can be given a family
+// page: { entry } | { can: true } | null.
+async function familyPageFor(s) {
+  const dog = ctx.dogsById.get(s.dog_id);
+  const litter = dog?.litter_id ? ctx.littersById.get(dog.litter_id) : null;
+  const kennelId = litter?.kennel_id || s.kennel_id || null;
+  if (!kennelId) return null;
+  const [{ waitlistEntryRepo }, { waitlistOfferRepo }, { familyPageBlocker }] = await Promise.all([
+    import('../data/waitlistEntryRepo.js'), import('../data/waitlistOfferRepo.js'), import('../data/waitlistRules.js')
+  ]);
+  const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(kennelId), waitlistOfferRepo.getByKennel(kennelId)]);
+  const entry = entries.find((e) => !e.is_archived && e.placed_sale_id === s.id);
+  if (entry) return { entry };
+  return familyPageBlocker(s, entries, offers) ? null : { can: true };
 }
 
 function showError(msg) {

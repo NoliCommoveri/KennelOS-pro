@@ -785,6 +785,8 @@ export async function computeNudges() {
     }
   }
 
+  // What her puppy portal changed here (K7-2): each fact once, for her to see and undo.
+  if (editionFlags.websiteLink) nudges.push(...portalFactNudges(events, dogsById, today));
   if (editionFlags.waitlist) nudges.push(...(await waitlistNudges(today, litters, dogsById, { dogs, sales })));
   if (editionFlags.accounts) nudges.push(...(await followUpNudges(today, inScopeOnly(sales), events, dogsById, kennelsById)));
   if (editionFlags.accounts) nudges.push(...(await integrationReviewNudges(inScopeOnly(sales))));
@@ -912,6 +914,27 @@ async function followUpNudges(today, sales, events, dogsById, kennelsById) {
 // Today's waitlist nudges on their own, for Kels's Review my waitlist
 // (assets/waitlistReviewUI.js), which works through the same items with the same
 // wording and actions (data/waitlistReview.js reads each key). Scoped like Today.
+// "From your puppy portal" (K7-2): each fact her portal sent back and KennelOS
+// applied leaves a Note on the pup (`details.portal_fact`, portalFeedSync); Today
+// shows each one for PORTAL_FACT_SHOWN_DAYS, dismissable, so a change never lands
+// unseen. She undoes it on the pup or its sale.
+export const PORTAL_FACT_SHOWN_DAYS = 14;
+export function portalFactNudges(events, dogsById, today) {
+  return (events || [])
+    .filter((e) => !e.is_archived && e.event_type === 'note' && e.details?.portal_fact && e.event_date && addDaysToYMD(e.event_date, PORTAL_FACT_SHOWN_DAYS) >= today && dogsById.has(e.subject_id))
+    .map((e) => {
+      const pup = dogsById.get(e.subject_id);
+      const href = e.details.sale_id && e.details.portal_fact === 'picked_up' ? `sale.html?id=${encodeURIComponent(e.details.sale_id)}` : `dog.html?id=${encodeURIComponent(pup.id)}`;
+      return {
+        key: `portal-fact:${e.id}`,
+        title: `From your puppy portal: ${pup.call_name || 'a pup'}`,
+        detail: `${e.notes || ''} If that's wrong, change it on ${e.details.portal_fact === 'picked_up' ? 'the sale and the pickup' : 'the dog'}.`,
+        subjectHref: href,
+        actions: [{ label: 'Open', run: async () => { location.href = href; } }]
+      };
+    });
+}
+
 export async function waitlistNudgeItems(today = todayYMD()) {
   if (!editionFlags.waitlist) return [];
   const [dogs, litters, sales] = await Promise.all([dogRepo.getAll(), litterRepo.getAll({ includeArchived: true }), saleRepo.getAll()]);

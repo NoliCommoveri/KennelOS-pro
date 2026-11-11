@@ -129,12 +129,12 @@ export async function mountWebsiteCard(el) {
     el.querySelector('#web-disconnect')?.addEventListener('click', async () => {
       const ok = await confirmModal({
         title: 'Disconnect this device?',
-        message: 'This device stops sending to your website. Your website keeps what it has, and your other devices stay connected. To edit everything in KennelPort, use Unlink KennelOS in KennelPort Site Manager.',
+        message: `This device stops sending to your website. Your website keeps what it has, and your other devices stay connected. To edit everything in KennelPort, use Unlink KennelOS in KennelPort Site Manager.${kennel?.kennelport_portal?.handoff_url ? '\n\nYour families\' status pages stop showing Open your puppy portal (their Companion link comes back). If another device is still connected, it turns the portal back on when it next sends, within the hour.' : ''}`,
         confirmLabel: 'Disconnect'
       });
       if (!ok) return;
       const out = await disconnectWebsite(kennelId);
-      note = { ok: true, text: out?.reached === false ? 'Disconnected here. KennelPort couldn\'t be reached, so stop this device there too, under Link KennelOS.' : 'Disconnected this device.' };
+      note = { ok: true, text: `${out?.reached === false ? 'Disconnected here. KennelPort couldn\'t be reached, so stop this device there too, under Link KennelOS.' : 'Disconnected this device.'}${out?.portal_off ? ' Your puppy portal is off on your families\' status pages until a connected device sends again.' : ''}` };
       render();
     });
   }

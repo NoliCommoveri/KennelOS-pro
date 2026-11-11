@@ -47,7 +47,7 @@ import {
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
-  sideSaleOf, pupClaims
+  sideSaleOf, pupClaims, isFamilyPageOnly
 } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import {
@@ -255,13 +255,15 @@ function statusLines(e) {
   } else if (e.status === 'placed') {
     const placedPup = ctx.sales.find((x) => x.id === e.placed_sale_id)?.dog_id;
     lines.push(e.placed_sale_id ? `Placed${placedPup ? ` with ${esc(dogName(placedPup))}` : ''} — <a href="sale.html?id=${encodeURIComponent(e.placed_sale_id)}">open the sale →</a>` : 'Placed.');
+    // A family page only (E3): a status page, never a place.
+    if (isFamilyPageOnly(e)) lines.push('<span class="badge badge-blue">Family page only</span> <span class="faint">Their status page has their pickup times, extras, the puppy portal link and your messages. They aren\'t on the list: no number, and they show on no list or report.</span>');
     // Pup selected (E1): they keep their place and number until the pup goes home.
     if (holdsPlace(e, numbering())) {
       const places = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering());
       lines.push(`<span class="badge badge-green">Pup selected</span> <strong>#${esc(places.get(e.id))}</strong> of ${esc(places.size)} on the list. <span class="faint">They keep this number until ${placedPup ? esc(dogName(placedPup)) : 'their pup'} goes home (the sale marked Delivered), so nobody behind them moves back if a pup is lost.</span>`);
     }
   } else if (e.status === 'withdrawn') {
-    lines.push(`Withdrew${e.withdrawn_date ? ` ${esc(fmtDate(e.withdrawn_date))}` : ''}.`);
+    lines.push(`${isFamilyPageOnly(e) ? 'Backed out' : 'Withdrew'}${e.withdrawn_date ? ` ${esc(fmtDate(e.withdrawn_date))}` : ''}.${isFamilyPageOnly(e) ? ' <span class="badge badge-blue">Family page only</span>' : ''}`);
     if (canUndoWithdrawal(e, today)) lines.push(`<span class="badge badge-amber">You can undo this until ${esc(fmtDate(addDaysToYMD(e.withdrawn_date, REMOVAL_UNDO_DAYS)))}</span>`);
   } else if (e.status === 'declined') {
     lines.push(`Declined${e.declined_date ? ` ${esc(fmtDate(e.declined_date))}` : ''}.`);
@@ -419,7 +421,7 @@ function pendingRequests(e) {
       text: `Asked ${esc(fmtDate(r.requested_date))} to <strong>back out</strong>${ctx.backOut?.pupName ? ` of ${esc(ctx.backOut.pupName)}` : ''}. Their reason: ${esc(r.reason?.label || '')}${r.reason?.text ? `: "${esc(r.reason.text)}"` : ''}.`,
       hint: s ? `Your policy suggests: ${BACK_OUT_OUTCOMES.find((o) => o.value === s.outcome).label.toLowerCase()}${s.row ? ` (${policyRowText(s.row, backOutReasons(ctx.config))})` : ' (no rule fits)'}.` : '',
       buttons: `<button class="btn btn-sm${s?.outcome === 'keep' ? ' btn-primary' : ''}" data-req="backout:keep">Keep the deposit</button>
-        <button class="btn btn-sm${s?.outcome === 'move' ? ' btn-primary' : ''}" data-req="backout:move">Move the deposit</button>
+        ${isFamilyPageOnly(e) ? '' : `<button class="btn btn-sm${s?.outcome === 'move' ? ' btn-primary' : ''}" data-req="backout:move">Move the deposit</button>`}
         <button class="btn btn-sm" data-req="backout:more">More options…</button>
         <button class="btn btn-sm" data-req="backout:decline">Decline</button>` });
   }
@@ -1015,7 +1017,19 @@ async function onUndoFee() {
   await afterAction();
 }
 
+// "Keep off the list (family page only)" (E3): one tap, undoable.
+async function onFamilyPageOnly(on) {
+  const name = entryName(ctx.entry, ctx.contact);
+  const ok = await confirmModal(on
+    ? { title: `Keep ${name} off the list?`, message: `They keep their status page (pickup times, extras, the puppy portal link and your messages) but leave the list: no number and no "Pup selected" row, so the families behind them move up one. You can put them back while their sale is open.`, confirmLabel: 'Keep off the list' }
+    : { title: `Put ${name} back on the list?`, message: 'They take back the place they held, with a "Pup selected" row until their pup goes home, so the families behind them move down one.', confirmLabel: 'Put back' });
+  if (!ok) return;
+  await actions.setFamilyPageOnly(ctx.entry.id, on);
+  await afterAction();
+}
+
 async function onReapply() {
+  if (isFamilyPageOnly(ctx.entry) && !(await confirmModal({ title: 'Apply to the list?', message: 'This starts an ordinary application for them, to review and approve like any other. Their family page stays as it is.', confirmLabel: 'Start the application' }))) return;
   const created = await actions.reapply(ctx.entry.id);
   location.href = `waitlist-entry.html?id=${encodeURIComponent(created.id)}`;
 }
@@ -1224,7 +1238,7 @@ function detailsDlHtml() {
       ${row('Ready to buy', readySummary(e))}
       ${row('Listening for', LISTEN_STATUSES.includes(e.status) || isListenOnly(e) ? listenSummary(e) : '')}
       ${row('Not this litter', notThisLitterHtml(e))}
-      ${row('On the public list', publicListNameHtml(e))}
+      ${isFamilyPageOnly(e) ? '' : row('On the public list', publicListNameHtml(e))}
       ${row('Paused until', e.paused_until ? esc(fmtDate(e.paused_until)) + (e.pause_reason ? ` <span class="faint">— ${esc(e.pause_reason)}</span>` : '') : '')}
       ${row('Fee', e.fee_amount != null ? esc(fmtMoney(e.fee_amount)) : '')}
       ${row('Fee policy', e.fee_credit_policy ? esc(descriptor(FEE_CREDIT_POLICY, e.fee_credit_policy).label) : '')}
@@ -1929,7 +1943,7 @@ function renderTitle() {
   }
   const e = ctx.entry;
   els.title.innerHTML = esc(entryName(e, ctx.contact)) + (e.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
-  els.subtitle.textContent = `${ctx.kennel.kennel_name} waitlist`;
+  els.subtitle.textContent = isFamilyPageOnly(e) ? `${ctx.kennel.kennel_name} family page (not on the waitlist)` : `${ctx.kennel.kennel_name} waitlist`;
 }
 
 // --- The three tabs (decided 2026-10-10) ---------------------------------------------
@@ -2103,8 +2117,15 @@ function interactButtons(e) {
     case 'declined': main = (canUndoDecline(e, todayYMD()) ? b('undo', 'Undo decline', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     case 'expired': main = (canUndoExpire(e, todayYMD()) ? b('undo', 'Reopen application', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     case 'removed': main = (canUndoRemoval(e, todayYMD()) ? b('undo', 'Undo removal', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
-    case 'withdrawn': main = (canUndoWithdrawal(e, todayYMD()) ? b('undo', 'Undo withdrawal', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
-    default: main = b('reapply', 'Re-apply');
+    case 'withdrawn': main = isFamilyPageOnly(e) ? b('reapply', 'Apply to the list…')
+      : (canUndoWithdrawal(e, todayYMD()) ? b('undo', 'Undo withdrawal', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
+    default: main = isFamilyPageOnly(e) ? b('reapply', 'Apply to the list…') : b('reapply', 'Re-apply');
+  }
+  // E3: a placed family with an open sale can be kept off the list (a family page
+  // only); one that was on the list can go back to the place it held.
+  if (e.status === 'placed' && endableSale(e)) {
+    if (!isFamilyPageOnly(e)) main += b('offlist', 'Keep off the list (family page only)…');
+    else if (e.fee_received_date) main += b('onlist', 'Put back on the list…');
   }
   const end = !lost && endableSale(e) ? b('endsale', 'End the sale…') : '';
   return lost + main + end + b('communicate', 'Communicate…');
@@ -2129,7 +2150,7 @@ function renderInteract() {
   wireOffers(pane);
   wireSideSale(pane);
   wireSuggestions(pane);
-  const handlers = { side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate };
+  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });

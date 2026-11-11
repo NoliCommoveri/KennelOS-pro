@@ -18,21 +18,23 @@ import {
 import { DISPOSITION, REGISTRATION_TYPE, SEX, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, registrationsForPurposes, cleanPurposes, descriptor } from '../data/vocab.js';
 import { esc, fmtDate, todayYMD, alertModal, confirmModal } from './ui.js';
 import { formModal } from './waitlistUI.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { entryDoNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 
 const label = (vocab, v) => descriptor(vocab, v)?.label || v || '—';
 
 async function kennelData(kennelId) {
-  const [kennel, entries, offers, litters, dogs, sales, contacts, programsById] = await Promise.all([
+  const [kennel, entries, offers, litters, dogs, sales, contacts, programsById, doNotSell] = await Promise.all([
     kennelRepo.getById(kennelId), waitlistEntryRepo.getByKennel(kennelId), waitlistOfferRepo.getByKennel(kennelId),
     litterRepo.getAll(), dogRepo.getAll({ includeArchived: true }), saleRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true }), waitlistProgramRepo.getMapForKennel(kennelId)
+    contactRepo.getAll({ includeArchived: true }), waitlistProgramRepo.getMapForKennel(kennelId), doNotSellRepo.getAll()
   ]);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const kennelLitters = waitlistLitters(kennelId, litters);
   const litterLabel = (l) => (l ? (l.nickname || `${dogsById.get(l.dam_id)?.call_name || 'Unknown'} × ${dogsById.get(l.sire_id)?.call_name || 'Unknown'}`) : '');
   return {
-    kennel, config: waitlistConfig(kennel), entries, offers, kennelLitters, dogs, dogsById, sales, contactsById, programsById,
+    kennel, config: waitlistConfig(kennel), entries, offers, kennelLitters, dogs, dogsById, sales, contactsById, programsById, doNotSell,
     familyName: (e) => entryName(e, contactsById.get(e.contact_id)),
     litterLabel
   };
@@ -126,6 +128,9 @@ export async function sideSaleDialog({ kennelId, entryId = null, dogId = null, l
       const due = o.querySelector('#ss-due');
       if (!due.dataset.touched) due.value = respondByDate(today, d.config, d.programsById.get(entry.waitlist_program_id) || null);
       const lines = issueLines(issues, entry, dog, d);
+      // Her do-not-sell list (K7-9): only a warning, as everywhere.
+      const dns = doNotSellWarning(entryDoNotSellMatches(entry, d.doNotSell));
+      if (dns) lines.unshift(dns);
       const setReg = reg.value !== (dog.intended_registration || '');
       o.querySelector('#ss-issues').innerHTML = `${lines.length ? `<div class="inline-warn" style="margin:4px 0 8px;"><strong>What doesn't fit</strong> (you can still record it)<ul style="margin:4px 0 0;padding-left:18px;">${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></div>` : ''}
         ${issues.fields.length ? '<label class="check-inline" style="display:block;margin:4px 0;"><input id="ss-fit" type="checkbox"> Also update their answers to match</label>' : ''}

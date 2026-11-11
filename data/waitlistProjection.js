@@ -24,7 +24,7 @@ import {
   waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, publicWantsMore, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
-  messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, LISTEN_LIVE_LITTER
+  messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, isPicksOpen, isFamilyPageOnly, LISTEN_LIVE_LITTER
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
@@ -163,6 +163,8 @@ function entryView(entry, ctx) {
   const contact = ctx.contactsById.get(entry.contact_id) || null;
   const view = { name: entryName(entry, contact), email: entryEmail(entry, contact), status: entry.status };
   if (entry.status_token) view.status_token = entry.status_token;
+  // A family page only (E3): their page never mentions a waitlist.
+  if (isFamilyPageOnly(entry)) view.page_only = true;
   // Which time on the list this record is, for a family with more than one (the
   // server links them on each page): when it started, and its own pup's call name.
   if (entry.applied_date) view.since = entry.applied_date;
@@ -533,7 +535,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   // in a litter with open picks they haven't spent a turn on, however many (Q13),
   // each with those pups per litter. The list the server walks for automatic
   // offers (W2 step 7); her device decides every entry of it.
-  const openLitters = litters.filter((l) => l.kennel_id === kennel.id && !l.is_archived && l.picks_opened_date);
+  const openLitters = litters.filter((l) => l.kennel_id === kennel.id && isPicksOpen(l));
   const turnQueue = [];
   for (const e of rankedList(live, kennel.id, programsById)) {
     const ls = turnLittersFor(e, kennelOffers, openLitters, dogs, sales, opts);

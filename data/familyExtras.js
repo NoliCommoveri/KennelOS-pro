@@ -102,7 +102,7 @@ export function familyExtrasView({ entry, sale, kennel, birthDate = null, today 
     return { id: c.id, list_id: c.list_id, name: c.label, group: c.group || byId.get(c.list_id).group || '', can_cancel: Boolean(cancel), cancel_until: cancel?.until ?? null };
   });
   const requests = (Array.isArray(entry?.extra_requests) ? entry.extra_requests : [])
-    .filter((r) => r && r.requested_date && (!r.decided || (r.decided_date && addDaysToYMD(r.decided_date, EXTRA_REQUEST_SHOWN_DAYS) >= today)))
+    .filter((r) => r && r.requested_date && r.decided !== 'closed' && (!r.decided || (r.decided_date && addDaysToYMD(r.decided_date, EXTRA_REQUEST_SHOWN_DAYS) >= today)))
     .map((r) => ({ id: r.id, kind: r.kind, list_id: r.list_id || null, charge_id: r.charge_id || null, name: r.name || '', requested_date: r.requested_date, decided: r.decided || null, decided_date: r.decided_date || null }));
   if (!available.length && !current.length && !requests.length) return null;
   return { available, current, requests };
