@@ -35,7 +35,7 @@ import { dogRepo } from './dogRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { pairingRepo } from './pairingRepo.js';
 import { litterSoldDue, litterReopenDue, litterCloseDue } from './litterCheckin.js';
-import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boardingChargeText, PICKUP_TITLE, BOARDING_TITLE, readyDateOf, trainingStaysFor, trainingStayEvent, orphanTrainingStays } from './goHome.js';
+import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boardingChargeText, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE, readyDateOf, trainingStaysFor, trainingStayEvent, orphanTrainingStays } from './goHome.js';
 import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
@@ -61,7 +61,8 @@ import {
 import {
   recordOutcome, markFeeExpired, recordReadyAnswer, undoRemoval, cancelSideSale, hasPendingRequest, markMessagesRead,
   approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange,
-  markCompanionLinkSent, declineCompanionRequest, approveExtraRequest, declineExtraRequest, approvePickupRequest, declinePickupRequest
+  markCompanionLinkSent, declineCompanionRequest, approveExtraRequest, declineExtraRequest, approvePickupRequest, declinePickupRequest,
+  pickupWishesFor
 } from './waitlistActions.js';
 import { pendingExtraRequests } from './familyExtras.js';
 import { pendingPickupRequests, requestText as pickupRequestText } from './familyPickup.js';
@@ -700,6 +701,10 @@ export async function computeNudges() {
         if (!eventsByDog.has(e.subject_id)) eventsByDog.set(e.subject_id, []);
         eventsByDog.get(e.subject_id).push(e);
       }
+      // What a family asked for on their status page and she hasn't decided
+      // (familyPickup.pickupWish): Schedule pickup opens with their day, time and place.
+      let wishes = new Map();
+      try { wishes = await pickupWishesFor(openSales); } catch { /* opens without them */ }
       const done = new Set();
       for (const sale of openSales) {
         const pup = dogsById.get(sale.dog_id);
@@ -715,7 +720,16 @@ export async function computeNudges() {
         const family = contactsById.get(s2.buyer_contact_id)?.name || 'their family';
         const dogHref = (q) => `dog.html?id=${encodeURIComponent(pup.id)}&${new URLSearchParams(q).toString()}`;
         const start = defaultStart(issue.readyDate, today);
-        const logPickup = (label) => ({ label, run: async () => { location.href = dogHref({ logEvent: 'placement', logDate: start, logTitle: PICKUP_TITLE, ...(s2.buyer_contact_id ? { logContact: s2.buyer_contact_id } : {}) }); } });
+        const wish = wishes.get(s2.id) || null;
+        const wishDetails = wish ? Object.fromEntries(Object.entries({ placement_time: wish.time, location: wish.location, dropoff_method: wish.method }).filter(([, v]) => v)) : {};
+        const wishText = wish ? ` They asked for ${[wish.date, wish.time].filter(Boolean).join(', ') || 'a time'}${wish.location ? ` at ${wish.location}` : ''} on their status page: Schedule pickup fills it in.` : '';
+        const logPickup = (label) => ({ label, run: async () => {
+          location.href = dogHref({
+            logEvent: 'placement', logDate: wish?.date && wish.date >= today ? wish.date : start, logTitle: wish?.method === 'Local pickup' || !wish ? PICKUP_TITLE : DROPOFF_TITLE,
+            ...(s2.buyer_contact_id ? { logContact: s2.buyer_contact_id } : {}),
+            ...(Object.keys(wishDetails).length ? { logDetails: JSON.stringify(wishDetails) } : {})
+          });
+        } });
         if (issue.kind === 'boarding') {
           const end = boardingEnd(s2, start);
           nudges.push({
@@ -729,7 +743,7 @@ export async function computeNudges() {
           nudges.push({
             key: `gohome-schedule:${s2.id}`,
             title: `${name} is going home to ${family}. Schedule the pickup?`,
-            detail: `The litter is ready ${issue.readyDate}, and there's no pickup or boarding on the calendar.`,
+            detail: `The litter is ready ${issue.readyDate}, and there's no pickup or boarding on the calendar.${wishText}`,
             subjectHref: `sale.html?id=${encodeURIComponent(s2.id)}`,
             actions: [logPickup('Schedule pickup')]
           });

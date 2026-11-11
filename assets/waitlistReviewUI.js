@@ -49,7 +49,7 @@ import { pendingPickupRequests } from '../data/familyPickup.js';
 import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf } from '../data/goHome.js';
 import { chargesWithStepPaid } from '../data/extraCharges.js';
 import { offerSpecs, kennelEmailsOn, familyEmail } from '../data/waitlistOutbox.js';
-import { standardLocation } from '../data/pickupSlots.js';
+import { standardLocation, timeRange } from '../data/pickupSlots.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { PAYMENT_METHODS, PLACEMENT_METHODS, SEX, isOpenSale, descriptor } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
@@ -510,7 +510,7 @@ class Review {
       title: `<strong>${esc(this.name(e))}'s drop-off</strong><span class="kels-lead">${esc(r.address || '')}</span>`,
       html: `<div class="ck-inline">
           ${field('Day', `<input id="wr-date" type="date" value="${esc(r.date || '')}">`)}
-          ${field('Time', '<input id="wr-time" type="text" placeholder="e.g. 2:00 PM">')}
+          ${field('Time', `<input id="wr-time" type="text" placeholder="e.g. 2:00 PM" value="${esc(r.start_time ? timeRange({ start_time: r.start_time }) : '')}">`)}
         </div>
         ${field('How', `<select id="wr-method">${PLACEMENT_METHODS.map((m) => `<option${m === 'Ground transport' ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select>`)}
         ${field('Miles, one way', `<input id="wr-miles" type="number" min="0" step="0.1" value="${miles0 ?? ''}">${from ? ' <button type="button" class="gl-more" id="wr-measure">Get driving miles</button>' : ''}`)}

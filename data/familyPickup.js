@@ -3,8 +3,9 @@
 // their requests, and whether they may suggest their own place. Pure: no db.
 //
 // Requests wait on the entry, `pickup_requests` = [{ id, kind: 'slot' | 'address' |
-// 'cancel', slot_id?, date?, start_time?, end_time?, place?, address?, miles?,
-// minutes?, far?, note, requested_date, decided?, decided_date? }], newest last;
+// 'cancel', slot_id?, date?, start_time? (a slot's, or the time they'd like to meet
+// at their own place), end_time?, place?, address?, miles?, minutes?, far?, note,
+// requested_date, decided?, decided_date? }], newest last;
 // approving one makes (or removes) the pup's pickup event
 // (waitlistActions.approvePickupRequest). Where they live: `home_place` and
 // `home_miles` on the entry (measured once), and `own_place_override` (true/false)
@@ -38,12 +39,18 @@ export function upcomingPickup(sale, events, today) {
     .sort((a, b) => a.event_date.localeCompare(b.event_date))[0] || null;
 }
 
-// Where a family's times start: the pup's ready date, or the day after the last
-// training stay linked to the sale ends, whichever is later.
-export function pickupFrom(sale, litter, events) {
+// A family sees her pickup times from this many days before the pup's ready date
+// (seven weeks, with the default 8-week ready date).
+export const PICKUP_EARLY_DAYS = 7;
+
+// When the pup can first go home: its ready date, or the day after the last
+// training stay linked to the sale ends, whichever is later. `earlyDays` moves the
+// ready date earlier (a family's times: PICKUP_EARLY_DAYS); a stay's end never moves.
+export function pickupFrom(sale, litter, events, { earlyDays = 0 } = {}) {
   const stays = events.filter((e) => !e.is_archived && e.event_type === 'boarding' && e.subject_id === sale.dog_id && e.details?.sale_id === sale.id && e.details?.extra_charge_id);
   const stayEnd = stays.map((e) => e.event_end_date || e.event_date).sort().pop() || null;
-  const ready = readyDateOf(litter);
+  const readyDate = readyDateOf(litter);
+  const ready = readyDate && earlyDays ? addDaysToYMD(readyDate, -earlyDays) : readyDate;
   const after = stayEnd ? addDaysToYMD(stayEnd, 1) : null;
   return [ready, after].filter(Boolean).sort().pop() || null;
 }
@@ -64,7 +71,7 @@ export function familyPickupView({ entry, sales, offers = [], dogsById, litters,
   const pendingSlot = pending.find((r) => r.kind === 'slot')?.slot_id || null;
   const litterPups = new Set([...dogsById.values()].filter((d) => d.litter_id === pup.litter_id).map((d) => d.id));
   const bookings = slotBookings(events.filter((e) => litterPups.has(e.subject_id)), entries, { live: (en) => Boolean(familySale(en, sales, offers, entries)) });
-  const from = pickupFrom(sale, litter, events);
+  const from = pickupFrom(sale, litter, events, { earlyDays: PICKUP_EARLY_DAYS });
   const slots = litter ? familySlots({ slots: litter.pickup_slots, locations, bookings, from, today, mine: mine || pendingSlot }) : [];
   const days = Number(config.pickup_change_days) || 0;
   let booked = null;
@@ -100,6 +107,29 @@ export function familyPickupView({ entry, sales, offers = [], dogsById, litters,
   return slots.length || booked || requests.length || own !== false ? view : null;
 }
 
+// What a family asked for that she hasn't decided yet, as a prefill for a pickup
+// she logs some other way (Today's Schedule pickup, Kels's drop-off form): their
+// newest waiting time or own place. A time's place comes from the litter's slot and
+// her places when given (`kennel`, `litter`), else its label. → null | { date, time,
+// location, method } (`time` as her pickup events write it: "10:00 AM–10:30 AM";
+// `method` 'Local pickup' for one of her times, '' for their own place: hers to choose).
+export function pickupWish(entry, { kennel = null, litter = null } = {}) {
+  const r = pendingPickupRequests(entry).filter((x) => x.kind === 'slot' || x.kind === 'address').pop();
+  if (!r) return null;
+  if (r.kind === 'address') {
+    return { date: r.date || null, time: r.start_time ? timeRange({ start_time: r.start_time }) : '', location: r.address || '', method: '' };
+  }
+  const slot = (litter?.pickup_slots || []).find((x) => x.id === r.slot_id) || null;
+  const place = slot && kennel ? pickupLocations(kennel).find((l) => l.id === slot.location_id) : null;
+  const start = slot?.start_time || r.start_time || '';
+  return {
+    date: slot?.date || r.date || null,
+    time: start ? timeRange({ start_time: start, end_time: slot?.end_time || r.end_time || '' }) : '',
+    location: place ? `${place.label}, ${place.address}` : r.place || '',
+    method: 'Local pickup'
+  };
+}
+
 // A request added once per id, oldest dropped past the cap.
 export function withPickupRequest(entry, request) {
   const list = Array.isArray(entry?.pickup_requests) ? entry.pickup_requests : [];
@@ -110,6 +140,6 @@ export function withPickupRequest(entry, request) {
 // "Sat Nov 21, 10:00 AM–10:30 AM at the Library" for her screens.
 export function requestText(r) {
   if (r.kind === 'cancel') return 'to cancel their pickup time';
-  if (r.kind === 'address') return `to meet at ${r.address}${r.date ? ` on ${r.date}` : ''}${Number.isFinite(r.miles) ? ` (about ${Math.round(r.miles)} miles)` : ''}`;
+  if (r.kind === 'address') return `to meet at ${r.address}${r.date ? ` on ${r.date}` : ''}${r.start_time ? `${r.date ? ' at' : ', at'} ${timeRange({ start_time: r.start_time })}` : ''}${Number.isFinite(r.miles) ? ` (about ${Math.round(r.miles)} miles)` : ''}`;
   return `for ${r.date}${r.start_time ? `, ${timeRange({ start_time: r.start_time, end_time: r.end_time || '' })}` : ''}${r.place ? ` at ${r.place}` : ''}`;
 }

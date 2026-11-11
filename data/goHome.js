@@ -92,12 +92,13 @@ export const defaultStart = (readyDate, today) => (readyDate && readyDate > toda
 
 // The events Kels writes. A pickup: the family as its related contact; with a
 // `method` (vocab PLACEMENT_METHODS) other than Local pickup it's a drop-off. A
-// boarding: the charge's span from `start`.
-export const pickupEvent = (pup, sale, date, time = '', method = '') => ({
+// boarding: the charge's span from `start`. `location`: where (a family's own place, or
+// one of her pickup places), optional.
+export const pickupEvent = (pup, sale, date, time = '', method = '', location = '') => ({
   subject_type: 'dog', subject_id: pup.id, event_type: 'placement', event_date: date,
   title: method && method !== 'Local pickup' ? DROPOFF_TITLE : PICKUP_TITLE,
   ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
-  details: { ...(time ? { placement_time: time } : {}), ...(method ? { dropoff_method: method } : {}) }
+  details: { ...(time ? { placement_time: time } : {}), ...(method ? { dropoff_method: method } : {}), ...(location ? { location } : {}) }
 });
 export const boardingEvent = (pup, start, end = '') => ({
   subject_type: 'dog', subject_id: pup.id, event_type: 'boarding', event_date: start,

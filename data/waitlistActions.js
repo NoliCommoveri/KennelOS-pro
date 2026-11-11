@@ -38,7 +38,7 @@ import { litterRepo } from './litterRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { familySale, pupBirthDate, withExtraRequest } from './familyExtras.js';
-import { withPickupRequest, pickupFrom } from './familyPickup.js';
+import { withPickupRequest, pickupFrom, pickupWish, pendingPickupRequests } from './familyPickup.js';
 import { pickupLocations, timeRange, ruleFor, standardBoarding } from './pickupSlots.js';
 import { pickupFor, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE } from './goHome.js';
 import { eventRepo } from './eventRepo.js';
@@ -1653,7 +1653,9 @@ const decidePickup = (entry, requestId, decision, date) =>
 // could apply instead with applyPickupBoarding), and a transport fee left on the
 // sale after a time or a cancel is reported (→ `transportFeeLeft`) for her to keep
 // or clear. → { entry, sale, event, boarding, boardingKept, transportFeeLeft }
-export async function approvePickupRequest(entryId, requestId, { date = todayYMD(), when = null, time = '', method = 'Ground transport', fee = null } = {}) {
+// `time`: the drop-off time for their own place (free text); left out (null), the
+// time they asked for, if any. '' means none.
+export async function approvePickupRequest(entryId, requestId, { date = todayYMD(), when = null, time = null, method = 'Ground transport', fee = null } = {}) {
   const entry = await load(entryId);
   const req = loadPickupRequest(entry, requestId);
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
@@ -1690,13 +1692,14 @@ export async function approvePickupRequest(entryId, requestId, { date = todayYMD
     });
   } else if (req.kind === 'address') {
     const day = when || req.date;
+    const at = time ?? (req.start_time ? timeRange({ start_time: req.start_time }) : '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day || '')) throw new Error('Choose the day for the drop-off.');
     for (const e of upcoming) await eventRepo.archive(e.id);
     await clearPickupBoarding(sale);
     event = await eventRepo.create({
       subject_type: 'dog', subject_id: sale.dog_id, event_type: 'placement', event_date: day, title: method === 'Local pickup' ? PICKUP_TITLE : DROPOFF_TITLE,
       ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
-      details: { dropoff_method: method, ...(time ? { placement_time: time } : {}), location: req.address }
+      details: { dropoff_method: method, ...(at ? { placement_time: at } : {}), location: req.address }
     });
     if (fee != null && fee !== '' && Number.isFinite(Number(fee))) await saleRepo.update(sale.id, { transport_fee: Math.round(Number(fee) * 100) / 100 });
   } else {
@@ -1707,6 +1710,31 @@ export async function approvePickupRequest(entryId, requestId, { date = todayYMD
   const after = await saleRepo.getById(sale.id);
   const transportFeeLeft = req.kind !== 'address' && Number(after.transport_fee) > 0 ? Number(after.transport_fee) : null;
   return { entry: updated, sale: after, event, boarding, boardingKept, transportFeeLeft };
+}
+
+// Each sale's pickupWish: what its family asked for and she hasn't decided, for a
+// pickup she logs another way. `sales`: the sales to look up. → Map sale id → wish
+// (sales without one are left out).
+export async function pickupWishesFor(sales) {
+  const out = new Map();
+  const kennelIds = [...new Set((sales || []).map((s) => s?.kennel_id).filter(Boolean))];
+  if (!kennelIds.length) return out;
+  const allSales = await saleRepo.getAll({ includeArchived: true });
+  for (const kennelId of kennelIds) {
+    const entries = (await waitlistEntryRepo.getByKennel(kennelId)).filter((e) => !e.is_archived);
+    const asking = entries.filter((e) => pendingPickupRequests(e).some((r) => r.kind === 'slot' || r.kind === 'address'));
+    if (!asking.length) continue;
+    const [kennel, offers] = await Promise.all([kennelRepo.getById(kennelId), waitlistOfferRepo.getByKennel(kennelId)]);
+    for (const sale of sales.filter((s) => s?.kennel_id === kennelId)) {
+      const entry = asking.find((e) => familySale(e, allSales, offers, entries)?.id === sale.id);
+      if (!entry) continue;
+      const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
+      const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+      const wish = pickupWish(entry, { kennel, litter });
+      if (wish) out.set(sale.id, wish);
+    }
+  }
+  return out;
 }
 
 export async function declinePickupRequest(entryId, requestId, { date = todayYMD() } = {}) {

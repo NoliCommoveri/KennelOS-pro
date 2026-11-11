@@ -225,7 +225,8 @@ export function planFamilyEvent(event, ctx) {
       if (event.kind === 'pickup_address') {
         const address = clean(p.address).slice(0, 300);
         if (!address) return skip('bad_payload');
-        return { op: 'pickup_request', date, activity: null, request: { ...base, kind: 'address', address, date: ymd(p.date),
+        const hm = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.time ?? '')) ? p.time : '';
+        return { op: 'pickup_request', date, activity: null, request: { ...base, kind: 'address', address, date: ymd(p.date), ...(hm ? { start_time: hm } : {}),
           ...(Number.isFinite(p.miles) ? { miles: p.miles } : {}), ...(Number.isFinite(p.minutes) ? { minutes: p.minutes } : {}), far: p.far === true } };
       }
       if (typeof p.slot_id !== 'string' || !p.slot_id) return skip('bad_payload');

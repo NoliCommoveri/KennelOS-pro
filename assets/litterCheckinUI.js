@@ -575,25 +575,36 @@ class Checkin {
 // "When's the drop-off?": a row per pup (`rows`: [{ pup, sale, date }]) with the
 // date, an optional time and how the pup goes home (vocab PLACEMENT_METHODS: a
 // Local pickup, else a drop-off). A pup left without a date is skipped. One
-// `placement` event per pup with a date (goHome.pickupEvent).
+// `placement` event per pup with a date (goHome.pickupEvent). What a family asked
+// for on their status page and she hasn't decided (waitlistActions.pickupWishesFor)
+// fills in the row: their day, time, place and, for one of her times, Local pickup.
 // → chat.form's { done, result: [{ pup, date, method }] }.
-export function pickupsForm(chat, rows, { title = '<strong>When\'s the drop-off?</strong>', cancelLabel = 'Not now' } = {}) {
+export async function pickupsForm(chat, rows, { title = '<strong>When\'s the drop-off?</strong>', cancelLabel = 'Not now' } = {}) {
   const many = rows.length > 1;
-  const methods = `<option value="">—</option>${PLACEMENT_METHODS.map((m) => `<option>${esc(m)}</option>`).join('')}`;
+  let wishes = new Map();
+  if (editionFlags.waitlist) {
+    try { wishes = await (await import('../data/waitlistActions.js')).pickupWishesFor(rows.map((r) => r.sale).filter(Boolean)); } catch { /* the form opens without them */ }
+  }
+  const today = todayYMD();
+  rows = rows.map((r) => {
+    const w = r.sale ? wishes.get(r.sale.id) : null;
+    return w ? { ...r, date: w.date && w.date >= today ? w.date : r.date, time: w.time, method: w.method, location: w.location, asked: true } : r;
+  });
+  const methods = (pick) => `<option value="">—</option>${PLACEMENT_METHODS.map((m) => `<option${m === pick ? ' selected' : ''}>${esc(m)}</option>`).join('')}`;
   return chat.form({
     title: many ? `${title}<span class="kels-lead">Leave a puppy's date blank to skip them.</span>` : title,
     html: rows.map((r, i) => `${many ? `<p class="gl-q">${pupLine(r.pup)}</p>` : ''}<div class="ck-inline">
         ${field('Date', `<input id="ck-pickup-${i}" type="date" value="${esc(r.date || '')}" aria-label="${esc(pupName(r.pup))}: date">`)}
-        ${field('Time (optional)', `<input id="ck-time-${i}" type="text" placeholder="e.g. 10am" aria-label="${esc(pupName(r.pup))}: time">`)}
-        ${field('How', `<select id="ck-method-${i}" aria-label="${esc(pupName(r.pup))}: how">${methods}</select>`)}
-      </div>`).join(''),
+        ${field('Time (optional)', `<input id="ck-time-${i}" type="text" placeholder="e.g. 10am" value="${esc(r.time || '')}" aria-label="${esc(pupName(r.pup))}: time">`)}
+        ${field('How', `<select id="ck-method-${i}" aria-label="${esc(pupName(r.pup))}: how">${methods(r.method || '')}</select>`)}
+      </div>${r.asked ? `<p class="field-hint">Filled in from what they asked for on their status page${r.location ? ` (${esc(r.location)})` : ''}. Their request still waits on their entry for you to approve or decline.</p>` : ''}`).join(''),
     submitLabel: many ? 'Save' : 'Save date',
     cancelLabel,
     submit: async (root) => {
       const out = rows.map((r, i) => ({ ...r, date: root.querySelector(`#ck-pickup-${i}`).value, time: root.querySelector(`#ck-time-${i}`).value.trim(), method: root.querySelector(`#ck-method-${i}`).value }))
         .filter((r) => r.date);
       if (!out.length) return many ? 'Pick a date for at least one puppy.' : 'Pick a date.';
-      for (const r of out) await eventRepo.create(H.pickupEvent(r.pup, r.sale, r.date, r.time, r.method));
+      for (const r of out) await eventRepo.create(H.pickupEvent(r.pup, r.sale, r.date, r.time, r.method, r.location || ''));
       return out;
     },
     reply: (out) => (many ? `${C.plural(out.length, 'drop-off date')} saved` : `Drop-off on ${fmtDate(out[0].date)}`)

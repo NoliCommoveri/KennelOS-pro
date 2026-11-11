@@ -436,7 +436,7 @@ function pendingRequests(e) {
     }
     const q = Number.isFinite(r.miles) ? transportQuote(r.miles, ctx.config) : null;
     out.push({ kind, note: r.note,
-      text: `Asked ${esc(fmtDate(r.requested_date))} to meet at <strong>${esc(r.address)}</strong>${r.date ? ` on ${esc(fmtDate(r.date))}` : ''}.`,
+      text: `Asked ${esc(fmtDate(r.requested_date))} to meet at <strong>${esc(r.address)}</strong>${r.date ? ` on ${esc(fmtDate(r.date))}` : ''}${r.start_time ? `${r.date ? ' at' : ', at'} ${esc(timeRange({ start_time: r.start_time }))}` : ''}.`,
       hint: q ? `${q.text}${q.far ? ' · Farther than your limit: they were told you\'ll be in touch.' : ''}` : 'Not measured yet.',
       buttons: `<a class="btn btn-sm" href="${esc(mapsLink(from, r.address))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>
         <button class="btn btn-sm" data-req="${kind}:transport">Send transport options</button>
@@ -637,7 +637,7 @@ async function approveAddress(request) {
     bodyHtml: `<p style="margin-top:0;">${esc(request.address)} <a href="${esc(mapsLink(from, request.address))}" target="_blank" rel="noopener noreferrer">Open in Maps</a></p>
       <div class="form-grid">
         <div class="field"><label for="pa-date">Day</label><input id="pa-date" type="date" value="${esc(request.date || '')}"></div>
-        <div class="field"><label for="pa-time">Time</label><input id="pa-time" type="text" placeholder="e.g. 2:00 PM"></div>
+        <div class="field"><label for="pa-time">Time</label><input id="pa-time" type="text" placeholder="e.g. 2:00 PM" value="${esc(request.start_time ? timeRange({ start_time: request.start_time }) : '')}"></div>
         <div class="field"><label for="pa-method">How</label><select id="pa-method">${PLACEMENT_METHODS.map((m) => `<option${m === 'Ground transport' ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
         <div class="field"><label for="pa-miles">Miles, one way</label><span style="display:inline-flex; gap:6px; align-items:center;"><input id="pa-miles" type="number" min="0" step="0.1" value="${miles ?? ''}" style="width:7em;">${from ? '<button type="button" class="btn btn-sm" id="pa-measure">Get driving miles</button>' : ''}</span></div>
         <div class="field"><label for="pa-fee">Transport fee</label>
@@ -1740,7 +1740,7 @@ function requestTimeline(e) {
     if (!r?.requested_date) continue;
     const when = r.date ? `${fmtDate(r.date)}${r.start_time ? `, ${timeRange({ start_time: r.start_time, end_time: r.end_time || '' })}` : ''}` : '';
     out.push([r.requested_date, r.kind === 'cancel' ? 'Asked to cancel their pickup time'
-      : r.kind === 'address' ? `Asked to meet at ${r.address}${when ? ` on ${fmtDate(r.date)}` : ''}`
+      : r.kind === 'address' ? `Asked to meet at ${r.address}${when ? ` on ${when}` : r.start_time ? `, ${timeRange({ start_time: r.start_time })}` : ''}`
         : `Asked for a pickup on ${when}${r.place ? ` at ${r.place}` : ''}`]);
     decision(r, r.kind === 'cancel' ? 'cancelling their pickup' : r.kind === 'address' ? 'their meetup place' : 'their pickup time');
   }
@@ -1943,7 +1943,9 @@ function renderTitle() {
   }
   const e = ctx.entry;
   els.title.innerHTML = esc(entryName(e, ctx.contact)) + (e.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
-  els.subtitle.textContent = isFamilyPageOnly(e) ? `${ctx.kennel.kennel_name} family page (not on the waitlist)` : `${ctx.kennel.kennel_name} waitlist`;
+  // Short, so the ⋯ menu keeps its place on a phone; Details' "Family page only"
+  // badge says they aren't on the list.
+  els.subtitle.textContent = isFamilyPageOnly(e) ? `${ctx.kennel.kennel_name} family page` : `${ctx.kennel.kennel_name} waitlist`;
 }
 
 // --- The three tabs (decided 2026-10-10) ---------------------------------------------
