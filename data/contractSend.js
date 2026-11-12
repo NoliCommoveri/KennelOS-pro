@@ -9,6 +9,9 @@ import { ourRole } from './studRules.js';
 import { dogRepo } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
+import { litterRepo } from './litterRepo.js';
+import { eventRepo } from './eventRepo.js';
+import { expectedPickupDate } from './goHome.js';
 import { accountRepo } from './accountRepo.js';
 import { incomeLineItems, paidOnSale, getSaleCredits } from './incomeView.js';
 import { allForms, prefillValues, prefillUrl, formProvider, mapValues, isFirmaForm } from './contractForms.js';
@@ -56,12 +59,18 @@ export async function gatherContractFacts(c) {
   const ours = ss ? await get(dogRepo, ss.our_dog_id) : null;
   const theirs = ss ? await get(dogRepo, ss.partner_dog_id) : null;
   const incoming = ss ? ourRole(ss, [ours, theirs].filter(Boolean)) === 'dam' : false;
+  const today = todayYMD();
+  const pickupDate = puppy ? expectedPickupDate({
+    sale, today,
+    events: await eventRepo.getForSubject('dog', puppy.id),
+    litter: await get(litterRepo, puppy.litter_id)
+  }) : '';
   return {
     contract: c,
     kennel: await get(kennelRepo, c.kennel_id),
     breeder: await breederFor(c.kennel_id),
-    today: todayYMD(),
-    sale, puppy,
+    today,
+    sale, puppy, pickupDate,
     balanceDue: sale ? await balanceDueOn(sale) : null,
     buyer: sale ? await get(contactRepo, sale.buyer_contact_id) : null,
     sire: puppy ? await get(dogRepo, puppy.sire_id) : null,

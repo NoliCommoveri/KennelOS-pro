@@ -62,6 +62,14 @@ export function boardingChargeText(sale, fmtMoney = (v) => `$${v}`) {
 export const pickupFor = (sale) => (e) => !e.is_archived && e.event_type === 'placement' && ymd(e.event_date)
   && (!e.related_contact_id || !sale.buyer_contact_id || e.related_contact_id === sale.buyer_contact_id);
 
+// When the pup is expected to go home to this sale's family, for a contract's
+// pickupDate: its next pickup on the calendar (today or later), else its latest
+// one, else the litter's ready date. `events`: the pup's events. → YYYY-MM-DD | ''
+export function expectedPickupDate({ sale, events, litter, today }) {
+  const dates = sale ? (events || []).filter(pickupFor(sale)).map((e) => e.event_date).sort() : [];
+  return dates.find((d) => d >= today) || dates[dates.length - 1] || readyDateOf(litter) || '';
+}
+
 // What's missing on this puppy's way home, or null. `pup`: the dog; `litter`:
 // its litter; `sales`: its sales; `events`: its events (any types).
 // → null | { kind: 'boarding' | 'schedule' | 'overdue', sale, readyDate, pickupDate? }

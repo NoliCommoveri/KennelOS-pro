@@ -169,6 +169,7 @@ export const PREFILL_FIELDS = {
     ['sireName', 'Sire'],
     ['damName', 'Dam'],
     ['registrationType', 'Registration (Limited, Full…)'],
+    ['pickupDate', 'Estimated pickup date (the pickup on your calendar, else the litter\'s ready date)'],
     ['price', 'Price'],
     ['depositAmount', 'Deposit'],
     ['balanceDue', 'Balance still due']
@@ -239,7 +240,7 @@ function person(prefix, c) {
 
 // The facts to prefill, as [[name, value]] in PREFILL_FIELDS order, empties
 // dropped. `facts` holds the records the contract reaches (the caller reads
-// them): { contract, kennel, breeder, sale, buyer, puppy, sire, dam, balanceDue,
+// them): { contract, kennel, breeder, sale, buyer, puppy, sire, dam, balanceDue, pickupDate,
 // studService, studDog, studDam, partner, dog, today }.
 export function prefillValues(formType, facts = {}) {
   const f = facts;
@@ -267,6 +268,7 @@ export function prefillValues(formType, facts = {}) {
       ['sireName', text(f.sire?.registered_name || f.sire?.call_name)],
       ['damName', text(f.dam?.registered_name || f.dam?.call_name)],
       ['registrationType', label(REGISTRATION_TYPE, s.registration_type)],
+      ['pickupDate', text(f.pickupDate)],
       ['price', money(s.price)], ['depositAmount', money(s.deposit_amount)], ['balanceDue', money(f.balanceDue)]
     );
   }
