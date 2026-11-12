@@ -11,15 +11,18 @@ import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { incomeLineItems, paidOnSale, getSaleCredits } from './incomeView.js';
-import { allForms, prefillValues, prefillUrl, formProvider, mapValues } from './contractForms.js';
+import { allForms, prefillValues, prefillUrl, formProvider, mapValues, isFirmaForm } from './contractForms.js';
+import { esignSignedIn } from './cloud/cloudEsign.js';
 import { todayYMD } from './dateUtils.js';
 
 // Contracts that can still go out for signature (and be sent again).
 export const SENDABLE_STATUSES = ['draft', 'sent', 'declined'];
 
-// Every saved contract form, from her Form service accounts.
+// Every saved contract form, from her Form service accounts. Her Firma templates
+// (D30) only while this device can send them (Pro, cloud, signed in).
 export async function loadContractForms() {
-  return allForms(await accountRepo.getAll());
+  const forms = allForms(await accountRepo.getAll());
+  return esignSignedIn() ? forms : forms.filter((f) => !isFirmaForm(f));
 }
 
 // What's still owed on a sale, read the way the ledger reads it.

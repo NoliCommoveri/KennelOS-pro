@@ -1,5 +1,8 @@
-// contracts.js — Contract List screen.
+// contracts.js — Contract List screen. With a cloud server, its "Contract
+// templates" button manages her contracts for e-signing through Firma
+// (Integrations plan §2.3a, D30; assets/esignUI.js). #templates opens it.
 import { contractRepo } from '../data/contractRepo.js';
+import { esignOffered } from '../data/cloud/cloudEsign.js';
 import { createListView } from '../assets/listView.js';
 import { inScope } from '../data/kennelScope.js';
 import { badge, esc } from '../assets/ui.js';
@@ -42,3 +45,26 @@ createListView({
   load: (o) => contractRepo.getAll(o),
   emptyText: 'No other contracts yet. Sale and stud-service contracts live on their Sales and Stud Services cards.'
 });
+
+// Contract templates (e-sign through Firma): she has no Firma login, so this is
+// where her templates are managed. Only with a cloud server.
+if (esignOffered()) {
+  const add = document.querySelector('.page-header a.btn-primary');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn';
+  btn.id = 'btn-contract-templates';
+  btn.textContent = 'Contract templates';
+  const open = async () => (await import('../assets/esignUI.js')).openContractTemplates();
+  btn.addEventListener('click', open);
+  if (add) {
+    const wrap = document.createElement('div');
+    wrap.className = 'pill-row';
+    add.replaceWith(wrap);
+    wrap.append(btn, add);
+  }
+  if (location.hash === '#templates') {
+    history.replaceState(null, '', location.pathname + location.search);
+    open();
+  }
+}

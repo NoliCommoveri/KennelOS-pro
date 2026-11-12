@@ -246,7 +246,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'signed_date', 'lease_start_date', 'lease_end_date',
       // Sent for signature through one of her contract forms (Integrations plan
       // §2.1a, D9 / D15): which service, which form (its label then), and when.
-      'esign_provider', 'esign_form_label', 'esign_sent_date'
+      'esign_provider', 'esign_form_label', 'esign_sent_date',
+      // Firma's id for the signing request (plan §2.3a, D30): an id only, no
+      // buyer details, so any of her devices can show the signed copy.
+      'esign_ref'
     ],
     // The link sent carries the prefilled facts in it (buyer's name, email, phone,
     // address, price), so it's private like those fields.

@@ -321,6 +321,26 @@ export const disconnectIntegration = (token, id) =>
 // → { events: [{ seq, provider, kind, recordType, recordId, payload, createdAt }], last, more }
 export const readIntegrationEvents = (token, since = 0) => getJson(`/integrations/events?since=${encodeURIComponent(since)}`, { token });
 
+// E-sign through Firma (Integrations plan §2.3a, step 8). Her workspace on
+// KennelOS's Firma account; every send counts against her monthly limit.
+// → { available, connected, connectedAt, usage: { used, limit, own, resetsOn } }
+export const getFirmaStatus = (token) => getJson('/integrations/firma', { token });
+export const connectFirma = (token, kennelName) => getJson('/integrations/firma/connect', { method: 'POST', token, json: { kennelName } });
+// fields: [{ name, label }], at most 40 a call → { added }
+export const syncFirmaFields = (token, fields) => getJson('/integrations/firma/fields', { method: 'POST', token, json: { fields } });
+// → { templates: [{ id, name, pageCount }] }
+export const listFirmaTemplates = (token) => getJson('/integrations/firma/templates', { token });
+// document: a base64 PDF → { id, name, pageCount }
+export const createFirmaTemplate = (token, { name, document }) =>
+  getJson('/integrations/firma/templates', { method: 'POST', token, json: { name, document }, timeoutMs: 120 * 1000 });
+// → { token, expiresAt }: Firma's editor token for one of her templates
+export const firmaTemplateToken = (token, templateId) => getJson('/integrations/firma/template-token', { method: 'POST', token, json: { templateId } });
+// { contractId, templateId, title, signer: { firstName, lastName, email }, facts, emailSigner, resend }
+// → { signingRequestId, signingLink, usage }
+export const sendForEsign = (token, body) => getJson('/integrations/esign/send', { method: 'POST', token, json: body, timeoutMs: 60 * 1000 });
+// → { url, expiresAt, partial, status }: a short-lived link to the signed PDF
+export const esignDocument = (token, ref) => getJson(`/integrations/esign/document?ref=${encodeURIComponent(ref)}`, { token });
+
 // --- Notifications: app alerts and the email digest (Notifications plan) ------------------
 // → { kinds, push: { available, publicKey, kinds, hideNames, thisDevice, devices },
 //     digest: { available, email, pendingEmail, frequency, kinds } }

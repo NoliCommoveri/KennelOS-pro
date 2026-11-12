@@ -16,11 +16,14 @@
 // stored is left alone.
 // A form once picked through Connect Jotform (retired, D27) keeps its saved
 // form_id and field_map (D29): shown, kept on save, never re-matched.
+// A Firma template (e-sign, Integrations plan §2.3a, D30) is a row with its
+// template id and no link: its type and label can be changed here, and it's
+// managed (uploaded, fields placed) on Contracts → Contract templates.
 // Reads/writes only through accountRepo / expenseRepo.
 import { accountRepo } from '../data/accountRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { ACCOUNT_TYPE, CONTRACT_FORM_TYPE } from '../data/vocab.js';
-import { cleanForms, formLink, PREFILL_FIELDS } from '../data/contractForms.js';
+import { cleanForms, formLink, isFirmaForm, PREFILL_FIELDS } from '../data/contractForms.js';
 import { feeRate, rateLabel } from '../data/processingFees.js';
 import { sharedReferrals, sharedTransport } from '../data/referralShare.js';
 import { paymentLink } from '../data/paymentLinks.js';
@@ -139,8 +142,10 @@ function formsHtml(a) {
   return `<div class="acct-section"><div class="acct-section-title">Contract forms</div>
     ${forms.map((f) => `<div class="acct-row">
       <span class="acct-k acct-k-wide">${badge(CONTRACT_FORM_TYPE, f.form_type)}</span>
-      <span class="acct-v">${esc(f.label)}${f.field_map ? ` <span class="muted">· ${Object.keys(f.field_map).length} fields matched</span>` : ''}</span>
-      <a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">Open</a>
+      <span class="acct-v">${esc(f.label)}${isFirmaForm(f) ? ' <span class="muted">· e-sign template</span>' : ''}${f.field_map ? ` <span class="muted">· ${Object.keys(f.field_map).length} fields matched</span>` : ''}</span>
+      ${isFirmaForm(f)
+        ? '<a class="btn btn-sm" href="contracts.html#templates">Manage</a>'
+        : `<a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">Open</a>`}
     </div>`).join('')}
   </div>`;
 }
@@ -166,12 +171,15 @@ function formRowHtml(f = {}) {
     .map((t) => `<option value="${esc(t.value)}"${t.value === f.form_type ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
   const jf = f.form_id
     ? ` data-form-id="${esc(f.form_id)}" data-field-map="${esc(JSON.stringify(f.field_map || {}))}"` : '';
-  const meta = f.form_id
-    ? `<div class="cf-meta field-hint"><span class="cf-meta-text">${esc(matchedNote(f.field_map))}</span></div>` : '';
-  return `<div class="cf-row" data-id="${esc(f.id || '')}"${jf}>
+  const firma = isFirmaForm(f);
+  const meta = firma
+    ? '<div class="cf-meta field-hint"><span class="cf-meta-text">E-sign template: upload a new version or place its fields on <a href="contracts.html#templates">Contracts → Contract templates</a>.</span></div>'
+    : f.form_id
+      ? `<div class="cf-meta field-hint"><span class="cf-meta-text">${esc(matchedNote(f.field_map))}</span></div>` : '';
+  return `<div class="cf-row" data-id="${esc(f.id || '')}"${jf}${firma ? ` data-template-id="${esc(f.template_id)}"` : ''}>
     <select class="cf-type" aria-label="Contract form type"><option value="">Type…</option>${typeOptions}</select>
     <input class="cf-label" type="text" aria-label="Label" value="${esc(f.label || '')}" placeholder="Label, e.g. Pet home – in state">
-    <input class="cf-url" type="url" aria-label="Form link" value="${esc(f.url || '')}" placeholder="https://…">
+    ${firma ? '' : `<input class="cf-url" type="url" aria-label="Form link" value="${esc(f.url || '')}" placeholder="https://…">`}
     <button type="button" class="btn btn-sm" data-cf-remove aria-label="Remove this form">✕</button>
     ${meta}
   </div>`;
@@ -447,8 +455,17 @@ function openForm(existing = null) {
         id: row.dataset.id || crypto.randomUUID(),
         form_type: row.querySelector('.cf-type').value,
         label: row.querySelector('.cf-label').value.trim(),
-        url: row.querySelector('.cf-url').value.trim()
+        url: row.querySelector('.cf-url')?.value.trim() || ''
       };
+      // A Firma template (D30): its id, no link.
+      if (row.dataset.templateId) {
+        f.provider = 'firma';
+        f.template_id = row.dataset.templateId;
+        delete f.url;
+        if (!f.form_type) problems.push(`Contract form ${i + 1}: pick its type (or remove it: the template stays in Contract templates).`);
+        out.push(f);
+        return;
+      }
       // Once picked through Connect Jotform (retired, D29): its form id and matches, kept.
       if (row.dataset.formId) {
         f.form_id = row.dataset.formId;

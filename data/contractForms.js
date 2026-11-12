@@ -2,7 +2,8 @@
 // the prefilled link that sends one out for signature.
 //
 // She keeps the forms on a Form service Account (`contract_forms`: [{ id, form_type, label,
-// url }], D6 / D12), each tagged with a CONTRACT_FORM_TYPE so the Contract page
+// url }], D6 / D12; a Firma template is { id, form_type, label, provider: 'firma',
+// template_id } instead, D30), each tagged with a CONTRACT_FORM_TYPE so the Contract page
 // can offer the right one. "Send for signature" builds the form's URL with the
 // contract's facts as query parameters — the prefill most form services document — on her
 // device: no API call, no server. The parameter names are fixed (PREFILL_FIELDS,
@@ -35,6 +36,12 @@ export function formProvider(url) {
 
 const FORM_TYPES = new Set(CONTRACT_FORM_TYPE.map((t) => t.value));
 
+// A Firma template of hers (Integrations plan §2.3a, D30): kept on an Account's
+// contract_forms like a pasted form, but with Firma's template id and no link.
+// Her device sends it through the Worker (data/cloud/cloudEsign.js), never as a link.
+const TEMPLATE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const isFirmaForm = (f) => f?.provider === 'firma' && TEMPLATE_ID.test(text(f.template_id));
+
 // An Account's saved forms, cleaned: a known type, a usable link, a label (the
 // type's name when she left it blank). Older backups have no field: [].
 // A form once picked through Connect Jotform (retired, D27/D29) also keeps its Jotform
@@ -42,8 +49,15 @@ const FORM_TYPES = new Set(CONTRACT_FORM_TYPE.map((t) => t.value));
 // neither and fills our fixed names.
 export function cleanForms(list) {
   return (Array.isArray(list) ? list : [])
-    .filter((f) => f && FORM_TYPES.has(f.form_type) && formLink(f.url))
+    .filter((f) => f && FORM_TYPES.has(f.form_type) && (isFirmaForm(f) || formLink(f.url)))
     .map((f) => {
+      if (isFirmaForm(f)) {
+        return {
+          id: text(f.id) || crypto.randomUUID(), form_type: f.form_type,
+          label: text(f.label) || descriptor(CONTRACT_FORM_TYPE, f.form_type).label,
+          provider: 'firma', template_id: text(f.template_id)
+        };
+      }
       const out = {
         id: text(f.id) || crypto.randomUUID(),
         form_type: f.form_type,

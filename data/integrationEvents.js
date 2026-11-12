@@ -39,6 +39,14 @@ export function planIntegrationEvent(event, record, ctx = {}) {
       if (record.status === 'declined') return { op: 'skip', reason: 'already' };
       if (record.status === 'sent') return { op: 'update', changes: { status: 'declined' } };
       return review(`The contract is ${record.status || 'a draft'}.`);
+    // Firma (plan §2.3a): the request ran out of time, or was cancelled. Never a
+    // status change by itself: Today asks her to send it again or mark it.
+    case 'contract.expired':
+    case 'contract.cancelled':
+      if (record.status !== 'sent') return { op: 'skip', reason: 'moved_on' };
+      return review(event.kind === 'contract.expired'
+        ? 'Its signing link ran out before it was signed. Send it again, or mark the contract yourself.'
+        : 'The signing request was cancelled. Send it again, or mark the contract yourself.');
     case 'payment.paid':
       return planPayment(record, p, date, ctx, review);
     case 'payment.refunded':
@@ -135,6 +143,8 @@ export function reviewTitle(review, money = (n) => `$${Number(n).toFixed(2)}`) {
   switch (review.kind) {
     case 'contract.signed': return `${who} says the contract was signed`;
     case 'contract.declined': return `${who} says the contract was declined`;
+    case 'contract.expired': return `${who} says the contract's signing link expired`;
+    case 'contract.cancelled': return `${who} says the contract's signing request was cancelled`;
     case 'payment.paid': return `${who} says a ${p.component === 'balance' ? 'balance' : 'deposit'} payment${amount} came in`;
     case 'payment.refunded': return `${who} says a refund${amount} was made`;
     default: return `${who} reported something to check`;

@@ -1,0 +1,165 @@
+// cloudEsign.js — e-sign through Firma on her device (Integrations plan §2.3a,
+// step 8, D25–D26, D30–D31). KennelOS holds the Firma account; the Worker makes
+// her a workspace, keeps its key, and counts her sends against the monthly limit.
+// Her device only ever sees ids, links and counts: never a Firma key.
+//
+//   esignOffered()          Pro with a cloud server (never `cloudUrl: null`, never the Demo)
+//   esignStatus()           connected? and this month's { used, limit, resetsOn }
+//   setUpEsign(kennelName)  her workspace (once), then the facts her templates can fill
+//   templates()             her Firma templates
+//   uploadTemplate(...)     a new template from her PDF
+//   editorLink(templateId)  Firma's editor in its own tab (the Worker's sandboxed page)
+//   sendForEsign(...)       send a contract; the contract is marked Sent
+//   signedCopyLink(ref)     a short-lived link to the signed PDF
+//
+// Every entry point checks isCloudAvailable() and the session first, so
+// `cloudUrl: null` makes no request. Network only through cloudApi.
+import * as api from './cloudApi.js';
+import { isCloudAvailable, cloudBaseUrl } from './cloudConfig.js';
+import { sessionToken } from './cloudAuth.js';
+import { refreshConnections } from './cloudIntegrations.js';
+import { editionFlags } from '../editionConfig.js';
+import { isDemo } from '../demoMode.js';
+import { contractRepo } from '../contractRepo.js';
+import { PREFILL_FIELDS, prefillValues, splitName } from '../contractForms.js';
+import { todayYMD } from '../dateUtils.js';
+
+// Firma refuses a request body over about 6 MB; a PDF grows by a third as base64.
+export const TEMPLATE_MAX_BYTES = 4_500_000;
+const FIELDS_PER_CALL = 40;
+
+export const esignOffered = () => isCloudAvailable() && Boolean(editionFlags.accounts) && !isDemo();
+export const esignSignedIn = () => esignOffered() && Boolean(sessionToken());
+
+function requireSession() {
+  if (!esignOffered()) throw new api.CloudUnavailableError();
+  const token = sessionToken();
+  if (!token) throw new api.CloudAuthError({ status: 401, code: 'unauthorized' });
+  return token;
+}
+
+// → { available, connected, connectedAt, usage: { used, limit, own, resetsOn } }
+export async function esignStatus() {
+  return api.getFirmaStatus(requireSession());
+}
+
+// Every fact name a template can fill, once each, with what it holds.
+export function factFields() {
+  const seen = new Map();
+  for (const rows of Object.values(PREFILL_FIELDS)) for (const [name, label] of rows) if (!seen.has(name)) seen.set(name, label);
+  return [...seen].map(([name, label]) => ({ name, label: label.slice(0, 100) }));
+}
+
+// Make the facts her workspace's custom fields, so Firma's editor offers them.
+// Safe to repeat: the Worker adds only the missing ones.
+export async function syncFactFields() {
+  const token = requireSession();
+  const all = factFields();
+  let added = 0;
+  for (let i = 0; i < all.length; i += FIELDS_PER_CALL) added += (await api.syncFirmaFields(token, all.slice(i, i + FIELDS_PER_CALL))).added || 0;
+  return added;
+}
+
+// Her workspace, named for her kennel, then its fields. → the status.
+export async function setUpEsign(kennelName) {
+  const token = requireSession();
+  await api.connectFirma(token, String(kennelName || '').trim());
+  // The account now has a connection: her devices start reading its events.
+  await refreshConnections().catch(() => {});
+  await syncFactFields();
+  return esignStatus();
+}
+
+export async function templates() {
+  return (await api.listFirmaTemplates(requireSession())).templates || [];
+}
+
+// Base64 of a file's bytes, in chunks (a large PDF overflows one apply()).
+export async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+// A new template from her PDF. → { id, name, pageCount }
+export async function uploadTemplate({ name, file }) {
+  const token = requireSession();
+  if (!file) throw new Error('Choose your contract\'s PDF.');
+  if (!/pdf$/i.test(file.type || '') && !/\.pdf$/i.test(file.name || '')) throw new Error('Upload your contract as a PDF.');
+  if (file.size > TEMPLATE_MAX_BYTES) throw new Error('That PDF is over 4.5 MB. Save a smaller copy (fewer pictures, or "reduce file size") and try again.');
+  return api.createFirmaTemplate(token, { name: String(name || '').trim() || String(file.name || 'Contract').replace(/\.pdf$/i, ''), document: await fileToBase64(file) });
+}
+
+// The address of Firma's editor for one template: the Worker's sandboxed page,
+// with the 24-hour token in the fragment (never sent to a server). The facts are
+// made fields first, so the editor offers them.
+export async function editorLink(templateId) {
+  const token = requireSession();
+  await syncFactFields();
+  const { token: jwt } = await api.firmaTemplateToken(token, templateId);
+  return `${cloudBaseUrl()}/esign/editor#${new URLSearchParams({ t: jwt, id: templateId })}`;
+}
+
+// What goes to Firma for one send: the signer, and the contract's facts as the
+// signer's custom fields (the same allow-list a pasted form's link carries).
+export function sendBody({ contract, form, facts, signer, emailSigner = true, resend = false }) {
+  const [firstName, lastName] = splitName(signer?.name || '');
+  const subject = facts?.puppy?.call_name || facts?.dog?.call_name || '';
+  return {
+    contractId: contract.id,
+    templateId: form.template_id,
+    title: [form.label, subject].filter(Boolean).join(': ').slice(0, 200) || contract.title || 'Contract',
+    signer: { firstName, lastName, email: String(signer?.email || '').trim() },
+    facts: Object.fromEntries(prefillValues(form.form_type, facts)),
+    emailSigner: emailSigner !== false,
+    resend: resend === true
+  };
+}
+
+// Send it. Firma charges KennelOS for it, so it counts (D26). The contract is
+// marked Sent with Firma's reference and the signer's link.
+// → { contract, signingLink, usage }. Throws the Worker's refusals (esignProblem).
+export async function sendForEsign({ contract, form, facts, signer, emailSigner = true, resend = false }) {
+  const token = requireSession();
+  const res = await api.sendForEsign(token, sendBody({ contract, form, facts, signer, emailSigner, resend }));
+  const saved = await contractRepo.update(contract.id, {
+    status: contract.status === 'draft' || contract.status === 'declined' ? 'sent' : contract.status,
+    esign_provider: 'firma',
+    esign_ref: res.signingRequestId,
+    esign_url: res.signingLink || null,
+    esign_sent_date: todayYMD(),
+    esign_form_label: form.label
+  });
+  return { contract: saved, signingLink: res.signingLink || null, usage: res.usage || null };
+}
+
+// → { url, partial, status }
+export async function signedCopyLink(ref) {
+  return api.esignDocument(requireSession(), ref);
+}
+
+const resetText = (usage) => (usage?.resetsOn ? ` It resets on ${usage.resetsOn}.` : '');
+
+// What to tell her about a refusal. → { kind, message } where kind is
+// 'already_sent' | 'limit' | 'unknown' | 'signed_out' | 'offline' | 'other'.
+export function esignProblem(err) {
+  const code = err?.code;
+  if (err instanceof api.CloudAuthError) return { kind: 'signed_out', message: 'Your cloud sign-in has expired. Sign in again in Settings → Cloud backup, then try again.' };
+  if (code === 'already_sent') return { kind: 'already_sent', message: 'This contract is already out for signature through Firma.' };
+  if (code === 'esign_limit_reached') {
+    const n = Number.isInteger(err.usage?.limit) ? `${err.usage.limit} ` : '';
+    return { kind: 'limit', message: `You've sent this month's ${n}e-sign contracts.${resetText(err.usage)} Until then you can send one of your own contract forms' links.` };
+  }
+  if (code === 'esign_unknown') return { kind: 'unknown', message: 'Firma didn\'t answer, so this contract may have gone out. Don\'t send it again yet: if the buyer got it, it comes back Signed by itself. Check again in a few minutes.' };
+  if (code === 'esign_not_connected') return { kind: 'other', message: 'E-signing isn\'t set up yet: open Contracts → Contract templates.' };
+  if (code === 'pro_required') return { kind: 'other', message: 'E-signing comes with KennelOS Pro on your cloud account.' };
+  if (code === 'esign_not_configured') return { kind: 'other', message: 'E-signing isn\'t available right now. Try again later.' };
+  if (code === 'esign_busy' || code === 'rate_limited') return { kind: 'other', message: 'Firma is busy right now. Wait a minute and try again.' };
+  if (code === 'esign_refused') return { kind: 'other', message: 'Firma refused this. Check the signer\'s email, and that the template has a signature field for the signer, then try again.' };
+  if (code === 'signer_email_required') return { kind: 'other', message: 'The signer needs an email address.' };
+  if (code === 'signer_name_required') return { kind: 'other', message: 'The signer needs a name.' };
+  if (code === 'too_large') return { kind: 'other', message: 'That PDF is too large for Firma. Save a smaller copy and try again.' };
+  if (err instanceof api.CloudOfflineError || code === 'esign_unavailable' || code === 'esign_setup_failed') return { kind: 'offline', message: 'Couldn\'t reach Firma right now. Check your connection and try again.' };
+  return { kind: 'other', message: err?.message || String(err) };
+}

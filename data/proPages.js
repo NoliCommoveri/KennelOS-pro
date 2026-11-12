@@ -113,6 +113,10 @@ export const PRO_ONLY_STANDALONE = [
   'assets/guidedFormUI.js', 'assets/waitlistFeeStep.js',
   // "Review sale & send" on the waitlist family page (Integrations plan §2.6).
   'assets/pickToSend.js',
+  // E-sign through Firma (Integrations plan §2.3a): Contract templates and the send
+  // dialog, opened from the Pro-only Contracts, Contract and waitlist family pages.
+  // Its data layer (data/cloud/cloudEsign.js, data/esignTemplates.js) stays shared.
+  'assets/esignUI.js',
   // The Companion link builder (shared by the Companion console and the guided
   // litter flow's share step) and that share step itself: guidedLitterUI.js
   // imports guidedShareUI.js dynamically only when editionFlags.waitlist or

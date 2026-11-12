@@ -13,7 +13,10 @@
 //      the device can share files), her email app, or copy + download.
 // Using any of those marks the contract sent, stamps the offer's
 // deposit_request_sent_date and logs the message on the family's entry. Nothing
-// goes to a server: the PDF and the link are made on her device.
+// goes to a server: the PDF and the link are made on her device. The one
+// exception is a Firma template of hers (e-sign, plan §2.3a, D30): Continue on
+// step 2 sends it through Firma then (assets/esignUI.js, which marks the contract
+// Sent), and its signing link goes in the message, Firma's own email off.
 // Pro-only (proPages.PRO_ONLY_STANDALONE): only the waitlist family page opens it.
 import { saleRepo } from '../data/saleRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
@@ -24,7 +27,7 @@ import { contractRepo } from '../data/contractRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from './salePrompts.js';
-import { rankForms, splitName } from '../data/contractForms.js';
+import { rankForms, splitName, isFirmaForm } from '../data/contractForms.js';
 import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, balanceDueOn } from '../data/contractSend.js';
 import { depositRequestMessage } from '../data/depositRequest.js';
 import { salePayAccount, salePaidVia } from '../data/paymentLinks.js';
@@ -64,6 +67,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
     let step = 1;
     let contract = null;     // the contract being sent (made at step 2)
     let chosen = null;       // { form, url, values } or null for no contract
+    const firmaSent = new Map(); // template id → its signing link, sent from this modal
     let pickedFormId = null; // step 2's radio
     let showAll = false;
     let recorded = false;    // the send was recorded (once per modal)
@@ -217,7 +221,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       if (pickedFormId === null) pickedFormId = all.length ? (ranked.matching[0] || all[0]).id : '';
       const option = (f) => `<label class="check-inline" style="display:flex; gap:8px; align-items:center; padding:4px 0;">
           <input type="radio" name="ps-form" value="${esc(f.id)}"${f.id === pickedFormId ? ' checked' : ''}>
-          <span>${esc(f.label)} ${badge(CONTRACT_FORM_TYPE, f.form_type)}</span></label>`;
+          <span>${esc(f.label)} ${badge(CONTRACT_FORM_TYPE, f.form_type)}${isFirmaForm(f) ? ' <span class="badge badge-green">E-sign</span>' : ''}</span></label>`;
       const sent = contract?.esign_url
         ? `<p class="field-hint">This sale's ${esc(contract.esign_form_label || 'contract')} went out ${contract.esign_sent_date ? esc(fmtDate(contract.esign_sent_date)) : 'before'}. Sending again makes a fresh link with today's details.</p>` : '';
       shell(`${forms.length
@@ -233,7 +237,8 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       $('#ps-all')?.addEventListener('click', () => { showAll = !showAll; drawContract(); });
       $('#ps-back').addEventListener('click', () => { step = 1; drawSale(); });
       $('#ps-next').addEventListener('click', async (e) => {
-        e.currentTarget.disabled = true;
+        const next = e.currentTarget;
+        next.disabled = true;
         try {
           const form = all.find((f) => f.id === pickedFormId) || null;
           chosen = null;
@@ -243,12 +248,23 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
               title: `${form.label}: ${pupName}`
             });
             changed = true;
-            chosen = { form, ...buildSignatureLink(form, await gatherContractFacts(contract)) };
+            const facts = await gatherContractFacts(contract);
+            if (isFirmaForm(form)) {
+              // Sent now, through Firma (it counts), once per template in this modal.
+              if (!firmaSent.has(form.template_id)) {
+                const { sendWithFirma } = await import('./esignUI.js');
+                const sent = await sendWithFirma({ contract, form, facts, signer: contact || facts.buyer, emailChoice: false });
+                if (!sent) { next.disabled = false; return; }
+                contract = sent.contract;
+                firmaSent.set(form.template_id, sent.signingLink || '');
+              }
+              chosen = { form, url: firmaSent.get(form.template_id), values: [], firma: true };
+            } else chosen = { form, ...buildSignatureLink(form, facts) };
           }
           message = null;
           step = 3;
           await drawSend();
-        } catch (err) { fail(err); e.currentTarget.disabled = false; }
+        } catch (err) { fail(err); next.disabled = false; }
       });
     }
 
@@ -366,7 +382,8 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
       changed = true;
       try {
         const msg = message || { subject: '', body: '' };
-        if (chosen && contract) contract = await markContractSent(contract, chosen.form, chosen.url);
+        // A Firma send was marked when it went (step 2).
+        if (chosen && contract && !chosen.firma) contract = await markContractSent(contract, chosen.form, chosen.url);
         // A side sale (Side Sale Spec) has no offer row: the date is kept on its sale.
         if (offer.side) {
           await saleRepo.update(offer.sale_id, { side_request_sent_date: todayYMD() });
