@@ -30,6 +30,14 @@ export function firmaAccountOf(accounts) {
     || live.find((a) => String(a.website || '').trim().toLowerCase() === FIRMA_ACCOUNT.website) || null;
 }
 
+// The kennel whose name signers see (Set up e-signing): the one she's working in,
+// else her "My kennel", else any own kennel. Never an outside kennel (a linked
+// or co-owner's kennel is on record too). Pure. → kennel | null.
+export function signingKennel(kennels, { activeId = null, myId = null } = {}) {
+  const own = (kennels || []).filter((k) => k && k.is_own_kennel && !k.is_archived && String(k.kennel_name || '').trim());
+  return own.find((k) => k.id === activeId) || own.find((k) => k.id === myId) || own[0] || null;
+}
+
 // Firma's list with the type she gave each one (pure). Templates she hasn't
 // typed yet have form_type ''. In Firma's order (by name).
 //   templates: [{ id, name, pageCount }] from the Worker

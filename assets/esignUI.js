@@ -16,7 +16,9 @@ import {
   esignSignedIn, esignStatus, setUpEsign, templates as listTemplates, uploadTemplate, editorLink,
   sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES
 } from '../data/cloud/cloudEsign.js';
-import { mergeTemplates, setTemplateType } from '../data/esignTemplates.js';
+import { mergeTemplates, setTemplateType, signingKennel } from '../data/esignTemplates.js';
+import { getActiveKennelId } from '../data/kennelScope.js';
+import { getMyKennelId } from '../data/settings.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { prefillValues } from '../data/contractForms.js';
@@ -91,7 +93,7 @@ export function openContractTemplates() {
 
   async function drawSetUp() {
     const kennels = await kennelRepo.getAll();
-    const name = kennels.find((k) => k.kennel_name)?.kennel_name || '';
+    const name = signingKennel(kennels, { activeId: getActiveKennelId(), myId: getMyKennelId() })?.kennel_name || '';
     frame(`<p style="margin-top:0;">Send your own contracts to be signed online: the buyer gets an email, signs on their phone or computer, and the contract comes back <strong>Signed</strong> by itself, with the signed PDF.</p>
       <ul class="field-hint" style="padding-left:18px;">
         <li>It runs on <strong>Firma</strong>, an e-signature service hosted in the EU, through KennelOS's own Firma account. You don't need one, and there's nothing to pay per contract.</li>
