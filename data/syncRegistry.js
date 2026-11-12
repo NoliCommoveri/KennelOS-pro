@@ -254,9 +254,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // Firma's id for the signing request (plan §2.3a, D30): an id only, no
       // buyer details, so any of her devices can show the signed copy.
       'esign_ref',
-      // She countersigns it, after the buyer (D32): a yes/no, so any of her
-      // devices shows Countersign while it's out.
-      'esign_countersign'
+      // She countersigns it, after the buyer (D32), or before (…_first): yes/nos,
+      // so any of her devices shows Countersign / Sign first while it's out.
+      'esign_countersign', 'esign_countersign_first'
     ],
     // The link sent carries the prefilled facts in it (buyer's name, email, phone,
     // address, price), so it's private like those fields.
@@ -326,6 +326,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // (retired, D27/D29) its form id and her field names (field_map). Nothing
       // about anyone else.
       'contract_forms',
+      // Whether she signs her next new Firma template (none/first/last, D32): the
+      // choice she made last, a setting, nothing about anyone.
+      'esign_signs_default',
       // Her own payment link and payment instructions (Integrations plan §4,
       // Level 0; D9: payment-link refs are cloud): written to be sent to buyers.
       'payment_link', 'payment_instructions'

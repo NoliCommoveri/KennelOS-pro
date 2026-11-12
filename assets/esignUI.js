@@ -7,8 +7,8 @@
 //                            place the signature and detail fields.
 //   sendWithFirma(...)       a contract's Send for signature with one of those
 //                            templates: who signs, this month's count, send.
-//   openCountersign(ref)     her own signing link, on a template she countersigns
-//                            (D32), opened in a new tab.
+//   openCountersign(ref)     her own signing link, on a template she signs (D32),
+//                            first or last, opened in a new tab.
 //
 // She has no Firma login: KennelOS holds the account and her kennel gets its own
 // workspace. Everything goes through data/cloud/cloudEsign.js.
@@ -17,7 +17,7 @@ import {
   sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES,
   previewLink, discardPreview
 } from '../data/cloud/cloudEsign.js';
-import { mergeTemplates, setTemplateType, signingKennel, forgetMissingTemplates, forgetTemplate, kennelSignerName } from '../data/esignTemplates.js';
+import { mergeTemplates, setTemplateType, signingKennel, forgetMissingTemplates, forgetTemplate, kennelSignerName, firmaAccountOf, signsDefault } from '../data/esignTemplates.js';
 import { breederFor } from '../data/contractSend.js';
 import { extraChoices, formKindOptionsHtml, readFormKind } from '../data/contractAddOns.js';
 import { kennelChargeList } from '../data/extraCharges.js';
@@ -28,6 +28,11 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { prefillValues } from '../data/contractForms.js';
 import { CONTRACT_FORM_TYPE } from '../data/vocab.js';
 import { esc, fmtDate, confirmModal } from './ui.js';
+
+// Whether she signs a template (D32): one choice of three, as radio buttons.
+const SIGN_CHOICES = [['first', 'I sign first', 'You sign before the buyer'], ['last', 'I sign last', 'You sign after the buyer'], ['none', 'I don\'t sign', 'Only the buyer signs']];
+const signsRadios = (name, value, disabled = false) => SIGN_CHOICES.map(([v, label, title]) => `<label class="check-inline" style="display:flex; gap:6px; align-items:center;" title="${title}">
+    <input type="radio" class="ct-sign" name="${esc(name)}" value="${v}"${value === v ? ' checked' : ''}${disabled ? ' disabled' : ''}> ${label}</label>`).join('');
 
 function overlayOf(html, { wide = false } = {}) {
   const overlay = document.createElement('div');
@@ -125,11 +130,13 @@ export function openContractTemplates() {
 
   async function drawList(status) {
     let rows;
+    let accounts;
     try {
       const { templates: list, complete } = await templateList();
       // One deleted in Firma's editor stops being offered (only from a full list).
       if (complete) await forgetMissingTemplates(new Set(list.map((t) => t.id)));
-      rows = mergeTemplates(list, await accountRepo.getAll());
+      accounts = await accountRepo.getAll();
+      rows = mergeTemplates(list, accounts);
     } catch (err) { frame(''); problem(err); return; }
     // Her name as she countersigns, per own kennel (Kennel.esign_signer_name);
     // blank falls back to the contact linked to the kennel, else the kennel's name
@@ -143,8 +150,7 @@ export function openContractTemplates() {
     const row = (t) => `<div class="acct-row" data-tid="${esc(t.id)}" style="flex-wrap:wrap; gap:8px; padding:6px 0; border-top:1px solid var(--border,#e2e6ec);">
         <span class="acct-v" style="min-width:160px;"><strong>${esc(t.name)}</strong>${t.pageCount ? ` <span class="muted">· ${esc(t.pageCount)} page${t.pageCount === 1 ? '' : 's'}</span>` : ''}</span>
         <select class="ct-type" aria-label="What kind of contract ${esc(t.name)} is">${kindOptions(extras, { formType: t.form_type, extraListId: t.extraListId })}</select>
-        <label class="check-inline" style="display:flex; gap:6px; align-items:center;" title="You sign it too, after the buyer">
-          <input type="checkbox" class="ct-flag" data-flag="countersign"${t.countersign ? ' checked' : ''}${t.form_type ? '' : ' disabled'}> I countersign</label>
+        <span role="radiogroup" aria-label="Do you sign ${esc(t.name)}?" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">${signsRadios(`ct-signs-${t.id}`, t.signs, !t.form_type)}</span>
         <label class="check-inline" style="display:flex; gap:6px; align-items:center;" title="KennelOS keeps the signed PDF and emails the buyer a link to it">
           <input type="checkbox" class="ct-flag" data-flag="keepCopy"${t.keepCopy ? ' checked' : ''}${t.form_type ? '' : ' disabled'}> Email the buyer the signed copy</label>
         <button type="button" class="btn btn-sm" data-edit="${esc(t.id)}">Place fields</button>
@@ -154,13 +160,14 @@ export function openContractTemplates() {
       ${signers.length ? `<div class="form-grid" style="margin-top:12px;">${signers.map(signerRow).join('')}</div>` : ''}
       <h3 style="font-size:15px; margin:16px 0 4px;">Add a template</h3>
       <p class="field-hint" style="margin-top:0;">Upload your contract as a PDF (up to ${Math.round(TEMPLATE_MAX_BYTES / 100_000) / 10} MB). Then <strong>Place fields</strong> opens Firma's editor in a new tab, where you put the buyer's signature, and the details KennelOS fills in (buyer, pup, price…), where they go on the page.</p>
-      <p class="field-hint">If you sign your contracts too, tick <strong>I countersign</strong>, and in Firma's editor add a second signer with your signature field. The buyer signs first, then you sign from the contract's <strong>Countersign</strong> button. It's still one e-sign contract.</p>
+      <p class="field-hint">If you sign your contracts too, pick <strong>I sign last</strong> or <strong>I sign first</strong>, and in Firma's editor add a second signer with your signature field, in that place: second when you sign last, first when you sign first. With <strong>I sign last</strong> the buyer signs, then you sign from the contract's <strong>Countersign</strong> button. With <strong>I sign first</strong> you sign from its <strong>Sign first</strong> button as soon as it's sent, and the buyer signs after you. It's still one e-sign contract. A new template starts with your last choice.</p>
       <p class="field-hint">Tick <strong>Email the buyer the signed copy</strong> and, once everyone has signed, KennelOS saves the signed PDF and emails the buyer a link to it. The contract's <strong>Signed copy</strong> opens the same copy.</p>
       <div class="form-grid">
         <div class="field"><label for="ct-file">Contract PDF</label><input id="ct-file" type="file" accept="application/pdf,.pdf"></div>
         <div class="field"><label for="ct-name">Name</label><input id="ct-name" type="text" maxlength="200" placeholder="e.g. Pet home contract"></div>
         <div class="field"><label for="ct-newtype">Kind of contract</label><select id="ct-newtype">${kindOptions(extras)}</select></div>
       </div>
+      <div role="radiogroup" aria-label="Do you sign it?" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:6px;">${signsRadios('ct-newsigns', signsDefault(firmaAccountOf(accounts)))}</div>
       <button type="button" class="btn btn-sm btn-primary" id="ct-upload" style="margin-top:8px;">Upload</button>`);
     box.querySelector('#ct-file').addEventListener('change', (e) => {
       const n = box.querySelector('#ct-name');
@@ -173,14 +180,29 @@ export function openContractTemplates() {
       if (kind.formType === 'extra' && !kind.extraListId) return;
       try {
         await setTemplateType({ templateId: tid, name: t?.name, ...kind });
-        sel.closest('[data-tid]').querySelectorAll('.ct-flag').forEach((tick) => { tick.disabled = !sel.value; });
+        sel.closest('[data-tid]').querySelectorAll('.ct-flag, .ct-sign').forEach((tick) => { tick.disabled = !sel.value; });
         say(`<p class="field-hint">${sel.value ? `Saved: ${esc(t?.name || 'the template')} · ${esc(kindLabel(extras, kind))}.` : `Saved: ${esc(t?.name || 'the template')} · Not offered.`}</p>`);
       } catch (err) { problem(err); }
     }));
+    const signsSaved = {
+      first: (name) => `Saved: you sign ${name} first, before the buyer. In Firma's editor, give the first signer your signature field.`,
+      last: (name) => `Saved: you sign ${name} last, after the buyer. In Firma's editor, give the second signer your signature field.`,
+      none: (name) => `Saved: only the buyer signs ${name}.`
+    };
+    box.querySelectorAll('[data-tid] .ct-sign').forEach((radio) => radio.addEventListener('change', async () => {
+      if (!radio.checked) return;
+      const el = radio.closest('[data-tid]');
+      const t = rows.find((r) => r.id === el.dataset.tid);
+      const { formType } = readFormKind(el.querySelector('.ct-type').value);
+      const restore = () => { const was = el.querySelector(`.ct-sign[value="${t?.signs || 'none'}"]`); if (was) was.checked = true; };
+      if (!formType) { restore(); return; }
+      try {
+        await setTemplateType({ templateId: el.dataset.tid, name: t?.name, formType, signs: radio.value });
+        if (t) t.signs = radio.value;
+        say(`<p class="field-hint">${signsSaved[radio.value](esc(t?.name || 'this template'))}</p>`);
+      } catch (err) { restore(); problem(err); }
+    }));
     const flagSaved = {
-      countersign: (on, name) => (on
-        ? `Saved: you countersign ${name}. In Firma's editor, give the second signer your signature field.`
-        : `Saved: only the buyer signs ${name}.`),
       keepCopy: (on, name) => (on
         ? `Saved: once ${name} is signed, KennelOS keeps the signed PDF and emails the buyer a link to it.`
         : `Saved: KennelOS won't keep or email ${name}'s signed copy. Signed copy still opens Firma's.`)
@@ -221,7 +243,8 @@ export function openContractTemplates() {
       say('<p class="field-hint">Uploading…</p>');
       try {
         const t = await uploadTemplate({ name: box.querySelector('#ct-name').value, file });
-        await setTemplateType({ templateId: t.id, name: t.name, formType, extraListId });
+        const signs = box.querySelector('input[name="ct-newsigns"]:checked')?.value;
+        await setTemplateType({ templateId: t.id, name: t.name, formType, extraListId, signs });
         busy = false;
         await drawList(await esignStatus());
         say(`<p class="field-hint">Uploaded ${esc(t.name)}. Next: <strong>Place fields</strong> on it, so the buyer has somewhere to sign.</p>`);
@@ -264,7 +287,9 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
           <p class="field-hint">Untick to send the link in your own message instead. It counts the same.</p>`
         : '<p class="field-hint">The signing link goes into your message. Firma doesn\'t email them.</p>'}
         ${form.countersign ? (counter
-          ? `<p class="field-hint">You countersign this one, as ${esc(counter.name)} (${esc(counter.email)}): once they've signed, tap <strong>Countersign</strong> on the contract. It's marked Signed when you both have.</p>`
+          ? (counter.first
+            ? `<p class="field-hint">You sign this one first, as ${esc(counter.name)} (${esc(counter.email)}): once it's sent, tap <strong>Sign first</strong> on the contract. They sign after you, and it's marked Signed when you both have.</p>`
+            : `<p class="field-hint">You countersign this one, as ${esc(counter.name)} (${esc(counter.email)}): once they've signed, tap <strong>Countersign</strong> on the contract. It's marked Signed when you both have.</p>`)
           : '<div class="inline-error">You countersign this template, so KennelOS needs your cloud account\'s email. Sign in again in Settings → Cloud backup.</div>') : ''}
         ${form.keep_copy ? '<p class="field-hint">Once everyone has signed, KennelOS saves the signed PDF and emails them a link to it.</p>' : ''}
         ${contract.esign_provider === 'firma' && contract.esign_ref ? '<p class="field-hint">This contract already went out through Firma. Sending again makes a new signing request and counts again.</p>' : ''}

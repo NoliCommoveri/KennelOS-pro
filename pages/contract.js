@@ -137,7 +137,9 @@ function renderView() {
       ${row('Document link', c.document_url ? `<a href="${esc(c.document_url)}" target="_blank" rel="noopener noreferrer">${esc(c.document_url)}</a>` : '')}
       ${c.esign_url || (c.esign_provider === 'firma' && c.esign_ref) ? row('Sent for signature', `${esc(c.esign_form_label || 'Contract form')}${c.esign_provider === 'firma' ? ' <span class="muted">· e-sign</span>' : ''}${c.esign_sent_date ? ` · ${esc(fmtDate(c.esign_sent_date))}` : ''}
         ${c.esign_url && c.status !== 'signed' ? '<button class="btn btn-sm" id="btn-copy-esign" style="margin-left:6px;">Copy link again</button>' : ''}
-        ${c.esign_provider === 'firma' && c.esign_ref && c.esign_countersign && c.status === 'sent' && esignSignedIn() ? '<button class="btn btn-sm btn-primary" id="btn-countersign" style="margin-left:6px;" title="Sign it too. Firma waits for the buyer first.">Countersign</button>' : ''}
+        ${c.esign_provider === 'firma' && c.esign_ref && c.esign_countersign && c.status === 'sent' && esignSignedIn() ? (c.esign_countersign_first
+          ? '<button class="btn btn-sm btn-primary" id="btn-countersign" style="margin-left:6px;" title="Sign it before the buyer. They sign after you.">Sign first</button>'
+          : '<button class="btn btn-sm btn-primary" id="btn-countersign" style="margin-left:6px;" title="Sign it too. Firma waits for the buyer first.">Countersign</button>') : ''}
         ${c.esign_provider === 'firma' && c.esign_ref && esignSignedIn() ? `<button class="btn btn-sm" id="btn-signed-copy" style="margin-left:6px;">${c.status === 'signed' ? 'Signed copy' : 'Copy so far'}</button>` : ''}`) : ''}
       ${row('Terms summary', c.terms_summary ? esc(c.terms_summary).replace(/\n/g, '<br>') : '')}
       ${row('Notes', c.notes ? esc(c.notes).replace(/\n/g, '<br>') : '')}
@@ -541,10 +543,14 @@ async function sendForSignature(c) {
           title: `Send ${choice.form.label}`,
           name: signer?.name || '', email: signer?.email || '', phone: signer?.phone || '',
           subject: m.subject, body: m.body,
-          hint: 'The contract is already marked Sent. When they sign, it\'s marked Signed by itself.'
+          hint: sent.countersignFirst
+            ? 'The contract is already marked Sent. Tap Sign first on it to sign before them: they can sign once you have. When you both have, it\'s marked Signed by itself.'
+            : 'The contract is already marked Sent. When they sign, it\'s marked Signed by itself.'
         });
       } else {
-        await alertModal({ title: 'Sent for e-signature', message: (sent.countersign
+        await alertModal({ title: 'Sent for e-signature', message: (sent.countersignFirst
+          ? 'You sign this one first: tap Sign first here now. Firma has them sign after you. When you both have, this contract is marked Signed by itself, and its signed copy opens from here.'
+          : sent.countersign
           ? 'Firma emailed them the signing link. Once they\'ve signed, tap Countersign here to sign it too. When you both have, this contract is marked Signed by itself, and its signed copy opens from here.'
           : 'Firma emailed them the signing link. When they sign, this contract is marked Signed by itself, and its signed copy opens from here.')
           + (sent.keepCopy ? ' KennelOS also emails them a link to the signed copy, within the hour after the last signature.' : '') });

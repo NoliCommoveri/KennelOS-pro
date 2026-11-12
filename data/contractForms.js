@@ -66,7 +66,9 @@ export function cleanForms(list) {
           provider: 'firma', template_id: text(f.template_id)
         };
         // She signs it too, after the buyer (Integrations D32). Absent = buyer only.
+        // countersign_first: she signs before the buyer instead (only with countersign).
         if (f.countersign === true) row.countersign = true;
+        if (f.countersign === true && f.countersign_first === true) row.countersign_first = true;
         // KennelOS keeps the signed PDF and emails the buyer a link (D33). Absent = no.
         if (f.keep_copy === true) row.keep_copy = true;
         withExtra(row, f);

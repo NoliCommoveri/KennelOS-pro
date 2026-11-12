@@ -123,18 +123,20 @@ export async function editorLink(templateId) {
 }
 
 // Who countersigns a template marked so (D32): her, as her cloud account's
-// email, under her kennel's signature name (esignTemplates.kennelSignerName).
-// → { name, email } | null (not her template, or no account email on this device).
+// email, under her kennel's signature name (esignTemplates.kennelSignerName),
+// with `first: true` when she signs before the buyer (countersign_first).
+// → { name, email, first? } | null (not her template, or no account email on this device).
 export function countersignerFor(form, facts, account = currentAccount()) {
   if (form?.countersign !== true) return null;
   const email = String(account?.email || '').trim();
   if (!email) return null;
-  return { name: kennelSignerName(facts?.kennel, facts?.breeder) || email, email };
+  return { name: kennelSignerName(facts?.kennel, facts?.breeder) || email, email, ...(form.countersign_first === true ? { first: true } : {}) };
 }
 
 // What goes to Firma for one send: the signer, and the contract's facts as the
 // signer's custom fields (the same allow-list a pasted form's link carries). On a
-// template she countersigns, her too, as the second signer (D32). On one whose
+// template she countersigns, her too, as a second signer, after the buyer or
+// before (D32). On one whose
 // signed copy KennelOS keeps (D33), keepCopy and her kennel's name (the email's
 // wording).
 export function sendBody({ contract, form, facts, signer, emailSigner = true, resend = false, account = currentAccount() }) {
@@ -159,8 +161,8 @@ export function sendBody({ contract, form, facts, signer, emailSigner = true, re
 
 // Send it. Firma charges KennelOS for it, so it counts (D26). The contract is
 // marked Sent with Firma's reference and the signer's link, and whether she
-// countersigns it (esign_countersign, D32).
-// → { contract, signingLink, countersign, keepCopy, usage }. Throws the Worker's refusals (esignProblem).
+// countersigns it (esign_countersign, D32) and whether first (esign_countersign_first).
+// → { contract, signingLink, countersign, countersignFirst, keepCopy, usage }. Throws the Worker's refusals (esignProblem).
 export async function sendForEsign({ contract, form, facts, signer, emailSigner = true, resend = false }) {
   const token = requireSession();
   const res = await api.sendForEsign(token, sendBody({ contract, form, facts, signer, emailSigner, resend }));
@@ -171,9 +173,10 @@ export async function sendForEsign({ contract, form, facts, signer, emailSigner 
     esign_url: res.signingLink || null,
     esign_sent_date: todayYMD(),
     esign_form_label: form.label,
-    esign_countersign: res.countersign === true
+    esign_countersign: res.countersign === true,
+    esign_countersign_first: res.countersign === true && res.countersignFirst === true
   });
-  return { contract: saved, signingLink: res.signingLink || null, countersign: res.countersign === true, keepCopy: res.keepCopy === true, usage: res.usage || null };
+  return { contract: saved, signingLink: res.signingLink || null, countersign: res.countersign === true, countersignFirst: res.countersign === true && res.countersignFirst === true, keepCopy: res.keepCopy === true, usage: res.usage || null };
 }
 
 // A preview of this send: her real template with the contract's values, as a
@@ -196,8 +199,8 @@ export async function signedCopyLink(ref) {
   return api.esignDocument(requireSession(), ref);
 }
 
-// → { url }: her own signing link (the second signer). Firma's page waits for
-// the buyer first when they haven't signed yet.
+// → { url }: her own signing link (after the buyer, or before when she signs
+// first). Firma's page waits for whoever signs before her.
 export async function countersignLink(ref) {
   return api.esignCountersign(requireSession(), ref);
 }
