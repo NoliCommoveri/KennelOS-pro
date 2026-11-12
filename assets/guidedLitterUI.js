@@ -359,7 +359,7 @@ function screens(draft, data, ctx) {
       },
       after: () => {
         G.syncPups(draft);
-        if (!draft.readyDate && draft.whelpDate) draft.readyDate = G.defaultReadyDate(draft.whelpDate);
+        G.refreshReadyDate(draft);
       }
     }),
 

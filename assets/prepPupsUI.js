@@ -44,7 +44,9 @@ import { expectedPricing } from '../data/saleDefaults.js';
 import { balanceDueOn } from '../data/contractSend.js';
 import * as C from '../data/litterCheckin.js';
 import * as P from '../data/prepPups.js';
-import { chipsForm, careForm, pickupsForm, field, pupName, pupLine } from './litterCheckinUI.js';
+import { deliveredOwnershipChanges } from '../data/goHome.js';
+import { chipsForm, pickupsForm, field, pupName, pupLine, PUP_WHO } from './litterCheckinUI.js';
+import { careForm, vaccineForm } from './careVisitUI.js';
 import { askKeeperTests } from './keeperTests.js';
 import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
 
@@ -396,7 +398,8 @@ class Prep {
     const pups = rows.map((r) => r.pup);
     if (key === 'chip') return this.saved(await chipsForm(this.chat, pups), (n) => (n ? `Perfect, ${n === 1 ? 'that chip is' : 'those chips are'} saved.` : 'Okay, I left them as they were.'));
     if (key === 'shots' || key === 'deworm') {
-      return this.saved(await careForm(this.chat, key === 'shots' ? 'vaccination' : 'preventative', pups, this.today),
+      const opts = { date: this.today, ticked: new Set(pups.map((p) => p.id)), who: PUP_WHO };
+      return this.saved(await (key === 'shots' ? vaccineForm(this.chat, pups, { ...opts, pups: true }) : careForm(this.chat, 'preventative', pups, this.today, opts)),
         (r) => `Done! It's on ${r.count === 1 ? 'the puppy\'s' : 'each puppy\'s'} history for ${esc(fmtDate(r.date))}.`);
     }
     if (key === 'pickup') {
@@ -535,7 +538,9 @@ class Prep {
       if (reg === 'co_own' && r.sale.buyer_contact_id && !(r.pup.co_owner_contact_ids || []).includes(r.sale.buyer_contact_id)) {
         await this.chat.say(`${esc(pupName(r.pup))} is a co-own placement. Add ${esc(r.buyer?.name || 'the family')} as a co-owner of ${esc(pupName(r.pup))} too?`);
         if ((await this.chat.choose([{ label: 'Add them', value: 'yes', primary: true }, { label: 'Skip', value: '' }])) === 'yes') {
-          await dogRepo.update(r.pup.id, { co_owner_contact_ids: [...(r.pup.co_owner_contact_ids || []), r.sale.buyer_contact_id] });
+          // Co-owned too, as the Delivered prompt writes it: an Owned dog with a
+          // co-owner reads as hers alone everywhere else (K9-12).
+          await dogRepo.update(r.pup.id, deliveredOwnershipChanges(r.pup, 'co_owned', { buyerId: r.sale.buyer_contact_id }));
           await this.chat.say('Done, they\'re a co-owner now.');
         }
       }

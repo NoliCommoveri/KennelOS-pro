@@ -6,9 +6,10 @@
 // one at a time: open picks when the accept-deposits date has come (Pro, with
 // families on the waitlist) or move that date; Weaning from 4 weeks; Ready from
 // the estimated ready date; and Today's litter rules (mark sold, reopen, close).
-// Then "What are we doing first?": weights, medication, or something else
-// (deworming, shots, a vet visit, puppy plans, microchips, the dates, the
-// status). Each thing is saved as soon as she approves it, through the repos, so
+// Then "What are we doing first?": weights, health care (the care step,
+// assets/careVisitUI.js: a vet visit, shots, screening tests, deworming,
+// medication, ticked once), or something else (puppy plans, microchips, the
+// dates, the status). Each thing is saved as soon as she approves it, through the repos, so
 // there's no draft to keep; she can stop at any point.
 //
 // The rules and wording helpers are in data/litterCheckin.js. Open picks uses
@@ -16,24 +17,28 @@
 // imported only when the edition has the waitlist.
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
+import { pairingRepo } from '../data/pairingRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { inScopeOnly } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { DISPOSITION, EVENT_TYPES, PLACEMENT_METHODS, descriptor } from '../data/vocab.js';
+import { DISPOSITION, EVENT_TYPES, PLACEMENT_METHODS, RELATED_CONTACT_ROLE, CONTACT_TYPE, descriptor } from '../data/vocab.js';
 import * as C from '../data/litterCheckin.js';
 import * as H from '../data/goHome.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
 import { askKeeperTests } from './keeperTests.js';
+import { careVisit } from './careVisitUI.js';
 
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const litterHref = (l) => `${pagesPrefix()}litter.html?id=${encodeURIComponent(l.id)}`;
 const sexWord = (p) => (p.sex === 'male' ? 'boy' : p.sex === 'female' ? 'girl' : '');
 export const pupName = (p) => p.call_name || p.registered_name || 'Puppy';
 export const pupLine = (p) => `<strong>${esc(pupName(p))}</strong>${sexWord(p) ? ` <span class="faint">${esc(sexWord(p))}</span>` : ''}`;
+// How the care forms (assets/careVisitUI.js) list a litter's pups.
+export const PUP_WHO = Object.freeze({ line: pupLine, one: 'puppy', many: 'puppies' });
 // A message from the waitlist ("\n\n" between paragraphs) as Kels's markup.
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((t) => esc(t)).join('<br><br>');
 
@@ -105,6 +110,10 @@ class Checkin {
 
   async pickLitter(all) {
     const dogsById = new Map((await dogRepo.getAll({ includeArchived: false })).map((d) => [d.id, d]));
+    // An Expected litter is due on its breeding's due date; its own whelp date is
+    // a placeholder until the birth (K9-3), shown only when it's still ahead.
+    const pairingsById = new Map((await pairingRepo.getAll({ includeArchived: true })).map((p) => [p.id, p]));
+    const dueOf = (l) => pairingsById.get(l.pairing_id)?.expected_due_date || (l.whelp_date && l.whelp_date >= this.today ? l.whelp_date : null);
     const counts = new Map();
     for (const d of dogsById.values()) if (d.litter_id && d.status !== 'deceased') counts.set(d.litter_id, (counts.get(d.litter_id) || 0) + 1);
     await this.chat.say('<strong>Which litter are we checking on?</strong>', { typing: 700 });
@@ -112,7 +121,7 @@ class Checkin {
       ...all.map((l) => {
         const age = C.ageText(C.ageDays(l, this.today));
         const bits = [C.statusLabel(l.status)];
-        if (l.status === 'expected') { if (l.whelp_date) bits.push(`due ${fmtDate(l.whelp_date)}`); }
+        if (l.status === 'expected') { if (dueOf(l)) bits.push(`due ${fmtDate(dueOf(l))}`); }
         else if (age) bits.push(age);
         if (counts.get(l.id)) bits.push(C.plural(counts.get(l.id), 'puppy', 'puppies'));
         return { label: C.litterLabel(l, dogsById), sub: bits.join(' · '), value: l.id };
@@ -363,12 +372,12 @@ class Checkin {
       const pick = await this.chat.choose([
         ...(hasPups ? [
           { label: 'Record weights', sub: weighedSub, value: 'weights' },
-          { label: 'Health care', sub: 'Deworming, shots, medication, a vet visit', value: 'care' }
+          { label: 'Health care', sub: 'A vet visit, shots, tests, deworming, medication', value: 'care' }
         ] : []),
         { label: 'Something else', sub: hasPups ? 'Plans, microchips, dates, the litter\'s status' : 'Plans, dates, the litter\'s status', value: 'more' },
         this.didSomething ? { label: 'That\'s all for now', value: 'done' } : { label: 'Never mind', value: 'nevermind' }
       ], { stagger: 150 });
-      const what = pick === 'more' ? await this.moreMenu() : pick === 'care' ? await this.careMenu() : pick;
+      const what = pick === 'more' ? await this.moreMenu() : pick;
       if (what === 'done' || what === 'nevermind') return this.finish(what);
       if (what === 'page') { location.href = litterHref(this.litter); return; }
       if (what) await this.run(what);
@@ -395,18 +404,9 @@ class Checkin {
     return pick;
   }
 
-  // "Health care": which kind, then that kind's form.
-  async careMenu() {
-    await this.chat.say('Sure! What did they receive?', { typing: 400 });
-    return this.chat.choose([
-      ...Object.entries(C.CARE_KINDS).map(([kind, k]) => ({ label: k.label, value: `care:${kind}` })),
-      { label: 'Go back', value: '' }
-    ], { stagger: 120 });
-  }
-
   async run(what) {
     if (what === 'weights') return this.weigh();
-    if (what.startsWith('care:')) return this.care(what.slice(5));
+    if (what === 'care') return this.care();
     if (what === 'plans') return this.plans();
     if (what === 'chips') return this.chips();
     if (what === 'dates') return this.dates();
@@ -484,13 +484,17 @@ class Checkin {
     return parts.join(' ');
   }
 
-  // --- Medication, deworming, shots, vet visits --------------------------------
+  // --- Health care: a vet visit, shots, tests, deworming, medication ------------
+  // The care step (assets/careVisitUI.js), every home pup ticked to start.
 
-  async care(kind) {
-    const res = await careForm(this.chat, kind, this.home, this.today);
-    if (!res.done) return;
+  async care() {
+    const res = await careVisit(this.chat, {
+      dogs: this.home, ticked: new Set(this.home.map((p) => p.id)), today: this.today, who: PUP_WHO, pups: true,
+      docType: editionFlags.documents ? 'vet_summary' : null
+    });
+    if (!res.kinds.length) return;
     this.didSomething = true;
-    await this.chat.say(`Saved. It's on each puppy's history for ${esc(fmtDate(res.result.date))}.`);
+    await this.chat.say('All on each puppy\'s history.');
   }
 
   // --- Puppy plans --------------------------------------------------------------
@@ -570,7 +574,7 @@ class Checkin {
   }
 }
 
-// --- Forms other tasks use too (Pups are going home, assets/prepPupsUI.js) -------------------
+// --- Forms other tasks use too (Pups are going home, assets/prepPupsUI.js; the care step) ----
 
 // "When's the drop-off?": a row per pup (`rows`: [{ pup, sale, date }]) with the
 // date, an optional time and how the pup goes home (vocab PLACEMENT_METHODS: a
@@ -611,43 +615,6 @@ export async function pickupsForm(chat, rows, { title = '<strong>When\'s the dro
   });
 }
 
-// "Health care" of one kind (C.CARE_KINDS) for `pups`, every one ticked. One
-// event per ticked pup. → chat.form's { done, result: { count, title, date } }.
-export function careForm(chat, kind, pups, today) {
-  const k = C.CARE_KINDS[kind];
-  const type = descriptor(EVENT_TYPES, k.eventType);
-  const span = type.duration === 'span';
-  const fields = (type.fields || []).map((f) => eventFieldInput(f, f.key === k.nameKey)).join('');
-  const boxes = pups.map((p, i) => `<label class="ck-check"><input type="checkbox" id="ck-pup-${i}" checked> ${pupLine(p)}</label>`).join('');
-  return chat.form({
-    title: `<strong>${esc(k.ask)}</strong>`,
-    html: `${fields}
-      <div class="ck-inline">
-        ${field(span ? 'Started' : 'Date', `<input id="ck-date" type="date" value="${esc(today)}">`)}
-        ${span ? field('Last dose (optional)', '<input id="ck-end" type="date">') : ''}
-      </div>
-      <p class="gl-q">Which puppies? <button type="button" class="gl-more" data-ck="all">All</button> <button type="button" class="gl-more" data-ck="none">None</button></p>
-      <div class="ck-checks">${boxes}</div>`,
-    wire: (root) => {
-      root.querySelector('[data-ck="all"]').addEventListener('click', () => root.querySelectorAll('.ck-checks input').forEach((c) => { c.checked = true; }));
-      root.querySelector('[data-ck="none"]').addEventListener('click', () => root.querySelectorAll('.ck-checks input').forEach((c) => { c.checked = false; }));
-    },
-    submitLabel: 'Save',
-    submit: async (root) => {
-      const ids = pups.filter((p, i) => root.querySelector(`#ck-pup-${i}`).checked).map((p) => p.id);
-      const details = {};
-      for (const f of type.fields || []) details[f.key] = root.querySelector(`#ck-f-${f.key}`)?.value ?? '';
-      const form = { date: root.querySelector('#ck-date').value, endDate: root.querySelector('#ck-end')?.value || '', details };
-      const problem = C.careProblem(kind, ids, form);
-      if (problem) return problem;
-      const events = C.careEvents(kind, ids, form);
-      for (const e of events) await eventRepo.create(e);
-      return { count: ids.length, title: events[0].title, date: form.date };
-    },
-    reply: (r) => `${r.title} for ${r.count === pups.length ? (r.count === 1 ? 'the puppy' : `all ${r.count} puppies`) : C.plural(r.count, 'puppy', 'puppies')}`
-  });
-}
-
 // Microchip numbers for `pups`. → chat.form's { done, result: how many changed }.
 export function chipsForm(chat, pups) {
   const rows = pups.map((p, i) => field(pupName(p) + (sexWord(p) ? ` (${sexWord(p)})` : ''), `<input id="ck-chip-${i}" type="text" inputmode="numeric" autocomplete="off" value="${esc(p.microchip_id || '')}">`)).join('');
@@ -670,6 +637,67 @@ export function chipsForm(chat, pups) {
 }
 
 // --- Small HTML helpers -----------------------------------------------------------
+
+// An event's own title, beside the field that names it (a vaccine, a drug…):
+// both are hers to fill in; a blank title takes the name, as on the event form.
+export function titleInput(id, type, nameKey) {
+  const named = (type.fields || []).find((f) => f.key === nameKey);
+  return field('Title (optional)', `<input id="${id}" type="text" autocomplete="off" placeholder="${esc(type.label)}">`,
+    named ? `Shown on the timeline. Leave blank to use the ${named.label.toLowerCase()}.` : 'Shown on the timeline.');
+}
+
+// A type's details fields, with its related contact (a vet, a handler, a
+// boarding host) as a picker of her contacts in place of the plain-text name
+// field (`contactFallback`), as the event form does.
+export function eventFieldsHtml(type, contacts, nameKey) {
+  return `${type.relatedContact ? relatedContactInput(type, contacts) : ''}
+    ${(type.fields || []).filter((f) => !(type.relatedContact && f.contactFallback)).map((f) => eventFieldInput(f, f.key === nameKey)).join('')}`;
+}
+
+const contactLabel = (type) => (typeof type.relatedContact === 'string' ? type.relatedContact : 'Who with');
+
+// Her contacts, those with the type's role (her vets) first, or someone new.
+// `selected`: a contact id to start picked (the care step's vet, carried on).
+export function relatedContactInput(type, contacts, selected = null) {
+  const role = RELATED_CONTACT_ROLE[type.value] || null;
+  const label = contactLabel(type);
+  const opt = (c) => `<option value="${esc(c.id)}"${c.id === selected ? ' selected' : ''}>${esc(c.name)}</option>`;
+  const has = (c) => role && (c.contact_type || []).includes(role);
+  const sorted = [...contacts].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const tagged = sorted.filter(has);
+  const rest = sorted.filter((c) => !has(c));
+  const roleLabel = role ? (CONTACT_TYPE.find((t) => t.value === role)?.label || role) : '';
+  const groups = tagged.length
+    ? `<optgroup label="${esc(roleLabel)}s">${tagged.map(opt).join('')}</optgroup>${rest.length ? `<optgroup label="Other contacts">${rest.map(opt).join('')}</optgroup>` : ''}`
+    : rest.map(opt).join('');
+  return `${field(`${label} (optional)`, `<select id="ck-rc-pick"><option value="">None</option>${groups}<option value="__new">Someone new…</option></select>`)}
+    <div id="ck-rc-new" hidden>${field(`${label}'s name`, '<input id="ck-rc-name" type="text" autocomplete="off">', role ? `I'll add them to your contacts as a ${roleLabel.toLowerCase()}.` : 'I\'ll add them to your contacts.')}</div>`;
+}
+
+export function wireRelatedContact(root) {
+  root.querySelector('#ck-rc-pick')?.addEventListener('change', (e) => {
+    root.querySelector('#ck-rc-new').hidden = e.target.value !== '__new';
+  });
+}
+
+export function relatedContactProblem(root, type) {
+  if (root.querySelector('#ck-rc-pick')?.value !== '__new') return '';
+  return root.querySelector('#ck-rc-name').value.trim() ? '' : `Type the ${contactLabel(type).toLowerCase()}'s name, or pick None.`;
+}
+
+// → the picked contact's id, a new contact's (made with the type's role), or
+// null. A picked one gets the role too (contactRepo.ensureType).
+export async function readRelatedContact(root, type) {
+  const pick = root.querySelector('#ck-rc-pick')?.value || '';
+  if (!pick) return null;
+  const role = RELATED_CONTACT_ROLE[type.value] || null;
+  if (pick === '__new') {
+    const c = await contactRepo.create({ name: root.querySelector('#ck-rc-name').value.trim(), contact_type: role ? [role] : [] });
+    return c.id;
+  }
+  if (role) await contactRepo.ensureType(pick, role);
+  return pick;
+}
 
 export function field(labelText, inputHtml, hint = '') {
   return `<div class="field gl-field"><label>${esc(labelText)}</label>${inputHtml}${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</div>`;

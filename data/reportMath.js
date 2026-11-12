@@ -216,3 +216,12 @@ export function rankBy(rows, { key, label = (k) => k, value = () => 1 }) {
 export function sumOf(rows, value) {
   return rows.reduce((t, r) => t + (Number(value(r)) || 0), 0);
 }
+
+// Live-Birth Summary: born and alive summed over the litters, then divided. Here,
+// not in the Pro-only reportFigures.js (which re-exports it), because Lite keeps
+// the Live-Birth Summary page (K13-7).
+export function liveBirthFigures(litters) {
+  const born = sumOf(litters, (l) => l.puppies_born_total);
+  const alive = sumOf(litters, (l) => l.puppies_born_alive);
+  return { litters: litters.length, born, alive, rate: born ? alive / born : null };
+}

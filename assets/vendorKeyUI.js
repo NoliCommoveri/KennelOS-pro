@@ -8,9 +8,21 @@
 // `account`: { id, name, username?, password?, website?, currency? }.
 import { esc } from './ui.js';
 
+// Her account's website as typed ("stripe.com"), made a full address as the
+// Accounts page does; only a web link is offered.
+function webHref(url) {
+  const u = String(url || '').trim();
+  if (!u) return '';
+  const href = /^[a-z][a-z0-9+.-]*:/i.test(u) ? u : `https://${u}`;
+  return /^https?:/i.test(href) ? href : '';
+}
+
+// `site`: the vendor's own key page, always; `own`: her saved website, offered
+// beside it when it's somewhere else (K12-10).
 const KEY_STEPS = {
   stripe: (a, perms, replacing) => ({
-    site: a.website || 'https://dashboard.stripe.com/apikeys',
+    site: 'https://dashboard.stripe.com/apikeys',
+    own: webHref(a.website),
     steps: [
       `Open a new browser tab and sign in to your Stripe Dashboard${a.username ? ' (your login is below)' : ''}.`,
       'Go to <strong>Developers → API keys</strong> and choose <strong>Create restricted key</strong>. Name it KennelOS.',
@@ -27,9 +39,11 @@ export async function vendorKeyFlow(chat, a, vendorKey, { replacing = false, res
   if (!KEY_STEPS[vendorKey]) return false;
   const vendor = 'Stripe';
   const stripeMod = await import('../data/stripeLinks.js');
-  const { site, steps } = KEY_STEPS[vendorKey](a, stripeMod.STRIPE_KEY_PERMISSIONS || [], replacing);
+  const { site, own, steps } = KEY_STEPS[vendorKey](a, stripeMod.STRIPE_KEY_PERMISSIONS || [], replacing);
+  const sameSite = own && own.replace(/\/+$/, '') === site;
   await chat.say(`Happy to help! Here's how to get ${replacing ? 'a new' : 'your'} ${vendor} key:<ol class="kels-steps">${steps.map((x) => `<li>${x}</li>`).join('')}</ol>`
-    + `<a class="btn btn-sm" href="${esc(site)}" target="_blank" rel="noopener">Open ${esc(vendor)} in a new tab</a>`, { typing: 900 });
+    + `<a class="btn btn-sm" href="${esc(site)}" target="_blank" rel="noopener">Open ${esc(vendor)}'s API keys in a new tab</a>`
+    + (own && !sameSite ? ` <a class="btn btn-sm" href="${esc(own)}" target="_blank" rel="noopener">Open your saved website</a>` : ''), { typing: 900 });
 
   const login = a.username || a.password ? `<div class="kels-login">
       <p class="gl-q">Your login for ${esc(a.name)}, from your Accounts</p>

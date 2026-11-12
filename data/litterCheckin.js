@@ -21,14 +21,12 @@ export { READY_AFTER_DAYS } from './goHome.js';
 // Days ahead the "push the deposit date back" question suggests.
 export const DEPOSIT_RESCHEDULE_DAYS = 7;
 
-// The care Kels can record for the litter, in the order she offers it under
-// "Health care": event types from vocab, the field that names it (and becomes
-// the event's title, else `title`), the choice's label, and how she asks.
+// The care step's plain forms (assets/careVisitUI.js careForm; its visit, shots
+// and screening tests have their own): the event type, the field that names it
+// (and becomes the event's title, else `title`), and how Kels asks.
 export const CARE_KINDS = Object.freeze({
-  preventative: { eventType: 'preventative', nameKey: 'product', title: 'Preventative', label: 'Deworming or flea & tick', ask: 'Which dewormer or preventative?' },
-  vaccination: { eventType: 'vaccination', nameKey: 'vaccine', title: 'Vaccination', label: 'Shots', ask: 'Which vaccine?' },
-  medication: { eventType: 'medication', nameKey: 'drug', title: 'Medication', label: 'Other medication', ask: 'Which medication?' },
-  vet_visit: { eventType: 'vet_visit', nameKey: 'reason', title: 'Vet visit', label: 'A vet visit', ask: 'Tell me about the vet visit', optionalName: true }
+  preventative: { eventType: 'preventative', nameKey: 'product', title: 'Preventative', ask: 'Which dewormer or preventative?' },
+  medication: { eventType: 'medication', nameKey: 'drug', title: 'Medication', ask: 'Which medication?' }
 });
 
 const DAY_MS = 86400000;
@@ -244,12 +242,15 @@ export function lastWeighedDate(weights, pups) {
 
 // --- Care -----------------------------------------------------------------------------
 
-// One care event per chosen pup. `form`: { date, endDate?, details } with the
-// type's details already read. The title is the named thing (the drug, the
-// vaccine…), else the kind's title.
+// One care event per chosen pup. `form`: { date, endDate?, title?, details,
+// relatedContactId? } with the type's details already read. The title is what
+// she typed, else the named thing (the drug, the vaccine…), else the kind's title.
 export function careEvents(kind, pupIds, form) {
   const k = CARE_KINDS[kind];
-  return dogEvents({ eventType: k.eventType, dogIds: pupIds, date: form.date, endDate: form.endDate, details: form.details, title: form.details?.[k.nameKey], fallbackTitle: k.title });
+  return dogEvents({
+    eventType: k.eventType, dogIds: pupIds, date: form.date, endDate: form.endDate, details: form.details,
+    title: String(form.title ?? '').trim() || form.details?.[k.nameKey], fallbackTitle: k.title, relatedContactId: form.relatedContactId || null
+  });
 }
 
 // What's wrong with a care form, or ''.

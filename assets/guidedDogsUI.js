@@ -17,11 +17,12 @@ import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { getGuidedDogsDraft, setGuidedDogsDraft, clearGuidedDogsDraft } from '../data/settings.js';
-import { DOG_STATUS, OWNERSHIP_TYPE, DOC_TYPES, VACCINE_CHECKLIST, VACCINE_GOOD_FOR, documentFieldsFor, descriptor } from '../data/vocab.js';
+import { DOG_STATUS, OWNERSHIP_TYPE, DISPOSITION, REGISTRATION_TYPE, DOC_TYPES, VACCINE_CHECKLIST, VACCINE_GOOD_FOR, documentFieldsFor, descriptor } from '../data/vocab.js';
 import { SCOPED_OWNERSHIP } from '../data/kennelScope.js';
 import * as G from '../data/guidedDogs.js';
 import { findDogMatches, matchReason, breedChoices } from '../data/dogSearch.js';
 import { fmt } from '../data/guidedLitter.js';
+import { resolveMyContactId } from '../data/kennelSetup.js';
 import { esc, todayYMD, dogOptgroups } from './ui.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
 import { StepConversation, tile, field, input, options, val, plural, pagesPrefix, filePicker, wireFilePicker, kennelPicker, wireKennelPicker, readKennelPicker, contactFields, readContactFields, breedPicker, wireBreedPicker, readBreedPicker } from './kelsSteps.js';
@@ -31,13 +32,16 @@ import { StepConversation, tile, field, input, options, val, plural, pagesPrefix
 async function loadData() {
   // Pedigree-only dogs too: a name she types may be one (brought into use), and
   // they're parents to pick.
-  const [dogs, contacts, kennels, own, capStatus, breedPool] = await Promise.all([
+  // Contacts in every edition: a co-owned dog's co-owner is one (Lite has
+  // co-owned dogs too), as are an outside dog's owner and a breeder.
+  const [dogs, contacts, kennels, own, capStatus, breedPool, myContactId] = await Promise.all([
     dogRepo.getAll({ includeArchived: false, includePedigreeOnly: true }),
-    (editionFlags.externalOwnership || editionFlags.contactsSection) ? contactRepo.getAll({ includeArchived: false }) : Promise.resolve([]),
+    contactRepo.getAll({ includeArchived: false }),
     kennelRepo.getAll({ includeArchived: false }),
     ownKennels(),
     dogCapStatus(),
-    kennelRepo.getBreedVocabulary()
+    kennelRepo.getBreedVocabulary(),
+    resolveMyContactId()
   ]);
   const name = (d) => d.call_name || d.registered_name || '';
   return {
@@ -45,6 +49,8 @@ async function loadData() {
     contacts: contacts.sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     dogsById: new Map(dogs.map((d) => [d.id, d])),
     contactsById: new Map(contacts.map((c) => [c.id, c])),
+    // Who she can co-own a dog with: anyone but herself.
+    coOwners: contacts.filter((c) => c.id !== myContactId),
     kennelsById: new Map(kennels.map((k) => [k.id, k])),
     own: own.filter((k) => !k.is_archived),
     // Other breeders' kennels and the breeders themselves (Pro: contacts).
@@ -71,38 +77,68 @@ function screens(draft, data) {
   const ownerships = G.ownershipChoices(editionFlags);
   const multiKennel = data.own.length > 1;
 
-  // Whose dog, its owner (someone else's) and kennel (hers, with several kennels):
-  // the same block on "in common" and on each dog. `o` holds the answers.
-  function ownershipHtml(o, prefix, { allowBlank = false } = {}) {
-    const external = G.OWNER_REQUIRED.includes(o.ownership_type);
+  // A contact picker with "Someone new…" and a name box under it.
+  const personPicker = (id, label, people, pickedId, typed, placeholder) => `
+    ${people.length ? field(label, `<select id="${id}-pick"><option value="">Someone new…</option>${people.map((c) => `<option value="${esc(c.id)}"${pickedId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`) : ''}
+    <div id="${id}-new"${pickedId ? ' hidden' : ''}>${field(people.length ? `${label}'s name` : label, input(`${id}-name`, typed, { placeholder }))}</div>`;
+
+  // Whose dog, its owner (someone else's, or an external reference), its
+  // co-owner (co-owned: who with, and where it lives) and kennel (hers, with
+  // several kennels): the same block on "in common" and on each dog (`perDog`:
+  // where it lives is asked only there). `o` holds the answers.
+  function ownershipHtml(o, prefix, { allowBlank = false, perDog = false } = {}) {
     const scoped = SCOPED_OWNERSHIP.has(o.ownership_type);
     return `${field('Whose dog?', `<select id="${prefix}-own">${options(ownerships, o.ownership_type, allowBlank ? 'Different for each' : null)}</select>`)}
-      ${editionFlags.externalOwnership ? `<div id="${prefix}-owner"${external ? '' : ' hidden'}>
-        ${data.contacts.length ? field('Owner', `<select id="${prefix}-owner-pick"><option value="">Someone new…</option>${data.contacts.map((c) => `<option value="${esc(c.id)}"${o.ownerId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`) : ''}
-        <div id="${prefix}-owner-new"${o.ownerId ? ' hidden' : ''}>${field('Owner\'s name', input(`${prefix}-owner-name`, o.ownerName, { placeholder: 'e.g. Pat Smith' }))}</div>
+      ${editionFlags.externalOwnership ? `<div id="${prefix}-owner"${G.needsOwner(o) ? '' : ' hidden'}>
+        ${personPicker(`${prefix}-owner`, 'Owner', data.contacts, o.ownerId, o.ownerName, 'e.g. Pat Smith')}
       </div>` : ''}
+      <div id="${prefix}-co"${G.isCoOwned(o) ? '' : ' hidden'}>
+        ${personPicker(`${prefix}-co`, 'Co-owner', data.coOwners, o.coOwnerId, o.coOwnerName, 'Who you co-own with')}
+        ${perDog ? field('Lives with', `<select id="${prefix}-co-lives"><option value="">Me</option><option value="co"${o.livesWithCoOwner ? ' selected' : ''}>The co-owner</option></select>`, 'Where this dog lives now.') : ''}
+      </div>
       ${multiKennel ? `<div id="${prefix}-kennel"${scoped ? '' : ' hidden'}>${field('Which of your kennels?', `<select id="${prefix}-kennel-pick">${options(data.own.map((k) => ({ value: k.id, label: k.kennel_name })), o.kennelId || '', allowBlank ? 'Different for each' : 'Pick a kennel…')}</select>`)}</div>` : ''}`;
   }
-  function wireOwnership(root, prefix) {
+  // `statusId`: the status select beside it, since an external reference asks for
+  // its owner too (and is External).
+  function wireOwnership(root, prefix, statusId) {
+    const own = root.querySelector(`#${prefix}-own`);
+    const status = root.querySelector(`#${statusId}`);
     const sync = () => {
-      const v = val(root, `${prefix}-own`);
+      const o = { ownership_type: own.value, status: status?.value || '' };
       const owner = root.querySelector(`#${prefix}-owner`);
-      if (owner) owner.hidden = !G.OWNER_REQUIRED.includes(v);
+      if (owner) owner.hidden = !G.needsOwner(o);
+      root.querySelector(`#${prefix}-co`).hidden = !G.isCoOwned(o);
       const kennel = root.querySelector(`#${prefix}-kennel`);
-      if (kennel) kennel.hidden = !SCOPED_OWNERSHIP.has(v);
+      if (kennel) kennel.hidden = !SCOPED_OWNERSHIP.has(o.ownership_type);
     };
-    root.querySelector(`#${prefix}-own`)?.addEventListener('change', sync);
-    root.querySelector(`#${prefix}-owner-pick`)?.addEventListener('change', (e) => {
-      root.querySelector(`#${prefix}-owner-new`).hidden = Boolean(e.target.value);
+    own?.addEventListener('change', sync);
+    status?.addEventListener('change', () => {
+      if (G.isReference({ status: status.value }) && [...own.options].some((x) => x.value === 'external')) own.value = 'external';
+      sync();
     });
+    for (const who of ['owner', 'co']) {
+      root.querySelector(`#${prefix}-${who}-pick`)?.addEventListener('change', (e) => {
+        root.querySelector(`#${prefix}-${who}-new`).hidden = Boolean(e.target.value);
+      });
+    }
   }
   function readOwnership(root, prefix, o) {
     o.ownership_type = val(root, `${prefix}-own`);
-    const external = G.OWNER_REQUIRED.includes(o.ownership_type);
-    o.ownerId = external ? (val(root, `${prefix}-owner-pick`) || null) : null;
-    o.ownerName = external && !o.ownerId ? val(root, `${prefix}-owner-name`) : '';
+    const owner = G.needsOwner(o);
+    o.ownerId = owner ? (val(root, `${prefix}-owner-pick`) || null) : null;
+    o.ownerName = owner && !o.ownerId ? val(root, `${prefix}-owner-name`) : '';
+    const co = G.isCoOwned(o);
+    o.coOwnerId = co ? (val(root, `${prefix}-co-pick`) || null) : null;
+    o.coOwnerName = co && !o.coOwnerId ? val(root, `${prefix}-co-name`) : '';
+    if (root.querySelector(`#${prefix}-co-lives`)) o.livesWithCoOwner = co && val(root, `${prefix}-co-lives`) === 'co';
     if (multiKennel) o.kennelId = SCOPED_OWNERSHIP.has(o.ownership_type) ? (val(root, `${prefix}-kennel-pick`) || null) : null;
   }
+
+  // A puppy's plan and intended registration, as Record a new litter asks them.
+  const puppyHtml = (d) => `<div id="gd-pup"${G.isPuppy(d) ? '' : ' hidden'}>
+      ${field(`What's the plan for ${d.call_name}?`, `<select id="gd-disp">${options(G.dispositionChoices(), d.disposition, 'Pick one…')}</select>`, 'Available puppies can be offered to families. Placed comes from a sale.')}
+      ${field('Intended registration (optional)', `<select id="gd-intreg">${options(REGISTRATION_TYPE, d.intended_registration, 'Not decided')}</select>`)}
+    </div>`;
 
   // A parent picker: the dogs being added, dogs on file of that sex (grouped and
   // A–Z like every dog picker), or a name typed in.
@@ -233,7 +269,7 @@ function screens(draft, data) {
           ${breedPicker('gd-c-breed', c.breed, data.breeds, { allowBlank: true })}
           ${field('Status', `<select id="gd-c-status">${options(statuses, c.status, 'Different for each')}</select>`)}
           ${ownershipHtml(c, 'gd-c', { allowBlank: true })}`,
-        wire: (root) => { wireOwnership(root, 'gd-c'); wireBreedPicker(root, 'gd-c-breed'); },
+        wire: (root) => { wireOwnership(root, 'gd-c', 'gd-c-status'); wireBreedPicker(root, 'gd-c-breed'); },
         read: (root) => {
           c.breed = readBreedPicker(root, 'gd-c-breed');
           c.status = val(root, 'gd-c-status');
@@ -258,8 +294,13 @@ function screens(draft, data) {
           ${field('Color and markings (optional)', input('gd-color', d.color_markings, { placeholder: 'e.g. red with white chest' }))}
           ${field('Microchip number (optional)', input('gd-chip', d.microchip_id, { inputmode: 'numeric' }))}
           ${field('Status', `<select id="gd-status">${options(statuses, d.status, 'Pick one…')}</select>`)}
-          ${ownershipHtml(d, 'gd-d')}`,
-        wire: (root) => { wireOwnership(root, 'gd-d'); wireBreedPicker(root, 'gd-breed'); },
+          ${puppyHtml(d)}
+          ${ownershipHtml(d, 'gd-d', { perDog: true })}`,
+        wire: (root) => {
+          wireOwnership(root, 'gd-d', 'gd-status');
+          wireBreedPicker(root, 'gd-breed');
+          root.querySelector('#gd-status').addEventListener('change', (e) => { root.querySelector('#gd-pup').hidden = !G.isPuppy({ status: e.target.value }); });
+        },
         read: (root) => {
           d.breed = readBreedPicker(root, 'gd-breed');
           d.date_of_birth = val(root, 'gd-dob');
@@ -269,7 +310,10 @@ function screens(draft, data) {
           d.color_markings = val(root, 'gd-color');
           d.microchip_id = val(root, 'gd-chip');
           d.status = val(root, 'gd-status');
+          d.disposition = G.isPuppy(d) ? val(root, 'gd-disp') : '';
+          d.intended_registration = G.isPuppy(d) ? val(root, 'gd-intreg') : '';
           readOwnership(root, 'gd-d', d);
+          G.tidyAnswers(d);
         },
         // Now that Kels knows its names, number, breed and birthday: is it on file?
         after: () => G.findMatchesFor(d, data.dogs, draft)
@@ -373,14 +417,16 @@ function screens(draft, data) {
 function answerFor(stepId, draft, data) {
   const c = draft.common;
   const lbl = (vocab, v) => (v ? descriptor(vocab, v).label : '');
-  const ownerText = (o) => (G.OWNER_REQUIRED.includes(o.ownership_type)
+  const ownerText = (o) => (G.needsOwner(o)
     ? (o.ownerId ? data.contactsById.get(o.ownerId)?.name : o.ownerName) : '');
+  const coOwnerText = (o) => (G.isCoOwned(o)
+    ? `with ${(o.coOwnerId ? data.contactsById.get(o.coOwnerId)?.name : o.coOwnerName) || 'a co-owner'}` : '');
   const kennelText = (o) => (data.own.length > 1 && o.kennelId ? data.kennelsById.get(o.kennelId)?.kennel_name : '');
   if (stepId === 'roster') {
     return draft.dogs.map((d) => `${d.call_name} (${d.sex === 'female' ? 'girl' : 'boy'})`).join(', ');
   }
   if (stepId === 'common') {
-    return [c.breed, lbl(DOG_STATUS, c.status), lbl(OWNERSHIP_TYPE, c.ownership_type), ownerText(c), kennelText(c)].filter(Boolean).join(' · ') || 'Different for each';
+    return [c.breed, lbl(DOG_STATUS, c.status), lbl(OWNERSHIP_TYPE, c.ownership_type), coOwnerText(c), ownerText(c), kennelText(c)].filter(Boolean).join(' · ') || 'Different for each';
   }
   if (stepId === 'review') return '';
   const d = draft.dogs[G.stepIndex(stepId)];
@@ -390,7 +436,9 @@ function answerFor(stepId, draft, data) {
     return `Yes, that's ${herHim(d.sex)}: ${dogName(data.dogsById.get(d.match))}`;
   }
   if (stepId.startsWith('dog:')) {
-    return [d.breed, d.date_of_birth ? `born ${fmt(d.date_of_birth)}` : '', d.registry, d.registered_name, lbl(DOG_STATUS, d.status), lbl(OWNERSHIP_TYPE, d.ownership_type), ownerText(d), kennelText(d)]
+    return [d.breed, d.date_of_birth ? `born ${fmt(d.date_of_birth)}` : '', d.registry, d.registered_name, lbl(DOG_STATUS, d.status),
+      G.isPuppy(d) ? lbl(DISPOSITION, d.disposition) : '', lbl(OWNERSHIP_TYPE, d.ownership_type), coOwnerText(d),
+      G.isCoOwned(d) && d.livesWithCoOwner ? 'lives with them' : '', ownerText(d), kennelText(d)]
       .filter(Boolean).join(' · ');
   }
   if (stepId.startsWith('breeder:')) {

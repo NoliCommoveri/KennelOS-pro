@@ -673,10 +673,38 @@ export const AKC_SHOW_AWARDS = [
 // plain strings or { value, label } vocab objects (the form stores `value` and
 // shows `label`). A field may carry `default`, applied only when creating an
 // event whose draft has no value for that key (a prefill wins).
+// The contact role a type's related contact is tagged with on save (Show
+// Tracking Spec §2.2): picking someone as a show's handler makes them a
+// Handler, and a vet visit's or surgery's vet a Vet. contactRepo.ensureType is a
+// no-op when the role is already there. Pickers (the event form, Kels's logging
+// forms) list contacts that already carry the role first, and a new contact
+// made there gets it.
+export const RELATED_CONTACT_ROLE = Object.freeze({ show: 'handler', vet_visit: 'vet', surgery: 'vet', screening_test: 'vet' });
+
 // Kels's Add dogs asks each new dog's shots from this fixed checklist, each with
 // how long it's good for: `years` sets the vaccination's `next_due` (and, when
 // she wants a reminder, its `reminder_date`); lifetime has none.
 export const VACCINE_CHECKLIST = ['Rabies', 'DHPP', 'Bordetella', 'Leptospirosis'];
+// The shots Kels's care step (assets/careVisitUI.js: Check in on my dogs, Check in
+// on a litter, Pups are going home) offers as ticks, one `vaccination` per ticked
+// vaccine per ticked dog; an Other box takes any name. Puppy series first.
+export const VACCINE_CHOICES = ['DHPP', 'Parvo', 'Rabies', 'Bordetella', 'Leptospirosis', 'Lyme', 'Canine influenza'];
+// When a shot is next due, from the day it was given (careVisit.nextDueFrom): the
+// weeks for a puppy series, the years for a grown dog's.
+export const VACCINE_NEXT_DUE = [
+  { value: '2w', label: 'In 2 weeks', days: 14 },
+  { value: '3w', label: 'In 3 weeks', days: 21 },
+  { value: '4w', label: 'In 4 weeks', days: 28 },
+  { value: '1y', label: 'In 1 year', months: 12 },
+  { value: '3y', label: 'In 3 years', months: 36 }
+];
+
+// Routine screening tests (`screening_test`): a vet's check that comes back
+// negative or positive, not a breeding clearance, so never one of the health
+// test types (healthTestLog.TEST_TYPES: planned tests, waitlist parent results,
+// Dog Cards). Suggestions only; any name she types is kept.
+export const SCREENING_TESTS = ['Fecal', 'Heartworm', 'Heartworm & tick-borne (4Dx)', 'Giardia', 'Brucellosis', 'Bloodwork', 'Urinalysis'];
+export const SCREENING_RESULTS = ['Negative', 'Positive'];
 export const VACCINE_GOOD_FOR = [
   { value: '1', label: '1 year', years: 1 },
   { value: '3', label: '3 years', years: 3 },
@@ -722,6 +750,11 @@ export const EVENT_TYPES = [
     fields: [{ key: 'joint', label: 'Joint', type: 'combobox' }, { key: 'method', label: 'Method', type: 'text' }, { key: 'rating', label: 'Rating', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
   { value: 'breed_specific_test', label: 'Breed-specific test', badge: 'badge-purple', subjects: ['dog'], duration: 'instant',
     fields: [{ key: 'test_name', label: 'Test', type: 'combobox' }, { key: 'result', label: 'Result', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
+  // A routine screening at the vet (fecal, heartworm, brucellosis...): the vet is
+  // the related contact, as on a vet visit. Kept apart from the three breeding
+  // test types above (see SCREENING_TESTS).
+  { value: 'screening_test',     label: 'Screening test',     badge: 'badge-blue',    subjects: ['dog'], duration: 'instant', relatedContact: 'Vet',
+    fields: [{ key: 'test', label: 'Test', type: 'combobox', options: SCREENING_TESTS }, { key: 'result', label: 'Result', type: 'combobox', options: SCREENING_RESULTS }, OUTCOME_FIELD, { key: 'vet', label: 'Vet', type: 'text', contactFallback: true }] },
   { value: 'illness',            label: 'Illness',            badge: 'badge-red',     subjects: ['dog'], duration: 'instant',
     fields: [{ key: 'diagnosis', label: 'Diagnosis', type: 'text' }, { key: 'treatment', label: 'Treatment', type: 'textarea' }] },
   // Span (Stage4.5 Addendum §C5): event_date is the start, event_end_date the
@@ -923,7 +956,7 @@ export function docTypeIcon(value) {
 const EVENT_TYPE_EXPENSE_CATEGORY = {
   acquisition: 'dog_purchase',
   vaccination: 'veterinary', illness: 'veterinary', surgery: 'veterinary',
-  vet_visit: 'veterinary', injury: 'veterinary', ultrasound: 'veterinary',
+  vet_visit: 'veterinary', injury: 'veterinary', ultrasound: 'veterinary', screening_test: 'veterinary',
   genetic_test: 'testing', ofa_pennhip: 'testing', breed_specific_test: 'testing',
   progesterone_test: 'testing',
   boarding: 'boarding',

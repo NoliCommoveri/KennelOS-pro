@@ -54,7 +54,7 @@ let contactsById = new Map();
 // the address on one line. A linked contact gives all three; a vet only typed
 // as text (`details.vet` — KennelAssistant, or logged before the link) gives
 // the name alone. Empty for every other type, or when nothing's ticked.
-const VET_EVENT_TYPES = ['vet_visit', 'surgery'];
+const VET_EVENT_TYPES = ['vet_visit', 'surgery', 'screening_test'];
 function vetLines(ev) {
   if (!VET_EVENT_TYPES.includes(ev.event_type)) return [];
   const contact = ev.related_contact_id ? contactsById.get(ev.related_contact_id) : null;
@@ -74,6 +74,8 @@ function eventDetail(ev) {
         .filter(Boolean).join(' — ');
     case 'preventative':
       return [d.product, d.dose].filter(Boolean).join(' — ');
+    case 'screening_test':
+      return [d.test, d.result].filter(Boolean).join(' — ');
     case 'genetic_test':
       return [d.panel_name, d.lab, d.result].filter(Boolean).join(' — ');
     case 'ofa_pennhip':

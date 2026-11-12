@@ -27,7 +27,7 @@ import { CapExceededError } from './repoBase.js';
 import { eventRepo } from './eventRepo.js';
 import { expenseRepo } from './expenseRepo.js';
 import { todayYMD, addMonthsToYMD } from './dateUtils.js';
-import { SEX, DOG_STATUS, OWNERSHIP_TYPE, VACCINE_GOOD_FOR, descriptor, defaultExpenseCategoryFor } from './vocab.js';
+import { SEX, DOG_STATUS, OWNERSHIP_TYPE, DISPOSITION, REGISTRATION_TYPE, VACCINE_GOOD_FOR, descriptor, defaultExpenseCategoryFor } from './vocab.js';
 import { fmt } from './guidedLitter.js';
 import { findDogMatches, matchReason, nameKey, similarNamed, looksLikeNumber, normReg } from './dogSearch.js';
 
@@ -35,10 +35,12 @@ import { findDogMatches, matchReason, nameKey, similarNamed, looksLikeNumber, no
 export const DRAFT_VERSION = 2;
 export const MAX_DOGS = 20;
 
-// Statuses she can give a dog she's adding. A puppy belongs to a litter (Record
-// a new litter); a pedigree-only dog is made from the parents step.
-const ADDABLE_STATUSES = ['active_breeding', 'retired_breeding', 'pet_home', 'for_sale', 'deceased'];
-const LITE_STATUSES = ['active_breeding', 'retired_breeding', 'deceased'];
+// Statuses she can give a dog she's adding: the Dog page's, by edition. A puppy
+// (one she bought, or one from a litter not in KennelOS) is asked its plan
+// (disposition) and intended registration; an external reference, its owner. A
+// pedigree-only dog is made from the parents step instead.
+const ADDABLE_STATUSES = ['puppy', 'active_breeding', 'retired_breeding', 'pet_home', 'for_sale', 'deceased', 'external_reference'];
+const LITE_STATUSES = ['puppy', 'active_breeding', 'retired_breeding', 'deceased'];
 export const statusChoices = ({ fullDogStatuses = true } = {}) =>
   DOG_STATUS.filter((s) => (fullDogStatuses ? ADDABLE_STATUSES : LITE_STATUSES).includes(s.value));
 
@@ -48,13 +50,25 @@ export const ownershipChoices = ({ externalOwnership = true } = {}) =>
 
 export const OWNER_REQUIRED = ['external'];
 
+// A puppy's plan, as Record a new litter asks it. Placed comes from a sale.
+export const dispositionChoices = () => DISPOSITION.filter((x) => x.value !== 'placed');
+export const isPuppy = (d) => d.status === 'puppy';
+// An external reference is someone else's dog: its ownership is External and
+// its owner is asked, as for any External dog.
+export const isReference = (d) => d.status === 'external_reference';
+// Someone else's dog, so its owner is asked (dogRepo requires one for External).
+export const needsOwner = (d) => OWNER_REQUIRED.includes(d.ownership_type) || isReference(d);
+// A co-owned dog: who she co-owns it with (one co-owner; more on the Dog page),
+// and whether it lives with them.
+export const isCoOwned = (d) => d.ownership_type === 'co_owned';
+
 const blank = (v) => v == null || String(v).trim() === '';
 const trimmed = (v) => (blank(v) ? '' : String(v).trim());
 const norm = (s) => trimmed(s).toLowerCase().replace(/\s+/g, ' ');
 const key = () => (globalThis.crypto?.randomUUID?.() || `k${Math.random().toString(36).slice(2)}`);
 
 // The fields "what they have in common" fills in on each dog.
-export const COMMON_FIELDS = ['breed', 'status', 'ownership_type', 'kennelId', 'ownerId', 'ownerName'];
+export const COMMON_FIELDS = ['breed', 'status', 'ownership_type', 'kennelId', 'ownerId', 'ownerName', 'coOwnerId', 'coOwnerName'];
 
 export function emptyDraft() {
   const now = new Date().toISOString();
@@ -66,7 +80,7 @@ export function emptyDraft() {
     label: '',
     history: [],
     dogs: [newDog()],
-    common: { breed: '', status: 'active_breeding', ownership_type: 'owned', kennelId: null, ownerId: null, ownerName: '' },
+    common: { breed: '', status: 'active_breeding', ownership_type: 'owned', kennelId: null, ownerId: null, ownerName: '', coOwnerId: null, coOwnerName: '' },
     // The common answers last filled in on the dogs (fillFromCommon).
     applied: {},
     saved: {},
@@ -105,6 +119,11 @@ export function newDog() {
     call_name: '', sex: '', breed: '', date_of_birth: '', registry: '', registered_name: '', registration_number: '',
     color_markings: '', microchip_id: '', status: '', ownership_type: '',
     ownerId: null, ownerName: '', kennelId: null,
+    // A puppy's plan and intended registration (the Dog page's puppy-only fields).
+    disposition: '', intended_registration: '',
+    // A co-owned dog's co-owner (picked, or a new name) and whether it lives
+    // with them (`livesWithCoOwner`; else with her).
+    coOwnerId: null, coOwnerName: '', livesWithCoOwner: false,
     dam: noParent(), sire: noParent(),
     // Who bred it (`breeder:<i>`): '' = not asked or not sure, 'me' = her own
     // kennel, 'other' = another breeder: their kennel (one on file, or a new
@@ -175,11 +194,20 @@ export function fillFromCommon(draft) {
       if (blank(c[k])) continue;
       if (blank(d[k]) || d[k] === prev[k]) d[k] = c[k];
     }
-    // Only someone else's dog has an owner to ask about.
-    if (!OWNER_REQUIRED.includes(d.ownership_type)) { d.ownerId = null; d.ownerName = ''; }
+    tidyAnswers(d);
   }
   draft.applied = Object.fromEntries(COMMON_FIELDS.map((k) => [k, c[k]]));
   return draft;
+}
+
+// Answers that no longer apply are cleared: an owner only for someone else's
+// dog, a co-owner only for a co-owned one, a plan only for a puppy. An external
+// reference is External (stepProblem asks her to change a dog of hers).
+export function tidyAnswers(d) {
+  if (!needsOwner(d)) { d.ownerId = null; d.ownerName = ''; }
+  if (!isCoOwned(d)) { d.coOwnerId = null; d.coOwnerName = ''; d.livesWithCoOwner = false; }
+  if (!isPuppy(d)) { d.disposition = ''; d.intended_registration = ''; }
+  return d;
 }
 
 // --- Steps --------------------------------------------------------------------
@@ -249,8 +277,11 @@ export function stepProblem(step, draft, ctx = {}) {
     if (blank(d.breed)) return `Pick ${name}'s breed, or type a new one.`;
     if (!blank(d.date_of_birth) && d.date_of_birth > today) return 'The birth date can\'t be in the future.';
     if (blank(d.status)) return `Pick ${name}'s status.`;
+    if (isPuppy(d) && !dispositionChoices().some((x) => x.value === d.disposition)) return `What's the plan for ${name}: keeping, available or undecided?`;
     if (blank(d.ownership_type)) return `Whose dog is ${name}?`;
-    if (OWNER_REQUIRED.includes(d.ownership_type) && !d.ownerId && blank(d.ownerName)) return `Pick ${name}'s owner, or type the owner's name.`;
+    if (isReference(d) && SCOPED_OWNERSHIP.has(d.ownership_type)) return `An external reference is someone else's dog. Pick External under Whose dog, or another status.`;
+    if (needsOwner(d) && !d.ownerId && blank(d.ownerName)) return `Pick ${name}'s owner, or type the owner's name.`;
+    if (isCoOwned(d) && !d.coOwnerId && blank(d.coOwnerName)) return `Who do you co-own ${name} with? Pick them, or type their name.`;
     if (ctx.multiKennel && SCOPED_OWNERSHIP.has(d.ownership_type) && !(ctx.ownKennelIds || []).includes(d.kennelId)) return `Which of your kennels is ${name} under?`;
     // A breed she has, spelled a little differently, would make a second breed.
     const breedLike = similarNamed((ctx.breeds || []).filter((x) => norm(x) !== norm(d.breed)), d.breed, (x) => x);
@@ -259,9 +290,13 @@ export function stepProblem(step, draft, ctx = {}) {
       const c = check(draft, `regname:${d.key}:${norm(d.registered_name)}`, `"${trimmed(d.registered_name)}" looks like a registration number. Should it go in the Registration number box?`);
       if (c) return c;
     }
-    if (OWNER_REQUIRED.includes(d.ownership_type) && !d.ownerId) {
+    if (needsOwner(d) && !d.ownerId) {
       const like = similarNamed(ctx.contacts || [], d.ownerName, (c) => c.name);
       if (like) { const c = check(draft, `owner:${d.key}:${norm(d.ownerName)}`, `Is that ${like.name}, already in your contacts? Pick them from the list if so.`); if (c) return c; }
+    }
+    if (isCoOwned(d) && !d.coOwnerId) {
+      const like = similarNamed(ctx.contacts || [], d.coOwnerName, (c) => c.name);
+      if (like) { const c = check(draft, `coowner:${d.key}:${norm(d.coOwnerName)}`, `Is that ${like.name}, already in your contacts? Pick them from the list if so.`); if (c) return c; }
     }
     return null;
   }
@@ -345,11 +380,16 @@ export function reviewSections(draft, names = {}, { kennelNames = false } = {}) 
     if (!blank(d.registry) || reg) lines.push(`Registered${blank(d.registry) ? '' : ` with ${trimmed(d.registry)}`}${reg ? `: ${reg}` : ''}.`);
     const more = [blank(d.color_markings) ? '' : trimmed(d.color_markings), blank(d.microchip_id) ? '' : `microchip ${trimmed(d.microchip_id)}`].filter(Boolean);
     if (more.length) lines.push(`${more.join(', ')}.`.replace(/^./, (c) => c.toUpperCase()));
-    const owner = OWNER_REQUIRED.includes(d.ownership_type)
+    const owner = needsOwner(d)
       ? (d.ownerId ? `, owned by ${names.contact?.(d.ownerId) || 'a contact'}` : `, owned by ${trimmed(d.ownerName)} (a new contact)`)
       : '';
+    const coName = d.coOwnerId ? (names.contact?.(d.coOwnerId) || 'a contact') : `${trimmed(d.coOwnerName)} (a new contact)`;
+    const coOwner = isCoOwned(d) ? ` with ${coName}, living with ${d.livesWithCoOwner ? 'them' : 'you'}` : '';
     const kennel = kennelNames && SCOPED_OWNERSHIP.has(d.ownership_type) && d.kennelId ? `, ${names.kennel?.(d.kennelId) || ''}` : '';
-    lines.push(`${label(DOG_STATUS, d.status)}. ${label(OWNERSHIP_TYPE, d.ownership_type)}${owner}${kennel}.`);
+    const plan = isPuppy(d)
+      ? ` (${[label(DISPOSITION, d.disposition), blank(d.intended_registration) ? '' : `${label(REGISTRATION_TYPE, d.intended_registration)} registration`].filter(Boolean).join(', ').toLowerCase()})`
+      : '';
+    lines.push(`${label(DOG_STATUS, d.status)}${plan}. ${label(OWNERSHIP_TYPE, d.ownership_type)}${coOwner}${owner}${kennel}.`);
     const dam = parentText(d.dam, draft, names);
     const sire = parentText(d.sire, draft, names);
     lines.push(dam || sire ? `Parents: ${sire || 'dad not known'} × ${dam || 'mom not known'}.` : 'Parents: not known.');
@@ -375,6 +415,10 @@ function dogFields(d) {
     status: d.status,
     ownership_type: d.ownership_type
   };
+  if (isPuppy(d)) {
+    fields.disposition = d.disposition || 'undecided';
+    if (!blank(d.intended_registration)) fields.intended_registration = d.intended_registration;
+  }
   for (const k of ['date_of_birth', 'registry', 'registered_name', 'registration_number', 'color_markings', 'microchip_id']) {
     if (!blank(d[k])) fields[k] = trimmed(d[k]);
   }
@@ -455,7 +499,7 @@ export async function saveGuidedDogs(draft, { onProgress = () => {} } = {}) {
       let ownerId = null;
       if (onFile?.owner_contact_id) {
         ownerId = onFile.owner_contact_id;
-      } else if (OWNER_REQUIRED.includes(d.ownership_type)) {
+      } else if (needsOwner(d)) {
         ownerId = d.ownerId || s.contacts[norm(d.ownerName)] || null;
         if (!ownerId) {
           const c = await contactRepo.create({ name: trimmed(d.ownerName), contact_type: ['breeder'] });
@@ -485,7 +529,23 @@ export async function saveGuidedDogs(draft, { onProgress = () => {} } = {}) {
         parentIds[role] = s.parents[k];
       }
 
+      // A co-owned dog's co-owner: picked, or a new contact (one per name).
+      let coOwnerId = null;
+      if (isCoOwned(d)) {
+        coOwnerId = d.coOwnerId || s.contacts[norm(d.coOwnerName)] || null;
+        if (!coOwnerId && !blank(d.coOwnerName)) {
+          const c = await contactRepo.create({ name: trimmed(d.coOwnerName) });
+          coOwnerId = s.contacts[norm(d.coOwnerName)] = c.id;
+          await step();
+        }
+      }
+
       const fields = { ...dogFields(d), owner_contact_id: ownerId };
+      if (coOwnerId) {
+        const had = onFile?.co_owner_contact_ids || [];
+        if (!had.includes(coOwnerId)) fields.co_owner_contact_ids = [...had, coOwnerId];
+        if (d.livesWithCoOwner) fields.lives_with_contact_id = coOwnerId;
+      }
       fields.breed = breedSpelling.get(norm(fields.breed)) || fields.breed;
       if (SCOPED_OWNERSHIP.has(d.ownership_type)) fields.kennel_id = d.kennelId || await resolveKennelIdForWrite();
       const breederKennelId = await saveBreeder(d.breeder, { s, step, ownKennelId: fields.kennel_id });
@@ -493,7 +553,9 @@ export async function saveGuidedDogs(draft, { onProgress = () => {} } = {}) {
       if (parentIds.dam) fields.dam_id = parentIds.dam;
       if (parentIds.sire) fields.sire_id = parentIds.sire;
       if (onFile) {
-        const changes = Object.fromEntries(Object.entries(fields).filter(([k, v]) => !blank(v) && blank(onFile[k])));
+        // co_owner_contact_ids only ever adds hers to the list (built above).
+        const changes = Object.fromEntries(Object.entries(fields).filter(([k, v]) => !blank(v)
+          && (k === 'co_owner_contact_ids' || blank(onFile[k]))));
         if (Object.keys(changes).length) await dogRepo.update(onFile.id, changes);
         d.id = onFile.id;
       } else if (d.bringIn) {

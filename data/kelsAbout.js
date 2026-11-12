@@ -50,8 +50,8 @@ export const DOG_TOPICS = [
     events: ['vaccination', 'preventative'], add: { type: 'vaccination', label: (n) => `Add a shot for ${n}` },
     label: (n) => `${n}'s shots`, count: (f) => f.shots.length,
     sub: (f) => [plural(f.shots.length, 'on record', 'on record'), f.due ? `${f.due.vaccine || 'next'} ${f.due.overdue ? 'overdue' : `due ${day(f.due.date)}`}` : null].filter(Boolean).join(' · '), noun: 'shots' },
-  { key: 'vet', words: ['vet', 'veterinarian', 'doctor', 'clinic', 'visit', 'sick', 'illness', 'ill', 'medication', 'medicine', 'med', 'surgery', 'injury', 'hurt', 'health', 'medical'],
-    events: ['vet_visit', 'illness', 'medication', 'surgery', 'injury'], add: { type: 'vet_visit', label: (n) => `Add a health event for ${n}` },
+  { key: 'vet', words: ['vet', 'veterinarian', 'doctor', 'clinic', 'visit', 'fecal', 'giardia', 'brucellosis', 'screening', 'bloodwork', 'sick', 'illness', 'ill', 'medication', 'medicine', 'med', 'surgery', 'injury', 'hurt', 'health', 'medical'],
+    events: ['vet_visit', 'screening_test', 'illness', 'medication', 'surgery', 'injury'], add: { type: 'vet_visit', label: (n) => `Add a health event for ${n}` },
     label: (n) => `${n}'s vet visits and health events`, count: (f) => f.vet.length,
     sub: (f) => [plural(f.vet.length, 'on record', 'on record'), f.seen?.date ? `last seen ${day(f.seen.date)}` : null].filter(Boolean).join(' · '), noun: 'vet visits or health events' }
 ];

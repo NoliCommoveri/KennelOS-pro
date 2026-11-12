@@ -153,6 +153,15 @@ export const PRO_ONLY_STANDALONE = [
 
 // True when a link target (an href like "contact-import.html" or with a query string)
 // points at a Pro-only page. Used by runtime gating in Lite-kept pages.
+// Pages the Demo build drops (build/assemble.mjs): no saving, exporting or
+// settings in a read-only demo. Kels's Find never offers them there.
+export const DEMO_EXCLUDED_PAGES = ['import-export.html', 'settings.html', 'assistant.html'];
+
+export function isDemoExcludedPage(href) {
+  const file = String(href || '').split('/').pop().split('?')[0];
+  return DEMO_EXCLUDED_PAGES.includes(file);
+}
+
 export function isProOnlyPage(href) {
   const file = String(href || '').split('/').pop().split('?')[0];
   return PRO_ONLY_PAGES.includes(file);

@@ -43,6 +43,10 @@ import { dogsInScope, inScopeOnly, subjectInScope, getActiveKennelId } from './k
 import { hasPolicies } from './waitlistForm.js';
 import { isWaitlistOnlineOffered } from './cloud/cloudConfig.js';
 import { todayYMD, monthsBetween, addDaysToYMD } from './dateUtils.js';
+
+// A heat with no end date logged is taken as over this many days after it started
+// (a typical heat runs about three weeks), for the "record a pairing?" nudge.
+export const HEAT_OPEN_DAYS = 21;
 import { descriptor, PAIRING_STATUS, LITTER_STATUS, SALE_STATUS, isOpenSale, PAIRING_ENDED_STATUSES, WHELPED_OR_LATER } from './vocab.js';
 import { editionFlags } from './editionConfig.js';
 import { showRecordFrom } from './showPoints.js';
@@ -363,9 +367,12 @@ export async function computeNudges() {
     });
   }
 
-  // §4.5 — concluded heat cycle with no matching pairing since it started.
+  // §4.5 — concluded heat cycle with no matching pairing since it started. A
+  // heat logged with no end date (the default in Log heat and Kels's check-in)
+  // counts as over HEAT_OPEN_DAYS after it started.
+  const heatEnd = (e) => e.event_end_date || addDaysToYMD(e.event_date, HEAT_OPEN_DAYS);
   const concludedHeats = events.filter((e) =>
-    e.event_type === 'heat_cycle' && e.subject_type === 'dog' && e.event_end_date && e.event_end_date < today
+    e.event_type === 'heat_cycle' && e.subject_type === 'dog' && e.event_date && heatEnd(e) < today
     // Scoped through the dam the heat was logged on (an Event carries no kennel
     // of its own — §4.1); an external dam stays scope-transparent.
     && subjectInScope('dog', e.subject_id, { dog: dogsById })
@@ -378,7 +385,7 @@ export async function computeNudges() {
     nudges.push({
       key,
       title: `${dam?.call_name || 'This dam'} finished a heat — record a pairing?`,
-      detail: `Heat concluded ${ev.event_end_date}.`,
+      detail: ev.event_end_date ? `Heat concluded ${ev.event_end_date}.` : `Heat started ${ev.event_date}, with no end date logged.`,
       subjectHref: `dog.html?id=${encodeURIComponent(damId)}`,
       actions: [
         { label: 'Create pairing', run: async () => { location.href = `pairing.html?new=1&dam=${encodeURIComponent(damId)}`; } }

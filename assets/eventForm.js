@@ -21,7 +21,7 @@ import { TEST_TYPE_FIELDS, testResultSuggestions } from '../data/healthTestLog.j
 import { expenseRepo } from '../data/expenseRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { eventTypesFor, descriptor, EVENT_TYPES, EXPENSE_CATEGORIES, defaultExpenseCategoryFor, TITLE_TRACKS, CONTACT_TYPE } from '../data/vocab.js';
+import { eventTypesFor, descriptor, EVENT_TYPES, EXPENSE_CATEGORIES, defaultExpenseCategoryFor, TITLE_TRACKS, CONTACT_TYPE, RELATED_CONTACT_ROLE } from '../data/vocab.js';
 import { esc, todayYMD, param, confirmModal } from './ui.js';
 import { attachNewContactButton } from './contactPicker.js';
 
@@ -38,12 +38,9 @@ const TEST_VOCAB_FIELDS = { genetic_test: 'panel_name', breed_specific_test: 'te
 // result field is filled the same way, below, from every test type.)
 const LOGGED_VALUE_FIELDS = { show: ['club', 'judge'] };
 
-// The contact role a type's related contact is tagged with on save (Show
-// Tracking Spec §2.2): picking someone as a show's handler makes them a
-// Handler, and a vet visit's or surgery's vet a Vet. contactRepo.ensureType is a
-// no-op when the role is already there. The picker lists contacts that already
-// carry the role first, and its "＋ New" contact defaults to it.
-const RELATED_CONTACT_ROLE = { show: 'handler', vet_visit: 'vet', surgery: 'vet' };
+// RELATED_CONTACT_ROLE (vocab.js): the role a type's related contact is tagged
+// with on save; the picker lists contacts that already carry it first, and its
+// "＋ New" contact defaults to it.
 
 // The type's `contactFallback` details key (the related contact's plain-text
 // name), or null.

@@ -31,6 +31,7 @@ import { contactRepo } from './contactRepo.js';
 import { kennelRepo, withSeededTests } from './kennelRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { eventRepo } from './eventRepo.js';
+import { enforceLitterCap } from './editionConfig.js';
 import { baseFromLitter } from './puppyDefaults.js';
 import { addDaysToYMD, todayYMD } from './dateUtils.js';
 import { similarNamed } from './dogSearch.js';
@@ -387,11 +388,16 @@ export function applyLitterChoice(draft, litter, dogs = []) {
   draft.litterId = litter ? litter.id : null;
   draft.source = litter ? 'litter' : (draft.pairingChoice && draft.pairingChoice !== 'none' ? 'pairing' : 'new');
   if (!litter) return draft;
-  if (litter.whelp_date && litter.whelp_date <= todayYMD()) draft.whelpDate = litter.whelp_date;
+  // An Expected litter's whelp date is a placeholder (often the day it was made),
+  // never the birth date (K9-3): she types the real one.
+  if (litter.status !== 'expected' && litter.whelp_date && litter.whelp_date <= todayYMD()) draft.whelpDate = litter.whelp_date;
   for (const k of Object.keys(draft.prices)) if (!blank(litter[k])) draft.prices[k] = String(litter[k]);
   draft.pricesFilled = Object.values(draft.prices).some((v) => v !== '');
   draft.acceptDepositsDate = litter.accept_deposits_date || draft.acceptDepositsDate;
   draft.readyDate = litter.estimated_ready_date || draft.readyDate;
+  // A ready date that is just its whelp date + 8 weeks follows the real birth
+  // date (refreshReadyDate); one she set herself stays.
+  draft.readyFromWhelp = litter.whelp_date && litter.estimated_ready_date === defaultReadyDate(litter.whelp_date) ? litter.whelp_date : null;
   draft.nickname = litter.nickname || draft.nickname;
   draft.photosUrl = litter.photos_url || draft.photosUrl;
   const pups = dogs.filter((d) => d.litter_id === litter.id && d.status === 'puppy' && !d.is_archived);
@@ -613,6 +619,10 @@ export async function saveGuidedLitter(draft, { onProgress = () => {} } = {}) {
   const existingLitter = draft.litterId ? await litterRepo.getById(draft.litterId) : null;
   const kennelId = existingLitter?.kennel_id || draft.kennelId || draft.autoKennelId;
 
+  // 0. Lite's litter cap, asked before anything is made: a new litter it would
+  // refuse must not leave a new parent behind (K13-14).
+  if (!existingLitter && !s.litterId) await enforceLitterCap({ candidate: litterFieldsFromDraft(draft) });
+
   // 1. Parents who weren't in KennelOS yet.
   const damId = existingLitter?.dam_id || (draft.newDam ? await createParent(draft.newDam, 'dam', s, kennelId, step) : draft.damId);
   const sireId = existingLitter?.sire_id || (draft.newSire ? await createParent(draft.newSire, 'sire', s, kennelId, step) : draft.sireId);
@@ -719,4 +729,16 @@ export async function saveGuidedLitter(draft, { onProgress = () => {} } = {}) {
 
 // Default "ready to go home" date for a birth date.
 export const defaultReadyDate = (whelpDate) => (blank(whelpDate) ? '' : addDaysToYMD(whelpDate, READY_DAYS_AFTER_WHELP));
+
+// Once the birth date is known: a blank ready date, or one still derived from an
+// earlier whelp date (an Expected litter's placeholder), becomes birth + 8 weeks.
+export function refreshReadyDate(draft) {
+  if (blank(draft.whelpDate)) return draft;
+  const derived = draft.readyFromWhelp && draft.readyDate === defaultReadyDate(draft.readyFromWhelp);
+  if (blank(draft.readyDate) || derived) {
+    draft.readyDate = defaultReadyDate(draft.whelpDate);
+    draft.readyFromWhelp = draft.whelpDate;
+  }
+  return draft;
+}
 export { STUD_SERVICE_TYPE };

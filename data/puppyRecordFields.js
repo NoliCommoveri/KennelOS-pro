@@ -13,7 +13,7 @@ import { EVENT_TYPES, descriptor } from './vocab.js';
 // The Health History event types, in the order the record prints their cards.
 // Admin/lifecycle types (milestone, placement, note…) are never printed.
 export const PUPPY_RECORD_HEALTH_TYPES = [
-  'vaccination', 'preventative', 'genetic_test', 'ofa_pennhip',
+  'vaccination', 'preventative', 'screening_test', 'genetic_test', 'ofa_pennhip',
   'breed_specific_test', 'illness', 'medication', 'surgery', 'vet_visit',
   'injury', 'abnormalities', 'weight_check'
 ];

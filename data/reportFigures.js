@@ -24,12 +24,8 @@ export function litterFigures(litters) {
   return { litters: litters.length, born: total, alive: sumOf(born, (l) => l.puppies_born_alive), counted: born.length, avgLitter: born.length ? total / born.length : null };
 }
 
-// Live-Birth Summary: born and alive summed over the litters, then divided.
-export function liveBirthFigures(litters) {
-  const born = sumOf(litters, (l) => l.puppies_born_total);
-  const alive = sumOf(litters, (l) => l.puppies_born_alive);
-  return { litters: litters.length, born, alive, rate: born ? alive / born : null };
-}
+// Live-Birth Summary's figures live in reportMath.js (shared with Lite's page).
+export { liveBirthFigures } from './reportMath.js';
 
 // Placements: placed sales, those that fell through, sale value and average price
 // (placed sales with a price), and pups placed by registration.

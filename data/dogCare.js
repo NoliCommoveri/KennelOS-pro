@@ -120,9 +120,10 @@ export function checkinDogs(dogs) {
 }
 
 // Dog event types the check-in's "Any other events to log?" leaves out: the ones
-// it asks about itself (heats, preventatives, health tests, vet visits), and the
+// it asks about itself (heats, preventatives, health tests, and the care step's
+// vet visits, shots, screening tests and medication), and the
 // ones another Kels task logs (a purchase: Add dogs; a puppy going home: Pups are going home).
-export const CHECKIN_OWN_TYPES = Object.freeze(['heat_cycle', 'preventative', 'genetic_test', 'ofa_pennhip', 'breed_specific_test', 'vet_visit']);
+export const CHECKIN_OWN_TYPES = Object.freeze(['heat_cycle', 'preventative', 'genetic_test', 'ofa_pennhip', 'breed_specific_test', 'vet_visit', 'vaccination', 'screening_test', 'medication']);
 export const OTHER_TASK_TYPES = Object.freeze(['acquisition', 'placement']);
 
 // The dog event types "Any other events to log?" offers, in vocab order: a dog's
@@ -138,7 +139,7 @@ export function otherEventTypes(flags = {}) {
 // one (a vaccine, a drug, a vet visit's reason…). A type with `titleFrom` (show)
 // uses that.
 const NAME_KEYS = Object.freeze({
-  vaccination: 'vaccine', medication: 'drug', vet_visit: 'reason', surgery: 'procedure',
+  vaccination: 'vaccine', medication: 'drug', vet_visit: 'reason', screening_test: 'test', surgery: 'procedure',
   illness: 'diagnosis', injury: 'description', milestone: 'description', title_earned: 'title_abbreviation',
   boarding: 'location', evaluation: 'evaluator', abnormalities: 'type'
 });
@@ -149,15 +150,23 @@ const trimmed = (details) => Object.fromEntries(Object.entries(details || {})
 
 // One event per dog, each a candidate for eventRepo.create. `title`: what she
 // typed, else the type's naming field, else `fallbackTitle`, else the type's label.
-// Blank details are dropped and the rest trimmed.
-export function dogEvents({ eventType, dogIds = [], date, endDate = '', details = {}, title = '', fallbackTitle = '' }) {
+// Blank details are dropped and the rest trimmed. `relatedContactId` (a vet, a
+// handler, boarding's host: the type's relatedContact) replaces its plain-text
+// name field (`contactFallback`), as the event form does; `notes` and
+// `reminderDate` as the event form's.
+export function dogEvents({ eventType, dogIds = [], date, endDate = '', details = {}, title = '', fallbackTitle = '', relatedContactId = null, notes = '', reminderDate = '' }) {
   const typeDef = EVENT_TYPES.find((t) => t.value === eventType);
   const d = trimmed(details);
+  if (relatedContactId) for (const f of typeDef?.fields || []) if (f.contactFallback) delete d[f.key];
   const key = eventNameKey(typeDef);
   const t = String(title ?? '').trim() || (key && d[key]) || fallbackTitle || typeDef?.label || 'Event';
+  const n = String(notes ?? '').trim();
   return dogIds.map((id) => ({
     subject_type: 'dog', subject_id: id, event_type: eventType,
     event_date: date, ...(endDate ? { event_end_date: endDate } : {}),
+    ...(relatedContactId ? { related_contact_id: relatedContactId } : {}),
+    ...(reminderDate ? { reminder_date: reminderDate } : {}),
+    ...(n ? { notes: n } : {}),
     title: t, details: { ...d }
   }));
 }

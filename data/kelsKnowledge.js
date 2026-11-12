@@ -18,7 +18,7 @@
 // exists and is precached.
 import { REPORTS, REPORT_GROUPS } from './reportCatalog.js';
 import { EXPENSE_CATEGORIES } from './vocab.js';
-import { isProOnlyPage } from './proPages.js';
+import { isProOnlyPage, isDemoExcludedPage } from './proPages.js';
 
 export const PLACES = [
   // Today
@@ -177,7 +177,10 @@ const REPORT_GROUP_LABEL = new Map(REPORT_GROUPS.map((g) => [g.value, g.label]))
 // Every place this edition has, as Find candidates (data/kelsFind.js).
 // ctx: { edition, flags, nav: (path) => the hub's name in the menu, kennelId }.
 export function placeCandidates({ edition, flags = {}, nav = (p) => p, kennelId = null }) {
+  // A place the edition's build dropped is never offered: Lite's Pro-only pages,
+  // Demo's save and settings pages.
   const offered = (p) => (!p.flag || flags[p.flag]) && !(edition === 'lite' && isProOnlyPage(p.href.split(/[?#]/)[0]))
+    && !(edition === 'demo' && isDemoExcludedPage(p.href.split(/[?#]/)[0]))
     && (kennelId || !p.href.includes('{kennel}'));
   const place = (p) => ({
     id: `place:${p.id}`, group: 'A page in the app', title: p.title,

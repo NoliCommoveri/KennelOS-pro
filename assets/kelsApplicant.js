@@ -15,6 +15,8 @@ import { waitlistConfig, kennelBreeds } from '../data/waitlistRules.js';
 import { formQuestions, snapshotQuestions, isAnswerQuestion, missingRequired } from '../data/waitlistForm.js';
 import { applicationFields, readAnswers, readPrefs } from './waitlistApplicationForm.js';
 import { newCredit } from '../data/receivedCredits.js';
+import { doNotSellRepo } from '../data/doNotSellRepo.js';
+import { entryDoNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { field } from './kelsSteps.js';
 import { esc, todayYMD } from './ui.js';
 
@@ -33,7 +35,10 @@ export function applicationFromContact(form, contact) {
 export async function askApplicant(chat, { kennel, contact = null, title = null } = {}) {
   const config = waitlistConfig(kennel);
   const form = formQuestions(config);
-  const [dogs, programs] = await Promise.all([dogRepo.getAll(), waitlistProgramRepo.getByKennel(kennel.id)]);
+  const [dogs, programs, doNotSell] = await Promise.all([dogRepo.getAll(), waitlistProgramRepo.getByKennel(kennel.id), doNotSellRepo.getAll()]);
+  // Her do-not-sell list, checked before the family is added (the entry page
+  // shows the same warning once they're on): asked once, then a second tap adds them.
+  let warned = '';
   const breeds = kennelBreeds(kennel, dogs);
   const live = programs.filter((p) => !p.is_archived).sort((a, b) => a.name.localeCompare(b.name));
   const entry = { application: applicationFromContact(form, contact) };
@@ -60,6 +65,8 @@ export async function askApplicant(chat, { kennel, contact = null, title = null 
       const missing = missingRequired(questions, application);
       if (!prefs.ready_timing) missing.push(form.find((q) => q.key === 'ready_timing')?.label || 'Ready to buy');
       if (missing.length) return `Please fill in: ${missing.map((m) => m.replace(/[?.!:]+$/, '')).join(', ')}.`;
+      const dns = doNotSellWarning(entryDoNotSellMatches({ application, contact_id: contact?.id || null }, doNotSell));
+      if (dns && warned !== dns) { warned = dns; return `${dns} Tap Add the family again to add them anyway.`; }
       let credit = null;
       const paid = root.querySelector('#ka-credit').value;
       if (String(paid).trim() !== '' && Number(paid) > 0) {

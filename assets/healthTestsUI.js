@@ -13,6 +13,9 @@
 // the test's name, date, lab and result.
 // The test's name lands in its kind's name field, so a planned test reads as
 // logged everywhere at once (Dog page, Health-Testing Gaps).
+// **A screening test** (a fecal, a heartworm test…) opens the care step's
+// screening form (assets/careVisitUI.js) for that dog: a `screening_test`, never
+// one of the three health test types, so it stays off planned tests and results.
 import { dogRepo } from '../data/dogRepo.js';
 import { eventRepo, testTokensOf, testMatchTokensOf } from '../data/eventRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
@@ -21,6 +24,7 @@ import { homeDogs } from '../data/dogCare.js';
 import { TEST_TYPES, TEST_TYPE_FIELDS, testTypeFor, testEvent, unloggedPlanned, testResultSuggestions } from '../data/healthTestLog.js';
 import { EVENT_TYPES, TEST_OUTCOME, descriptor } from '../data/vocab.js';
 import { field } from './litterCheckinUI.js';
+import { screeningForm } from './careVisitUI.js';
 import { filePicker, wireFilePicker } from './kelsSteps.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { esc, fmtDate, todayYMD } from './ui.js';
@@ -29,6 +33,7 @@ const HOW = 'Pick a dog, then a test from their plan or any other, and I\'ll log
 const dogName = (d) => d.call_name || d.registered_name || 'Unnamed';
 const listText = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 const typeLabel = (t) => descriptor(EVENT_TYPES, t)?.label || t;
+const ONE_DOG = Object.freeze({ line: (d) => `<strong>${esc(dogName(d))}</strong>`, one: 'dog', many: 'dogs' });
 
 // `only`: a narrower list of dogs (the dog check-in passes dogCare.checkinDogs).
 async function load(only = null) {
@@ -119,9 +124,15 @@ async function logForDog(chat, dog) {
     const pick = await chat.choose([
       ...planned.map((t) => ({ label: t, value: `plan:${t}` })),
       { label: planned.length ? 'A different test' : 'Log a test', value: '__new' },
+      { label: 'A screening test', note: 'Fecal, heartworm…', value: '__screen' },
       { label: `Done with ${dogName(dog)}`, value: '__done', primary: !firstTest || !planned.length }
     ]);
     if (pick === '__done') return;
+    if (pick === '__screen') {
+      const res = await screeningForm(chat, [dog], { date: todayYMD(), ticked: new Set([dog.id]), who: ONE_DOG });
+      if (res.done) await chat.say('Logged.');
+      continue;
+    }
     const name = pick.startsWith('plan:') ? pick.slice(5) : '';
     const res = await testForm(chat, dog, name, tests);
     if (!res.done) continue;

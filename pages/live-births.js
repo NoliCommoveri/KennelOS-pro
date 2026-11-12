@@ -4,11 +4,25 @@
 // alive/total — never a kennel-wide average persisted anywhere. Only litters
 // that recorded a birth total appear (an expected, not-yet-whelped litter has
 // nothing to summarize yet).
-import { loadLiveBirths } from '../data/reportSources.js';
-import { liveBirthFigures } from '../data/reportFigures.js';
+//
+// Lite keeps this page, so it reads only shared modules: never reportSources.js
+// or reportFigures.js, which are Pro-only (K13-7). Its loader is the same as
+// reportSources.loadLiveBirths, which Kels's Pro insights use.
+import { litterRepo } from '../data/litterRepo.js';
+import { dogRepo } from '../data/dogRepo.js';
+import { inScope } from '../data/kennelScope.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { createReportView } from '../assets/reportView.js';
 import { fmtDate } from '../assets/ui.js';
-import { periodSeries, sumOf, pct } from '../data/reportMath.js';
+import { periodSeries, sumOf, pct, liveBirthFigures } from '../data/reportMath.js';
+
+// The litters with a recorded birth total, newest first.
+async function loadLiveBirths() {
+  const [all, dogs] = await Promise.all([litterRepo.getAll({ includeArchived: false }), dogRepo.getAll({ includeArchived: true })]);
+  const rows = all.filter((l) => Number.isFinite(Number(l.puppies_born_total)))
+    .sort((a, b) => (b.whelp_date || '').localeCompare(a.whelp_date || ''));
+  return { rows, scope: inScope, date: (l) => l.whelp_date, dogs };
+}
 
 function livePct(l) {
   const total = Number(l.puppies_born_total);
@@ -18,6 +32,8 @@ function livePct(l) {
 }
 
 async function init() {
+  // Lite has no Reports hub to go back to.
+  if (!editionFlags.reports) document.getElementById('all-reports')?.remove();
   // Only litters with a recorded birth total have a live-birth story to tell.
   const src = await loadLiveBirths();
   const dogsById = new Map(src.dogs.map((d) => [d.id, d]));

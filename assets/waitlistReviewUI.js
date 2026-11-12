@@ -43,7 +43,7 @@ import {
 import { hasOwnForm } from '../data/guidedForm.js';
 import { entryQuestions, formQuestions, answerText } from '../data/waitlistForm.js';
 import { backOutItems, backOutSummary, suggestOutcome } from '../data/backOut.js';
-import { transportQuote } from '../data/transportFee.js';
+import { transportQuote, mapsLink } from '../data/transportFee.js';
 import { familySale, pendingExtraRequests } from '../data/familyExtras.js';
 import { pendingPickupRequests } from '../data/familyPickup.js';
 import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf } from '../data/goHome.js';
@@ -149,7 +149,7 @@ class Review {
       litterRepo.getAll({ includeArchived: true }),
       dogRepo.getAll({ includeArchived: true }),
       saleRepo.getAll({ includeArchived: true }),
-      waitlistProgramRepo.getByKennel(k.id),
+      waitlistProgramRepo.getMapForKennel(k.id),
       waitlistNudgeItems(this.today)
     ]);
     // A family page only (E3) is never part of reviewing the list.
@@ -167,7 +167,11 @@ class Review {
     };
     Object.assign(this, {
       config: waitlistConfig(k), entries: live, entriesById, offers, contactsById, litters: kennelLitters,
-      dogs, dogsById: new Map(dogs.map((d) => [d.id, d])), sales, programs: programs.filter((p) => !p.is_archived),
+      dogs, dogsById: new Map(dogs.map((d) => [d.id, d])), sales,
+      // Positions read every program, archived ones too: an archived program still
+      // applies to the families already in it, as on every other page (K6-5). The
+      // program picker offers only the live ones.
+      programMap: programs, programs: [...programs.values()].filter((p) => !p.is_archived),
       items: items.filter((n) => STEP_OF[readNudgeKey(n.key).kind] && mine(n))
     });
     const familySales = this.familySales();
@@ -513,7 +517,7 @@ class Review {
           ${field('Time', `<input id="wr-time" type="text" placeholder="e.g. 2:00 PM" value="${esc(r.start_time ? timeRange({ start_time: r.start_time }) : '')}">`)}
         </div>
         ${field('How', `<select id="wr-method">${PLACEMENT_METHODS.map((m) => `<option${m === 'Ground transport' ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select>`)}
-        ${field('Miles, one way', `<input id="wr-miles" type="number" min="0" step="0.1" value="${miles0 ?? ''}">${from ? ' <button type="button" class="gl-more" id="wr-measure">Get driving miles</button>' : ''}`)}
+        ${field('Miles, one way', `<input id="wr-miles" type="number" min="0" step="0.1" value="${miles0 ?? ''}">${from ? ' <button type="button" class="gl-more" id="wr-measure">Get driving miles</button>' : ''}${r.address ? ` <a class="gl-more" href="${esc(mapsLink(from, r.address))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>` : ''}`)}
         ${field('Transport fee', `<input id="wr-fee" type="number" min="0" step="0.01" value="${current ?? (quote(miles0)?.fee ?? '')}">`, current != null ? `On the sale now: ${fmtMoney(current)}. Saving uses what's in the box.` : '')}
         <p class="field-hint" id="wr-working">${esc(quote(miles0)?.text || '')}</p>`,
       wire: (root) => {
@@ -531,7 +535,7 @@ class Review {
             root.querySelector('#wr-miles').value = (await drivingMiles(from, r.address)).miles;
             refresh();
           } catch (err) {
-            root.querySelector('#wr-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'miles aren\'t switched on yet' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Type the miles instead.`;
+            root.querySelector('#wr-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'miles aren\'t switched on yet' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
           }
           ev.target.disabled = false;
         });
@@ -881,7 +885,7 @@ class Review {
       litter = open.find((l) => l.id === id);
     }
     const pups = this.dogs.filter((d) => d.litter_id === litter.id);
-    const progs = new Map(this.programs.map((p) => [p.id, p]));
+    const progs = this.programMap;
     const fits = rankedList(this.entries, this.kennel.id, progs).filter((x) => eligiblePupsFor(x, litter, pups, this.sales, { today: this.today, config: this.config }).length);
     if (!fits.length) { await this.chat.say('Nobody on the list has a pup in that litter they could take right now.'); return; }
     const pos = overallPositions(this.entries, this.kennel.id, progs, { sales: this.sales, dogs: this.dogsById });
