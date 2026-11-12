@@ -39,8 +39,12 @@ export class CloudError extends Error {
     super(message);
     this.name = 'CloudError';
     this.status = status;
+    // A body's own `code` (e.g. Firma's reason behind esign_refused) is the
+    // provider's, kept as providerCode: it never replaces the Worker's code.
+    const { code: providerCode, ...rest } = extra || {};
+    Object.assign(this, rest);
     this.code = code;
-    Object.assign(this, extra);
+    if (providerCode != null) this.providerCode = providerCode;
   }
 }
 export class CloudUnavailableError extends CloudError {

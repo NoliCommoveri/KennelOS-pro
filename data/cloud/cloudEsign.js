@@ -184,7 +184,12 @@ export function esignProblem(err) {
   if (code === 'pro_required') return { kind: 'other', message: 'E-signing comes with KennelOS Pro on your cloud account.' };
   if (code === 'esign_not_configured') return { kind: 'other', message: 'E-signing isn\'t available right now. Try again later.' };
   if (code === 'esign_busy' || code === 'rate_limited') return { kind: 'other', message: 'Firma is busy right now. Wait a minute and try again.' };
-  if (code === 'esign_refused') return { kind: 'other', message: 'Firma refused this. Check the signer\'s email, and that the template has a signature field for the signer, then try again.' };
+  if (code === 'esign_refused') {
+    // Firma's reason, when it gave one (e.g. VALIDATION_ERROR), for her and for support.
+    const why = /^[A-Z0-9_]{1,60}$/.test(err.providerCode || '') ? ` (Firma said ${err.providerCode})` : '';
+    if (err.providerCode === 'RECIPIENT_EMAIL_SUPPRESSED') return { kind: 'other', message: `Firma won't email that address: it bounced or was reported before${why}. Use another email for the signer.` };
+    return { kind: 'other', message: `Firma refused this${why}. Check the signer's email, and that the template has a signature field for each signer (for you too, on one you countersign), then try again.` };
+  }
   if (code === 'signer_email_required') return { kind: 'other', message: 'The signer needs an email address.' };
   if (code === 'signer_name_required') return { kind: 'other', message: 'The signer needs a name.' };
   if (code === 'countersigner_email_required' || code === 'countersigner_name_required') return { kind: 'other', message: 'You countersign this template, so KennelOS needs your cloud account\'s email. Sign in again in Settings → Cloud backup, then try again.' };
