@@ -52,11 +52,16 @@ export function cleanForms(list) {
     .filter((f) => f && FORM_TYPES.has(f.form_type) && (isFirmaForm(f) || formLink(f.url)))
     .map((f) => {
       if (isFirmaForm(f)) {
-        return {
+        const row = {
           id: text(f.id) || crypto.randomUUID(), form_type: f.form_type,
           label: text(f.label) || descriptor(CONTRACT_FORM_TYPE, f.form_type).label,
           provider: 'firma', template_id: text(f.template_id)
         };
+        // She signs it too, after the buyer (Integrations D32). Absent = buyer only.
+        if (f.countersign === true) row.countersign = true;
+        // KennelOS keeps the signed PDF and emails the buyer a link (D33). Absent = no.
+        if (f.keep_copy === true) row.keep_copy = true;
+        return row;
       }
       const out = {
         id: text(f.id) || crypto.randomUUID(),

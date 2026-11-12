@@ -136,6 +136,7 @@ function renderView() {
       ${row('Document link', c.document_url ? `<a href="${esc(c.document_url)}" target="_blank" rel="noopener noreferrer">${esc(c.document_url)}</a>` : '')}
       ${c.esign_url || (c.esign_provider === 'firma' && c.esign_ref) ? row('Sent for signature', `${esc(c.esign_form_label || 'Contract form')}${c.esign_provider === 'firma' ? ' <span class="muted">· e-sign</span>' : ''}${c.esign_sent_date ? ` · ${esc(fmtDate(c.esign_sent_date))}` : ''}
         ${c.esign_url && c.status !== 'signed' ? '<button class="btn btn-sm" id="btn-copy-esign" style="margin-left:6px;">Copy link again</button>' : ''}
+        ${c.esign_provider === 'firma' && c.esign_ref && c.esign_countersign && c.status === 'sent' && esignSignedIn() ? '<button class="btn btn-sm btn-primary" id="btn-countersign" style="margin-left:6px;" title="Sign it too. Firma waits for the buyer first.">Countersign</button>' : ''}
         ${c.esign_provider === 'firma' && c.esign_ref && esignSignedIn() ? `<button class="btn btn-sm" id="btn-signed-copy" style="margin-left:6px;">${c.status === 'signed' ? 'Signed copy' : 'Copy so far'}</button>` : ''}`) : ''}
       ${row('Terms summary', c.terms_summary ? esc(c.terms_summary).replace(/\n/g, '<br>') : '')}
       ${row('Notes', c.notes ? esc(c.notes).replace(/\n/g, '<br>') : '')}
@@ -148,6 +149,18 @@ function renderView() {
       copyBtn.textContent = 'Copied ✓';
       setTimeout(() => { copyBtn.textContent = 'Copy link again'; }, 1500);
     } catch { showError(`Couldn't copy. The link is: ${c.esign_url}`); }
+  };
+  const counterBtn = document.getElementById('btn-countersign');
+  if (counterBtn) counterBtn.onclick = async () => {
+    clearError();
+    counterBtn.disabled = true;
+    try {
+      const { openCountersign } = await import('../assets/esignUI.js');
+      if (!(await openCountersign(c.esign_ref))) showError('Your browser blocked the new tab. Allow pop-ups for KennelOS, then try again.');
+    } catch (e) {
+      const { esignProblem } = await import('../data/cloud/cloudEsign.js');
+      showError(esignProblem(e).message);
+    } finally { counterBtn.disabled = false; }
   };
   const signedBtn = document.getElementById('btn-signed-copy');
   if (signedBtn) signedBtn.onclick = async () => {
@@ -516,7 +529,10 @@ async function sendForSignature(c) {
           hint: 'The contract is already marked Sent. When they sign, it\'s marked Signed by itself.'
         });
       } else {
-        await alertModal({ title: 'Sent for e-signature', message: 'Firma emailed them the signing link. When they sign, this contract is marked Signed by itself, and its signed copy opens from here.' });
+        await alertModal({ title: 'Sent for e-signature', message: (sent.countersign
+          ? 'Firma emailed them the signing link. Once they\'ve signed, tap Countersign here to sign it too. When you both have, this contract is marked Signed by itself, and its signed copy opens from here.'
+          : 'Firma emailed them the signing link. When they sign, this contract is marked Signed by itself, and its signed copy opens from here.')
+          + (sent.keepCopy ? ' KennelOS also emails them a link to the signed copy, within the hour after the last signature.' : '') });
       }
       return;
     }

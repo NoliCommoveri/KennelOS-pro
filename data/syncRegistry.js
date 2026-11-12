@@ -249,7 +249,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'esign_provider', 'esign_form_label', 'esign_sent_date',
       // Firma's id for the signing request (plan §2.3a, D30): an id only, no
       // buyer details, so any of her devices can show the signed copy.
-      'esign_ref'
+      'esign_ref',
+      // She countersigns it, after the buyer (D32): a yes/no, so any of her
+      // devices shows Countersign while it's out.
+      'esign_countersign'
     ],
     // The link sent carries the prefilled facts in it (buyer's name, email, phone,
     // address, price), so it's private like those fields.

@@ -340,6 +340,8 @@ export const firmaTemplateToken = (token, templateId) => getJson('/integrations/
 export const sendForEsign = (token, body) => getJson('/integrations/esign/send', { method: 'POST', token, json: body, timeoutMs: 60 * 1000 });
 // → { url, expiresAt, partial, status }: a short-lived link to the signed PDF
 export const esignDocument = (token, ref) => getJson(`/integrations/esign/document?ref=${encodeURIComponent(ref)}`, { token });
+// → { url }: her own signing link on a contract she countersigns (D32), asked for when she taps Countersign
+export const esignCountersign = (token, ref) => getJson(`/integrations/esign/countersign?ref=${encodeURIComponent(ref)}`, { token });
 
 // --- Notifications: app alerts and the email digest (Notifications plan) ------------------
 // → { kinds, push: { available, publicKey, kinds, hideNames, thisDevice, devices },

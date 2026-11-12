@@ -11,12 +11,13 @@
 //   editorLink(templateId)  Firma's editor in its own tab (the Worker's sandboxed page)
 //   sendForEsign(...)       send a contract; the contract is marked Sent
 //   signedCopyLink(ref)     a short-lived link to the signed PDF
+//   countersignLink(ref)    her own signing link, on a contract she countersigns (D32)
 //
 // Every entry point checks isCloudAvailable() and the session first, so
 // `cloudUrl: null` makes no request. Network only through cloudApi.
 import * as api from './cloudApi.js';
 import { isCloudAvailable, cloudBaseUrl } from './cloudConfig.js';
-import { sessionToken } from './cloudAuth.js';
+import { sessionToken, currentAccount } from './cloudAuth.js';
 import { refreshConnections } from './cloudIntegrations.js';
 import { editionFlags } from '../editionConfig.js';
 import { isDemo } from '../demoMode.js';
@@ -101,25 +102,45 @@ export async function editorLink(templateId) {
   return `${cloudBaseUrl()}/esign/editor#${new URLSearchParams({ t: jwt, id: templateId })}`;
 }
 
+// Who countersigns a template marked so (D32): her, as her cloud account's
+// email, named for her kennel. → { name, email } | null (not her template, or no
+// account email on this device).
+export function countersignerFor(form, facts, account = currentAccount()) {
+  if (form?.countersign !== true) return null;
+  const email = String(account?.email || '').trim();
+  if (!email) return null;
+  return { name: String(facts?.kennel?.kennel_name || '').trim() || email, email };
+}
+
 // What goes to Firma for one send: the signer, and the contract's facts as the
-// signer's custom fields (the same allow-list a pasted form's link carries).
-export function sendBody({ contract, form, facts, signer, emailSigner = true, resend = false }) {
+// signer's custom fields (the same allow-list a pasted form's link carries). On a
+// template she countersigns, her too, as the second signer (D32). On one whose
+// signed copy KennelOS keeps (D33), keepCopy and her kennel's name (the email's
+// wording).
+export function sendBody({ contract, form, facts, signer, emailSigner = true, resend = false, account = currentAccount() }) {
   const [firstName, lastName] = splitName(signer?.name || '');
   const subject = facts?.puppy?.call_name || facts?.dog?.call_name || '';
+  const countersigner = countersignerFor(form, facts, account);
+  if (form?.countersign === true && !countersigner) {
+    throw Object.assign(new Error('countersigner_email_required'), { code: 'countersigner_email_required' });
+  }
   return {
     contractId: contract.id,
     templateId: form.template_id,
     title: [form.label, subject].filter(Boolean).join(': ').slice(0, 200) || contract.title || 'Contract',
     signer: { firstName, lastName, email: String(signer?.email || '').trim() },
     facts: Object.fromEntries(prefillValues(form.form_type, facts)),
+    ...(countersigner ? { countersigner } : {}),
+    ...(form?.keep_copy === true ? { keepCopy: true, kennelName: String(facts?.kennel?.kennel_name || '').trim() } : {}),
     emailSigner: emailSigner !== false,
     resend: resend === true
   };
 }
 
 // Send it. Firma charges KennelOS for it, so it counts (D26). The contract is
-// marked Sent with Firma's reference and the signer's link.
-// → { contract, signingLink, usage }. Throws the Worker's refusals (esignProblem).
+// marked Sent with Firma's reference and the signer's link, and whether she
+// countersigns it (esign_countersign, D32).
+// → { contract, signingLink, countersign, keepCopy, usage }. Throws the Worker's refusals (esignProblem).
 export async function sendForEsign({ contract, form, facts, signer, emailSigner = true, resend = false }) {
   const token = requireSession();
   const res = await api.sendForEsign(token, sendBody({ contract, form, facts, signer, emailSigner, resend }));
@@ -129,14 +150,21 @@ export async function sendForEsign({ contract, form, facts, signer, emailSigner 
     esign_ref: res.signingRequestId,
     esign_url: res.signingLink || null,
     esign_sent_date: todayYMD(),
-    esign_form_label: form.label
+    esign_form_label: form.label,
+    esign_countersign: res.countersign === true
   });
-  return { contract: saved, signingLink: res.signingLink || null, usage: res.usage || null };
+  return { contract: saved, signingLink: res.signingLink || null, countersign: res.countersign === true, keepCopy: res.keepCopy === true, usage: res.usage || null };
 }
 
 // → { url, partial, status }
 export async function signedCopyLink(ref) {
   return api.esignDocument(requireSession(), ref);
+}
+
+// → { url }: her own signing link (the second signer). Firma's page waits for
+// the buyer first when they haven't signed yet.
+export async function countersignLink(ref) {
+  return api.esignCountersign(requireSession(), ref);
 }
 
 const resetText = (usage) => (usage?.resetsOn ? ` It resets on ${usage.resetsOn}.` : '');
@@ -159,6 +187,10 @@ export function esignProblem(err) {
   if (code === 'esign_refused') return { kind: 'other', message: 'Firma refused this. Check the signer\'s email, and that the template has a signature field for the signer, then try again.' };
   if (code === 'signer_email_required') return { kind: 'other', message: 'The signer needs an email address.' };
   if (code === 'signer_name_required') return { kind: 'other', message: 'The signer needs a name.' };
+  if (code === 'countersigner_email_required' || code === 'countersigner_name_required') return { kind: 'other', message: 'You countersign this template, so KennelOS needs your cloud account\'s email. Sign in again in Settings → Cloud backup, then try again.' };
+  if (code === 'countersigner_is_signer') return { kind: 'other', message: 'The signer\'s email is your own. You countersign this template, so the buyer needs their own email.' };
+  if (code === 'esign_not_open') return { kind: 'other', message: 'This contract isn\'t out for signature any more, so there\'s nothing to countersign.' };
+  if (code === 'no_countersigner') return { kind: 'other', message: 'This contract was sent without you as a signer, so there\'s nothing to countersign. To sign it too, mark its template "I countersign" and send it again.' };
   if (code === 'too_large') return { kind: 'other', message: 'That PDF is too large for Firma. Save a smaller copy and try again.' };
   if (err instanceof api.CloudOfflineError || code === 'esign_unavailable' || code === 'esign_setup_failed') return { kind: 'offline', message: 'Couldn\'t reach Firma right now. Check your connection and try again.' };
   return { kind: 'other', message: err?.message || String(err) };

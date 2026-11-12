@@ -7,12 +7,14 @@
 //                            place the signature and detail fields.
 //   sendWithFirma(...)       a contract's Send for signature with one of those
 //                            templates: who signs, this month's count, send.
+//   openCountersign(ref)     her own signing link, on a template she countersigns
+//                            (D32), opened in a new tab.
 //
 // She has no Firma login: KennelOS holds the account and her kennel gets its own
 // workspace. Everything goes through data/cloud/cloudEsign.js.
 import {
   esignSignedIn, esignStatus, setUpEsign, templates as listTemplates, uploadTemplate, editorLink,
-  sendForEsign, signedCopyLink, esignProblem, TEMPLATE_MAX_BYTES
+  sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES
 } from '../data/cloud/cloudEsign.js';
 import { mergeTemplates, setTemplateType } from '../data/esignTemplates.js';
 import { accountRepo } from '../data/accountRepo.js';
@@ -118,12 +120,18 @@ export function openContractTemplates() {
     const row = (t) => `<div class="acct-row" data-tid="${esc(t.id)}" style="flex-wrap:wrap; gap:8px; padding:6px 0; border-top:1px solid var(--border,#e2e6ec);">
         <span class="acct-v" style="min-width:160px;"><strong>${esc(t.name)}</strong>${t.pageCount ? ` <span class="muted">· ${esc(t.pageCount)} page${t.pageCount === 1 ? '' : 's'}</span>` : ''}</span>
         <select class="ct-type" aria-label="What kind of contract ${esc(t.name)} is">${typeOptions(t.form_type)}</select>
+        <label class="check-inline" style="display:flex; gap:6px; align-items:center;" title="You sign it too, after the buyer">
+          <input type="checkbox" class="ct-flag" data-flag="countersign"${t.countersign ? ' checked' : ''}${t.form_type ? '' : ' disabled'}> I countersign</label>
+        <label class="check-inline" style="display:flex; gap:6px; align-items:center;" title="KennelOS keeps the signed PDF and emails the buyer a link to it">
+          <input type="checkbox" class="ct-flag" data-flag="keepCopy"${t.keepCopy ? ' checked' : ''}${t.form_type ? '' : ' disabled'}> Email the buyer the signed copy</label>
         <button type="button" class="btn btn-sm" data-edit="${esc(t.id)}">Place fields</button>
       </div>`;
     frame(`<p class="field-hint" style="margin-top:0;">${usageLine(status.usage)} A contract's <strong>Send for signature</strong> offers the templates of its kind, beside your own contract forms.</p>
       ${rows.length ? rows.map(row).join('') : '<p class="muted">No templates yet. Upload your first contract below.</p>'}
       <h3 style="font-size:15px; margin:16px 0 4px;">Add a template</h3>
       <p class="field-hint" style="margin-top:0;">Upload your contract as a PDF (up to ${Math.round(TEMPLATE_MAX_BYTES / 100_000) / 10} MB). Then <strong>Place fields</strong> opens Firma's editor in a new tab, where you put the buyer's signature, and the details KennelOS fills in (buyer, pup, price…), where they go on the page.</p>
+      <p class="field-hint">If you sign your contracts too, tick <strong>I countersign</strong>, and in Firma's editor add a second signer with your signature field. The buyer signs first, then you sign from the contract's <strong>Countersign</strong> button. It's still one e-sign contract.</p>
+      <p class="field-hint">Tick <strong>Email the buyer the signed copy</strong> and, once everyone has signed, KennelOS saves the signed PDF and emails the buyer a link to it. The contract's <strong>Signed copy</strong> opens the same copy.</p>
       <div class="form-grid">
         <div class="field"><label for="ct-file">Contract PDF</label><input id="ct-file" type="file" accept="application/pdf,.pdf"></div>
         <div class="field"><label for="ct-name">Name</label><input id="ct-name" type="text" maxlength="200" placeholder="e.g. Pet home contract"></div>
@@ -139,8 +147,28 @@ export function openContractTemplates() {
       const t = rows.find((r) => r.id === tid);
       try {
         await setTemplateType({ templateId: tid, name: t?.name, formType: sel.value });
+        sel.closest('[data-tid]').querySelectorAll('.ct-flag').forEach((tick) => { tick.disabled = !sel.value; });
         say(`<p class="field-hint">${sel.value ? `Saved: ${esc(t?.name || 'the template')} is offered for ${esc(CONTRACT_FORM_TYPE.find((x) => x.value === sel.value)?.label.toLowerCase() || 'that kind of contract')}s.` : `${esc(t?.name || 'The template')} isn't offered any more.`}</p>`);
       } catch (err) { problem(err); }
+    }));
+    const flagSaved = {
+      countersign: (on, name) => (on
+        ? `Saved: you countersign ${name}. In Firma's editor, give the second signer your signature field.`
+        : `Saved: only the buyer signs ${name}.`),
+      keepCopy: (on, name) => (on
+        ? `Saved: once ${name} is signed, KennelOS keeps the signed PDF and emails the buyer a link to it.`
+        : `Saved: KennelOS won't keep or email ${name}'s signed copy. Signed copy still opens Firma's.`)
+    };
+    box.querySelectorAll('.ct-flag').forEach((tick) => tick.addEventListener('change', async () => {
+      const el = tick.closest('[data-tid]');
+      const t = rows.find((r) => r.id === el.dataset.tid);
+      const formType = el.querySelector('.ct-type').value;
+      const flag = tick.dataset.flag;
+      if (!formType) { tick.checked = false; return; }
+      try {
+        await setTemplateType({ templateId: el.dataset.tid, name: t?.name, formType, [flag]: tick.checked });
+        say(`<p class="field-hint">${flagSaved[flag](tick.checked, esc(t?.name || 'this template'))}</p>`);
+      } catch (err) { tick.checked = !tick.checked; problem(err); }
     }));
     box.querySelectorAll('[data-edit]').forEach((btn) => btn.addEventListener('click', async () => {
       say('<p class="field-hint">Opening Firma\'s editor in a new tab…</p>');
@@ -184,6 +212,7 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
     const done = (v) => { overlay.remove(); resolve(v); };
     overlay.addEventListener('click', (e) => { if (e.target === overlay && !busy) done(null); });
     const filled = prefillValues(form.form_type, facts).length;
+    const counter = countersignerFor(form, facts);
 
     async function draw() {
       let usage = null;
@@ -199,11 +228,15 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
           <input id="fs-emailme" type="checkbox" checked> Firma emails them the signing link</label>
           <p class="field-hint">Untick to send the link in your own message instead. It counts the same.</p>`
         : '<p class="field-hint">The signing link goes into your message. Firma doesn\'t email them.</p>'}
+        ${form.countersign ? (counter
+          ? `<p class="field-hint">You countersign this one, as ${esc(counter.email)}: once they've signed, tap <strong>Countersign</strong> on the contract. It's marked Signed when you both have.</p>`
+          : '<div class="inline-error">You countersign this template, so KennelOS needs your cloud account\'s email. Sign in again in Settings → Cloud backup.</div>') : ''}
+        ${form.keep_copy ? '<p class="field-hint">Once everyone has signed, KennelOS saves the signed PDF and emails them a link to it.</p>' : ''}
         ${contract.esign_provider === 'firma' && contract.esign_ref ? '<p class="field-hint">This contract already went out through Firma. Sending again makes a new signing request and counts again.</p>' : ''}
         ${full ? `<div class="inline-warn">You've sent this month's ${esc(usage.limit)} e-sign contracts. It resets on ${esc(fmtDate(usage.resetsOn))}. Until then, send one of your own contract forms' links instead.</div>` : ''}
         <div id="fs-msg" role="status"></div>
         <div class="form-actions">
-          <button class="btn btn-primary" id="fs-send"${full ? ' disabled' : ''}>Send</button>
+          <button class="btn btn-primary" id="fs-send"${full || (form.countersign && !counter) ? ' disabled' : ''}>Send</button>
           <button class="btn" id="fs-cancel">Cancel</button>
         </div>`;
       const $ = (s) => box.querySelector(s);
@@ -245,6 +278,11 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
 
     draw();
   });
+}
+
+// Her own signing page (D32), in a new tab. → false when the browser blocked it.
+export async function openCountersign(ref) {
+  return openInNewTab(countersignLink(ref).then((r) => r.url));
 }
 
 // The signed PDF (or the copy so far), opened in a new tab.
