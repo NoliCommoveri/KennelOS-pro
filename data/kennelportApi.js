@@ -1,6 +1,6 @@
 // kennelportApi.js — her KennelPort website (KennelPort plan 5.2, 5.5; End-State
-// guide §35): the only module that talks to KennelPort, as jotformApi.js and
-// stripeApi.js are for theirs (cloudApi.js is the cloud's own).
+// guide §35): the only module that talks to KennelPort, as
+// stripeApi.js is for Stripe (cloudApi.js is the cloud's own).
 //
 // Straight from her browser to api.kennelport.com with the device's link token in
 // an Authorization header (kept in device_secrets, kennelportLinkStore.js). No

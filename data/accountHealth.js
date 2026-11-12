@@ -16,7 +16,7 @@
 //   license:  { gated, state, record } | null       license.evaluateLicense(), gated = Pro's gate on
 //   devices:  [listDevices row] | null    signed in only
 //   vault:    { offered, status, unsavedCode } | null   status = cloudVault.vaultStatus()
-//   keys:     [{ account: { id, name }, vendor: 'stripe' | 'jotform', ok, message }]   ok null = couldn't ask
+//   keys:     [{ account: { id, name }, vendor: 'stripe', ok, message }]   ok null = couldn't ask
 //   waitlists:[{ kennel: { id, kennel_name }, status }]  waitlistOnlineStatus, online kennels only
 // }
 
@@ -161,7 +161,7 @@ export function healthReport(facts = {}, fmtDate = (iso) => String(iso).slice(0,
   }
 
   for (const k of keys) {
-    const vendor = k.vendor === 'stripe' ? 'Stripe' : 'Jotform';
+    const vendor = k.vendor === 'stripe' ? 'Stripe' : String(k.vendor || 'The service');
     add(k.account.name, `${vendor} ${k.ok ? 'connected and working' : k.ok === false ? 'key refused' : 'couldn\'t check right now'}`);
   }
   for (const w of waitlists) {

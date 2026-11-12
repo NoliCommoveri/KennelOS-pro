@@ -212,9 +212,9 @@ async function boot() {
   // open one-use link was paid, at most every 15 minutes. Pro (Accounts) only.
   if (editionFlags.accounts) {
     import('./data/stripeLinks.js').then((m) => m.bootStripeCheck()).catch(() => {});
-    // Contracts sent through her Jotform forms that came back signed (step 7):
-    // her device reads the forms' submissions with the key it holds.
-    import('./data/jotformSigned.js').then((m) => m.bootJotformCheck()).catch(() => {});
+    // Connect Jotform is retired (Integrations plan D27): any Jotform API key this
+    // device still holds is deleted.
+    import('./data/jotformKeyStore.js').then((m) => m.forgetJotformKeys()).catch(() => {});
   }
   // Her puppy portal on KennelPort (End-State guide §35.1): the family feed goes by
   // itself from a device linked to a website whose portal is on. Nothing loads

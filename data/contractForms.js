@@ -1,13 +1,13 @@
-// contractForms.js — her contract forms (Jotform, Integrations plan §2.1a) and
+// contractForms.js — her contract forms (pasted links, Integrations plan §2.1a, D28) and
 // the prefilled link that sends one out for signature.
 //
 // She keeps the forms on a Form service Account (`contract_forms`: [{ id, form_type, label,
 // url }], D6 / D12), each tagged with a CONTRACT_FORM_TYPE so the Contract page
 // can offer the right one. "Send for signature" builds the form's URL with the
-// contract's facts as query parameters — Jotform's documented prefill — on her
+// contract's facts as query parameters — the prefill most form services document — on her
 // device: no API call, no server. The parameter names are fixed (PREFILL_FIELDS,
-// D14): she gives her Jotform fields those Unique Names, and any field her form
-// doesn't have is simply ignored by Jotform.
+// D14): she gives her form's fields those names, and any field her form
+// doesn't have is simply ignored by the form.
 //
 // A prefilled link carries its values in the URL, so only short facts go in it,
 // never private notes, terms or end reasons (§2.1). This list IS that allow-list.
@@ -37,7 +37,7 @@ const FORM_TYPES = new Set(CONTRACT_FORM_TYPE.map((t) => t.value));
 
 // An Account's saved forms, cleaned: a known type, a usable link, a label (the
 // type's name when she left it blank). Older backups have no field: [].
-// A form picked through Connect Jotform (plan §2.1b) also keeps its Jotform
+// A form once picked through Connect Jotform (retired, D27/D29) also keeps its Jotform
 // `form_id` and the `field_map` she confirmed (cleanFieldMap); a pasted one has
 // neither and fills our fixed names.
 export function cleanForms(list) {
@@ -116,7 +116,7 @@ export function rankForms(forms, contract, sale = null) {
 }
 
 // The parameter names a form can use, by group, with what each holds. Shown on
-// the Accounts page (Copy) so she can set her Jotform fields' Unique Names.
+// the Accounts page (Copy) so she can name her form's fields.
 export const PREFILL_FIELDS = {
   every: [
     ['contractRef', 'This contract\'s reference (make it a hidden field)'],

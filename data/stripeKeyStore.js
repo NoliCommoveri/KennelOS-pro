@@ -1,8 +1,8 @@
 // stripeKeyStore.js — her own Stripe restricted key, per Account, on THIS device
 // only (Integrations plan §4, step 6: her own key, decided 2026-10-12). Rows
 // `stripe:<account id>` in the device-only `device_secrets` table (db.js); this
-// module is the only reader/writer of those rows (jotformKeyStore.js and
-// cloud/vaultKeyStore.js keep theirs).
+// module is the only reader/writer of those rows (cloud/vaultKeyStore.js and
+// kennelportLinkStore.js keep theirs).
 //
 // Never in exportAll, a backup, a snapshot, a sync or a restore, so each device
 // connects on its own; Disconnect and deleting the account forget it here. Not

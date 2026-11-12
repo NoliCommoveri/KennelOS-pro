@@ -235,8 +235,9 @@ db.on('versionchange', () => { announce(DB_VERSIONCHANGE_EVENT); });
 // --- Device-only tables ---------------------------------------------------
 // `device_secrets` holds this device's unlocked private-vault key as a
 // CryptoKey (Private Vault Plan §3.3; data/cloud/vaultKeyStore.js reads and
-// writes those rows), and her Jotform API keys, one `jotform:<account id>` row
-// per connected Form service account (Integrations plan §2.1b;
+// writes those rows), her Stripe keys and KennelPort links (their key stores),
+// and, until the app's next open deletes them, the Jotform API keys Connect
+// Jotform once kept (`jotform:<account id>`, retired: Integrations plan D27;
 // data/jotformKeyStore.js). It is NOT kennel data: it is never in exportAll, the JSON/
 // Dropbox backups, the cloud snapshot, a file restore or the sample manifest,
 // and it has no syncRegistry entry. Reset App and remote erase still clear it

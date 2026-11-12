@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v116';
+const CACHE_NAME = 'kennelos-pro-shell-v117';
 
 const PRECACHE_URLS = [
   './',
@@ -170,11 +170,7 @@ const PRECACHE_URLS = [
   'data/receivedCredits.js',
   'data/integrationApply.js',
   'data/integrationEvents.js',
-  'data/jotformApi.js',
-  'data/jotformConnect.js',
   'data/jotformKeyStore.js',
-  'data/jotformMatch.js',
-  'data/jotformSigned.js',
   'data/kennelportApi.js',
   'data/kennelportLink.js',
   'data/kennelportLinkStore.js',

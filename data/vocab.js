@@ -162,8 +162,8 @@ export const ACCOUNT_TYPE = [
   { value: 'health',      label: 'Health / testing lab', badge: 'badge-red' },
   { value: 'insurance',   label: 'Insurance',           badge: 'badge-amber' },
   { value: 'software',    label: 'Software / service',  badge: 'badge-neutral' },
-  // Jotform and the like: the only type that holds contract forms (contract_forms,
-  // Integrations plan §2.1a), so it's the only one whose form shows that section.
+  // A form service (any): the only type that holds pasted contract-form links
+  // (contract_forms, Integrations plan §2.1a, D28), so it's the only one whose form shows that section.
   { value: 'form_service', label: 'Form service',       badge: 'badge-blue' },
   // Stripe, Square, PayPal, Venmo…: the only type that holds a payment link and a
   // Stripe key (Integrations plan §4), and the only one offered as "paid via" for
@@ -450,7 +450,7 @@ export const CONTRACT_TYPE = [
 ];
 
 // The kinds of contract form she can save on an Account (Integrations plan §2.1a):
-// her own Jotform forms, each tagged with one of these so the Contract page offers
+// her own pasted form links, each tagged with one of these so the Contract page offers
 // the right one. `contractTypes` is the CONTRACT_TYPE(s) it serves. Pet home and
 // breeding rights are both `sale` contracts, told apart by the Sale's registration
 // (`registrations`, which ranks that form first); deposit ranks first while the

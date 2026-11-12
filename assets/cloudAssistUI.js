@@ -89,7 +89,7 @@ async function setUpForHer(programId) {
     pg.close();
     await alertModal({
       title: `You’re in ${herName()}’s account`,
-      message: 'Set up her kennel as she would: kennel, dogs, waitlist, settings. Everything syncs to her account as you go. Her Jotform and Stripe keys can only be entered on her own device.\n\nWhen you’re done, tell her to open KennelOS on her devices and choose “I already use KennelOS”.'
+      message: 'Set up her kennel as she would: kennel, dogs, waitlist, settings. Everything syncs to her account as you go. Her Stripe key can only be entered on her own device.\n\nWhen you’re done, tell her to open KennelOS on her devices and choose “I already use KennelOS”.'
     });
   } catch (e) {
     pg.close();

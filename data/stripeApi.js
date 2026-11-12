@@ -6,7 +6,7 @@
 // *Unverified from the build environment, which can't reach stripe.com:* that
 // api.stripe.com answers a browser call made with a restricted key (CORS), the
 // restricted-key permission names, and the expand path for the fee. The calls
-// are Stripe's documented ones; check them in a real flow, as Jotform's were.
+// are Stripe's documented ones; check them in a real flow.
 //   Products: Write, Prices: Write   (a price for exactly this amount)
 //   Payment Links: Write             (the one-use link)
 //   Checkout Sessions: Read, PaymentIntents: Read, Charges: Read,

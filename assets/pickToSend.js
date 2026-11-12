@@ -224,7 +224,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           ? `${ranked.matching.map(option).join('')}
              ${ranked.others.length && ranked.matching.length ? `<button type="button" class="btn btn-sm" id="ps-all" style="margin:4px 0;">${showAll ? 'Hide other forms' : `Show all forms (${ranked.others.length} more)`}</button>` : ''}
              ${showAll || !ranked.matching.length ? ranked.others.map(option).join('') : ''}`
-          : '<p class="muted">You have no contract forms yet. Add your form service (for example Jotform) on the Accounts page as a <strong>Form service</strong> account with your contract forms, and they\'ll show here.</p>'}
+          : '<p class="muted">You have no contract forms yet. Add your form service on the Accounts page as a <strong>Form service</strong> account with your contract forms, and they\'ll show here.</p>'}
         <label class="check-inline" style="display:flex; gap:8px; align-items:center; padding:4px 0;">
           <input type="radio" name="ps-form" value=""${pickedFormId === '' ? ' checked' : ''}> <span>No contract in this message</span></label>
         ${sent}`,

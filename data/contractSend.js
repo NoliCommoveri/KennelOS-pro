@@ -72,7 +72,7 @@ export async function gatherContractFacts(c) {
 }
 
 // One form's prefilled link for these facts, under her field names when the form
-// was matched through Connect Jotform (field_map). → { values, url }.
+// was once matched through Connect Jotform (field_map, kept read-only, D29). → { values, url }.
 export function buildSignatureLink(form, facts) {
   const values = mapValues(prefillValues(form.form_type, facts), form.field_map);
   return { values, url: prefillUrl(form.url, values) };

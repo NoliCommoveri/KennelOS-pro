@@ -312,9 +312,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // (KennelPort plan 5.3): a display choice like the four record marks.
       'show_on_website',
       // Her contract forms (Integrations plan §2.1a, D15): type, her label and the
-      // form's public share link, and for a form picked through Connect Jotform
-      // (§2.1b) its form id and her field names (field_map). Nothing about anyone
-      // else; the API key itself is device-only (device_secrets).
+      // form's public share link, and for a form once picked through Connect Jotform
+      // (retired, D27/D29) its form id and her field names (field_map). Nothing
+      // about anyone else.
       'contract_forms',
       // Her own payment link and payment instructions (Integrations plan §4,
       // Level 0; D9: payment-link refs are cloud): written to be sent to buyers.

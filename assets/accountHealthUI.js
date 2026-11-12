@@ -8,8 +8,8 @@
 // Edition-honest: the cloud parts need isCloudAvailable() (and the vault and the
 // waitlist online their release switches), the license Pro's gate, the vendor keys
 // `accounts`, the waitlist `waitlist`. What isn't offered isn't checked or named.
-// Reads go only where those features already go (the cloud, Lemon Squeezy, Stripe,
-// Jotform), each wrapped so an offline one is skipped, never guessed.
+// Reads go only where those features already go (the cloud, Lemon Squeezy,
+// Stripe), each wrapped so an offline one is skipped, never guessed.
 import * as A from '../data/accountHealth.js';
 import { getLastBackupDate } from '../data/settings.js';
 import { requestPersistentStorage } from '../data/db.js';
@@ -80,28 +80,24 @@ export async function gatherHealthFacts() {
   return facts;
 }
 
-// Each Payment service / Form service account with a key on this device, checked
+// Each Payment service account with a Stripe key on this device, checked
 // with its vendor (the same call the Accounts page makes on connect). ok: true
 // works, false refused, null couldn't ask (offline, the browser blocked it).
 async function vendorKeys() {
   const { accountRepo } = await import('../data/accountRepo.js');
   const { getStripeKey } = await import('../data/stripeKeyStore.js');
-  const { getJotformKey } = await import('../data/jotformKeyStore.js');
   const out = [];
   for (const a of await accountRepo.getAll()) {
     // Her saved login for the vendor and the connection's settings ride along (in
     // memory only) for "Help me replace it".
     const account = { id: a.id, name: a.name || 'An account', username: a.username || '', password: a.password || '', website: a.website || '' };
     const stripe = a.account_type === 'payment_service' ? await getStripeKey(a.id) : null;
-    const jot = a.account_type === 'form_service' ? await getJotformKey(a.id) : null;
-    if (!stripe && !jot) continue;
-    const vendor = stripe ? 'stripe' : 'jotform';
-    account.currency = stripe?.currency || 'usd';
-    account.region = jot?.region || 'us';
+    if (!stripe) continue;
+    const vendor = 'stripe';
+    account.currency = stripe.currency || 'usd';
     if (navigator.onLine === false) { out.push({ account, vendor, ok: null }); continue; }
     try {
-      if (stripe) await (await import('../data/stripeApi.js')).stripeCheckKey(stripe);
-      else await (await import('../data/jotformApi.js')).jotformUser(jot);
+      await (await import('../data/stripeApi.js')).stripeCheckKey(stripe);
       out.push({ account, vendor, ok: true });
     } catch (e) {
       out.push({ account, vendor, ok: e?.kind === 'auth' ? false : null, message: e?.message || '' });
@@ -332,7 +328,7 @@ const FIXES = {
   },
 
   async 'key-rejected'(f) {
-    const vendor = f.vendor === 'stripe' ? 'Stripe' : 'Jotform';
+    const vendor = 'Stripe';
     const pick = await this.ask(f, `The ${vendor} key on <strong>${esc(f.account.name)}</strong> isn't working.${f.message ? ` ${esc(f.message)}` : ''} Until it's fixed, KennelOS can't use that connection.`, [
       { label: 'Help me replace it', value: 'fix', primary: true }
     ]);

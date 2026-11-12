@@ -124,7 +124,7 @@ export function addReview(list, review) {
   return [...rest, review].slice(-REVIEWS_MAX);
 }
 
-const PROVIDER_LABELS = { stripe: 'Stripe', square: 'Square', jotform: 'Jotform', docusign: 'DocuSign', signwell: 'SignWell', boldsign: 'BoldSign' };
+const PROVIDER_LABELS = { stripe: 'Stripe', square: 'Square', jotform: 'Jotform', firma: 'Firma', docusign: 'DocuSign', signwell: 'SignWell', boldsign: 'BoldSign' };
 export const providerLabel = (p) => PROVIDER_LABELS[p] || String(p || 'A connected service');
 
 // One line for Today: what the vendor said. `money` formats an amount.

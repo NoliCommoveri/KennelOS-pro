@@ -337,7 +337,7 @@ const TASKS = [
       ...(isCloudAvailable() ? ['cloud', 'device', 'devices', 'lost phone', 'account', 'sign in'] : []),
       ...(isLicenseGated() ? ['license', 'subscription', 'renew', 'pro'] : []),
       ...(isVaultOffered() ? ['sensitive records', 'recovery code', 'passkey', 'encrypted'] : []),
-      ...(editionFlags.accounts ? ['stripe', 'jotform', 'connections', 'keys'] : [])],
+      ...(editionFlags.accounts ? ['stripe', 'connections', 'keys'] : [])],
     available: () => true,
     priority: () => 20,
     run: (opts) => runHealthTask(chat, opts)

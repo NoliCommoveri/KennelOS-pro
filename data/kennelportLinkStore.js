@@ -1,7 +1,7 @@
 // kennelportLinkStore.js — her KennelPort website link, per own kennel, on THIS
 // device only (KennelPort plan 5.5, decision 11: each device links once). Rows
 // `kennelport:<kennel id>` in the device-only `device_secrets` table (db.js),
-// beside the vault key and her Jotform and Stripe keys; this module is the only
+// beside the vault key and her Stripe keys; this module is the only
 // reader/writer of the `kennelport:` rows.
 //
 // A row: { token, site: { name, website, extras_info_url, waitlist_page,
