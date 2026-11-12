@@ -28,7 +28,8 @@ import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from './salePrompts.js';
 import { rankForms, splitName, isFirmaForm } from '../data/contractForms.js';
-import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, balanceDueOn } from '../data/contractSend.js';
+import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, balanceDueOn, contractForForm, saleAddOns, logPickup } from '../data/contractSend.js';
+import { pickupToSet } from '../data/contractAddOns.js';
 import { depositRequestMessage } from '../data/depositRequest.js';
 import { salePayAccount, salePaidVia } from '../data/paymentLinks.js';
 import { stripeConnection, makeSaleLink } from '../data/stripeLinks.js';
@@ -36,7 +37,7 @@ import { logOwnMessage } from '../data/waitlistOutbox.js';
 import { depositPaid } from '../data/incomeView.js';
 import { photoLink } from '../data/waitlistProjection.js';
 import { todayYMD } from '../data/dateUtils.js';
-import { esc, badge, fmtDate, fmtMoney } from './ui.js';
+import { esc, badge, fmtDate, fmtMoney, promptModal } from './ui.js';
 import { REGISTRATION_TYPE, CONTRACT_FORM_TYPE, descriptor } from '../data/vocab.js';
 
 const numOrNull = (v) => (String(v ?? '').trim() === '' ? null : Number(v));
@@ -66,6 +67,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
     let changed = false;
     let step = 1;
     let contract = null;     // the contract being sent (made at step 2)
+    let addOns = null;       // the sale's separate agreements' facts, for the form list
     let chosen = null;       // { form, url, values } or null for no contract
     const firmaSent = new Map(); // template id → its signing link, sent from this modal
     let pickedFormId = null; // step 2's radio
@@ -208,6 +210,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           });
           changed = true;
           contract = await openContractForSale(sale.id);
+          addOns = await saleAddOns(sale);
           step = 2;
           drawContract();
         } catch (err) { fail(err); e.currentTarget.disabled = false; }
@@ -216,7 +219,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
 
     // --- 2. Contract -------------------------------------------------------------
     function drawContract() {
-      const ranked = rankForms(forms, { contract_type: 'sale' }, sale);
+      const ranked = rankForms(forms, { contract_type: 'sale' }, sale, addOns);
       const all = [...ranked.matching, ...ranked.others];
       if (pickedFormId === null) pickedFormId = all.length ? (ranked.matching[0] || all[0]).id : '';
       const option = (f) => `<label class="check-inline" style="display:flex; gap:8px; align-items:center; padding:4px 0;">
@@ -243,12 +246,19 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           const form = all.find((f) => f.id === pickedFormId) || null;
           chosen = null;
           if (form) {
-            contract = contract || await contractRepo.create({
+            // Each of the sale's agreements goes out on a contract record of its own.
+            contract = contract ? await contractForForm(contract, form, forms) : await contractRepo.create({
               contract_type: 'sale', related_sale_id: sale.id, kennel_id: sale.kennel_id, status: 'draft',
               title: `${form.label}: ${pupName}`
             });
             changed = true;
-            const facts = await gatherContractFacts(contract);
+            let facts = await gatherContractFacts(contract);
+            // A boarding or training agreement is dated by the pup's pickup: set it now.
+            const pickup = pickupToSet(form, facts.addOns);
+            if (pickup !== null) {
+              const date = await promptModal({ title: 'Pickup date', label: `${dog?.call_name || 'The pup'}'s pickup`, type: 'date', defaultValue: pickup, confirmLabel: 'Save', cancelLabel: 'Skip' });
+              if (date) { await logPickup(sale, date); facts = await gatherContractFacts(contract); }
+            }
             if (isFirmaForm(form)) {
               // Sent now, through Firma (it counts), once per template in this modal.
               if (!firmaSent.has(form.template_id)) {

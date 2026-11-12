@@ -105,6 +105,10 @@ export const SYNC_REGISTRY = Object.freeze({
       'kennelport_portal',
       'logo_data_url', 'preferred_tests', 'preferred_breeds', 'preferred_test_breeds',
       'promote_nudge_enabled', 'promote_age_male_months', 'promote_age_female_months',
+      // The name she countersigns e-sign contracts with for this kennel (Integrations
+      // D32; owner decision 2026-11-12: cloud, so every device of hers has it). It
+      // goes to Firma on each send anyway.
+      'esign_signer_name',
       // Her own waitlist setup: rules, application form questions, FAQ, fee and
       // payment instructions. Her business settings, not anyone else's personal
       // data, so cloud, or a restore couldn't run her waitlist (decided 2026-10-07,

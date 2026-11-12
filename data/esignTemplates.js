@@ -2,7 +2,8 @@
 // §2.3a, D30). The templates themselves (the PDF and the fields placed on it) live
 // in her Firma workspace; KennelOS keeps only what kind of contract each one is,
 // as a row in a Form service Account's `contract_forms`:
-//   { id, form_type, label, provider: 'firma', template_id, countersign?, keep_copy? }
+//   { id, form_type, label, provider: 'firma', template_id, countersign?, keep_copy?,
+//     extra_list_id? (an Extra agreement: the price-list extra it's for) }
 // (contractForms.cleanForms). `countersign: true` = she signs it too, after the
 // buyer, from the contract's Countersign button (Integrations D32). `keep_copy:
 // true` = KennelOS keeps the signed PDF and emails the buyer a link (D33). That
@@ -53,7 +54,8 @@ export function mergeTemplates(templates, accounts) {
     return {
       id: t.id, name: t.name || '(untitled)', pageCount: t.pageCount ?? null,
       form_type: row?.form_type || '', label: row?.label || '',
-      countersign: row?.countersign === true, keepCopy: row?.keep_copy === true
+      countersign: row?.countersign === true, keepCopy: row?.keep_copy === true,
+      extraListId: row?.extra_list_id || ''
     };
   });
 }
@@ -61,7 +63,7 @@ export function mergeTemplates(templates, accounts) {
 // The account's forms with this template's row set (a known type), or removed
 // (type ''). `countersign` / `keepCopy` left out keep what the row had. Pure.
 // → the new contract_forms list.
-export function withTemplateRow(forms, { templateId, name, formType, countersign, keepCopy }) {
+export function withTemplateRow(forms, { templateId, name, formType, countersign, keepCopy, extraListId }) {
   const list = cleanForms(forms);
   const i = list.findIndex((f) => isFirmaForm(f) && f.template_id === templateId);
   if (!formType || !CONTRACT_FORM_TYPE.some((t) => t.value === formType)) return i < 0 ? list : list.filter((_, j) => j !== i);
@@ -69,6 +71,9 @@ export function withTemplateRow(forms, { templateId, name, formType, countersign
   const row = { id: i < 0 ? crypto.randomUUID() : list[i].id, form_type: formType, label, provider: 'firma', template_id: templateId };
   if (countersign === undefined ? list[i]?.countersign === true : countersign === true) row.countersign = true;
   if (keepCopy === undefined ? list[i]?.keep_copy === true : keepCopy === true) row.keep_copy = true;
+  // An Extra agreement: the extra it's for (left out = unchanged).
+  const extra = String((extraListId === undefined ? list[i]?.extra_list_id : extraListId) || '').trim();
+  if (formType === 'extra' && extra) row.extra_list_id = extra;
   return i < 0 ? [...list, row] : list.map((f, j) => (j === i ? row : f));
 }
 
@@ -76,11 +81,48 @@ export function withTemplateRow(forms, { templateId, name, formType, countersign
 // countersigns it, and whether KennelOS keeps and emails the signed copy (each
 // left out = unchanged). Makes the E-sign (Firma) account the
 // first time. → the account.
-export async function setTemplateType({ templateId, name, formType, countersign, keepCopy }) {
+export async function setTemplateType({ templateId, name, formType, countersign, keepCopy, extraListId }) {
   let account = firmaAccountOf(await accountRepo.getAll());
   if (!account) {
     if (!formType) return null;
     account = await accountRepo.create({ ...FIRMA_ACCOUNT, contract_forms: [] });
   }
-  return accountRepo.update(account.id, { contract_forms: withTemplateRow(account.contract_forms, { templateId, name, formType, countersign, keepCopy }) });
+  return accountRepo.update(account.id, { contract_forms: withTemplateRow(account.contract_forms, { templateId, name, formType, countersign, keepCopy, extraListId }) });
+}
+
+// The forms without her Firma templates that aren't in `liveIds` any more (a
+// Set of the ids Firma has: deleted in Firma's editor). Other forms untouched.
+// Pure. → the new contract_forms list.
+export function withoutMissingTemplates(forms, liveIds) {
+  return cleanForms(forms).filter((f) => !isFirmaForm(f) || liveIds.has(f.template_id));
+}
+
+// Stop offering the templates Firma no longer has, on every account that holds
+// one. `liveIds` must be the COMPLETE set (cloudEsign.liveTemplateIds). → the
+// number of templates dropped.
+export async function forgetMissingTemplates(liveIds) {
+  if (!(liveIds instanceof Set)) return 0;
+  let dropped = 0;
+  for (const a of await accountRepo.getAll()) {
+    if (a.is_archived || a.account_type !== 'form_service') continue;
+    const before = cleanForms(a.contract_forms);
+    const after = withoutMissingTemplates(before, liveIds);
+    if (after.length === before.length) continue;
+    dropped += before.length - after.length;
+    await accountRepo.update(a.id, { contract_forms: after });
+  }
+  return dropped;
+}
+
+// Stop offering one template (Firma said it's gone at send). → the account | null.
+export function forgetTemplate(templateId) {
+  return setTemplateType({ templateId, formType: '' });
+}
+
+// The name she countersigns with for a kennel (Integrations D32): the kennel's
+// own setting (Kennel.esign_signer_name), else her name from the contact linked
+// to the kennel (`breeder`, contractSend.breederFor), else the kennel's name. Pure.
+export function kennelSignerName(kennel, breeder = null) {
+  const t = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  return t(kennel?.esign_signer_name) || t(breeder?.name) || t(kennel?.kennel_name);
 }

@@ -17,10 +17,11 @@ import { contactRepo } from '../data/contactRepo.js';
 import { documentRepo } from '../data/documentRepo.js';
 import { rankForms, splitName, signatureMessage, isFirmaForm, prefillValues } from '../data/contractForms.js';
 import { esignOffered, esignSignedIn } from '../data/cloud/cloudEsign.js';
-import { SENDABLE_STATUSES, loadContractForms, gatherContractFacts, buildSignatureLink, markContractSent } from '../data/contractSend.js';
+import { SENDABLE_STATUSES, loadContractForms, gatherContractFacts, buildSignatureLink, markContractSent, contractForForm, logPickup } from '../data/contractSend.js';
+import { pickupToSet } from '../data/contractAddOns.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { CONTRACT_TYPE, CONTRACT_STATUS, CONTRACT_FORM_TYPE, SEX, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate, param, confirmModal, alertModal, dogOptgroups } from '../assets/ui.js';
+import { esc, badge, fmtDate, param, confirmModal, alertModal, promptModal, dogOptgroups } from '../assets/ui.js';
 import { openComposer } from '../assets/messageComposer.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 import { resolveKennelIdForWrite } from '../data/kennelScope.js';
@@ -461,7 +462,7 @@ function pickForm(c, ranked, facts) {
       <span>${esc(f.label)} ${badge(CONTRACT_FORM_TYPE, f.form_type)}${isFirmaForm(f) ? ' <span class="badge badge-green">E-sign</span>' : f.account_name ? ` <span class="muted" style="font-size:13px;">· ${esc(f.account_name)}</span>` : ''}</span></label>`;
     const draw = () => {
       const firma = isFirmaForm(picked);
-      const { values, url } = firma ? { values: prefillValues(picked.form_type, facts), url: '' } : buildSignatureLink(picked, facts);
+      const { values, url } = firma ? { values: prefillValues(picked, facts), url: '' } : buildSignatureLink(picked, facts);
       overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:620px;">
         <h2 style="margin-top:0;">Send for signature</h2>
         <p class="field-hint" style="margin-top:0;">Pick the form to send. ${firma ? 'The details below go to Firma with it, into the fields you placed on the template.' : 'The details below go into it, in the link itself.'}</p>
@@ -506,17 +507,31 @@ async function sendForSignature(c) {
       });
       return;
     }
-    const facts = await gatherContractFacts(c);
-    const sale = facts.sale;
-    const choice = await pickForm(c, rankForms(forms, c, sale), facts);
+    let facts = await gatherContractFacts(c);
+    const choice = await pickForm(c, rankForms(forms, c, facts.sale, facts.addOns), facts);
     if (!choice) return;
+    // Each of a sale's agreements goes out on a contract record of its own.
+    const contract = await contractForForm(c, choice.form, forms);
+    if (contract.id !== c.id) facts = await gatherContractFacts(contract);
+    // A boarding or training agreement is dated by the pup's pickup: set it now.
+    const pickup = pickupToSet(choice.form, facts.addOns);
+    if (pickup !== null) {
+      const date = await promptModal({ title: 'Pickup date', label: `${facts.puppy?.call_name || 'The pup'}'s pickup`, type: 'date', defaultValue: pickup, confirmLabel: 'Save', cancelLabel: 'Skip' });
+      if (date) { await logPickup(facts.sale, date); facts = await gatherContractFacts(contract); }
+    }
+    if (!isFirmaForm(choice.form)) choice.url = buildSignatureLink(choice.form, facts).url;
+    // Its own record opens once it's sent; this one is redrawn.
+    const show = (saved) => {
+      if (contract.id !== c.id) { window.location.href = `contract.html?id=${encodeURIComponent(contract.id)}`; return; }
+      ctx.original = saved;
+      renderAll();
+    };
     const signer = facts.buyer || facts.partner;
     if (isFirmaForm(choice.form)) {
       const { sendWithFirma } = await import('../assets/esignUI.js');
-      const sent = await sendWithFirma({ contract: c, form: choice.form, facts, signer });
+      const sent = await sendWithFirma({ contract, form: choice.form, facts, signer });
       if (!sent) return;
-      ctx.original = sent.contract;
-      renderAll();
+      if (contract.id === c.id) show(sent.contract);
       if (!sent.emailed && sent.signingLink) {
         const m = signatureMessage({
           who: signer ? splitName(signer.name)[0] : '', kennelName: facts.kennel?.kennel_name || '',
@@ -534,6 +549,7 @@ async function sendForSignature(c) {
           : 'Firma emailed them the signing link. When they sign, this contract is marked Signed by itself, and its signed copy opens from here.')
           + (sent.keepCopy ? ' KennelOS also emails them a link to the signed copy, within the hour after the last signature.' : '') });
       }
+      if (contract.id !== c.id) show(sent.contract);
       return;
     }
     const subject = facts.puppy?.call_name || facts.dog?.call_name
@@ -552,8 +568,7 @@ async function sendForSignature(c) {
       hint: 'Once you\'ve sent it, the contract is marked Sent. When it comes back signed, mark it Signed yourself.'
     });
     if (!used) return;
-    ctx.original = await markContractSent(c, choice.form, choice.url);
-    renderAll();
+    show(await markContractSent(contract, choice.form, choice.url));
   } catch (e) {
     showError(e.message || String(e));
   }

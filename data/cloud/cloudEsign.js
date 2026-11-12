@@ -7,9 +7,11 @@
 //   esignStatus()           connected? and this month's { used, limit, resetsOn }
 //   setUpEsign(kennelName)  her workspace (once), then the facts her templates can fill
 //   templates()             her Firma templates
+//   liveTemplateIds()       their ids, when the list is known complete (else null)
 //   uploadTemplate(...)     a new template from her PDF
 //   editorLink(templateId)  Firma's editor in its own tab (the Worker's sandboxed page)
 //   sendForEsign(...)       send a contract; the contract is marked Sent
+//   previewLink(...)        a free draft of that send, read-only in Firma's editor
 //   signedCopyLink(ref)     a short-lived link to the signed PDF
 //   countersignLink(ref)    her own signing link, on a contract she countersigns (D32)
 //
@@ -24,6 +26,7 @@ import { isDemo } from '../demoMode.js';
 import { contractRepo } from '../contractRepo.js';
 import { PREFILL_FIELDS, prefillValues, splitName } from '../contractForms.js';
 import { todayYMD } from '../dateUtils.js';
+import { kennelSignerName } from '../esignTemplates.js';
 
 // Firma refuses a request body over about 6 MB; a PDF grows by a third as base64.
 export const TEMPLATE_MAX_BYTES = 4_500_000;
@@ -72,7 +75,24 @@ export async function setUpEsign(kennelName) {
 }
 
 export async function templates() {
-  return (await api.listFirmaTemplates(requireSession())).templates || [];
+  return (await templateList()).templates;
+}
+
+// → { templates, complete }: complete = every template she has (not a first
+// page), so one missing from it is gone from Firma.
+export async function templateList() {
+  const r = await api.listFirmaTemplates(requireSession());
+  return { templates: r.templates || [], complete: r.complete === true };
+}
+
+// The ids of every template in her Firma workspace, or null when that isn't
+// known for sure (offline, not set up, an older Worker, a partial list). A
+// template missing from a known set was deleted (in Firma's editor).
+export async function liveTemplateIds() {
+  try {
+    const { templates: list, complete } = await templateList();
+    return complete ? new Set(list.map((t) => t.id)) : null;
+  } catch { return null; }
 }
 
 // Base64 of a file's bytes, in chunks (a large PDF overflows one apply()).
@@ -103,13 +123,13 @@ export async function editorLink(templateId) {
 }
 
 // Who countersigns a template marked so (D32): her, as her cloud account's
-// email, named for her kennel. → { name, email } | null (not her template, or no
-// account email on this device).
+// email, under her kennel's signature name (esignTemplates.kennelSignerName).
+// → { name, email } | null (not her template, or no account email on this device).
 export function countersignerFor(form, facts, account = currentAccount()) {
   if (form?.countersign !== true) return null;
   const email = String(account?.email || '').trim();
   if (!email) return null;
-  return { name: String(facts?.kennel?.kennel_name || '').trim() || email, email };
+  return { name: kennelSignerName(facts?.kennel, facts?.breeder) || email, email };
 }
 
 // What goes to Firma for one send: the signer, and the contract's facts as the
@@ -129,7 +149,7 @@ export function sendBody({ contract, form, facts, signer, emailSigner = true, re
     templateId: form.template_id,
     title: [form.label, subject].filter(Boolean).join(': ').slice(0, 200) || contract.title || 'Contract',
     signer: { firstName, lastName, email: String(signer?.email || '').trim() },
-    facts: Object.fromEntries(prefillValues(form.form_type, facts)),
+    facts: Object.fromEntries(prefillValues(form, facts)),
     ...(countersigner ? { countersigner } : {}),
     ...(form?.keep_copy === true ? { keepCopy: true, kennelName: String(facts?.kennel?.kennel_name || '').trim() } : {}),
     emailSigner: emailSigner !== false,
@@ -156,6 +176,21 @@ export async function sendForEsign({ contract, form, facts, signer, emailSigner 
   return { contract: saved, signingLink: res.signingLink || null, countersign: res.countersign === true, keepCopy: res.keepCopy === true, usage: res.usage || null };
 }
 
+// A preview of this send: her real template with the contract's values, as a
+// Firma draft (free, never counted) opened read-only on the Worker's editor page.
+// → { url, previewId }. Discard it with discardPreview once she's done.
+export async function previewLink({ contract, form, facts, signer }) {
+  const token = requireSession();
+  const res = await api.esignPreview(token, sendBody({ contract, form, facts, signer, emailSigner: false }));
+  return { url: `${cloudBaseUrl()}/esign/editor#${new URLSearchParams({ t: res.token, sr: res.previewId })}`, previewId: res.previewId };
+}
+
+// Throw a preview's draft away (best effort: a draft left behind costs nothing).
+export async function discardPreview(previewId) {
+  if (!previewId) return false;
+  try { return (await api.discardEsignPreview(requireSession(), previewId)).discarded === true; } catch { return false; }
+}
+
 // → { url, partial, status }
 export async function signedCopyLink(ref) {
   return api.esignDocument(requireSession(), ref);
@@ -170,7 +205,7 @@ export async function countersignLink(ref) {
 const resetText = (usage) => (usage?.resetsOn ? ` It resets on ${usage.resetsOn}.` : '');
 
 // What to tell her about a refusal. → { kind, message } where kind is
-// 'already_sent' | 'limit' | 'unknown' | 'signed_out' | 'offline' | 'other'.
+// 'already_sent' | 'limit' | 'unknown' | 'template_missing' | 'signed_out' | 'offline' | 'other'.
 export function esignProblem(err) {
   const code = err?.code;
   if (err instanceof api.CloudAuthError) return { kind: 'signed_out', message: 'Your cloud sign-in has expired. Sign in again in Settings → Cloud backup, then try again.' };
@@ -196,6 +231,7 @@ export function esignProblem(err) {
   if (code === 'countersigner_is_signer') return { kind: 'other', message: 'The signer\'s email is your own. You countersign this template, so the buyer needs their own email.' };
   if (code === 'esign_not_open') return { kind: 'other', message: 'This contract isn\'t out for signature any more, so there\'s nothing to countersign.' };
   if (code === 'no_countersigner') return { kind: 'other', message: 'This contract was sent without you as a signer, so there\'s nothing to countersign. To sign it too, mark its template "I countersign" and send it again.' };
+  if (code === 'template_missing') return { kind: 'template_missing', message: 'This template isn\'t in Firma any more (it was deleted), so KennelOS has stopped offering it. Nothing was sent or counted. Pick another, or upload it again on Contracts → Contract templates.' };
   if (code === 'too_large') return { kind: 'other', message: 'That PDF is too large for Firma. Save a smaller copy and try again.' };
   if (err instanceof api.CloudOfflineError || code === 'esign_unavailable' || code === 'esign_setup_failed') return { kind: 'offline', message: 'Couldn\'t reach Firma right now. Check your connection and try again.' };
   return { kind: 'other', message: err?.message || String(err) };

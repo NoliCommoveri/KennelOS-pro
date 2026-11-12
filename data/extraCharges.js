@@ -348,9 +348,23 @@ export function readChargeGroups(rows = []) {
   return { groups: kennelChargeGroups({ extra_charge_groups: rows }), error: '' };
 }
 
-// A new charge for a sale, from a price-list entry (or blank, to type one in).
-export function newExtraCharge(preset = null) {
-  return { id: crypto.randomUUID(), label: text(preset?.label), amount: preset ? cents(num(preset.amount)) : '' };
+// A new charge for a sale, blank, to type one in.
+export function newExtraCharge() {
+  return { id: crypto.randomUUID(), label: '', amount: '' };
+}
+
+// A sale's charge copied from a price-list row, the same wherever it's added (the
+// Sale page, Kels, a family's request): its name and price, the row it came from
+// (`list_id`, which ties it to its Extra agreement and to the family's own page),
+// its group, its payment plan as dated steps (the row's, else its group's:
+// `groups` = kennelChargeGroups), and the days the pup stays for it.
+export function chargeFromPriceList(item, { groups = [], approvalDate, birthDate = null, openDays } = {}) {
+  const payments = planSteps(chargeRules(item, groups).payment_plan, item.amount, { approvalDate, birthDate, openDays });
+  return {
+    id: crypto.randomUUID(), label: text(item.label), amount: cents(num(item.amount)), list_id: item.id,
+    ...(item.group ? { group: item.group } : {}), ...(payments ? { payments } : {}),
+    ...(item.boarding_days ? { boarding_days: item.boarding_days } : {})
+  };
 }
 
 // The fee to charge back for a deposit paid through an account set to charge its

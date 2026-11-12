@@ -42,7 +42,7 @@ import { withPickupRequest, pickupFrom, pickupWish, pendingPickupRequests } from
 import { pickupLocations, timeRange, ruleFor, standardBoarding } from './pickupSlots.js';
 import { pickupFor, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE } from './goHome.js';
 import { eventRepo } from './eventRepo.js';
-import { kennelChargeList, kennelChargeGroups, chargeRules, planSteps, saleExtraCharges } from './extraCharges.js';
+import { kennelChargeList, kennelChargeGroups, chargeFromPriceList, saleExtraCharges } from './extraCharges.js';
 import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
 import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
@@ -1563,10 +1563,7 @@ export async function approveExtraRequest(entryId, requestId, { date = todayYMD(
     if (!charge) {
       const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
       const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
-      const rules = chargeRules(item, kennelChargeGroups(kennel));
-      const payments = planSteps(rules.payment_plan, item.amount, { approvalDate: date, birthDate: pupBirthDate(dog, litter), openDays: businessDays(waitlistConfig(kennel)) });
-      charge = { id: crypto.randomUUID(), label: item.label, amount: item.amount, list_id: item.id, ...(item.group ? { group: item.group } : {}),
-        ...(payments ? { payments } : {}), ...(item.boarding_days ? { boarding_days: item.boarding_days } : {}) };
+      charge = chargeFromPriceList(item, { groups: kennelChargeGroups(kennel), approvalDate: date, birthDate: pupBirthDate(dog, litter), openDays: businessDays(waitlistConfig(kennel)) });
       await saleRepo.update(sale.id, { extra_charges: [...(sale.extra_charges || []), charge] });
       boardingDays = item.boarding_days || 0;
     }

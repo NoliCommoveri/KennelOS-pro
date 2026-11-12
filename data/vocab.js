@@ -463,7 +463,13 @@ export const CONTRACT_FORM_TYPE = [
   { value: 'stud_service',    label: 'Stud service contract',           badge: 'badge-purple',  contractTypes: ['stud_service'] },
   { value: 'lease',           label: 'Lease agreement',                 badge: 'badge-amber',   contractTypes: ['lease'] },
   { value: 'foster',          label: 'Foster / guardian home',          badge: 'badge-amber',   contractTypes: ['foster'] },
-  { value: 'other',           label: 'Other',                           badge: 'badge-gray',    contractTypes: ['other'] }
+  { value: 'other',           label: 'Other',                           badge: 'badge-gray',    contractTypes: ['other'] },
+  // A sale's separate agreements (2026-11-12): offered first only when the sale has
+  // that charge (`addOn`, contractForms.rankForms). An `extra` form is for ONE of her
+  // price-list extras (the row's `extra_list_id`), e.g. one training package.
+  { value: 'transport',       label: 'Transport agreement',             badge: 'badge-blue',    contractTypes: ['sale'], addOn: 'transport' },
+  { value: 'boarding',        label: 'Boarding agreement',              badge: 'badge-amber',   contractTypes: ['sale'], addOn: 'boarding' },
+  { value: 'extra',           label: 'Extra agreement',                 badge: 'badge-green',   contractTypes: ['sale'], addOn: 'extra' }
 ];
 
 // Not a locked state machine (Stage4 Revision v2 §7) — moves any direction, no

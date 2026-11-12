@@ -29,7 +29,8 @@ import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { portalOn } from '../data/portalFeed.js';
-import { saleExtraCharges, kennelChargeList, newExtraCharge, depositFeeChargeBack } from '../data/extraCharges.js';
+import { saleExtraCharges, kennelChargeList, kennelChargeGroups, chargeFromPriceList, depositFeeChargeBack } from '../data/extraCharges.js';
+import { businessDays, waitlistConfig } from '../data/waitlistRules.js';
 import { depositPaid } from '../data/incomeView.js';
 import { inScopeOnly, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
@@ -690,7 +691,8 @@ class Prep {
         submit: async (root) => {
           const picked = [...root.querySelectorAll('[data-xc]:checked')].map((el) => presets[Number(el.dataset.xc)]);
           if (!picked.length) return 'Tick what they\'re getting, or choose No extras.';
-          sale = await saleRepo.update(sale.id, { extra_charges: [...saleExtraCharges(sale), ...picked.map(newExtraCharge)] });
+          const from = { groups: kennelChargeGroups(kennel), approvalDate: todayYMD(), birthDate: r.pup.date_of_birth || null, openDays: businessDays(waitlistConfig(kennel)) };
+          sale = await saleRepo.update(sale.id, { extra_charges: [...saleExtraCharges(sale), ...picked.map((x) => chargeFromPriceList(x, from))] });
           return picked;
         },
         reply: (picked) => picked.map((x) => x.label).join(', ')

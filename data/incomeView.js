@@ -361,6 +361,30 @@ export async function getSaleCredits(saleId) {
   return { feeCredit, credit: entry ? familyCredit(entry, sale, feeCredit) : null, entry };
 }
 
+// A contract's payment table for one sale: the purchase price only (no transport,
+// boarding or extras, which are agreed apart). Pure.
+//   depositDue  the deposit less the application fee credited toward it
+//               (feeCreditSplit) and the family's received funds counted toward it
+//               (familyCredit's allocation). The same before and after the deposit
+//               is marked paid.
+//   otherPaid   credits and payments toward the balance: the credited fee when it
+//               isn't taken off the deposit, the family's received funds (a lost pup's
+//               carry-over) not on the deposit, and the balance once it's marked paid.
+//               Nothing is counted twice: funds on the deposit are in depositDue, and
+//               funds that paid the fee count only as the fee (familyCredit leaves
+//               the fee out of `received`).
+//   balanceDue  what's still owed of the price at pickup.
+// So price = the deposit + otherPaid + balanceDue.
+// → { depositDue, otherPaid, balanceDue }
+export function priceTable(sale, { feeCredit = NO_FEE_CREDIT, received = null } = {}) {
+  const parts = saleComponents({ ...sale, end_reason: null }, feeCredit, received).filter((c) => c.component === 'balance');
+  const sum = (state) => round2(parts.filter((c) => c.state === state).reduce((t, c) => t + c.amount, 0));
+  const split = feeCreditSplit(sale, feeCredit);
+  const deposit = Math.max(round2(num(sale.deposit_amount) - split.deposit), 0);
+  const depositDue = round2(deposit - Math.min(num(received?.byKey?.deposit), deposit));
+  return { depositDue, otherPaid: round2(sum('earned') + split.balance), balanceDue: sum('anticipated') };
+}
+
 // One entry's credits as its page shows them, with the sale they go toward.
 // → { credit (familyCredit or null), sale, feeCredit }
 export async function getEntryCredit(entryId) {

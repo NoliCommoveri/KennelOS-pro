@@ -24,6 +24,9 @@ import { accountRepo } from '../data/accountRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { ACCOUNT_TYPE, CONTRACT_FORM_TYPE } from '../data/vocab.js';
 import { cleanForms, formLink, isFirmaForm, PREFILL_FIELDS } from '../data/contractForms.js';
+import { extraChoices, formKindOptionsHtml, readFormKind } from '../data/contractAddOns.js';
+import { kennelChargeList } from '../data/extraCharges.js';
+import { kennelRepo } from '../data/kennelRepo.js';
 import { feeRate, rateLabel } from '../data/processingFees.js';
 import { sharedReferrals, sharedTransport } from '../data/referralShare.js';
 import { paymentLink } from '../data/paymentLinks.js';
@@ -45,6 +48,7 @@ const els = {
 
 let accounts = [];
 let spendByAccount = new Map(); // account id -> { total, count } over active expenses
+let extras = []; // her price-list extras an Extra agreement can be for (contractAddOns.extraChoices)
 const revealed = new Set(); // account ids whose password is showing
 
 function showError(msg) { els.msg.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; }
@@ -160,26 +164,33 @@ function fieldNamesHtml() {
     ${group('Sale contracts (pet home, breeding rights, deposit, co-own sale)', PREFILL_FIELDS.sale)}
     ${group('Stud service contracts', PREFILL_FIELDS.stud_service)}
     ${group('Co-own, lease, foster and other contracts', PREFILL_FIELDS.dog)}
+    ${group('Transport agreements (with the sale contract names)', PREFILL_FIELDS.transport)}
+    ${group('Boarding agreements (with the sale contract names)', PREFILL_FIELDS.boarding)}
+    ${group('Extra agreements, one per extra: the extra its form is for (with the sale contract names)', PREFILL_FIELDS.extra)}
   </details>`;
 }
 
 // A form once matched through Connect Jotform (retired): its matches, read-only.
 const matchedNote = (map) => `${Object.keys(map || {}).length} fields matched`;
 
+// One pasted form's row. An e-sign template is shown, not edited: Contracts →
+// Contract templates is the one place its kind and settings are set, and saving
+// here keeps its row as stored (readForms).
 function formRowHtml(f = {}) {
-  const typeOptions = CONTRACT_FORM_TYPE
-    .map((t) => `<option value="${esc(t.value)}"${t.value === f.form_type ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
+  if (isFirmaForm(f)) {
+    return `<div class="cf-row" data-id="${esc(f.id || '')}" data-template-id="${esc(f.template_id)}" style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
+      <span style="flex:1; min-width:160px;">${esc(f.label)} ${badge(CONTRACT_FORM_TYPE, f.form_type)} <span class="badge badge-green">E-sign</span></span>
+      <a class="btn btn-sm" href="contracts.html#templates">Contract templates</a>
+    </div>`;
+  }
   const jf = f.form_id
     ? ` data-form-id="${esc(f.form_id)}" data-field-map="${esc(JSON.stringify(f.field_map || {}))}"` : '';
-  const firma = isFirmaForm(f);
-  const meta = firma
-    ? '<div class="cf-meta field-hint"><span class="cf-meta-text">E-sign template: upload a new version or place its fields on <a href="contracts.html#templates">Contracts → Contract templates</a>.</span></div>'
-    : f.form_id
-      ? `<div class="cf-meta field-hint"><span class="cf-meta-text">${esc(matchedNote(f.field_map))}</span></div>` : '';
-  return `<div class="cf-row" data-id="${esc(f.id || '')}"${jf}${firma ? ` data-template-id="${esc(f.template_id)}"` : ''}>
-    <select class="cf-type" aria-label="Contract form type"><option value="">Type…</option>${typeOptions}</select>
+  const meta = f.form_id
+    ? `<div class="cf-meta field-hint"><span class="cf-meta-text">${esc(matchedNote(f.field_map))}</span></div>` : '';
+  return `<div class="cf-row" data-id="${esc(f.id || '')}"${jf}>
+    <select class="cf-type" aria-label="Contract form type"><option value="">Type…</option>${formKindOptionsHtml(CONTRACT_FORM_TYPE, extras, { formType: f.form_type, extraListId: f.extra_list_id || '' }, esc)}</select>
     <input class="cf-label" type="text" aria-label="Label" value="${esc(f.label || '')}" placeholder="Label, e.g. Pet home – in state">
-    ${firma ? '' : `<input class="cf-url" type="url" aria-label="Form link" value="${esc(f.url || '')}" placeholder="https://…">`}
+    <input class="cf-url" type="url" aria-label="Form link" value="${esc(f.url || '')}" placeholder="https://…">
     <button type="button" class="btn btn-sm" data-cf-remove aria-label="Remove this form">✕</button>
     ${meta}
   </div>`;
@@ -236,11 +247,13 @@ function render() {
 }
 
 async function load() {
-  const [rows, expenses] = await Promise.all([
+  const [rows, expenses, kennels] = await Promise.all([
     accountRepo.getAll({ includeArchived: true }),
-    expenseRepo.getAll()
+    expenseRepo.getAll(),
+    kennelRepo.getAll()
   ]);
   accounts = rows;
+  extras = extraChoices(kennels, kennelChargeList);
   spendByAccount = new Map();
   for (const x of expenses) {
     if (!x.account_id) continue;
@@ -450,22 +463,21 @@ function openForm(existing = null) {
   // The rows as typed; a row left wholly blank is dropped, a half-filled one is an error.
   function readForms() {
     const out = []; const problems = [];
+    const stored = new Map(cleanForms(existing?.contract_forms).map((f) => [f.id, f]));
     formsBox.querySelectorAll('.cf-row').forEach((row, i) => {
-      const f = {
-        id: row.dataset.id || crypto.randomUUID(),
-        form_type: row.querySelector('.cf-type').value,
-        label: row.querySelector('.cf-label').value.trim(),
-        url: row.querySelector('.cf-url')?.value.trim() || ''
-      };
-      // A Firma template (D30): its id, no link.
+      // An e-sign template (D30): its row exactly as stored (set in Contract templates).
       if (row.dataset.templateId) {
-        f.provider = 'firma';
-        f.template_id = row.dataset.templateId;
-        delete f.url;
-        if (!f.form_type) problems.push(`Contract form ${i + 1}: pick its type (or remove it: the template stays in Contract templates).`);
-        out.push(f);
+        if (stored.has(row.dataset.id)) out.push(stored.get(row.dataset.id));
         return;
       }
+      const kind = readFormKind(row.querySelector('.cf-type').value);
+      const f = {
+        id: row.dataset.id || crypto.randomUUID(),
+        form_type: kind.formType,
+        extra_list_id: kind.extraListId,
+        label: row.querySelector('.cf-label').value.trim(),
+        url: row.querySelector('.cf-url').value.trim()
+      };
       // Once picked through Connect Jotform (retired, D29): its form id and matches, kept.
       if (row.dataset.formId) {
         f.form_id = row.dataset.formId;
@@ -473,6 +485,7 @@ function openForm(existing = null) {
       }
       if (!f.form_type && !f.label && !f.url) return;
       if (!f.form_type) problems.push(`Contract form ${i + 1}: pick its type.`);
+      if (f.form_type === 'extra' && !f.extra_list_id) problems.push(`Contract form ${i + 1}: pick which extra it's for.`);
       if (!formLink(f.url)) problems.push(`Contract form ${i + 1}: paste the form's link (starting https://).`);
       out.push(f);
     });

@@ -9,7 +9,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { saleExtraCharges, readExtraCharges, kennelChargeList, kennelChargeGroups, groupedChargeList, newExtraCharge, depositFeeChargeBack, chargeRules, planSteps, cleanSteps, stepWithPaidDate } from '../data/extraCharges.js';
+import { saleExtraCharges, readExtraCharges, kennelChargeList, kennelChargeGroups, groupedChargeList, newExtraCharge, chargeFromPriceList, depositFeeChargeBack, cleanSteps, stepWithPaidDate } from '../data/extraCharges.js';
 import { depositPaid } from '../data/incomeView.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
 import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
@@ -389,14 +389,11 @@ function wireExtraCharges() {
     if (!choice) return;
     ctx.draft = readForm();
     const preset = priceList().find((p) => p.id === choice) || null;
-    const charge = newExtraCharge(preset);
     // From the price list: where it came from, and its payment plan as dated steps.
-    if (preset) {
-      const kennel = priceKennel();
-      const dog = ctx.dogsById.get(ctx.draft.dog_id);
-      const payments = planSteps(chargeRules(preset, kennelChargeGroups(kennel)).payment_plan, preset.amount, { approvalDate: todayYMD(), birthDate: dog?.date_of_birth || null, openDays: businessDays(waitlistConfig(kennel)) });
-      Object.assign(charge, { list_id: preset.id, ...(preset.group ? { group: preset.group } : {}), ...(payments ? { payments } : {}), ...(preset.boarding_days ? { boarding_days: preset.boarding_days } : {}) });
-    }
+    const kennel = priceKennel();
+    const charge = preset
+      ? chargeFromPriceList(preset, { groups: kennelChargeGroups(kennel), approvalDate: todayYMD(), birthDate: ctx.dogsById.get(ctx.draft.dog_id)?.date_of_birth || null, openDays: businessDays(waitlistConfig(kennel)) })
+      : newExtraCharge();
     ctx.draft.extra_charges = [...ctx.draft.extra_charges, charge];
     renderEdit();
     const labels = document.querySelectorAll('#xc-rows .xc-label');

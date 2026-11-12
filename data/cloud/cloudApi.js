@@ -343,6 +343,9 @@ export const firmaTemplateToken = (token, templateId) => getJson('/integrations/
 // → { signingRequestId, signingLink, usage }
 export const sendForEsign = (token, body) => getJson('/integrations/esign/send', { method: 'POST', token, json: body, timeoutMs: 60 * 1000 });
 // → { url, expiresAt, partial, status }: a short-lived link to the signed PDF
+// A draft of that send, for a read-only preview (never sent, never counted). → { previewId, token, expiresAt }
+export const esignPreview = (token, body) => getJson('/integrations/esign/preview', { method: 'POST', token, json: body, timeoutMs: 60 * 1000 });
+export const discardEsignPreview = (token, id) => getJson(`/integrations/esign/preview?id=${encodeURIComponent(id)}`, { method: 'DELETE', token });
 export const esignDocument = (token, ref) => getJson(`/integrations/esign/document?ref=${encodeURIComponent(ref)}`, { token });
 // → { url }: her own signing link on a contract she countersigns (D32), asked for when she taps Countersign
 export const esignCountersign = (token, ref) => getJson(`/integrations/esign/countersign?ref=${encodeURIComponent(ref)}`, { token });

@@ -13,10 +13,14 @@
 // She has no Firma login: KennelOS holds the account and her kennel gets its own
 // workspace. Everything goes through data/cloud/cloudEsign.js.
 import {
-  esignSignedIn, esignStatus, setUpEsign, templates as listTemplates, uploadTemplate, editorLink,
-  sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES
+  esignSignedIn, esignStatus, setUpEsign, templateList, uploadTemplate, editorLink,
+  sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES,
+  previewLink, discardPreview
 } from '../data/cloud/cloudEsign.js';
-import { mergeTemplates, setTemplateType, signingKennel } from '../data/esignTemplates.js';
+import { mergeTemplates, setTemplateType, signingKennel, forgetMissingTemplates, forgetTemplate, kennelSignerName } from '../data/esignTemplates.js';
+import { breederFor } from '../data/contractSend.js';
+import { extraChoices, formKindOptionsHtml, readFormKind } from '../data/contractAddOns.js';
+import { kennelChargeList } from '../data/extraCharges.js';
 import { getActiveKennelId } from '../data/kennelScope.js';
 import { getMyKennelId } from '../data/settings.js';
 import { accountRepo } from '../data/accountRepo.js';
@@ -37,8 +41,11 @@ const usageLine = (u) => (u
   ? `${u.used} of ${u.limit} e-sign contract${u.limit === 1 ? '' : 's'} sent this month${u.resetsOn ? ` (resets ${esc(fmtDate(u.resetsOn))})` : ''}.`
   : '');
 
-const typeOptions = (current) => `<option value="">Not offered yet: pick a type…</option>${CONTRACT_FORM_TYPE
-  .map((t) => `<option value="${esc(t.value)}"${t.value === current ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}`;
+// One pick for a template's kind: her contract types, and each of her extras by
+// name (contractAddOns.formKindOptionsHtml).
+const kindOptions = (extras, row = {}) => `<option value="">Not offered</option>${formKindOptionsHtml(CONTRACT_FORM_TYPE, extras, row, esc)}`;
+const kindLabel = (extras, { formType, extraListId }) => (formType === 'extra' && extras.find((x) => x.id === extraListId)?.label)
+  || CONTRACT_FORM_TYPE.find((x) => x.value === formType)?.label || '';
 
 // Open a link in a new tab that can't reach back into this one. The tab is opened
 // first, while the tap still counts as one (a browser blocks a tab opened after
@@ -118,10 +125,24 @@ export function openContractTemplates() {
 
   async function drawList(status) {
     let rows;
-    try { rows = mergeTemplates(await listTemplates(), await accountRepo.getAll()); } catch (err) { frame(''); problem(err); return; }
+    try {
+      const { templates: list, complete } = await templateList();
+      // One deleted in Firma's editor stops being offered (only from a full list).
+      if (complete) await forgetMissingTemplates(new Set(list.map((t) => t.id)));
+      rows = mergeTemplates(list, await accountRepo.getAll());
+    } catch (err) { frame(''); problem(err); return; }
+    // Her name as she countersigns, per own kennel (Kennel.esign_signer_name);
+    // blank falls back to the contact linked to the kennel, else the kennel's name
+    // (kennelSignerName).
+    const allKennels = await kennelRepo.getAll();
+    const own = allKennels.filter((k) => k.is_own_kennel && !k.is_archived);
+    const extras = extraChoices(allKennels, kennelChargeList);
+    const signers = await Promise.all(own.map(async (k) => ({ k, fallback: kennelSignerName({ ...k, esign_signer_name: '' }, await breederFor(k.id)) })));
+    const signerRow = ({ k, fallback }) => `<div class="field"><label for="ct-ks-${esc(k.id)}">${own.length > 1 ? `Countersign as (${esc(k.kennel_name)})` : 'Countersign as'}</label>
+        <input id="ct-ks-${esc(k.id)}" class="ct-kennel-signer" data-kid="${esc(k.id)}" type="text" maxlength="100" value="${esc(k.esign_signer_name || '')}" placeholder="${esc(fallback)}"></div>`;
     const row = (t) => `<div class="acct-row" data-tid="${esc(t.id)}" style="flex-wrap:wrap; gap:8px; padding:6px 0; border-top:1px solid var(--border,#e2e6ec);">
         <span class="acct-v" style="min-width:160px;"><strong>${esc(t.name)}</strong>${t.pageCount ? ` <span class="muted">· ${esc(t.pageCount)} page${t.pageCount === 1 ? '' : 's'}</span>` : ''}</span>
-        <select class="ct-type" aria-label="What kind of contract ${esc(t.name)} is">${typeOptions(t.form_type)}</select>
+        <select class="ct-type" aria-label="What kind of contract ${esc(t.name)} is">${kindOptions(extras, { formType: t.form_type, extraListId: t.extraListId })}</select>
         <label class="check-inline" style="display:flex; gap:6px; align-items:center;" title="You sign it too, after the buyer">
           <input type="checkbox" class="ct-flag" data-flag="countersign"${t.countersign ? ' checked' : ''}${t.form_type ? '' : ' disabled'}> I countersign</label>
         <label class="check-inline" style="display:flex; gap:6px; align-items:center;" title="KennelOS keeps the signed PDF and emails the buyer a link to it">
@@ -130,6 +151,7 @@ export function openContractTemplates() {
       </div>`;
     frame(`<p class="field-hint" style="margin-top:0;">${usageLine(status.usage)} A contract's <strong>Send for signature</strong> offers the templates of its kind, beside your own contract forms.</p>
       ${rows.length ? rows.map(row).join('') : '<p class="muted">No templates yet. Upload your first contract below.</p>'}
+      ${signers.length ? `<div class="form-grid" style="margin-top:12px;">${signers.map(signerRow).join('')}</div>` : ''}
       <h3 style="font-size:15px; margin:16px 0 4px;">Add a template</h3>
       <p class="field-hint" style="margin-top:0;">Upload your contract as a PDF (up to ${Math.round(TEMPLATE_MAX_BYTES / 100_000) / 10} MB). Then <strong>Place fields</strong> opens Firma's editor in a new tab, where you put the buyer's signature, and the details KennelOS fills in (buyer, pup, price…), where they go on the page.</p>
       <p class="field-hint">If you sign your contracts too, tick <strong>I countersign</strong>, and in Firma's editor add a second signer with your signature field. The buyer signs first, then you sign from the contract's <strong>Countersign</strong> button. It's still one e-sign contract.</p>
@@ -137,7 +159,7 @@ export function openContractTemplates() {
       <div class="form-grid">
         <div class="field"><label for="ct-file">Contract PDF</label><input id="ct-file" type="file" accept="application/pdf,.pdf"></div>
         <div class="field"><label for="ct-name">Name</label><input id="ct-name" type="text" maxlength="200" placeholder="e.g. Pet home contract"></div>
-        <div class="field"><label for="ct-newtype">Kind of contract</label><select id="ct-newtype">${typeOptions('')}</select></div>
+        <div class="field"><label for="ct-newtype">Kind of contract</label><select id="ct-newtype">${kindOptions(extras)}</select></div>
       </div>
       <button type="button" class="btn btn-sm btn-primary" id="ct-upload" style="margin-top:8px;">Upload</button>`);
     box.querySelector('#ct-file').addEventListener('change', (e) => {
@@ -147,10 +169,12 @@ export function openContractTemplates() {
     box.querySelectorAll('.ct-type').forEach((sel) => sel.addEventListener('change', async () => {
       const tid = sel.closest('[data-tid]').dataset.tid;
       const t = rows.find((r) => r.id === tid);
+      const kind = readFormKind(sel.value);
+      if (kind.formType === 'extra' && !kind.extraListId) return;
       try {
-        await setTemplateType({ templateId: tid, name: t?.name, formType: sel.value });
+        await setTemplateType({ templateId: tid, name: t?.name, ...kind });
         sel.closest('[data-tid]').querySelectorAll('.ct-flag').forEach((tick) => { tick.disabled = !sel.value; });
-        say(`<p class="field-hint">${sel.value ? `Saved: ${esc(t?.name || 'the template')} is offered for ${esc(CONTRACT_FORM_TYPE.find((x) => x.value === sel.value)?.label.toLowerCase() || 'that kind of contract')}s.` : `${esc(t?.name || 'The template')} isn't offered any more.`}</p>`);
+        say(`<p class="field-hint">${sel.value ? `Saved: ${esc(t?.name || 'the template')} · ${esc(kindLabel(extras, kind))}.` : `Saved: ${esc(t?.name || 'the template')} · Not offered.`}</p>`);
       } catch (err) { problem(err); }
     }));
     const flagSaved = {
@@ -164,13 +188,21 @@ export function openContractTemplates() {
     box.querySelectorAll('.ct-flag').forEach((tick) => tick.addEventListener('change', async () => {
       const el = tick.closest('[data-tid]');
       const t = rows.find((r) => r.id === el.dataset.tid);
-      const formType = el.querySelector('.ct-type').value;
+      const { formType } = readFormKind(el.querySelector('.ct-type').value);
       const flag = tick.dataset.flag;
       if (!formType) { tick.checked = false; return; }
       try {
         await setTemplateType({ templateId: el.dataset.tid, name: t?.name, formType, [flag]: tick.checked });
         say(`<p class="field-hint">${flagSaved[flag](tick.checked, esc(t?.name || 'this template'))}</p>`);
       } catch (err) { tick.checked = !tick.checked; problem(err); }
+    }));
+    box.querySelectorAll('.ct-kennel-signer').forEach((input) => input.addEventListener('change', async () => {
+      try {
+        const name = input.value.replace(/\s+/g, ' ').trim().slice(0, 100);
+        await kennelRepo.update(input.dataset.kid, { esign_signer_name: name || null });
+        const shown = name || input.placeholder;
+        say(`<p class="field-hint">Saved: you countersign as ${esc(shown)}.</p>`);
+      } catch (err) { problem(err); }
     }));
     box.querySelectorAll('[data-edit]').forEach((btn) => btn.addEventListener('click', async () => {
       say('<p class="field-hint">Opening Firma\'s editor in a new tab…</p>');
@@ -182,14 +214,14 @@ export function openContractTemplates() {
     box.querySelector('#ct-upload').addEventListener('click', async (e) => {
       if (busy) return;
       const file = box.querySelector('#ct-file').files?.[0];
-      const formType = box.querySelector('#ct-newtype').value;
+      const { formType, extraListId } = readFormKind(box.querySelector('#ct-newtype').value);
       if (!file) { say('<div class="inline-error">Choose your contract\'s PDF first.</div>'); return; }
-      if (!formType) { say('<div class="inline-error">Pick what kind of contract it is.</div>'); return; }
+      if (!formType || (formType === 'extra' && !extraListId)) { say('<div class="inline-error">Pick what kind of contract it is.</div>'); return; }
       busy = true; e.currentTarget.disabled = true;
       say('<p class="field-hint">Uploading…</p>');
       try {
         const t = await uploadTemplate({ name: box.querySelector('#ct-name').value, file });
-        await setTemplateType({ templateId: t.id, name: t.name, formType });
+        await setTemplateType({ templateId: t.id, name: t.name, formType, extraListId });
         busy = false;
         await drawList(await esignStatus());
         say(`<p class="field-hint">Uploaded ${esc(t.name)}. Next: <strong>Place fields</strong> on it, so the buyer has somewhere to sign.</p>`);
@@ -211,9 +243,10 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
     const overlay = overlayOf('<h2 style="margin-top:0;">Send for e-signature</h2><p class="muted">Loading…</p>');
     const box = overlay.querySelector('.modal');
     let busy = false;
-    const done = (v) => { overlay.remove(); resolve(v); };
+    const previews = []; // drafts opened from this dialog, discarded when it closes
+    const done = (v) => { overlay.remove(); previews.splice(0).forEach((id) => { discardPreview(id); }); resolve(v); };
     overlay.addEventListener('click', (e) => { if (e.target === overlay && !busy) done(null); });
-    const filled = prefillValues(form.form_type, facts).length;
+    const filled = prefillValues(form, facts).length;
     const counter = countersignerFor(form, facts);
 
     async function draw() {
@@ -231,7 +264,7 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
           <p class="field-hint">Untick to send the link in your own message instead. It counts the same.</p>`
         : '<p class="field-hint">The signing link goes into your message. Firma doesn\'t email them.</p>'}
         ${form.countersign ? (counter
-          ? `<p class="field-hint">You countersign this one, as ${esc(counter.email)}: once they've signed, tap <strong>Countersign</strong> on the contract. It's marked Signed when you both have.</p>`
+          ? `<p class="field-hint">You countersign this one, as ${esc(counter.name)} (${esc(counter.email)}): once they've signed, tap <strong>Countersign</strong> on the contract. It's marked Signed when you both have.</p>`
           : '<div class="inline-error">You countersign this template, so KennelOS needs your cloud account\'s email. Sign in again in Settings → Cloud backup.</div>') : ''}
         ${form.keep_copy ? '<p class="field-hint">Once everyone has signed, KennelOS saves the signed PDF and emails them a link to it.</p>' : ''}
         ${contract.esign_provider === 'firma' && contract.esign_ref ? '<p class="field-hint">This contract already went out through Firma. Sending again makes a new signing request and counts again.</p>' : ''}
@@ -239,11 +272,36 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
         <div id="fs-msg" role="status"></div>
         <div class="form-actions">
           <button class="btn btn-primary" id="fs-send"${full || (form.countersign && !counter) ? ' disabled' : ''}>Send</button>
+          <button class="btn" id="fs-preview" title="See your template with these details filled in. Nothing is sent or counted.">Preview</button>
           <button class="btn" id="fs-cancel">Cancel</button>
         </div>`;
       const $ = (s) => box.querySelector(s);
       $('#fs-cancel').addEventListener('click', () => { if (!busy) done(null); });
       $('#fs-send').addEventListener('click', () => go(false));
+      $('#fs-preview').addEventListener('click', preview);
+    }
+
+    // A free draft, read-only in Firma's editor in a new tab (opened before the
+    // await, so the browser counts it as the tap's).
+    async function preview() {
+      const $ = (s) => box.querySelector(s);
+      const name = $('#fs-name').value.trim();
+      const email = $('#fs-email').value.trim();
+      if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { $('#fs-msg').innerHTML = '<div class="inline-error">Add who signs and their email first: the preview is made for them.</div>'; return; }
+      $('#fs-msg').innerHTML = '<p class="field-hint">Making the preview…</p>';
+      try {
+        // A preview that comes back after the dialog closed is discarded straight away.
+        const opened = await openInNewTab(previewLink({ contract, form, facts, signer: { name, email } }).then((r) => {
+          if (box.isConnected) previews.push(r.previewId); else discardPreview(r.previewId);
+          return r.url;
+        }));
+        if (!box.isConnected) return;
+        $('#fs-msg').innerHTML = `<p class="field-hint">${opened ? 'The preview is open in a new tab: your template with these details. Nothing was sent or counted.' : 'Your browser blocked the new tab. Allow pop-ups for KennelOS, then tap Preview again.'}</p>`;
+      } catch (err) {
+        const p = esignProblem(err);
+        if (p.kind === 'template_missing') await forgetTemplate(form.template_id).catch(() => {});
+        if (box.isConnected) $('#fs-msg').innerHTML = `<div class="inline-error">${esc(p.message)}</div>`;
+      }
     }
 
     async function go(resend) {
@@ -271,10 +329,11 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
           });
           if (again) { await go(true); return; }
         }
+        if (p.kind === 'template_missing') await forgetTemplate(form.template_id).catch(() => {});
         if (!box.isConnected) return;
         $('#fs-msg').innerHTML = `<div class="inline-${p.kind === 'unknown' ? 'warn' : 'error'}">${esc(p.message)}</div>`;
         $('#fs-cancel').disabled = false;
-        $('#fs-send').disabled = p.kind === 'limit' || p.kind === 'unknown';
+        $('#fs-send').disabled = p.kind === 'limit' || p.kind === 'unknown' || p.kind === 'template_missing';
       }
     }
 
