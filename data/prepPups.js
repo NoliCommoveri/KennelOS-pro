@@ -13,7 +13,9 @@
 //   pickup       a drop-off date: goHome's `placement` event ("Placement / drop-off") for the
 //                sale's family, today or later. It's the only go-home date the app keeps
 //                (Furever's pickup fields are the family app's, not counted);
-//   balance      the sale paid in full, or its balance-due date set;
+//   balance      "Payments": nothing owed on the sale (its payment statement,
+//                paymentSchedule.paymentStatement: everything paid, credits and the
+//                fee credited included), or marked paid in full / Delivered;
 //   contract     a signed contract on the sale (Pro, `contracts`);
 //   registration the sale's registration type;
 //   feeding      a feeding schedule: the litter's override, or one for the pup's breed (Pro,
@@ -24,6 +26,7 @@
 import { isOpenSale, RELEASED_SALE_STATUSES } from './vocab.js';
 import { GO_HOME_SALE_STATUSES, pickupFor, readyDateOf } from './goHome.js';
 import { homePups, rosterOf } from './litterCheckin.js';
+import { nextPaymentText } from './paymentSchedule.js';
 
 export const READY_ITEMS = Object.freeze([
   { key: 'chip', label: 'Microchip', optional: true, ask: 'Microchip numbers' },
@@ -32,7 +35,7 @@ export const READY_ITEMS = Object.freeze([
   { key: 'shots', label: 'Shots' },
   { key: 'deworm', label: 'Deworming' },
   { key: 'pickup', label: 'Drop-off date', sale: true },
-  { key: 'balance', label: 'Balance', sale: true },
+  { key: 'balance', label: 'Payments', sale: true },
   { key: 'contract', label: 'Contract signed', sale: true, flag: 'contracts' },
   { key: 'registration', label: 'Registration type', sale: true },
   { key: 'feeding', label: 'Feeding schedule', flag: 'feedingSchedule', optional: true, ask: 'A feeding schedule' }
@@ -74,16 +77,19 @@ const newestOf = (events, type) => events.filter((e) => !e.is_archived && e.even
 // One pup's readiness. `pup`: the dog; `sale`: pupSale (or null); `events`: the
 // pup's events; `contracts`: the sale's contracts; `litter`: its litter;
 // `hasBreedSchedule`: a breed feeding schedule exists for the pup's breed;
+// `statement`: the sale's payment statement (incomeView.getSaleStatement(s)), or null;
 // `flags`: the edition's flags (`contracts`, `feedingSchedule`).
 // → { items: [{ key, label, done, detail }], missing: [key], pickupDate }
 // `detail` is plain text (the chip number, the last date…), or ''.
 // `checks`: the optional item keys she ticked; null checks them all (the Puppy
 // Record's cover page from the Sales picker).
-export function readiness({ pup, sale = null, events = [], contracts = [], litter = null, hasBreedSchedule = false, flags = {}, today, checks = null }) {
+export function readiness({ pup, sale = null, events = [], contracts = [], litter = null, hasBreedSchedule = false, flags = {}, today, checks = null, statement = null }) {
   const shots = newestOf(events, 'vaccination');
   const deworm = newestOf(events, 'preventative');
   const pickupDate = nextPickup(sale, events, today);
-  const paid = sale && (['paid_in_full', 'delivered'].includes(sale.status) || Boolean(sale.balance_paid_date));
+  const paid = sale && (['paid_in_full', 'delivered'].includes(sale.status) || Boolean(sale.balance_paid_date)
+    || Boolean(statement && !statement.ended && !(statement.remaining > 0)));
+  const next = !paid && statement ? nextPaymentText(statement) : '';
   const live = contracts.filter((c) => !c.is_archived);
   const signed = live.some((c) => c.status === 'signed');
   const override = String(litter?.feeding_schedule_override || '').trim();
@@ -94,7 +100,7 @@ export function readiness({ pup, sale = null, events = [], contracts = [], litte
     shots: [Boolean(shots), shots ? shots.event_date : ''],
     deworm: [Boolean(deworm), deworm ? deworm.event_date : ''],
     pickup: [Boolean(pickupDate), pickupDate || ''],
-    balance: [paid || Boolean(sale?.balance_due_date), paid ? 'paid' : sale?.balance_due_date ? `due ${sale.balance_due_date}` : ''],
+    balance: [Boolean(paid), paid ? 'paid' : next ? `next ${next}` : ''],
     contract: [signed, signed ? 'signed' : live.length ? live[0].status || 'draft' : ''],
     registration: [Boolean(sale?.registration_type), sale?.registration_type || ''],
     feeding: [Boolean(override) || hasBreedSchedule, override ? 'litter' : hasBreedSchedule ? 'breed' : '']

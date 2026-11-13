@@ -12,8 +12,9 @@
 // the steps, most time-sensitive first, each skipped when empty, each item with
 // **Skip for now**: (1) family requests and messages, (2) families backing out,
 // then any other sale to cancel or void, (3) offers past their deadline, (4) picks
-// to open, (5) a turn to offer, (6) new applications, (7) fees to check and extras
-// payments due, (8) "Ready now?" unanswered and recent removals.
+// to open, (5) a turn to offer, (6) new applications, (7) fees to check, scheduled
+// payments due or not marked received, and extras payments due, (8) "Ready now?"
+// unanswered and recent removals.
 //
 // Nothing here is its own rule. The items are Today's own waitlist nudges
 // (nudges.waitlistNudgeItems), whose one-tap actions run as they do on Today;
@@ -21,7 +22,8 @@
 // waitlistRules), or a shared dialog (offerEmails for every "email the family",
 // communicateDialog, pickDialog / depositDialog, salePrompts, restoreLostPupDialog).
 import { kennelRepo } from '../data/kennelRepo.js';
-import { getEntryCredit } from '../data/incomeView.js';
+import { getEntryCredit, getSaleStatement } from '../data/incomeView.js';
+import { newPayment, paymentsWith, paidInFullOffer, paidInFullChanges } from '../data/paymentSchedule.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -32,7 +34,7 @@ import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { ownKennels, getActiveKennel } from '../data/kennelScope.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
-import { waitlistNudgeItems, extraDueItems } from '../data/nudges.js';
+import { waitlistNudgeItems, extraDueItems, paymentDueItems } from '../data/nudges.js';
 import { snooze, snoozedUntil } from '../data/nudgeState.js';
 import { readNudgeKey, STEP_OF, REVIEW_STEPS, reviewSummary, readinessProblems, outcomeReport } from '../data/waitlistReview.js';
 import * as actions from '../data/waitlistActions.js';
@@ -176,6 +178,7 @@ class Review {
     });
     const familySales = this.familySales();
     this.extras = (await extraDueItems(familySales, this.today));
+    this.payments = await paymentDueItems(familySales, this.today);
     return this;
   }
 
@@ -184,7 +187,7 @@ class Review {
   litterName(id) { const l = this.litters.find((x) => x.id === id); return l ? litterLabel(l, this.dogsById) : 'a litter'; }
   pupName(id) { return this.dogsById.get(id)?.call_name || 'the pup'; }
   canEmail(e) { return kennelEmailsOn(this.kennel) && Boolean(familyEmail(e, this.contactOf(e))); }
-  // The waitlist families' open sales (for extras payments due).
+  // The waitlist families' open sales (for payments and extras payments due).
   familySales() {
     const buyers = new Set(this.entries.map((e) => e.contact_id).filter(Boolean));
     return this.sales.filter((s) => !s.is_archived && s.kennel_id === this.kennel.id && buyers.has(s.buyer_contact_id) && isOpenSale(s));
@@ -229,6 +232,7 @@ class Review {
       applications: this.entries.filter((e) => e.status === 'applied').length,
       fees: this.entries.filter((e) => e.status === 'approved' && !e.fee_received_date).length,
       extrasDue: this.extras.length,
+      paymentsDue: this.payments.length,
       ready: this.items.filter((n) => readNudgeKey(n.key).kind === 'waitlist-ready-overdue').length,
       removals: this.items.filter((n) => readNudgeKey(n.key).kind === 'waitlist-removed').length
     };
@@ -278,7 +282,7 @@ class Review {
       c.picks.length && { label: 'Picks to open', note: c.picks.join(', '), value: 'picks' },
       c.turns && { label: 'A turn to offer', value: 'turns' },
       c.applications && { label: 'New applications', note: String(c.applications), value: 'applications' },
-      (c.fees || c.extrasDue) && { label: 'Fees and payments to check', note: String(c.fees + c.extrasDue), value: 'fees' },
+      (c.fees || c.extrasDue || c.paymentsDue) && { label: 'Fees and payments to check', note: String(c.fees + c.extrasDue + c.paymentsDue), value: 'fees' },
       (c.ready || c.removals) && { label: '"Ready now?" and removals', note: String(c.ready + c.removals), value: 'upkeep' }
     ].filter(Boolean);
   }
@@ -997,7 +1001,7 @@ class Review {
     await this.emails([{ entryId: e.id, kind: fresh.status === 'active' ? 'on_list' : 'approved' }]);
   }
 
-  // --- 7. Fees to check, then extras payments due ---------------------------------------------
+  // --- 7. Fees to check, then scheduled payments, then extras payments due ---------------------
 
   async fees() {
     const ids = this.entries.filter((e) => e.status === 'approved' && !e.fee_received_date)
@@ -1044,6 +1048,19 @@ class Review {
       await this.chat.say(`${esc(this.name(e))} is on the list.`);
       await this.emails([{ entryId: e.id, kind: 'on_list' }]);
     }
+    // Scheduled payments due soon or gone by (Today's payment-due / payment-missed),
+    // each rechecked as it comes: a payment for one due date can cover the next.
+    for (const key of this.payments.map((x) => x.key)) {
+      const r = readNudgeKey(key);
+      const sale = await saleRepo.getById(r.saleId);
+      const n = sale ? (await paymentDueItems([sale], this.today)).find((x) => x.key === key) : null;
+      if (!n) continue;
+      await this.chat.say(`<strong>${esc(n.title)}</strong><br>${esc(n.detail || '')}`);
+      const pick = await this.chat.choose([{ label: 'Received', value: 'paid', primary: true }, { label: 'Not yet', value: '__skip' }, { label: 'Open the sale', value: 'open' }]);
+      if (pick === '__skip') { this.skipped++; continue; }
+      if (pick === 'open') return this.openPage(`sale.html?id=${encodeURIComponent(sale.id)}`, 'the sale');
+      if (!(await this.paymentReceived(sale, n.owed))) this.skipped++;
+    }
     for (const n of this.extras) {
       const r = readNudgeKey(n.key);
       await this.chat.say(`<strong>${esc(n.title)}</strong><br>${esc(n.detail || '')}`);
@@ -1055,6 +1072,48 @@ class Review {
       await saleRepo.update(sale.id, { extra_charges: chargesWithStepPaid(sale, r.chargeId, r.stepId, this.today) });
       await this.chat.say(`Marked paid today, ${esc(fmtDate(this.today))}. Change the date on the sale if it came in another day.`);
     }
+  }
+
+  // A payment on the sale's schedule (Payment Schedule plan §3.2), as Record a payment
+  // saves it: the amount (what's owed by that due date), the day, how they paid, a
+  // reference. When that covers everything, one question: mark it paid in full (D22).
+  // → true once recorded.
+  async paymentReceived(sale, owed) {
+    const res = await this.chat.form({
+      title: '<strong>The payment received</strong><span class="kels-lead">It\'s recorded on the sale\'s Payments card, toward its schedule.</span>',
+      html: `<div class="ck-inline">
+          ${field('Date received', `<input id="wr-pay-date" type="date" value="${esc(this.today)}">`)}
+          ${field('Amount', `<input id="wr-pay-amt" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(owed ?? '')}">`)}
+        </div>
+        <div class="ck-inline">${field('Method', `<select id="wr-pay-method"><option value="">—</option>${PAYMENT_METHODS.map((m) => `<option>${esc(m)}</option>`).join('')}</select>`)}${field('Reference (optional)', '<input id="wr-pay-ref" type="text" autocomplete="off">')}</div>`,
+      submitLabel: 'Record it',
+      cancelLabel: 'Not now',
+      submit: async (root) => {
+        let rec;
+        try {
+          rec = newPayment({ amount: root.querySelector('#wr-pay-amt').value, date: root.querySelector('#wr-pay-date').value,
+            method: root.querySelector('#wr-pay-method').value, reference: root.querySelector('#wr-pay-ref').value.trim() });
+        } catch (err) { return err.message; }
+        const fresh = await saleRepo.getById(sale.id);
+        await saleRepo.update(sale.id, { payments: paymentsWith(fresh, rec) });
+        return rec;
+      },
+      reply: (rec) => `${fmtMoney(rec.amount)} on ${fmtDate(rec.date)}`
+    });
+    if (!res.done) return false;
+    await this.chat.say('Recorded on the sale.');
+    const saved = await saleRepo.getById(sale.id);
+    const loaded = await getSaleStatement(saved);
+    const offer = loaded && paidInFullOffer(loaded.statement, saved);
+    if (offer) {
+      const date = offer.date || this.today;
+      await this.chat.say(`That covers everything on the sale. Mark it paid in full on ${esc(fmtDate(date))}?`);
+      if ((await this.chat.choose([{ label: 'Mark paid in full', value: 'yes', primary: true }, { label: 'Not now', value: '' }])) === 'yes') {
+        await saleRepo.update(saved.id, paidInFullChanges(saved, date));
+        await this.chat.say('Marked paid in full.');
+      }
+    }
+    return true;
   }
 
   // --- 8. "Ready now?" unanswered, recent removals ---------------------------------------------

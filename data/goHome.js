@@ -113,6 +113,39 @@ export const boardingEvent = (pup, start, end = '') => ({
   ...(end ? { event_end_date: end } : {}), title: BOARDING_TITLE, details: { boarding_reason: 'Deferred pickup' }
 });
 
+// The pickup message (Payment Schedule plan §7): what Kels's Pups are going home
+// offers to send a family once their pup's pickup or drop-off is on the calendar.
+// She sends it herself (the message composer). Everything comes in formatted:
+//   who          the buyer's first name
+//   pupName      the pup
+//   date, time   the pickup day ("December 4, 2026") and time ("2:00 PM"), time optional
+//   location     where, optional
+//   dropoff      true: it's a drop-off (taken to the family), not a pickup
+//   owed         what's owed by that day ("$2,150.00", from paymentSchedule.owedBy), or ''
+//   paidUp       nothing is owed on the sale at all
+//   finalMethods her final-payment methods ("Cash or Zelle only"), only when what's
+//                owed includes the final payment (D9), else ''
+//   kennelName   signs it
+// → { subject, body }
+export function pickupMessage(p = {}) {
+  const t = (v) => String(v ?? '').trim();
+  const pup = t(p.pupName) || 'your puppy';
+  const Pup = pup.charAt(0).toUpperCase() + pup.slice(1);
+  const at = `${t(p.date)}${t(p.time) ? ` at ${t(p.time)}` : ''}`;
+  const where = t(p.location) ? `${p.dropoff ? ', to' : ', at'} ${t(p.location)}` : '';
+  const lines = [t(p.who) ? `Hi ${t(p.who)},` : 'Hi,', ''];
+  lines.push(p.dropoff ? `We're all set to bring ${pup} to you on ${at}${where}.` : `${Pup}'s pickup is all set for ${at}${where}.`);
+  if (t(p.owed)) {
+    lines.push('', `${t(p.owed)} is due ${p.dropoff ? 'at drop-off' : 'at pickup'}.`);
+    if (t(p.finalMethods)) lines.push(`For the final payment: ${t(p.finalMethods)}`);
+  } else if (p.paidUp) {
+    lines.push('', `${Pup} is paid in full. Thank you!`);
+  }
+  lines.push('', 'Let us know if anything changes, or if you have any questions.', '', 'See you soon!');
+  if (t(p.kennelName)) lines.push(t(p.kennelName));
+  return { subject: `${Pup}'s ${p.dropoff ? 'drop-off' : 'pickup'} day`, body: lines.join('\n') };
+}
+
 // --- Training stays (Family Requests plan §6) ----------------------------------------
 // An extra that needs the pup to stay (a training package: `boarding_days` on the
 // sale's charge) is a boarding event on the pup, reason Training, linked by

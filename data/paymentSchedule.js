@@ -615,8 +615,34 @@ export function paidInFullOffer(statement, sale) {
   return { date };
 }
 
+// What marking the sale paid in full writes (D22, after she says yes): the date, and
+// the status Paid in full while it's still at a deposit status.
+export const paidInFullChanges = (sale, date) => ({
+  balance_paid_date: date,
+  ...(['deposit_pending', 'deposit_paid'].includes(sale?.status) ? { status: 'paid_in_full' } : {})
+});
+
 // The final payment's date (the schedule's last), for the sale's balance_due_date.
 export const finalDueDate = (statement) => statement?.dueDates?.[statement.dueDates.length - 1]?.date || null;
+
+// What's owed by a date (a pickup day, for the pickup message): the deposit and each
+// due date or own-dated charge still owed whose date is that day or before, or isn't
+// known. `final`: the final payment is part of it (her final-payment methods apply,
+// D9). → { amount, final }
+export function owedBy(statement, date) {
+  if (!statement || statement.ended) return { amount: 0, final: false };
+  const by = (d) => !d || !date || d <= date;
+  let amount = 0;
+  let final = false;
+  if (statement.deposit && statement.deposit.owed > 0 && by(statement.deposit.date)) amount += statement.deposit.owed;
+  for (const d of statement.dueDates) {
+    if (!(d.owed > 0) || !by(d.date)) continue;
+    amount += d.owed;
+    if (d.isFinal) final = true;
+  }
+  for (const o of statement.ownDated) if (o.owed > 0 && by(o.date)) amount += o.owed;
+  return { amount: cents(amount), final };
+}
 
 // --- Words ------------------------------------------------------------------------------
 

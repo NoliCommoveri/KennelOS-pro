@@ -11,13 +11,15 @@
 // are an entry, a request on it, a litter or a turn, depending on the kind.
 export function readNudgeKey(key) {
   const [kind, a = null, b = null] = String(key || '').split(':');
-  const out = { kind, entryId: null, requestId: null, litterId: null, turnId: null, saleId: null, chargeId: null, stepId: null };
+  const out = { kind, entryId: null, requestId: null, litterId: null, turnId: null, saleId: null, chargeId: null, stepId: null, dueId: null };
   switch (kind) {
     case 'waitlist-offer-overdue': out.turnId = a; break;
     case 'waitlist-open-picks': out.litterId = a; break;
     case 'waitlist-extra-request':
     case 'waitlist-pickup-request': out.entryId = a; out.requestId = b; break;
     case 'extra-due': out.saleId = a; out.chargeId = b; out.stepId = String(key).split(':')[3] || null; break;
+    case 'payment-due':
+    case 'payment-missed': out.saleId = a; out.dueId = b; break;
     case 'waitlist-applications': break; // the task lists applications itself
     default: out.entryId = a;
   }
@@ -39,6 +41,8 @@ export const STEP_OF = Object.freeze({
   'waitlist-open-picks': 'picks',
   'waitlist-fee-overdue': 'fees',
   'extra-due': 'fees',
+  'payment-due': 'fees',
+  'payment-missed': 'fees',
   'waitlist-ready-overdue': 'upkeep',
   'waitlist-removed': 'upkeep'
 });
@@ -77,6 +81,7 @@ export function reviewSummary(c = {}) {
   if (c.turns) parts.push(n(c.turns, 'turn to offer', 'turns to offer'));
   if (c.applications) parts.push(n(c.applications, 'new application', 'new applications'));
   if (c.fees) parts.push(n(c.fees, 'fee to check', 'fees to check'));
+  if (c.paymentsDue) parts.push(n(c.paymentsDue, 'payment due or not marked received', 'payments due or not marked received'));
   if (c.extrasDue) parts.push(n(c.extrasDue, 'extras payment due', 'extras payments due'));
   if (c.ready) parts.push(n(c.ready, 'family who hasn\'t answered "Ready now?"', 'families who haven\'t answered "Ready now?"'));
   if (c.removals) parts.push(n(c.removals, 'removal you can still undo', 'removals you can still undo'));

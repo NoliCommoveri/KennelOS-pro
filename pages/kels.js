@@ -183,8 +183,8 @@ const TASKS = [
     id: 'prep-pups',
     label: () => 'Pups are going home',
     // Printing is Pro (Puppy Record); Lite never mentions or searches it.
-    sub: editionFlags.puppyRecord ? 'Chips, shots, drop-off dates, balances, then their puppy records' : 'Chips, shots, drop-off dates and balances',
-    keywords: ['go home', 'going home', 'leaving', 'pickup day', 'drop off', 'dropoff', 'ready', 'balance', 'paperwork',
+    sub: editionFlags.puppyRecord ? 'Chips, shots, drop-off dates, payments, then their puppy records' : 'Chips, shots, drop-off dates and payments',
+    keywords: ['go home', 'going home', 'leaving', 'pickup day', 'drop off', 'dropoff', 'ready', 'balance', 'payments', 'pickup message', 'paperwork',
       ...(editionFlags.puppyRecord ? ['puppy records', 'print', 'packet'] : []), ...(editionFlags.contracts ? ['contract'] : [])],
     available: (s) => s.prep.litters > 0,
     priority: () => 45,

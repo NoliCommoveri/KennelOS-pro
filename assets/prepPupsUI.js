@@ -10,12 +10,15 @@
 // record the sale or change the plan, in the chat. Then where each stands, and
 // what's missing one thing at a time (data/prepPups.js READY_ITEMS), each with its
 // fix, done in the chat wherever it can be: the check-in's microchip, care and
-// drop-off forms (assets/litterCheckinUI.js), the litter's registration number, a
-// balance-due date, each contract's status, the registration type, the litter's
-// feeding note. Only the breed feeding schedule (a table editor) leaves for its
-// page. Unpaid balances then get (Pro) a deposit fee charged back and extras from her
-// price list (guide §21.2), a payment request, then an invoice. Each fix is saved
-// when approved, so there's no draft. Then, in Pro, the Furever link (not tracked,
+// drop-off forms (assets/litterCheckinUI.js), the litter's registration number,
+// payments received (recorded on the sale), each contract's status, the registration
+// type, the litter's feeding note. Only the breed feeding schedule (a table editor)
+// leaves for its page. Money still owed (read from each sale's payment statement,
+// incomeView.getSaleStatement) then gets (Pro) a deposit fee charged back and extras
+// from her price list (guide §21.2), a payment request, then an invoice. Then, for
+// pups with a pickup on the calendar, a pickup message to each family (the day, what's
+// owed by then and her final-payment methods), which she sends herself. Each fix is
+// saved when approved, so there's no draft. Then, in Pro, the Furever link (not tracked,
 // so only offered) and the printed puppy records: one file, a cover page for her,
 // then each pup's record (pages/puppy-record.html?dogs=…&cover=1). Anything that
 // opens a new tab is announced first and waits for her OK.
@@ -31,7 +34,10 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { portalOn } from '../data/portalFeed.js';
 import { saleExtraCharges, kennelChargeList, kennelChargeGroups, chargeFromPriceList, depositFeeChargeBack } from '../data/extraCharges.js';
 import { businessDays, waitlistConfig } from '../data/waitlistRules.js';
-import { depositPaid } from '../data/incomeView.js';
+import { depositPaid, getSaleStatement, getSaleStatements } from '../data/incomeView.js';
+import { newPayment, paymentsWith, paidInFullOffer, paidInFullChanges, nextPaymentText, owedBy } from '../data/paymentSchedule.js';
+import { splitName } from '../data/contractForms.js';
+import { timeRange } from '../data/pickupSlots.js';
 import { inScopeOnly, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { saleFeeEstimate } from '../data/processingFees.js';
@@ -39,12 +45,11 @@ import { paymentAccounts } from '../data/paymentLinks.js';
 import { stripeConnection } from '../data/stripeLinks.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { getPrepChecks, setPrepChecks } from '../data/settings.js';
-import { SALE_STATUS, REGISTRATION_TYPE, CONTRACT_STATUS, DISPOSITION, descriptor } from '../data/vocab.js';
+import { SALE_STATUS, REGISTRATION_TYPE, CONTRACT_STATUS, DISPOSITION, PAYMENT_METHODS, isOpenSale as isOpen, descriptor } from '../data/vocab.js';
 import { expectedPricing } from '../data/saleDefaults.js';
-import { balanceDueOn } from '../data/contractSend.js';
 import * as C from '../data/litterCheckin.js';
 import * as P from '../data/prepPups.js';
-import { deliveredOwnershipChanges } from '../data/goHome.js';
+import { deliveredOwnershipChanges, pickupFor, pickupMessage } from '../data/goHome.js';
 import { chipsForm, pickupsForm, field, pupName, pupLine, PUP_WHO } from './litterCheckinUI.js';
 import { careForm, vaccineForm } from './careVisitUI.js';
 import { askKeeperTests } from './keeperTests.js';
@@ -57,6 +62,9 @@ const LATER = ['No problem, we can come back to that.', 'Sure, that can wait.', 
 const pagesPrefix = () => (location.pathname.includes('/pages/') ? '' : 'pages/');
 const names = (rows) => esc(listText(rows.map((r) => pupName(r.pup))));
 const listText = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+const words = { money: fmtMoney, date: fmtDate };
+// "2:00 PM" for a typed "14:00"; anything else (a family's own words) as it is.
+const timeText = (t) => (/^\d{1,2}:\d{2}$/.test(String(t || '').trim()) ? timeRange({ start_time: String(t).trim() }) : String(t || '').trim());
 
 // For Kels's menu: how many litters have pups still at home.
 export async function prepState() {
@@ -118,6 +126,7 @@ class Prep {
     await this.overview();
     if (await this.fixAll() === 'left') return null;
     await this.balances();
+    await this.pickupMessages();
     await this.wrapUp();
     return this.onExit('done');
   }
@@ -136,18 +145,22 @@ class Prep {
         schedules.set(breed, Boolean(await breedFeedingScheduleRepo.getByBreed(breed)));
       }
     }
-    this.rows = await Promise.all(this.home.map(async (pup) => {
-      const sale = P.pupSale(sales.filter((s) => s.dog_id === pup.id));
+    // Each sale's payment statement, for Payments and the money still owed.
+    const pupSales = this.home.map((pup) => P.pupSale(sales.filter((s) => s.dog_id === pup.id)));
+    const statements = await getSaleStatements(pupSales.filter(Boolean), { today: this.today });
+    this.rows = await Promise.all(this.home.map(async (pup, i) => {
+      const sale = pupSales[i];
+      const statement = sale ? statements.get(sale.id) || null : null;
       const [events, contracts, buyer] = await Promise.all([
         eventRepo.getForSubject('dog', pup.id),
         sale && editionFlags.contracts ? contractRepo.getBySale(sale.id) : [],
         sale?.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null
       ]);
       const ready = P.readiness({
-        pup, sale, events, contracts, litter, today: this.today, flags: editionFlags, checks: this.checks,
+        pup, sale, events, contracts, litter, today: this.today, flags: editionFlags, checks: this.checks, statement,
         hasBreedSchedule: schedules.get((pup.breed || '').trim()) || false
       });
-      return { pup, sale, contracts, buyer, ready };
+      return { pup, sale, contracts, buyer, ready, statement, events };
     }));
     this.chosen = this.rows.filter((r) => this.pupIds.includes(r.pup.id));
   }
@@ -187,7 +200,7 @@ class Prep {
     if (!opts.length) return true;
     const last = getPrepChecks() || [];
     const res = await this.chat.form({
-      title: '<strong>Want me to check any of these too?</strong><span class="kels-lead">Tick the ones you keep track of. I\'ll always check shots, deworming, the drop-off, the balance and the paperwork.</span>',
+      title: '<strong>Want me to check any of these too?</strong><span class="kels-lead">Tick the ones you keep track of. I\'ll always check shots, deworming, the drop-off, payments and the paperwork.</span>',
       html: `<div class="ck-checks">${opts.map((it) => `<label class="ck-check"><input type="checkbox" id="pp-opt-${esc(it.key)}"${last.includes(it.key) ? ' checked' : ''}> <span>${esc(it.ask)}</span></label>`).join('')}</div>`,
       submitLabel: 'Continue',
       submit: async (root) => setPrepChecks(opts.filter((it) => root.querySelector(`#pp-opt-${it.key}`).checked).map((it) => it.key)),
@@ -379,7 +392,7 @@ class Prep {
       shots: [`I don't see any shots logged for ${n}.`, 'Log shots'],
       deworm: [`I don't see any deworming logged for ${n}.`, 'Log deworming'],
       pickup: [`${n} ${one ? 'has' : 'have'} no drop-off date on the calendar.`, 'Set the drop-off date'],
-      balance: [`${n}'s ${one ? 'sale has' : 'sales have'} a balance with no due date.`, 'Set the due date'],
+      balance: [`${n} ${one ? 'still has' : 'still have'} money owed on ${one ? 'their sale' : 'their sales'}. Has any of it come in?`, 'Record payments'],
       contract: [`${n}'s ${one ? 'contract isn\'t' : 'contracts aren\'t'} signed yet.`, one ? 'Update the contract' : 'Update the contracts'],
       registration: [`${n}'s ${one ? 'sale has' : 'sales have'} no registration type.`, 'Pick the registration'],
       feeding: [`There's no feeding schedule for ${n}.`, 'Set one up']
@@ -407,7 +420,7 @@ class Prep {
       return this.saved(await pickupsForm(this.chat, rows.map((r) => ({ pup: r.pup, sale: r.sale, date }))),
         (out) => `Got it! ${out.length === 1 ? 'It\'s' : 'They\'re'} on your calendar and ${out.length === 1 ? 'the puppy\'s' : 'each puppy\'s'} history.`);
     }
-    if (key === 'balance') return this.balance(rows);
+    if (key === 'balance') return this.payments(rows);
     if (key === 'litter_reg') return this.litterReg();
     if (key === 'pup_reg') return this.pupReg(pups);
     if (key === 'contract') return this.contracts(rows);
@@ -429,21 +442,60 @@ class Prep {
     return 'left';
   }
 
-  async balance(rows) {
+  // Payments received (Payment Schedule plan §3.2): one amount per pup, prefilled with
+  // what its next due date still asks for, the day and how they paid, each recorded on
+  // its sale toward the schedule, as the sale's Record a payment does. A deposit still
+  // owed isn't a payment: it's marked received on the sale. Then, for a sale that's
+  // now all paid, one question each: mark it paid in full (D22).
+  async payments(rows) {
+    const suggest = (st) => (st?.next?.kind === 'schedule' ? st.next.owed : st?.dueDates?.find((d) => d.owed > 0)?.owed ?? '');
     const res = await this.chat.form({
-      title: '<strong>When is the balance due?</strong><span class="kels-lead">Already paid? Record the payment on the sale instead. Leave a puppy blank to skip them.</span>',
-      html: rows.map((r, i) => field(`${pupName(r.pup)}${r.buyer?.name ? ` (${r.buyer.name})` : ''}`, `<input id="pp-due-${i}" type="date" value="${esc(P.pickupDefault(this.litter, this.today))}">`)).join(''),
-      submitLabel: 'Save',
+      title: '<strong>What\'s come in?</strong><span class="kels-lead">Each amount is recorded on the sale\'s Payments card. Leave a puppy blank to skip them. A deposit still owed is marked received on the sale instead.</span>',
+      html: rows.map((r, i) => {
+        const next = r.statement ? nextPaymentText(r.statement, words) : '';
+        const hint = r.statement ? `${fmtMoney(r.statement.remaining)} still owed${next ? `; next: ${next}` : ''}` : '';
+        return field(`${pupName(r.pup)}${r.buyer?.name ? ` (${r.buyer.name})` : ''}`, `<input id="pp-pay-${i}" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(suggest(r.statement))}">`, hint);
+      }).join('') + `<div class="ck-inline">
+          ${field('Date received', `<input id="pp-pay-date" type="date" value="${esc(this.today)}">`)}
+          ${field('How they paid', `<select id="pp-pay-method"><option value="">—</option>${PAYMENT_METHODS.map((m) => `<option>${esc(m)}</option>`).join('')}</select>`)}
+        </div>`,
+      submitLabel: 'Record them',
       cancelLabel: 'Not now',
       submit: async (root) => {
-        const out = rows.map((r, i) => ({ r, date: root.querySelector(`#pp-due-${i}`).value })).filter((x) => x.date);
-        if (!out.length) return 'Pick a date for at least one puppy.';
-        for (const x of out) await saleRepo.update(x.r.sale.id, { balance_due_date: x.date });
+        const date = root.querySelector('#pp-pay-date').value;
+        const method = root.querySelector('#pp-pay-method').value;
+        const out = [];
+        for (const [i, r] of rows.entries()) {
+          const amount = root.querySelector(`#pp-pay-${i}`).value.trim();
+          if (!amount || !(Number(amount) > 0)) continue;
+          out.push({ r, rec: newPayment({ amount, date, method }) });
+        }
+        if (!out.length) return 'Enter an amount for at least one puppy.';
+        for (const x of out) {
+          const fresh = await saleRepo.getById(x.r.sale.id);
+          await saleRepo.update(fresh.id, { payments: paymentsWith(fresh, x.rec) });
+        }
         return out;
       },
-      reply: (out) => (out.length === 1 ? `Due ${fmtDate(out[0].date)}` : `${C.plural(out.length, 'due date')} set`)
+      reply: (out) => (out.length === 1 ? `${fmtMoney(out[0].rec.amount)} on ${fmtDate(out[0].rec.date)}` : `${C.plural(out.length, 'payment')} recorded`)
     });
-    return this.saved(res, () => 'Saved on the sale. One less thing to chase!');
+    if (!res.done) return null;
+    await this.chat.say(`Recorded on ${res.result.length === 1 ? 'the sale' : 'each sale'}.`);
+    for (const { r } of res.result) await this.offerPaidInFull(r);
+    return 'saved';
+  }
+
+  // Everything on this pup's sale is paid and it isn't marked (D22): ask once.
+  async offerPaidInFull(r) {
+    const sale = await saleRepo.getById(r.sale.id);
+    const loaded = sale ? await getSaleStatement(sale) : null;
+    const offer = loaded && paidInFullOffer(loaded.statement, sale);
+    if (!offer) return;
+    const date = offer.date || this.today;
+    await this.chat.say(`That covers everything for ${esc(pupName(r.pup))}. Mark the sale paid in full on ${esc(fmtDate(date))}?`);
+    if ((await this.chat.choose([{ label: 'Mark paid in full', value: 'yes', primary: true }, { label: 'Not now', value: '' }])) !== 'yes') return;
+    await saleRepo.update(sale.id, paidInFullChanges(sale, date));
+    await this.chat.say('Marked paid in full.', { typing: 300 });
   }
 
   // Each pup's sale contract: its status (and the signed date), saved on the
@@ -614,16 +666,17 @@ class Prep {
     return this.saved(res, (out) => (out.n ? 'Saved on each puppy\'s record, ready for their papers.' : 'Okay, I left them as they were.'));
   }
 
-  // Sales with money still owed (Pro: accounts / invoicing): for each, a payment
+  // Sales with money still owed (Pro: accounts / invoicing), read from each sale's
+  // payment statement: what's left and the next payment. For each, a payment
   // request (the Sale page's, a message she sends herself, with a Stripe link when
   // connected) or an invoice (the generator, which opens the invoice in a new tab).
   async balances() {
     if (!editionFlags.accounts && !editionFlags.invoicing) return;
+    await this.load();
     const owing = [];
     for (const r of this.chosen) {
       if (!r.sale || !['deposit_pending', 'deposit_paid'].includes(r.sale.status) || r.sale.balance_paid_date) continue;
-      const due = await balanceDueOn(r.sale);
-      if (due > 0) owing.push({ r, due });
+      if (r.statement && r.statement.remaining > 0) owing.push({ r, st: r.statement });
     }
     if (!owing.length) return;
     // A payment request needs a Payment service to pay through (a link or
@@ -635,15 +688,22 @@ class Prep {
       for (const a of accounts) if (!canRequest && !a.is_archived && a.account_type === 'payment_service' && await stripeConnection(a.id)) canRequest = true;
     }
     if (!canRequest && !editionFlags.invoicing) return;
-    const lines = owing.map(({ r, due }) => `<strong>${esc(pupName(r.pup))}</strong>${r.buyer?.name ? ` (${esc(r.buyer.name)})` : ''}: ${esc(fmtMoney(due))}${r.sale.balance_due_date ? `, due ${esc(fmtDate(r.sale.balance_due_date))}` : ''}`);
+    const owedText = (st) => {
+      const next = nextPaymentText(st, words);
+      return `${fmtMoney(st.remaining)} in all${next ? `; next payment ${next}` : ''}`;
+    };
+    const lines = owing.map(({ r, st }) => `<strong>${esc(pupName(r.pup))}</strong>${r.buyer?.name ? ` (${esc(r.buyer.name)})` : ''}: ${esc(owedText(st))}`);
     const offer = [canRequest && 'a payment request', editionFlags.invoicing && 'an invoice'].filter(Boolean).join(' and ');
-    await this.chat.say(`${owing.length === 1 ? 'One family still owes' : 'These families still owe'} a balance:<br>${lines.join('<br>')}<br>Want to send ${owing.length === 1 ? 'them' : 'each'} ${offer}?${editionFlags.accounts && !canRequest ? ' (To send payment requests, add the service families pay you through on the Accounts page.)' : ''}`);
+    await this.chat.say(`${owing.length === 1 ? 'One family still owes' : 'These families still owe'} money:<br>${lines.join('<br>')}<br>Want to send ${owing.length === 1 ? 'them' : 'each'} ${offer}?${editionFlags.accounts && !canRequest ? ' (To send payment requests, add the service families pay you through on the Accounts page.)' : ''}`);
     if ((await this.chat.choose([{ label: 'Yes, let\'s do it', value: 'go', primary: true }, { label: 'Not now', value: '' }])) !== 'go') return;
     // Each family in turn: the payment request, then the invoice, each skippable.
-    for (const [i, { r, due }] of owing.entries()) {
+    for (const [i, { r, st }] of owing.entries()) {
       const who = esc(r.buyer?.name || 'the family');
-      if (owing.length > 1) await this.chat.say(`<strong>${esc(pupName(r.pup))}</strong>: ${esc(fmtMoney(due))} from ${who}.`);
-      if (await this.extras(r)) await this.chat.say(`That makes ${who}'s balance ${esc(fmtMoney(await balanceDueOn(r.sale)))}.`, { typing: 300 });
+      if (owing.length > 1) await this.chat.say(`<strong>${esc(pupName(r.pup))}</strong>: ${esc(owedText(st))}, from ${who}.`);
+      if (await this.extras(r)) {
+        const now = (await getSaleStatement(r.sale))?.statement;
+        if (now) await this.chat.say(`That makes what ${who} owes ${esc(owedText(now))}.`, { typing: 300 });
+      }
       if (canRequest) {
         await this.chat.say(`First, a payment request to ${who}: the amount and how to pay, sent by email or text.`, { typing: 400 });
         if ((await this.chat.choose([{ label: 'Send a payment request', value: 'go', primary: true }, { label: 'Skip', value: '' }])) === 'go') {
@@ -660,15 +720,15 @@ class Prep {
           await new Promise((resolve) => { openInvoiceGenerator({ preselect: { source: 'sale', id: r.sale.id }, onClose: resolve }); });
         }
       }
-      await this.chat.say(i === owing.length - 1 ? 'Okay, that\'s the balances!' : 'Okay, next family.', { typing: 300 });
+      await this.chat.say(i === owing.length - 1 ? 'Okay, that\'s everyone who owes!' : 'Okay, next family.', { typing: 300 });
     }
   }
 
-  // Before asking a family for their balance (Pro, extraCharges, guide §21.2): the
+  // Before asking a family for what they owe (Pro, extraCharges, guide §21.2): the
   // deposit's fee charged back, when it came through an account set to charge it
   // back and the sale doesn't carry it yet (the Sale page asks too, but not for a
   // deposit recorded some other way); then extras from her kennel's price list not
-  // already on the sale. Both ride the balance, so the payment request and invoice
+  // already on the sale. Both go on the sale's payments, so the payment request and invoice
   // that follow include them. → true when the sale changed (r.sale is refreshed).
   async extras(r) {
     if (!editionFlags.extraCharges) return false;
@@ -678,7 +738,7 @@ class Prep {
     const account = sale.deposit_paid_via_account_id ? await accountRepo.getById(sale.deposit_paid_via_account_id) : null;
     const offer = depositFeeChargeBack(sale, account, depositPaid(sale));
     if (offer) {
-      await this.chat.say(`${who}'s deposit came through ${esc(account.name)}, which took about ${esc(fmtMoney(offer.amount))}. Add "${esc(offer.label)}" to their balance?`, { typing: 400 });
+      await this.chat.say(`${who}'s deposit came through ${esc(account.name)}, which took about ${esc(fmtMoney(offer.amount))}. Add "${esc(offer.label)}" to their sale?`, { typing: 400 });
       if ((await this.chat.choose([{ label: 'Add it', value: 'go', primary: true }, { label: 'Skip', value: '' }])) === 'go') {
         sale = await saleRepo.update(sale.id, { extra_charges: [...saleExtraCharges(sale), { id: crypto.randomUUID(), ...offer }] });
         changed = true;
@@ -706,6 +766,45 @@ class Prep {
     }
     r.sale = sale;
     return changed;
+  }
+
+  // The pickup message (Payment Schedule plan §7): for each chosen pup with an open
+  // sale, a family and a pickup or drop-off on the calendar, a message she sends herself
+  // (the message composer: Email, Text or Copy): the day, time and place, what's owed
+  // by that day (paymentSchedule.owedBy over the sale's statement) and, when that
+  // includes the final payment, her final-payment methods (D9). Asked once for them all.
+  async pickupMessages() {
+    await this.load();
+    const going = this.chosen.filter((r) => r.sale && r.buyer && r.ready.pickupDate && isOpen(r.sale));
+    if (!going.length) return;
+    const one = going.length === 1;
+    await this.chat.say(`Want to send ${one ? `${esc(going[0].buyer.name)} a message` : 'each family a message'} about ${one ? `${esc(pupName(going[0].pup))}'s` : 'their'} pickup? It says the day and what's owed by then, and you can change anything before you send it.`);
+    if ((await this.chat.choose([{ label: one ? 'Write it' : 'Write them', value: 'go', primary: true }, { label: 'Not now', value: '' }])) !== 'go') return;
+    const { openComposer } = await import('./messageComposer.js');
+    for (const [i, r] of going.entries()) {
+      const loaded = await getSaleStatement(r.sale);
+      const st = loaded?.statement || null;
+      const date = r.ready.pickupDate;
+      const ev = (r.events || []).filter(pickupFor(r.sale)).filter((e) => e.event_date === date)[0] || null;
+      const det = ev?.details || {};
+      const dropoff = Boolean(det.dropoff_method && det.dropoff_method !== 'Local pickup');
+      const owed = owedBy(st, date);
+      const kennel = loaded?.kennel || null;
+      const msg = pickupMessage({
+        who: splitName(r.buyer.name)[0], pupName: pupName(r.pup), date: fmtDate(date), time: timeText(det.placement_time),
+        location: det.location || '', dropoff,
+        owed: owed.amount > 0 ? fmtMoney(owed.amount) : '', paidUp: Boolean(st && !(st.remaining > 0) && st.total > 0),
+        finalMethods: owed.amount > 0 && owed.final ? String(kennel?.final_payment_methods || '').trim() : '',
+        kennelName: kennel?.kennel_name || ''
+      });
+      if (!one) await this.chat.say(`<strong>${esc(pupName(r.pup))}</strong>, for ${esc(r.buyer.name)}.`, { typing: 300 });
+      const sent = await openComposer({
+        title: `${dropoff ? 'Drop-off' : 'Pickup'} message`, name: r.buyer.name, email: r.buyer.email || '', phone: r.buyer.phone || '',
+        subject: msg.subject, body: msg.body
+      });
+      const last = i === going.length - 1;
+      await this.chat.say(sent ? (last ? 'Done!' : 'Done! Next family.') : (last ? 'Okay, I left that one.' : 'Okay, skipping that one.'), { typing: 300 });
+    }
   }
 
   async feeding() {

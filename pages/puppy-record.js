@@ -21,6 +21,7 @@ import { contractRepo } from '../data/contractRepo.js';
 import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { pupSale, readiness, doneText } from '../data/prepPups.js';
+import { getSaleStatements } from '../data/incomeView.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { esc, param, todayYMD } from '../assets/ui.js';
 
@@ -336,10 +337,13 @@ async function coverHtml(pups) {
   const today = todayYMD();
   // Kels passes the optional checks she ticked (&checks=chip,…); without it, all of them.
   const checks = param('checks') == null ? null : param('checks').split(',').filter(Boolean);
+  // Payments read each sale's payment statement, as Kels's check does.
+  const statements = await getSaleStatements(pups.map((p) => p.sale).filter(Boolean), { today });
   const rows = await Promise.all(pups.map(async ({ dog, sale, events }) => {
     const contracts = sale && editionFlags.contracts ? await contractRepo.getBySale(sale.id) : [];
     const ready = readiness({
       pup: dog, sale, events, contracts, litter: littersById.get(dog.litter_id) || null, today, flags: editionFlags, checks,
+      statement: sale ? statements.get(sale.id) || null : null,
       hasBreedSchedule: schedules.get((dog.breed || '').trim()) || false
     });
     const family = sale?.buyer_contact_id ? contactsById.get(sale.buyer_contact_id)?.name || '' : '';

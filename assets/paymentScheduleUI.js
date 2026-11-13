@@ -16,7 +16,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { getSaleStatement } from '../data/incomeView.js';
 import {
   paymentStatement, saleCharges, cleanSchedule, defaultSchedule, readSchedule, scheduleFromSaved, newPayment, paymentsWith,
-  addedFees, paidInFullOffer, finalDueDate, scheduleSummary, coversText
+  addedFees, paidInFullOffer, paidInFullChanges, finalDueDate, scheduleSummary, coversText
 } from '../data/paymentSchedule.js';
 import { SCHEDULE_DUE, SCHEDULE_COVERS, PAYMENT_METHODS, RELEASED_SALE_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal } from './ui.js';
@@ -440,7 +440,7 @@ async function offerPaidInFull(sale) {
     confirmLabel: 'Mark paid in full', cancelLabel: 'Not now'
   });
   if (!ok) return false;
-  await saleRepo.update(sale.id, { balance_paid_date: date, ...(['deposit_pending', 'deposit_paid'].includes(sale.status) ? { status: 'paid_in_full' } : {}) });
+  await saleRepo.update(sale.id, paidInFullChanges(sale, date));
   return true;
 }
 
