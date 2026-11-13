@@ -88,9 +88,12 @@ export function familyAccount({ entry = null, statement = null, sale = null } = 
 
   // The sale: its pieces, and its money (the statement's received, on the sale's charges).
   const payments = new Map((Array.isArray(sale?.payments) ? sale.payments : []).map((p) => [p.id, p]));
+  // A schedule due date that covers more than one of the sale's charges (the price and
+  // an extra, say) is billed as one line, "Combined Price (<due date>)": `combined`.
+  const combined = new Set(combinedDueIds(st));
   for (const pc of chargePieces(st)) {
     const ref = `${pc.key}@${pc.dueId}`;
-    charges.push({ ...pc, ref, source: 'sale' });
+    charges.push({ ...pc, ref, source: 'sale', ...(combined.has(pc.dueId) ? { combined: true } : {}) });
     for (const x of pc.paid) {
       const p = x.kind === 'payment' ? payments.get(x.id) : null;
       const m = moneyItem(x.ref, { kind: x.kind, id: x.id, date: x.date, credited: x.credited,
@@ -116,6 +119,21 @@ export function familyAccount({ entry = null, statement = null, sale = null } = 
     hasSchedule: Boolean(st?.hasSchedule), ended: Boolean(st?.ended)
   };
 }
+
+// The statement's schedule due dates whose covers take in more than one schedule
+// charge (the deposit is its own due date, own-dated extras theirs). → [dueId]
+export function combinedDueIds(st) {
+  if (!st || st.ended || !st.dueDates?.length) return [];
+  const sched = st.charges.filter((c) => c.part === 'schedule');
+  return st.dueDates.filter((d) => {
+    const covers = d.step?.covers || [];
+    const n = covers.includes('all') ? sched.length
+      : sched.filter((c) => covers.includes(c.covers) || (c.extraId && covers.includes(`extra:${c.extraId}`))).length;
+    return n > 1;
+  }).map((d) => d.id);
+}
+
+export const COMBINED_LABEL = 'Combined Price';
 
 // --- What a document picks (pure) -----------------------------------------------------
 
@@ -186,6 +204,7 @@ export function documentLines(account, { doc = 'invoice', lines = [], money = []
   let due = 0;
   const picked = lines.map((l) => ({ l, c: account.charges.find((c) => c.ref === l.ref) })).filter((x) => x.c)
     .sort((a, b) => account.charges.indexOf(a.c) - account.charges.indexOf(b.c));
+  const byDue = new Map();
   for (const { l, c } of picked) {
     const partial = l.amount != null && l.amount !== '' && num(l.amount) > 0;
     const amount = partial ? cents(num(l.amount)) : c.amount;
@@ -195,12 +214,30 @@ export function documentLines(account, { doc = 'invoice', lines = [], money = []
       for (const x of c.paid) less[x.kind === 'fee' ? 'fee' : x.kind === 'credit' ? 'credit' : 'other'] += x.amount;
       due += c.owed;
     }
-    rows.push({
-      label: `${c.label}${partial ? ' (partial)' : ''}`, ref: c.ref, amount, partial,
+    const owed = partial ? amount : c.owed;
+    // A combined due date's charges print as one line, whichever of them it falls on.
+    const group = c.combined && c.source === 'sale' ? byDue.get(c.dueId) : null;
+    if (group) {
+      group.amount = cents(group.amount + amount);
+      group.owed = cents(group.owed + owed);
+      group.partial = group.partial || partial;
+      continue;
+    }
+    const row = {
+      label: c.label, ref: c.ref, amount, partial, owed,
       marker: c.source === 'sale' && !account.hasSchedule ? (FOOTNOTE[c.component] || '') : '',
-      dueDate: c.dueDate || null,
-      dueText: !partial && c.owed <= 0 ? 'Paid' : c.dueDate ? '' : c.dueId === 'deposit' ? 'Immediately' : c.source === 'sale' ? 'Date not set yet' : ''
-    });
+      dueDate: c.dueDate || null, dueId: c.dueId, source: c.source, combined: Boolean(c.combined && c.source === 'sale')
+    };
+    if (row.combined) {
+      row.label = `${COMBINED_LABEL} (${c.dueLabel})`;
+      byDue.set(c.dueId, row);
+    }
+    rows.push(row);
+  }
+  for (const r of rows) {
+    r.label = `${r.label}${r.partial ? ' (partial)' : ''}`;
+    r.dueText = !r.partial && r.owed <= 0 ? 'Paid' : r.dueDate ? '' : r.dueId === 'deposit' ? 'Immediately' : r.source === 'sale' ? 'Date not set yet' : '';
+    delete r.owed; delete r.dueId; delete r.source;
   }
   const totals = [
     { label: 'Subtotal', amount: cents(subtotal) },
