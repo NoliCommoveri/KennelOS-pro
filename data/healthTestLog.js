@@ -119,7 +119,9 @@ export function completedTestsByDog(events = []) {
     const k = key(name);
     const flag = String(e.details?.[TEST_OUTCOME_FIELD] ?? '').trim();
     const outcome = TEST_OUTCOME.find((o) => o.toLowerCase() === flag.toLowerCase()) || '';
-    byName.set(k, { name, result, outcome, date: e.event_date || null }); // a retest keeps the first test's place
+    // `type`: the latest result's event type (the website groups by it, siteExport's
+    // health_detail section). A retest keeps the first test's place.
+    byName.set(k, { name, result, outcome, date: e.event_date || null, type: e.event_type });
     latest.set(e.subject_id, byName);
   }
   return new Map([...latest].map(([id, byName]) => [id, [...byName.values()]]));

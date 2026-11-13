@@ -68,7 +68,7 @@ const blankDog = () => ({
   date_of_death: '', breed: '', color_markings: '', registry: '', registration_number: '',
   microchip_id: '', url: '', photos_online: false, show_on_website: false, heats_online: false, sire_id: '', dam_id: '', ownership_type: '', owner_contact_id: '',
   co_owner_contact_ids: [], lives_with_contact_id: '', litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_registration: '', notes: '',
-  planned_tests: [], additional_registrations: []
+  planned_tests: [], additional_registrations: [], imported: false, import_country: ''
 });
 
 const ctx = {
@@ -292,6 +292,7 @@ function renderView() {
       ${row('Registry', esc(d.registry))}
       ${row('Registration #', esc(d.registration_number))}
       ${row('Other registrations', otherRegistrationsHtml(d.additional_registrations))}
+      ${row('Imported', d.imported ? (d.import_country ? `Yes, from ${esc(d.import_country)}` : 'Yes') : '')}
       ${row('Microchip', esc(d.microchip_id))}
       ${row('URL', d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a>${editionFlags.waitlist && d.photos_online ? ' <span class="badge badge-blue">Shown on waitlist pages</span>' : ''}` : '')}
       ${websiteLinkOffered() && (d.show_on_website || d.heats_online) ? row('Your website', `${d.show_on_website ? '<span class="badge badge-blue">Shown on website</span> ' : ''}${d.heats_online ? '<span class="badge badge-neutral">Heats shown</span>' : ''}`) : ''}
@@ -358,6 +359,8 @@ function renderEdit() {
       ${field('Registry', `<input id="f-registry" type="text" value="${esc(d.registry)}">`)}
       ${field('Registration #', `<input id="f-registration_number" type="text" value="${esc(d.registration_number)}">`)}
       ${registrationsEditor(d.additional_registrations)}
+      ${field('Imported', `<label class="check-inline"><input id="f-imported" type="checkbox"${d.imported ? ' checked' : ''}> Imported from another country</label>`)}
+      ${d.imported ? field('Country of origin', `<input id="f-import_country" type="text" value="${esc(d.import_country || '')}">`) : ''}
       ${field('Microchip', `<input id="f-microchip_id" type="text" value="${esc(d.microchip_id)}">`)}
       ${field('URL', `<input id="f-url" type="url" value="${esc(d.url || '')}" placeholder="https://…">`, { hint: 'A link to this dog\'s photos (an album, a gallery page).' })}
       ${editionFlags.waitlist ? field('Photos online', `<label class="check-inline"><input id="f-photos_online" type="checkbox"${d.photos_online ? ' checked' : ''}> Show the URL as a photos link on waitlist pages</label>`, { hint: 'Families see it as a parent of a litter (public list and family pages) and as a pup on their turn or their pick. Off until you tick it.' }) : ''}
@@ -387,6 +390,13 @@ function renderEdit() {
       ${field('Notes', `<textarea id="f-notes">${esc(d.notes)}</textarea>`, { wide: true })}
     </div>
     <div id="form-warn"></div>`;
+
+  // Country of origin shows only while Imported is ticked; unticking clears it.
+  document.getElementById('f-imported')?.addEventListener('change', () => {
+    ctx.draft = readForm();
+    renderEdit();
+    if (ctx.draft.imported) document.getElementById('f-import_country')?.focus();
+  });
 
   // Lives with offers the co-owners chosen above: re-draw as they change.
   document.getElementById('f-co_owner_contact_ids')?.addEventListener('change', () => {
@@ -526,6 +536,8 @@ function readForm() {
     registry: val('f-registry').trim(),
     registration_number: val('f-registration_number').trim(),
     additional_registrations: readRegistrations(),
+    imported: document.getElementById('f-imported')?.checked || false,
+    import_country: document.getElementById('f-imported')?.checked ? val('f-import_country').trim() : '',
     microchip_id: val('f-microchip_id').trim(),
     url: val('f-url').trim(),
     // Only read when its field rendered (Pro with the waitlist), else kept.

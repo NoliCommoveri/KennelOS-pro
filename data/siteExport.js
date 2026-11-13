@@ -26,18 +26,37 @@
 //    (lives_with_contact_id), and its co-owners' kennels, only outside kennels she
 //    ticked Name this kennel on my website, by name and website. Never a co-owner
 //    as a person: no name, email, phone, address, contract or money.
+//  - Raw values for KennelPort's rules (KennelPort's docs/plans/kennelos-contract.md,
+//    Part C; docs/KennelOS_Website_Contract_Plan.md), each only to a Worker whose
+//    answer lists its section: a litter puppy's `disposition` as she set it
+//    (pup_disposition), a litter's `status` (litter_status), a health result's
+//    event `type` (health_detail), an account's `account_type` (account_type), and a
+//    dog's `titles` as [{ abbr, organization, date }] in place of the bare
+//    abbreviations (titles_detail).
+//  - Origin and lineage (contract C4, C7): a dog's `imported` and `import_country`
+//    as she set them (origin), and its `breed`, `sire_id`, `dam_id` and `ancestors`
+//    to four generations (lineage). Ancestors go by name and titles only, pedigree-
+//    only dogs and dogs that aren't hers included: never an owner, a contact, a
+//    kennel or a date of birth. Import-descended is KennelPort's to work out from
+//    the ancestors' `imported` (sent on each with both sections).
+//  - Her waitlist's settings as values (contract C9, waitlist_facts section), for
+//    the website's own wording: `steps` and `payment` still go beside them.
+//    The worked-out values they replace (a puppy's `status`, a product's
+//    `transport`) keep going until KennelPort has moved.
 import { titlesByDog } from './waitlistProjection.js';
 import { completedTestsByDog } from './healthTestLog.js';
 import { waitlistConfig, waitlistIsSetUp } from './waitlistRules.js';
 import { feePay } from './waitlistFeePay.js';
 import { kennelChargeList } from './extraCharges.js';
 import { addDaysToYMD } from './dateUtils.js';
+import { DISPOSITION, ACCOUNT_TYPE } from './vocab.js';
+import { ancestorsOf, MAX_GENERATIONS } from './pedigreeWalk.js';
 
 export const SITE_BUNDLE_FORMAT = 1;
 
 // KennelPort's caps (bundle.js MAX). Over one, the website would refuse the whole
 // bundle, so siteExport says so first, in words.
-export const SITE_MAX = { dogs: 200, litters: 100, puppies: 30, pairings: 50, heats: 50, health: 60, extras: 100, products: 50, steps: 20, titles: 20, partner_kennels: 50, co_owner_kennels: 10 };
+export const SITE_MAX = { dogs: 200, litters: 100, puppies: 30, pairings: 50, heats: 50, health: 60, extras: 100, products: 50, steps: 20, titles: 20, partner_kennels: 50, co_owner_kennels: 10, ancestors: 30 };
 
 // The website's own heat rules (KennelPort plan 5.3), not the public list's.
 export const HEAT_KEEP_DAYS = 60; // a heat no pairing uses stays this long after its date
@@ -63,7 +82,8 @@ export class SiteExportError extends Error {
 
 // --- the allow-lists ----------------------------------------------------------
 
-export const BUNDLE_KEYS = ['format', 'bundle_id', 'kennel_id', 'sent_at', 'waitlist_public_id', 'dogs', 'litters', 'pairings', 'heats', 'extras', 'products', 'steps', 'payment', 'partner_kennels'];
+export const BUNDLE_KEYS = ['format', 'bundle_id', 'kennel_id', 'sent_at', 'waitlist_public_id', 'dogs', 'litters', 'pairings', 'heats', 'extras', 'products', 'steps', 'payment', 'partner_kennels', 'waitlist_facts'];
+export const WAITLIST_FACT_KEYS = ['online_form', 'has_fee', 'fee_due_days', 'respond_days', 'max_passes'];
 export const PRODUCT_KEYS = ['id', 'name', 'link_url', 'code', 'code_note'];
 // With a Worker that takes the 'transport' section: whether it's a transport
 // service (for her Getting your pup home page) and its website (shown under its badge).
@@ -88,6 +108,15 @@ export const CO_OWNED_KEYS = ['co_owned', 'lives_away', 'lives_with_kennel_id', 
 export const PARTNER_KENNEL_KEYS = ['id', 'name', 'website'];
 const withCoOwned = (keys, on) => (on ? [...keys, ...CO_OWNED_KEYS] : keys);
 export const HEALTH_KEYS = ['id', 'test', 'result', 'normal', 'date'];
+export const TITLE_KEYS = ['abbr', 'organization', 'date'];
+export const ORIGIN_KEYS = ['imported', 'import_country'];
+export const LINEAGE_KEYS = ['breed', 'sire_id', 'dam_id', 'ancestors'];
+export const ANCESTOR_KEYS = ['id', 'path', 'call_name', 'registered_name', 'titles'];
+// The raw-value sections (contract Part C). Each adds one key where it's named.
+const has = (sections, s) => Array.isArray(sections) && sections.includes(s);
+const plus = (keys, key, on) => (on ? [...keys, key] : keys);
+const DISPOSITIONS = DISPOSITION.map((d) => d.value);
+const ACCOUNT_TYPES = ACCOUNT_TYPE.map((t) => t.value);
 export const LITTER_KEYS = ['id', 'pairing_id', 'name', 'dam_id', 'sire_id', 'dam_name', 'sire_name', 'expected_on', 'born_on', 'ready_on', 'deposits_on', 'prices', 'puppies'];
 export const PRICE_KEYS = ['price_female', 'price_male', 'full_reg_female', 'full_reg_male', 'deposit_female', 'deposit_male'];
 export const PUPPY_KEYS = ['id', 'name', 'sex', 'color', 'registration', 'status'];
@@ -143,6 +172,29 @@ const isMarked = (r) => r?.show_on_website === true;
 
 // --- dogs ---------------------------------------------------------------------
 
+// Each dog's titles with their organization and date (titles_detail section), from
+// her title_earned events, in the order earned. The same title from the same
+// organization counts once, at its first date; the same abbreviation from two
+// organizations is two titles. → Map(dogId → [{ abbr, organization, date }]).
+export function titleDetailsByDog(events = []) {
+  const out = new Map();
+  const earned = events
+    .filter((ev) => ev && ev.event_type === 'title_earned' && ev.subject_type === 'dog' && !ev.is_archived && line(ev.details?.title_abbreviation, 30))
+    .sort((a, b) => String(a.event_date || '').localeCompare(String(b.event_date || '')) || String(a.id).localeCompare(String(b.id)));
+  const seen = new Set();
+  for (const ev of earned) {
+    const abbr = line(ev.details.title_abbreviation, 30);
+    const organization = line(ev.details.organization, 60);
+    const k = `${ev.subject_id}|${abbr.toLowerCase()}|${(organization || '').toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const list = out.get(ev.subject_id) || [];
+    list.push(assertOnlyKeys({ abbr, organization, date: ymd(ev.event_date) }, TITLE_KEYS, 'title'));
+    out.set(ev.subject_id, list);
+  }
+  return out;
+}
+
 // --- co-owned dogs --------------------------------------------------------------
 
 // The kennel a contact belongs to, as the website may name it: an outside kennel,
@@ -174,7 +226,33 @@ function partnerKennelEntries(entries, kennelsById) {
   });
 }
 
-function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposition = false) {
+// Imported, and the country only while it's ticked (origin section).
+const originOf = (d) => {
+  const imported = d.imported === true;
+  return { imported, import_country: imported ? line(d.import_country, 60) : null };
+};
+
+// A dog's titles as sent: the detail objects (titles_detail) or the abbreviations.
+const titlesSent = (titles, id, detail) => (detail
+  ? (titles.get(id) || []).slice(0, SITE_MAX.titles)
+  : (titles.get(id) || []).map((t) => line(t, 30)).filter(Boolean).slice(0, SITE_MAX.titles));
+
+// A dog's lineage (lineage section): its breed, parents' ids, and its ancestors to
+// four generations, nearest first, by name and titles only; with the origin
+// section each ancestor also says whether it was imported.
+function lineageOf(dog, { dogsById, titles, titlesDetail, origin }) {
+  const ancestors = ancestorsOf(dog, dogsById, { generations: MAX_GENERATIONS }).slice(0, SITE_MAX.ancestors).map(({ dog: a, path }) => assertOnlyKeys({
+    id: a.id,
+    path,
+    call_name: line(a.call_name, 40),
+    registered_name: line(a.registered_name, 120),
+    titles: titlesSent(titles, a.id, titlesDetail),
+    ...(origin ? originOf(a) : {})
+  }, origin ? [...ANCESTOR_KEYS, ...ORIGIN_KEYS] : ANCESTOR_KEYS, 'ancestor'));
+  return { breed: line(dog.breed, 60), sire_id: dog.sire_id || null, dam_id: dog.dam_id || null, ancestors };
+}
+
+function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposition = false, healthType = false, titlesDetail = false, lineage = null, origin = false) {
   const done = (tests.get(dog.id) || []).slice(0, SITE_MAX.health);
   return assertOnlyKeys({
     id: dog.id,
@@ -186,7 +264,9 @@ function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposit
     color: line(dog.color_markings, 40),
     status: DOG_STATUS[dog.status],
     died_on: dog.status === 'deceased' ? ymd(dog.date_of_death) : null,
-    titles: (titles.get(dog.id) || []).map((t) => line(t, 30)).filter(Boolean).slice(0, SITE_MAX.titles),
+    // A Worker that takes titles_detail gets each title as { abbr, organization,
+    // date } (`titles` is then the detail map); an older one the abbreviations.
+    titles: titlesSent(titles, dog.id, titlesDetail),
     // A test's id is its name, so a retest updates the same result on the website
     // (and keeps her Show on site tick there).
     health: done.map((t) => assertOnlyKeys({
@@ -196,11 +276,16 @@ function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposit
       // Marked Normal: true; Abnormal: false; not marked: null, which the website
       // counts as normal (only a result she marked Abnormal is kept off).
       normal: t.outcome === 'Normal' ? true : t.outcome === 'Abnormal' ? false : null,
-      date: ymd(t.date)
-    }, HEALTH_KEYS, 'health')),
+      date: ymd(t.date),
+      // Its KennelOS event type (genetic_test, ofa_pennhip, breed_specific_test), so
+      // the website can group results (health_detail section).
+      ...(healthType ? { type: t.type } : {})
+    }, plus(HEALTH_KEYS, 'type', healthType), 'health')),
     ...(coOwned ? coOwnership(dog, coOwned) : {}),
-    ...dispositionOf(dog, disposition)
-  }, withDisposition(withCoOwned(withRegistry(DOG_KEYS, registry), Boolean(coOwned)), disposition), 'dog');
+    ...dispositionOf(dog, disposition),
+    ...(origin ? originOf(dog) : {}),
+    ...(lineage ? lineageOf(dog, { ...lineage, titles, titlesDetail, origin }) : {})
+  }, [...withDisposition(withCoOwned(withRegistry(DOG_KEYS, registry), Boolean(coOwned)), disposition), ...(origin ? ORIGIN_KEYS : []), ...(lineage ? LINEAGE_KEYS : [])], 'dog');
 }
 
 // The dogs she shows: her own kennel's, marked, with a status the website has.
@@ -222,7 +307,7 @@ export function puppyStatus(pup) {
   return DISPOSITION_ON_SITE[pup.disposition] ?? 'undecided';
 }
 
-function puppyEntries(litter, dogs, registry = false) {
+function puppyEntries(litter, dogs, registry = false, rawDisposition = false) {
   return dogs
     .filter((d) => d.litter_id === litter.id && !d.is_archived && !['deceased', 'external_reference'].includes(d.status) && SEXES.includes(d.sex))
     .sort((a, b) => String(a.call_name || '').localeCompare(String(b.call_name || '')) || String(a.id).localeCompare(String(b.id)))
@@ -234,8 +319,11 @@ function puppyEntries(litter, dogs, registry = false) {
       color: line(p.color_markings, 40),
       registration: REGISTRATIONS.includes(p.intended_registration) ? p.intended_registration : null,
       status: puppyStatus(p),
-      ...registryOf(p, registry)
-    }, withRegistry(PUPPY_KEYS, registry), 'puppy'));
+      ...registryOf(p, registry),
+      // Her disposition as she set it, null when none is set (pup_disposition
+      // section): KennelPort's rule turns it into the site status.
+      ...(rawDisposition ? { disposition: DISPOSITIONS.includes(p.disposition) ? p.disposition : null } : {})
+    }, plus(withRegistry(PUPPY_KEYS, registry), 'disposition', rawDisposition), 'puppy'));
 }
 
 // --- litters and pairings -----------------------------------------------------
@@ -262,7 +350,7 @@ function litterPrices(litter) {
   }, PRICE_KEYS, 'prices');
 }
 
-function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry, heatOf }) {
+function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry, heatOf, litterStatus, rawDisposition }) {
   const pairing = litter.pairing_id ? pairingsById.get(litter.pairing_id) : null;
   const born = litter.status !== 'expected';
   return assertOnlyKeys({
@@ -278,9 +366,11 @@ function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry, h
     born_on: born ? ymd(litter.whelp_date) : null,
     ready_on: born ? ymd(litter.estimated_ready_date) : null,
     deposits_on: ymd(litter.accept_deposits_date),
+    // Its status as she set it (litter_status section): only live ones are sent.
+    ...(litterStatus ? { status: litter.status } : {}),
     prices: prices ? litterPrices(litter) : null,
-    puppies: puppyEntries(litter, dogs, registry)
-  }, withHeat(LITTER_KEYS, Boolean(heatOf)), 'litter');
+    puppies: puppyEntries(litter, dogs, registry, rawDisposition)
+  }, plus(withHeat(LITTER_KEYS, Boolean(heatOf)), 'status', litterStatus), 'litter');
 }
 
 // Pairings she shows under Coming up: marked, still on their way, and not yet a
@@ -369,6 +459,25 @@ export function waitlistSteps(kennel) {
   return steps.map((s) => assertOnlyKeys({ id: s.id, heading: line(s.heading, 80), body: para(s.body, 400) }, STEP_KEYS, 'step'));
 }
 
+// Her waitlist's settings as values (waitlist_facts section), the same ones
+// waitlistSteps words: whether she takes applications online (only while her list is
+// online), whether there's an application fee (never its amount: prices follow the
+// website's prices rule), the days to pay it after approval, the days to accept an
+// offer and send the deposit, and the passes before removal. A count she hasn't set
+// is null. null before her waitlist is set up.
+const count = (v) => (Number.isInteger(Number(v)) && Number(v) >= 1 && v !== '' && v != null ? Number(v) : null);
+export function waitlistFacts(kennel) {
+  if (!waitlistIsSetUp(kennel)) return null;
+  const c = waitlistConfig(kennel);
+  return assertOnlyKeys({
+    online_form: c.online === true && c.online_form === true,
+    has_fee: Number(c.fee_amount) > 0,
+    fee_due_days: count(c.fee_due_days),
+    respond_days: count(c.respond_days),
+    max_passes: count(c.max_passes)
+  }, WAITLIST_FACT_KEYS, 'waitlist facts');
+}
+
 // How to pay the application fee (KennelPort plan 3.9), from her waitlist's
 // payment instructions and the fee account's Pay link: the same words families
 // read on their status pages. null when there's nothing to say. Instructions
@@ -428,7 +537,7 @@ const siteAddress = (v) => {
   const s = String(v ?? '').trim();
   return webLink(s) || (/^[\w.-]+\.[a-z]{2,}(\/\S*)?$/i.test(s) ? webLink(`https://${s}`) : null);
 };
-export function websiteProducts(accounts = [], { transport = false } = {}) {
+export function websiteProducts(accounts = [], { transport = false, accountType = false } = {}) {
   return accounts
     .filter((a) => a && !a.is_archived && a.show_on_website === true && line(a.name, 80)
       && (isTransportAccount(a) ? transport : hasReferral(a)))
@@ -442,8 +551,10 @@ export function websiteProducts(accounts = [], { transport = false } = {}) {
         code: line(a.referral_code, 40),
         code_note: note && note.length <= 120 ? note : null
       };
-      if (!transport) return assertOnlyKeys(out, PRODUCT_KEYS, 'product');
-      return assertOnlyKeys({ ...out, website: siteAddress(a.website), transport: isTransportAccount(a) }, PRODUCT_TRANSPORT_KEYS, 'product');
+      // Its type as she set it, null when none (account_type section).
+      const type = accountType ? { account_type: ACCOUNT_TYPES.includes(a.account_type) ? a.account_type : null } : {};
+      if (!transport) return assertOnlyKeys({ ...out, ...type }, plus(PRODUCT_KEYS, 'account_type', accountType), 'product');
+      return assertOnlyKeys({ ...out, website: siteAddress(a.website), transport: isTransportAccount(a), ...type }, plus(PRODUCT_TRANSPORT_KEYS, 'account_type', accountType), 'product');
     });
 }
 
@@ -512,14 +623,15 @@ function coOwnedGaps(kennel, dogs, contacts, kennels) {
 // its id and time). Records match by id within a section, as on KennelPort.
 // → ["New litter: First Down", "Coach: Available → Spoken for", …], [] when the
 // same.
-const PUPPY_WORDS = { available: 'Available', placed: 'Spoken for', staying: 'Staying with us', undecided: 'Still deciding', hidden: 'Hidden', reserved: 'Reserved' };
+const PUPPY_WORDS = { available: 'Available', placed: 'Spoken for', staying: 'Staying with us', undecided: 'Still deciding', hidden: 'Hidden' };
 const DOG_WORDS = { puppy: 'up and coming', active_breeding: 'at home', for_sale: 'looking for a home', retired_breeding: 'retired', deceased: 'in memory' };
 const FIELD_WORDS = {
   call_name: 'name', registered_name: 'registered name', registry: 'registry', sex: 'sex', date_of_birth: 'birthday', color: 'colour', died_on: 'date of death',
   titles: 'titles', health: 'health results', name: 'name', dam_id: 'dam', sire_id: 'sire', dam_name: 'dam', sire_name: 'sire',
   expected_on: 'expected date', born_on: 'birth date', ready_on: 'going-home date', deposits_on: 'deposits date', prices: 'prices',
   planned_on: 'planned date', month: 'month', pairing_id: 'pairing', registration: 'registration',
-  co_owned: 'co-owned', co_owner_kennel_ids: 'co-owner kennels'
+  co_owned: 'co-owned', co_owner_kennel_ids: 'co-owner kennels',
+  imported: 'imported', import_country: 'country of origin', breed: 'breed', ancestors: 'pedigree'
 };
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 export function bundleChanges(before = {}, after = {}) {
@@ -556,7 +668,7 @@ export function bundleChanges(before = {}, after = {}) {
       const pw = p0.get(pid);
       if (!pw) { out.push(`${p.name}: new puppy in ${litterName(l)}`); continue; }
       if (pw.status !== p.status) out.push(`${p.name}: ${PUPPY_WORDS[pw.status] || pw.status} → ${PUPPY_WORDS[p.status] || p.status}`);
-      const pk = fields(pw, p, ['id', 'status']);
+      const pk = fields(pw, p, ['id', 'status', 'disposition']); // her disposition is the status line above
       if (pk.length) out.push(`${p.name}: ${words(pk)} changed`);
     }
     for (const [pid, p] of p0) if (!p1.has(pid)) out.push(`${p.name}: off the site`);
@@ -575,7 +687,7 @@ export function bundleChanges(before = {}, after = {}) {
   for (const [id, h] of h1) if (!h0.has(id)) out.push(`Coming up: ${h.dam_name || 'a girl'}'s heat`);
   for (const [id, h] of h0) if (!h1.has(id)) out.push(`${h.dam_name || 'A girl'}'s heat: off Coming up`);
 
-  const other = { extras: 'Extras', products: 'Recommended products', partner_kennels: 'Partner kennels', steps: 'How it works steps', payment: 'How to pay', waitlist_public_id: 'Your waitlist link' };
+  const other = { extras: 'Extras', products: 'Recommended products', partner_kennels: 'Partner kennels', steps: 'How it works steps', payment: 'How to pay', waitlist_facts: 'Waitlist details', waitlist_public_id: 'Your waitlist link' };
   for (const [k, label] of Object.entries(other)) if (!same(before[k], after[k])) out.push(`${label} changed`);
   return out;
 }
@@ -605,22 +717,24 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   if (!/^[\w-]{8,80}$/.test(String(bundleId ?? ''))) throw new Error('buildSiteBundle needs a bundle id.');
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const pairingsById = new Map(pairings.map((p) => [p.id, p]));
-  const titles = titlesByDog(events);
+  const titlesDetail = has(sections, 'titles_detail');
+  const titles = titlesDetail ? titleDetailsByDog(events) : titlesByDog(events);
   const tests = completedTestsByDog(events);
   const config = waitlistConfig(kennel);
-  const registry = Array.isArray(sections) && sections.includes('registry');
+  const registry = has(sections, 'registry');
   const heatOf = Array.isArray(sections) && sections.includes('heat_id') ? heatUse(kennel, { dogs, events, pairings, today }).heatOf : null;
-  const ctx = { dogsById, pairingsById, dogs, prices, registry, heatOf };
+  const ctx = { dogsById, pairingsById, dogs, prices, registry, heatOf, litterStatus: has(sections, 'litter_status'), rawDisposition: has(sections, 'pup_disposition') };
   const kennelsById = new Map(kennels.map((k) => [k.id, k]));
   const coOwned = Array.isArray(sections) && sections.includes('partner_kennels') ? { contactsById: new Map(contacts.map((c) => [c.id, c])), kennelsById } : null;
 
   const shown = {
-    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry, coOwned, Array.isArray(sections) && sections.includes('disposition'))),
+    dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry, coOwned, has(sections, 'disposition'), has(sections, 'health_detail'), titlesDetail,
+      has(sections, 'lineage') ? { dogsById } : null, has(sections, 'origin'))),
     litters: websiteLitters(kennel, litters, pairingsById).map((l) => litterEntry(l, ctx)),
     pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById, heatOf)),
     heats: websiteHeats(kennel, { dogs, events, pairings, today }).map((h) => assertOnlyKeys({ ...h, dam_name: dogName(dogsById.get(h.dam_id)) }, HEAT_KEYS, 'heat'))
   };
-  const products = Array.isArray(sections) && sections.includes('products') ? websiteProducts(accounts, { transport: sections.includes('transport') }) : null;
+  const products = Array.isArray(sections) && sections.includes('products') ? websiteProducts(accounts, { transport: sections.includes('transport'), accountType: sections.includes('account_type') }) : null;
   if (products && products.length > SITE_MAX.products) throw new SiteExportError(`Your website takes at most ${SITE_MAX.products} recommended products, and ${products.length} accounts are marked Show on website. Untick some, then try again.`);
   const words = { dogs: 'dogs', litters: 'litters', pairings: 'pairings', heats: 'planned heats' };
   for (const [k, list] of Object.entries(shown)) {
@@ -631,6 +745,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
 
   const steps = waitlistSteps(kennel);
   const fee = applicationFeePay(kennel, accounts);
+  const facts = has(sections, 'waitlist_facts') ? waitlistFacts(kennel) : null;
   const bundle = {
     format: SITE_BUNDLE_FORMAT,
     bundle_id: bundleId,
@@ -644,7 +759,8 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
     ...(products ? { products } : {}),
     ...(partnerKennels ? { partner_kennels: partnerKennels } : {}),
     ...(steps.length ? { steps } : {}),
-    ...(fee ? { payment: assertOnlyKeys({ application_fee: fee }, PAYMENT_KEYS, 'payment') } : {})
+    ...(fee ? { payment: assertOnlyKeys({ application_fee: fee }, PAYMENT_KEYS, 'payment') } : {}),
+    ...(facts ? { waitlist_facts: facts } : {})
   };
   return assertOnlyKeys(bundle, BUNDLE_KEYS, 'bundle');
 }

@@ -65,6 +65,9 @@ export const SYNC_REGISTRY = Object.freeze({
       'lives_with_contact_id',
       'pedigree_only', // without it a cloud restore would turn every ancestor into a kennel dog
       'additional_registrations', // the dog's other registries and numbers; the same kind of data as registry/registration_number
+      // Imported, and its Country of origin while ticked (Website Contract Plan C4): facts
+      // about the dog like registry (owner decision 2026-11-13).
+      'imported', 'import_country',
       // Its Dog Card id (Shared Dogs Plan §3.1): a random kosd1_ id, minted when it first
       // goes on a card or received with one. Cloud so every device of hers matches the
       // same dog on the next card.
