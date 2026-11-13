@@ -152,10 +152,12 @@ function boardingTotal(sale) {
 // the schedule, extras on their own dates, transport last. Each is
 // { key, component, label, amount, part: 'deposit'|'schedule'|'own', use, covers?,
 //   extraId?, step? }. `use` is the credit use that may pay it (CREDIT_USES).
-// An extra is on its own dates when it's flagged so, or it has its own payment steps
-// and no due date names it; named, its steps aren't used.
+// An extra is on its own dates when it's flagged so (`own_due_dates`). On a sale with
+// a schedule stored, every other extra is on the schedule, its own steps not used for
+// dates (`steps` keeps them, so a step marked paid still counts). With no schedule,
+// an extra with its own steps keeps them, as before schedules (D2).
 export function saleCharges(sale, schedule = scheduleOf(sale)) {
-  const named = new Set(schedule.flatMap((st) => st.covers).filter((c) => c.startsWith('extra:')).map((c) => c.slice(6)));
+  const scheduled = hasSchedule(sale);
   const price = num(sale?.price);
   const deposit = cents(num(sale?.deposit_amount));
   const out = [];
@@ -166,9 +168,9 @@ export function saleCharges(sale, schedule = scheduleOf(sale)) {
   if (boarding > 0) out.push({ key: 'boarding', component: 'boarding', label: INVOICE_LINE_LABELS.boarding, amount: boarding, part: 'schedule', use: 'extras', covers: 'boarding' });
   const own = [];
   for (const x of saleExtraCharges(sale)) {
-    const ownDates = x.own_due_dates === true || (Array.isArray(x.payments) && !named.has(x.id));
+    const ownDates = x.own_due_dates === true || (Array.isArray(x.payments) && !scheduled);
     if (!ownDates) {
-      out.push({ key: `extra:${x.id}`, component: 'extra', label: x.label, amount: x.amount, part: 'schedule', use: 'extras', covers: 'extras', extraId: x.id });
+      out.push({ key: `extra:${x.id}`, component: 'extra', label: x.label, amount: x.amount, part: 'schedule', use: 'extras', covers: 'extras', extraId: x.id, ...(Array.isArray(x.payments) ? { steps: x.payments } : {}) });
     } else if (Array.isArray(x.payments)) {
       for (const st of x.payments) own.push({ key: `extra:${x.id}:${st.id}`, component: 'extra', label: stepLabel(x, st), amount: st.amount, part: 'own', use: 'extras', extraId: x.id, step: st });
     } else {
@@ -273,11 +275,28 @@ export function paymentStatement(sale, opts = {}) {
   const payments = cleanPayments(s.payments);
   const recordPayment = (p, accepts) => record({ kind: 'payment', id: p.id, date: p.date, offered: p.amount,
     ...(p.method ? { method: p.method } : {}), ...(p.account_id ? { account_id: p.account_id } : {}), ...(text(p.toward) ? { toward: text(p.toward) } : {}) }, ledger.pay(p.amount, accepts));
-  for (const p of payments.filter((x) => text(x.toward))) recordPayment(p, (ch) => ch.key === text(p.toward));
+  //    An extra now on the schedule keeps what was paid toward its old steps: a payment
+  //    toward one of them pays the extra, and a step marked paid covers what's left
+  //    of that step's share.
+  const towardSteps = {};
+  for (const p of payments.filter((x) => text(x.toward))) {
+    const toward = text(p.toward);
+    const onSched = charges.find((ch) => ch.part === 'schedule' && ch.steps && toward.startsWith(`${ch.key}:`));
+    recordPayment(p, (ch) => ch.key === toward || ch === onSched);
+    if (onSched) towardSteps[toward] = cents((towardSteps[toward] || 0) + received[received.length - 1].amount);
+  }
   for (const ch of charges.filter((c) => c.part === 'own' && c.step?.paid_date)) {
     const left = ledger.left(ch.key);
     const pays = ledger.pay(left, (c) => c.key === ch.key);
     if (pays.length) record({ kind: 'step', id: ch.key, date: ch.step.paid_date, offered: left }, pays);
+  }
+  for (const ch of charges.filter((c) => c.part === 'schedule' && c.steps)) {
+    for (const stp of ch.steps.filter((x) => x.paid_date)) {
+      const id = `${ch.key}:${stp.id}`;
+      const left = cents(Math.min(Math.max(num(stp.amount) - (towardSteps[id] || 0), 0), ledger.left(ch.key)));
+      const pays = ledger.pay(left, (c) => c.key === ch.key);
+      if (pays.length) record({ kind: 'step', id, date: stp.paid_date, offered: left }, pays);
+    }
   }
   // 5. Payments recorded on the sale toward the schedule, in date order (never the
   //    deposit, never an own-dated extra).
@@ -582,7 +601,8 @@ export function addedFees(before, after) {
   if (num(after?.transport_fee) > num(b.transport_fee)) out.push({ kind: 'transport', label: 'Transport fee' });
   if (boardingTotal(after || {}) > boardingTotal(b)) out.push({ kind: 'boarding', label: 'Boarding' });
   const had = new Set(saleExtraCharges(b).map((x) => x.id));
-  for (const x of saleExtraCharges(after)) if (!had.has(x.id)) out.push({ kind: 'extra', label: x.label, ...(x.own_due_dates || Array.isArray(x.payments) ? { own: true } : {}) });
+  const scheduled = hasSchedule(after);
+  for (const x of saleExtraCharges(after)) if (!had.has(x.id)) out.push({ kind: 'extra', label: x.label, ...(x.own_due_dates || (Array.isArray(x.payments) && !scheduled) ? { own: true } : {}) });
   return out;
 }
 

@@ -15,7 +15,7 @@
 import { saleRepo } from '../data/saleRepo.js';
 import { getSaleStatement } from '../data/incomeView.js';
 import {
-  paymentStatement, cleanSchedule, defaultSchedule, readSchedule, scheduleFromSaved, newPayment, paymentsWith,
+  paymentStatement, saleCharges, cleanSchedule, defaultSchedule, readSchedule, scheduleFromSaved, newPayment, paymentsWith,
   addedFees, paidInFullOffer, finalDueDate, scheduleSummary, coversText
 } from '../data/paymentSchedule.js';
 import { SCHEDULE_DUE, SCHEDULE_COVERS, PAYMENT_METHODS, RELEASED_SALE_STATUSES } from '../data/vocab.js';
@@ -304,8 +304,10 @@ function previewRows(root, loaded) {
 
 export function openScheduleEditor({ loaded, savedList = [] }) {
   const sale = loaded.sale;
-  const charges = loaded.statement.charges;
   const current = cleanSchedule(sale.payment_schedule);
+  // The charges as they'll be once a schedule is stored: an extra with its own steps
+  // joins the schedule then (unless it's flagged its own dates), so it can be ticked.
+  const charges = current ? loaded.statement.charges : saleCharges({ ...sale, payment_schedule: defaultSchedule(sale) });
   const savedPick = savedList.length ? `<div class="field"><label for="ps-saved">Start from a saved schedule</label>
       <select id="ps-saved"><option value="">Choose…</option>${savedList.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select></div>` : '';
   return formDialog({
