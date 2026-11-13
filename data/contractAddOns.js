@@ -22,6 +22,7 @@
 import { readyDateOf, pickupFor, defaultStart, boardingEnd, hasDeferredBoarding, trainingStaysFor, trainingStayEvent } from './goHome.js';
 import { saleExtraCharges, stepDueDate } from './extraCharges.js';
 import { addDaysToYMD } from './dateUtils.js';
+import { chargePieces } from './paymentSchedule.js';
 
 const text = (v) => String(v ?? '').trim();
 const lower = (v) => text(v).toLowerCase();
@@ -110,7 +111,20 @@ export function pickupToSet(form, addOns) {
 // A charge's payment plan as dated steps: [{ percent, amount, due }] ('' = not
 // known yet; 'with the balance' for one paid with it). No plan = one step, all of
 // it, with the balance.
-export function extraPayments(charge, sale, pickupDate = '') {
+// `statement` (the sale's payment statement): on a sale with a schedule, an extra paid
+// through it (not on its own dates) has no steps of its own; its plan is its share of
+// each due date (chargePieces: paid and still owed), the final one 'with the balance'
+// while its date isn't known. Own-dated extras, and every extra on a sale with no
+// schedule, keep their own steps (D2).
+export function extraPayments(charge, sale, pickupDate = '', statement = null) {
+  const onSchedule = statement?.hasSchedule && !statement.ended
+    ? statement.charges.find((c) => c.key === `extra:${charge?.id}` && c.part === 'schedule') : null;
+  if (onSchedule && onSchedule.amount > 0) {
+    return chargePieces(statement).filter((p) => p.key === onSchedule.key).map((p) => ({
+      percent: Math.round((p.amount / onSchedule.amount) * 10000) / 100, amount: p.amount,
+      due: p.dueDate || (p.isFinal ? 'with the balance' : '')
+    }));
+  }
   if (!Array.isArray(charge?.payments) || !charge.payments.length) {
     return [{ percent: 100, amount: charge?.amount ?? 0, due: text(sale?.balance_due_date) || 'with the balance' }];
   }

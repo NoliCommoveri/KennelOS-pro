@@ -15,6 +15,7 @@
 // Pure: no db, no DOM. The callers read the records.
 import { CONTRACT_FORM_TYPE, CONTRACT_TYPE, REGISTRATION_TYPE, SEX, STUD_SERVICE_TYPE, descriptor } from './vocab.js';
 import { extraFor, extraPayments } from './contractAddOns.js';
+import { finalDueDate } from './paymentSchedule.js';
 
 const text = (v) => String(v ?? '').trim();
 
@@ -214,13 +215,21 @@ export const PREFILL_FIELDS = {
     ['balanceDue', 'Balance still due (everything on the sale: with transport, boarding and extras)'],
     ['depositDue', 'Deposit still due (the deposit, less the application fee and credits counted toward it)'],
     ['otherPaymentsReceived', 'Credits and payments toward the balance, beyond what covered the deposit'],
-    ['purchaseBalanceDue', 'Balance of the purchase price due at pickup (the price only)']
+    ['purchaseBalanceDue', 'Balance of the purchase price due at pickup (the price only)'],
+    ['totalCharges', 'Everything on the sale (price, transport, boarding and extras)'],
+    ['paidToDate', 'Paid to date: deposit, payments, credits for funds received and the fee credited, on the sale'],
+    ['payment1Amount', 'First payment before the final one: what\'s still owed by it (blank with no schedule)'],
+    ['payment1Due', 'First payment\'s due date'],
+    ['payment2Amount', 'Second payment before the final one: what\'s still owed by it'],
+    ['payment2Due', 'Second payment\'s due date'],
+    ['finalPaymentAmount', 'Final payment: what\'s still owed by it'],
+    ['finalPaymentDue', 'Final payment\'s due date']
   ],
   transport: [
     ['transportFee', 'Transport fee'],
     ['deliveryDate', 'Delivery / pickup date (the one on your calendar)'],
     ['deliveryPlace', 'Delivery / pickup place'],
-    ['transportDueDate', 'When the transport fee is due (the balance due date)']
+    ['transportDueDate', 'When the transport fee is due (with the final payment; without a schedule, the balance due date)']
   ],
   boarding: [
     ['boardingRate', 'Boarding rate'],
@@ -276,6 +285,47 @@ export const PREFILL_FIELDS = {
   ]
 };
 
+// Each fact's label in Firma's template editor (her workspace's custom fields,
+// cloudEsign.factFields): a group prefix, then a short name, so the fields sort into
+// groups in the editor's list (Payment Schedule plan §8.2, D15). Only the label shows
+// there; the field's name (the fact) never changes, so a field already placed keeps
+// filling. A fact shared by two groups (damName, breed, partner…) reads right in both.
+export const FIRMA_LABELS = {
+  contractRef: 'Contract · Reference (hidden)', contractTitle: 'Contract · Title', contractDate: 'Contract · Date',
+  kennelName: 'Kennel · Name', kennelLocation: 'Kennel · Location', kennelWebsite: 'Kennel · Website',
+  breederName: 'Breeder · Full name', breederFirstName: 'Breeder · First name', breederLastName: 'Breeder · Last name',
+  breederEmail: 'Breeder · Email', breederPhone: 'Breeder · Phone', breederAddress: 'Breeder · Address',
+  saleRef: 'Sale · Reference (hidden)',
+  buyerName: 'Buyer · Full name', buyerFirstName: 'Buyer · First name', buyerLastName: 'Buyer · Last name',
+  buyerEmail: 'Buyer · Email', buyerPhone: 'Buyer · Phone', buyerAddress: 'Buyer · Address',
+  puppyName: 'Pup · Call name', puppyRegisteredName: 'Pup · Registered name', puppySex: 'Pup · Sex',
+  puppyColor: 'Pup · Color / markings', puppyDob: 'Pup · Date of birth', puppyMicrochip: 'Pup · Microchip',
+  breed: 'Pup or dog · Breed', sireName: 'Sire · Name', damName: 'Dam · Name',
+  registrationType: 'Sale · Registration', pickupDate: 'Sale · Pickup date', price: 'Sale · Price',
+  depositAmount: 'Sale · Deposit', balanceDue: 'Sale · Balance still due', depositDue: 'Sale · Deposit still due',
+  otherPaymentsReceived: 'Sale · Other payments and credits', purchaseBalanceDue: 'Sale · Price balance due at pickup',
+  totalCharges: 'Sale · Total charges', paidToDate: 'Sale · Paid to date',
+  payment1Amount: 'Payment · 1st amount', payment1Due: 'Payment · 1st due date',
+  payment2Amount: 'Payment · 2nd amount', payment2Due: 'Payment · 2nd due date',
+  finalPaymentAmount: 'Payment · Final amount', finalPaymentDue: 'Payment · Final due date',
+  transportFee: 'Transport · Fee', deliveryDate: 'Transport · Delivery date', deliveryPlace: 'Transport · Delivery place',
+  transportDueDate: 'Transport · Fee due date',
+  boardingRate: 'Boarding · Rate', boardingPer: 'Boarding · Rate per', boardingLength: 'Boarding · Length',
+  boardingTotal: 'Boarding · Total', boardingStart: 'Boarding · Start date', boardingEnd: 'Boarding · End date',
+  extraName: 'Extra · Name', extraDescription: 'Extra · Description', extraPrice: 'Extra · Price', extraPayments: 'Extra · Payment plan',
+  extraPayment1Amount: 'Extra · 1st payment', extraPayment1Due: 'Extra · 1st payment due',
+  extraPayment2Amount: 'Extra · 2nd payment', extraPayment2Due: 'Extra · 2nd payment due',
+  extraPayment3Amount: 'Extra · 3rd payment', extraPayment3Due: 'Extra · 3rd payment due',
+  extraPayment4Amount: 'Extra · 4th payment', extraPayment4Due: 'Extra · 4th payment due',
+  extraStayDays: 'Extra · Stay days', extraStayStart: 'Extra · Stay start', extraStayEnd: 'Extra · Stay end',
+  studServiceRef: 'Stud service · Reference (hidden)', studName: 'Stud · Name', studRegisteredName: 'Stud · Registered name',
+  damRegisteredName: 'Dam · Registered name', studFee: 'Stud service · Fee', serviceType: 'Stud service · Type',
+  partnerName: 'Other party · Full name', partnerFirstName: 'Other party · First name', partnerLastName: 'Other party · Last name',
+  partnerEmail: 'Other party · Email', partnerPhone: 'Other party · Phone', partnerAddress: 'Other party · Address',
+  dogName: 'Dog · Call name', dogRegisteredName: 'Dog · Registered name', dogSex: 'Dog · Sex', dogDob: 'Dog · Date of birth',
+  dogMicrochip: 'Dog · Microchip', leaseStart: 'Lease · Start date', leaseEnd: 'Lease · End date'
+};
+
 // Which groups a form type fills, after `every`.
 export function fieldGroupsFor(formType) {
   if (formType === 'stud_service') return ['stud_service'];
@@ -308,11 +358,30 @@ function person(prefix, c) {
   ];
 }
 
+// The sale's payment schedule on a contract (Payment Schedule plan §8.1, D11), from its
+// payment statement (paymentSchedule.paymentStatement), so the contract says what the
+// Payments card says. totalCharges / paidToDate: the statement's total and paid (the
+// sale's own charges; money on them from the deposit, payments, credits for funds
+// received and the application fee credited; a credit's leftover or the part that paid
+// the fee itself isn't on the sale). payment1 / payment2: the first two due dates before
+// the final one; finalPayment: the last. Each amount is what's still owed by that due
+// date (its ask less the money it took, so 0.00 once met); its date, YYYY-MM-DD, is left
+// out while it can't be known. A returned, cancelled or voided sale has no due dates.
+function scheduleValues(st) {
+  if (!st) return [];
+  const out = [['totalCharges', money(st.total)], ['paidToDate', money(st.paid)]];
+  const dueDates = st.dueDates || [];
+  dueDates.filter((d) => !d.isFinal).slice(0, 2).forEach((d, i) => out.push([`payment${i + 1}Amount`, money(d.owed)], [`payment${i + 1}Due`, text(d.date)]));
+  const last = dueDates.find((d) => d.isFinal);
+  if (last) out.push(['finalPaymentAmount', money(last.owed)], ['finalPaymentDue', text(last.date)]);
+  return out;
+}
+
 // The facts to prefill for a form (or a bare form type), as [[name, value]] in
 // PREFILL_FIELDS order, empties dropped. An Extra agreement fills from the extra
 // its row names (`extra_list_id`). `facts` holds the records the contract reaches (the caller reads
 // them): { contract, kennel, breeder, sale, buyer, puppy, sire, dam, balanceDue, priceTable, pickupDate,
-// addOns (contractAddOns.addOnFacts),
+// statement (the sale's payment statement, incomeView.getSaleStatement), addOns (contractAddOns.addOnFacts),
 // studService, studDog, studDam, partner, dog, today }.
 export function prefillValues(formOrType, facts = {}) {
   const form = typeof formOrType === 'string' ? { form_type: formOrType } : (formOrType || {});
@@ -346,14 +415,20 @@ export function prefillValues(formOrType, facts = {}) {
       ['price', money(s.price)], ['depositAmount', money(s.deposit_amount)], ['balanceDue', money(f.balanceDue)],
       // Her contract's payment table (contractSend: incomeView.priceTable).
       ['depositDue', money(f.priceTable?.depositDue)],
-      ['otherPaymentsReceived', money(f.priceTable?.otherPaid)], ['purchaseBalanceDue', money(f.priceTable?.balanceDue)]
+      ['otherPaymentsReceived', money(f.priceTable?.otherPaid)], ['purchaseBalanceDue', money(f.priceTable?.balanceDue)],
+      ...scheduleValues(f.statement)
     );
   }
   const a = f.addOns;
   if (groups.includes('transport') && a) {
     const t = a.transport;
+    // Transport is always paid last (D16), so with a schedule it's due with the final
+    // payment: that due date as it stands now, not the balance due date mirrored when
+    // the schedule was last saved.
+    const st = f.statement;
+    const due = st?.hasSchedule && !st.ended ? text(finalDueDate(st)) : text(t.due);
     out.push(['transportFee', money(t.fee)], ['deliveryDate', text(t.date)],
-      ['deliveryPlace', text(t.place)], ['transportDueDate', text(t.due)]);
+      ['deliveryPlace', text(t.place)], ['transportDueDate', due]);
   }
   if (groups.includes('boarding') && a?.boarding) {
     const b = a.boarding;
@@ -362,7 +437,7 @@ export function prefillValues(formOrType, facts = {}) {
   }
   const x = groups.includes('extra') ? extraFor(a, form.extra_list_id) : null;
   if (x) {
-    const steps = extraPayments(x.charge, f.sale, a.pickupDate || f.pickupDate);
+    const steps = extraPayments(x.charge, f.sale, a.pickupDate || f.pickupDate, f.statement);
     const stepText = (st) => `${st.percent}% (${money(st.amount)}) ${st.due === 'with the balance' ? 'with the balance' : st.due ? `due ${st.due}` : ''}`.trim();
     out.push(['extraName', text(x.charge.label)], ['extraDescription', text(x.row?.description)], ['extraPrice', money(x.charge.amount)],
       ['extraPayments', steps.map(stepText).join('; ')]);

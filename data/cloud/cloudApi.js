@@ -335,7 +335,8 @@ export const readIntegrationEvents = (token, since = 0) => getJson(`/integration
 export const getFirmaStatus = (token) => getJson('/integrations/firma', { token });
 export const connectFirma = (token, kennelName) => getJson('/integrations/firma/connect', { method: 'POST', token, json: { kennelName } });
 // fields: [{ name, label }], at most 40 a call → { added }
-export const syncFirmaFields = (token, fields) => getJson('/integrations/firma/fields', { method: 'POST', token, json: { fields } });
+// `relabel`: names of fields already there whose label the Worker updates to the one given.
+export const syncFirmaFields = (token, fields, relabel = []) => getJson('/integrations/firma/fields', { method: 'POST', token, json: { fields, ...(relabel.length ? { relabel } : {}) } });
 // → { templates: [{ id, name, pageCount }] }
 export const listFirmaTemplates = (token) => getJson('/integrations/firma/templates', { token });
 // document: a base64 PDF → { id, name, pageCount }

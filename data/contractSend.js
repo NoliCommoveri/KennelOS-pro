@@ -13,7 +13,7 @@ import { litterRepo } from './litterRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { expectedPickupDate, pickupEvent } from './goHome.js';
 import { accountRepo } from './accountRepo.js';
-import { incomeLineItems, paidOnSale, getSaleCredits, priceTable } from './incomeView.js';
+import { incomeLineItems, paidOnSale, getSaleCredits, priceTable, getSaleStatement } from './incomeView.js';
 import { allForms, prefillValues, prefillUrl, formProvider, mapValues, isFirmaForm, agreementKey } from './contractForms.js';
 import { esignSignedIn, liveTemplateIds } from './cloud/cloudEsign.js';
 import { forgetMissingTemplates } from './esignTemplates.js';
@@ -106,6 +106,9 @@ export async function gatherContractFacts(c) {
     sale, puppy, pickupDate,
     balanceDue: sale ? await balanceDueOn(sale, credits) : null,
     priceTable: sale ? priceTable(sale, { feeCredit: credits.feeCredit, received: credits.credit?.received || null }) : null,
+    // The sale's payment statement, read as the Payments card reads it (Payment Schedule
+    // plan §8.1): the schedule's payments, an extra's share of them, transport's due date.
+    statement: sale ? (await getSaleStatement(sale, { today }))?.statement || null : null,
     addOns: await saleAddOns(sale, { puppy, events: pupEvents, litter, kennel: priceKennel }),
     buyer: sale ? await get(contactRepo, sale.buyer_contact_id) : null,
     sire: puppy ? await get(dogRepo, puppy.sire_id) : null,

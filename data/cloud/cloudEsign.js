@@ -24,7 +24,7 @@ import { refreshConnections } from './cloudIntegrations.js';
 import { editionFlags } from '../editionConfig.js';
 import { isDemo } from '../demoMode.js';
 import { contractRepo } from '../contractRepo.js';
-import { PREFILL_FIELDS, prefillValues, splitName } from '../contractForms.js';
+import { PREFILL_FIELDS, FIRMA_LABELS, prefillValues, splitName } from '../contractForms.js';
 import { todayYMD } from '../dateUtils.js';
 import { kennelSignerName } from '../esignTemplates.js';
 
@@ -47,20 +47,32 @@ export async function esignStatus() {
   return api.getFirmaStatus(requireSession());
 }
 
-// Every fact name a template can fill, once each, with what it holds.
+// Every fact name a template can fill, once each, with its label in Firma's editor
+// (contractForms.FIRMA_LABELS: grouped, e.g. "Buyer · Email"; else what it holds).
 export function factFields() {
   const seen = new Map();
-  for (const rows of Object.values(PREFILL_FIELDS)) for (const [name, label] of rows) if (!seen.has(name)) seen.set(name, label);
+  for (const rows of Object.values(PREFILL_FIELDS)) for (const [name, label] of rows) if (!seen.has(name)) seen.set(name, FIRMA_LABELS[name] || label);
   return [...seen].map(([name, label]) => ({ name, label: label.slice(0, 100) }));
 }
 
-// Make the facts her workspace's custom fields, so Firma's editor offers them.
-// Safe to repeat: the Worker adds only the missing ones.
+// The fields already in her workspace whose label the Worker brings up to date (the
+// group prefixes, Payment Schedule plan §8.2 step 1). One first, to prove on a real send
+// that a relabelled field still fills (Firma keeps the name, so it should); then every
+// fact, by listing them all here. A field added new always gets its grouped label.
+export const RELABEL_FIELDS = ['buyerEmail'];
+
+// Make the facts her workspace's custom fields, so Firma's editor offers them, and
+// relabel the ones RELABEL_FIELDS names. Safe to repeat: the Worker adds only the
+// missing ones and relabels only a label that differs. → the number added.
 export async function syncFactFields() {
   const token = requireSession();
   const all = factFields();
+  const relabel = new Set(RELABEL_FIELDS);
   let added = 0;
-  for (let i = 0; i < all.length; i += FIELDS_PER_CALL) added += (await api.syncFirmaFields(token, all.slice(i, i + FIELDS_PER_CALL))).added || 0;
+  for (let i = 0; i < all.length; i += FIELDS_PER_CALL) {
+    const chunk = all.slice(i, i + FIELDS_PER_CALL);
+    added += (await api.syncFirmaFields(token, chunk, chunk.map((f) => f.name).filter((n) => relabel.has(n)))).added || 0;
+  }
   return added;
 }
 
