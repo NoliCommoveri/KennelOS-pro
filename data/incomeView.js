@@ -529,7 +529,9 @@ function statementOpts(sale, { dog = null, litter = null, events = [], kennel = 
 //               is marked paid.
 //   otherPaid   credits and payments toward the balance: the credited fee when it
 //               isn't taken off the deposit, the family's received funds (a lost pup's
-//               carry-over) not on the deposit, and the balance once it's marked paid.
+//               carry-over) not on the deposit, payments recorded on the sale (their
+//               share of the price, from the payment statement), and the balance once
+//               it's marked paid.
 //               Nothing is counted twice: funds on the deposit are in depositDue, and
 //               funds that paid the fee count only as the fee (familyCredit leaves
 //               the fee out of `received`).
@@ -537,12 +539,36 @@ function statementOpts(sale, { dog = null, litter = null, events = [], kennel = 
 // So price = the deposit + otherPaid + balanceDue.
 // → { depositDue, otherPaid, balanceDue }
 export function priceTable(sale, { feeCredit = NO_FEE_CREDIT, received = null } = {}) {
-  const parts = saleComponents({ ...sale, end_reason: null }, feeCredit, received).filter((c) => c.component === 'balance');
+  const s = { ...sale, end_reason: null };
+  const parts = saleComponents(s, feeCredit, received).filter((c) => c.component === 'balance');
   const sum = (state) => round2(parts.filter((c) => c.state === state).reduce((t, c) => t + c.amount, 0));
   const split = feeCreditSplit(sale, feeCredit);
   const deposit = Math.max(round2(num(sale.deposit_amount) - split.deposit), 0);
   const depositDue = round2(deposit - Math.min(num(received?.byKey?.deposit), deposit));
-  return { depositDue, otherPaid: round2(sum('earned') + split.balance), balanceDue: sum('anticipated') };
+  const earned = sum('earned');
+  const anticipated = sum('anticipated');
+  // Payments recorded on the sale pay the rest of the price first (D16). Their share
+  // comes from the statement, after the credited fee; credits for funds received are
+  // already in `earned`, so a payment only covers what's left beyond them. A
+  // returned or cancelled sale keeps what was paid: its unpaid price is dropped from
+  // `anticipated`, so the payments count against that instead. A lost sale counts
+  // nothing, as before.
+  let paidByPayments = 0;
+  if (!isLostSale(s)) {
+    const fc = feeCreditOf(feeCredit);
+    const st = paymentStatement(s, { feeCredit: fc.amount > 0 ? fc : null });
+    const recorded = round2(st.received.filter((r) => r.kind === 'payment')
+      .reduce((t, r) => t + r.pays.filter((p) => p.key === 'balance').reduce((u, p) => u + p.amount, 0), 0));
+    const unpaid = RELEASED_SALE_STATUSES.includes(s.status)
+      ? Math.max(round2(Math.max(round2(num(s.price) - num(s.deposit_amount) - split.balance), 0) - earned), 0)
+      : anticipated;
+    paidByPayments = Math.min(recorded, unpaid);
+  }
+  return {
+    depositDue,
+    otherPaid: round2(earned + split.balance + paidByPayments),
+    balanceDue: round2(Math.max(anticipated - paidByPayments, 0))
+  };
 }
 
 // One entry's credits as its page shows them, with the sale they go toward.
