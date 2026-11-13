@@ -418,6 +418,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // the part of their fee a credit paid (receivedCredits.js): money, private
       // like fee_amount.
       'received_credits', 'fee_credit_amount',
+      // A typed invoice / receipt number and notes, kept on the entry while the family
+      // has no sale (Payment Schedule plan D14): private like a sale's.
+      'invoice_number', 'invoice_notes',
       // Their ask, on the application, to list privately (Spec §15.3): private
       // like pause_request. What she decided rides private_listing.
       'private_request',

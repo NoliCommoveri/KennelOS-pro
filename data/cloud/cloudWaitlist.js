@@ -12,7 +12,7 @@
 // Network only through cloudApi. Nothing here ever blocks a page: publishing runs
 // in the background and records its own errors in the waitlist-online state.
 import * as api from './cloudApi.js';
-import { isWaitlistOnlineOffered } from './cloudConfig.js';
+import { isWaitlistOnlineOffered, statusPageLink } from './cloudConfig.js';
 import { sessionToken } from './cloudAuth.js';
 import { contractRepo } from '../contractRepo.js';
 import { claimServerWork, inBackground, releaseServerWork } from './serverWork.js';
@@ -475,11 +475,13 @@ function exclusive(fn) {
 }
 
 // Publish every online kennel whose projection changed, unpublish every kennel
-// taken offline, then send the emails she queued. `force` republishes unchanged ones too. → { status:
+// taken offline, then send the emails she queued. `force` republishes unchanged ones too;
+// `asked` = she asked for it this moment, so a tab gone to the background (the one
+// View their page just opened in front) still publishes. → { status:
 // 'skipped' | 'ok' | 'error', reason?, published: [kennelId], unpublished: [kennelId] }
-export function syncWaitlistOnline({ force = false } = {}) {
+export function syncWaitlistOnline({ force = false, asked = false } = {}) {
   return exclusive(async () => {
-    const result = await syncNow({ force });
+    const result = await syncNow({ force, asked });
     if (result.status !== 'skipped' || result.reason !== 'unavailable') {
       try { globalThis.dispatchEvent?.(new CustomEvent(WAITLIST_ONLINE_EVENT, { detail: result })); } catch { /* no window */ }
     }
@@ -487,7 +489,7 @@ export function syncWaitlistOnline({ force = false } = {}) {
   });
 }
 
-async function syncNow({ force }) {
+async function syncNow({ force, asked }) {
   if (!isWaitlistOnlineOffered() || !editionFlags.waitlist) return { status: 'skipped', reason: 'unavailable' };
   const kennels = (await kennelRepo.getAll({ includeArchived: true })).filter((k) => k.is_own_kennel);
   const state = getWaitlistOnlineState();
@@ -509,7 +511,7 @@ async function syncNow({ force }) {
   if (!token) return stop('signed-out');
   if (!getCloudBackupState().enabled) return stop('backup-off');
   // A syncing device in a background tab leaves it to the one in front (§7).
-  if (inBackground()) return { status: 'skipped', reason: 'background' };
+  if (!asked && inBackground()) return { status: 'skipped', reason: 'background' };
 
   const published = [];
   const unpublished = [];
@@ -594,6 +596,30 @@ export async function saveWaitlistOnline(kennelId, changes, { timeZone, today = 
   }
   await syncWaitlistOnline().catch(() => {});
   return kennel;
+}
+
+// "View their page" (waitlist-entry Interact): one family's status page as they see
+// it signed in. Publishes first, forced, so the page shows what's on this device
+// now, then asks the server for her preview of it (cloud/src/waitlist.js
+// previewStatusPage; it lasts an hour). → { url, plain, publish, why? }: url null
+// when the family has no page online; `plain` when the server gave no preview (why:
+// its refusal code, 'signed-out' or 'offline') and url is their link as anyone with
+// it sees it; `publish` is the sync result, whose error the page explains.
+export async function statusPagePreview(kennel, entryId) {
+  if (!isWaitlistOnlineOffered() || !editionFlags.waitlist || !isOnline(kennel)) return { url: null };
+  const publish = await syncWaitlistOnline({ force: true, asked: true }).catch(() => ({ status: 'error', reason: 'failed' }));
+  // A family new to the list gets its token in that publish (ensureStatusTokens).
+  const entry = await waitlistEntryRepo.getById(entryId);
+  const plain = statusPageLink(entry?.status_token);
+  if (!plain) return { url: null, publish };
+  const token = sessionToken();
+  if (!token) return { url: plain, plain: true, why: 'signed-out', publish };
+  try {
+    const p = await api.previewWaitlistPage(token, kennel.public_id, entryId);
+    return { url: `${statusPageLink(p.token)}#preview=${p.preview}`, plain: false, publish };
+  } catch (err) {
+    return { url: plain, plain: true, why: err instanceof api.CloudOfflineError ? 'offline' : err instanceof api.CloudAuthError ? 'signed-out' : (err?.code || 'failed'), publish };
+  }
 }
 
 // What the settings card shows for one kennel.

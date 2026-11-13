@@ -127,13 +127,16 @@ export function renderInvoicePdf(d, JsPDF) {
   y += reLines.length * lineH(9.5) + 10;
 
   // --- Line items ---
+  // The middle column: an invoice's Due by, a receipt's Received (date and method), or
+  // none (a stud receipt).
+  const colLabel = d.colLabel ?? (d.isReceipt ? '' : 'Due by');
   const amountW = 90;
-  const dueW = d.isReceipt ? 0 : 90;
+  const dueW = colLabel ? (d.isReceipt ? 130 : 90) : 0;
   const descW = width - amountW - dueW - 12;
   const dueX = m + descW + 12;
   font('bold', 7.5, GRAY);
   pdf.text('DESCRIPTION', m, y);
-  if (!d.isReceipt) pdf.text('DUE BY', dueX, y);
+  if (colLabel) pdf.text(pdfText(colLabel.toUpperCase()), dueX, y);
   pdf.text('AMOUNT', right, y, { align: 'right' });
   y += 6;
   pdf.setDrawColor(...LINE);
@@ -147,11 +150,13 @@ export function renderInvoicePdf(d, JsPDF) {
   for (const row of d.rows) {
     font('normal', 10.5);
     const label = wrap(`${row.label}${row.marker ? ` ${row.marker}` : ''}`, descW);
-    room(label.length * lineH(10.5) + 10);
+    const dueLines = colLabel ? wrap(row.due || '-', dueW - 6) : [];
+    const rowLines = Math.max(label.length, dueLines.length);
+    room(rowLines * lineH(10.5) + 10);
     pdf.text(label, m, y);
-    if (!d.isReceipt) pdf.text(pdfText(row.due || '-'), dueX, y);
+    if (colLabel) pdf.text(dueLines, dueX, y);
     pdf.text(pdfText(money(row.amount)), right, y, { align: 'right' });
-    y += label.length * lineH(10.5) + 2;
+    y += rowLines * lineH(10.5) + 2;
     pdf.line(m, y, right, y);
     y += 14;
   }
@@ -173,6 +178,21 @@ export function renderInvoicePdf(d, JsPDF) {
     y += lineH(size) + 2;
   }
   y += 8;
+
+  // --- Account summary (a family's documents): total, paid to date, what's left ---
+  if (d.summary?.length) {
+    room(16 + d.summary.length * lineH(9.5));
+    font('bold', 7.5, GRAY);
+    pdf.text('ACCOUNT SUMMARY', right - 240, y);
+    y += lineH(9.5);
+    for (const t of d.summary) {
+      font('normal', 9.5, GRAY);
+      pdf.text(pdfText(t.label), right - 110, y, { align: 'right' });
+      pdf.text(pdfText(money(t.amount)), right, y, { align: 'right' });
+      y += lineH(9.5);
+    }
+    y += 8;
+  }
 
   // --- Payment box ---
   if (d.pay) {

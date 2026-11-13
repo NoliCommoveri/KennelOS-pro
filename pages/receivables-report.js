@@ -1,6 +1,6 @@
 // receivables-report.js — "Receivables" (Reports plan, phase 3): money still owed to
-// the program. Every anticipated income component (incomeView's own split: a deposit
-// not yet in, a balance, transport, boarding, a stud fee) under its due date, plus
+// the program. What's owed by each due date (a deposit not yet in, each of a sale's
+// payment schedule due dates, a stud fee), one row each (moneyReport.receivableRows), plus
 // foster costs fronted and not yet paid back (litterFinances.reimbursablePending).
 // Aged into buckets from today. Pure math in data/moneyReport.js.
 import { AGE_BUCKETS, daysOverdue } from '../data/moneyReport.js';
@@ -26,7 +26,7 @@ async function init() {
     search: { placeholder: 'Search who or which pup…', text: (r) => `${r.who} ${r.what}` },
     filters: [
       { id: 'bucket', label: 'Age', options: AGE_BUCKETS, match: (r, v) => r.bucket === v },
-      { id: 'what', label: 'For', options: WHAT, match: (r, v) => r.component === v }
+      { id: 'what', label: 'For', options: WHAT, match: (r, v) => r.components.includes(v) }
     ],
     kpis: (list) => {
       const f = receivableFigures(list);
@@ -47,7 +47,7 @@ async function init() {
       { header: 'Due', value: (r) => (r.due ? fmtDate(r.due) : ''), csv: (r) => r.due },
       { header: 'From', value: (r) => r.who },
       { header: 'Pup / litter', value: (r) => r.what },
-      { header: 'For', value: (r) => descriptor(WHAT, r.component).label },
+      { header: 'For', value: (r) => r.components.map((c) => descriptor(WHAT, c).label).join(', ') },
       { header: 'Amount', value: (r) => money(r.amount), csv: (r) => String(r.amount), className: 'num', total: (list) => money(sumOf(list, (r) => r.amount)) },
       { header: 'Age', value: (r) => descriptor(AGE_BUCKETS, r.bucket).label, className: 'num',
         tone: (r) => (r.bucket === 'd90plus' || r.bucket === 'd90' ? 'badge-red' : OVERDUE.includes(r.bucket) ? 'badge-amber' : null) }

@@ -1,33 +1,24 @@
 // invoice.js — Invoice / Receipt view (§24). Renders the printable financial
-// document for one income record: a Sale or an outgoing StudService (all five
-// cash income types: deposit, remaining purchase price, transport, boarding, stud
-// fee), or a waitlist family's application fee (Waitlist Spec §15.2). What the
-// document SAYS is built by assets/invoiceDoc.js; this page draws it as HTML and
-// "Download PDF" draws the same model as a real PDF file (assets/invoicePdf.js,
-// vendored jsPDF). "Print" is the browser's own print.
+// document: a family's (a waitlist entry and the sale it goes toward, Payment
+// Schedule plan §6) or a stud service's. What the document SAYS is built by
+// assets/invoiceDoc.js; this page draws it as HTML and "Download PDF" draws the same
+// model as a real PDF file (assets/invoicePdf.js, vendored jsPDF). "Print" is the
+// browser's own print.
 //
 // Query params:
-//   source = 'sale' | 'stud' | 'waitlist'   which record this bills
-//   id     = <record id>
+//   source = 'family' (with entry=<id> or sale=<id>) | 'stud' (with id=<id>); the
+//            older 'sale' / 'waitlist' with id=<id> read as that sale's or entry's family
 //   doc    = 'invoice' | 'receipt'  (default 'invoice')
-//   cfg    = URL-encoded JSON built by the Financials generator modal:
-//            { number, notes, lines:[{key,mode:'full'|'partial',collected,credit?,dueDate?}],
-//              (dueDate only when she changed it from the record's own date —
-//              absent = read the record's due date live, invoiceDoc.saleDueDate)
-//              methods:[…]  (invoice: accepted methods),
-//              payMethod, payReference  (receipt: method used) }
-//
-// Full vs Partial per line (owner's model):
-//   • Partial → the line prints "<Name> (partial)" and its amount IS the entered
-//     "collected" number.
-//   • Full → the line prints at the record's full amount; on an invoice the
-//     collected number is subtracted in the totals, on a receipt the line shows
-//     the remaining (base − collected) and the collected is not printed.
-//   • credit (full lines) → the part of "collected" that is the family's credit
-//     for funds already received: it prints as "Less credit for funds already
-//     received" in the totals, on invoices and receipts alike.
-// Line base amounts always come from incomeView.incomeLineItems so they stay
-// truthful to the record; cfg only carries the per-line choices.
+//   cfg    = URL-encoded JSON from the generator:
+//            family: { v: 2, pick?, lines?: [{ ref, amount? }] (invoice: each line's
+//              ref, amount = a typed partial), money?: [{ ref, key? }] (receipt: the
+//              money ticked), number, notes, methods (invoice), payMethod,
+//              payReference (receipt: for a deposit or paid-in-full with none) }
+//              (data/familyMoney.js resolvePick / documentLines)
+//            stud: { number, notes, lines: [{ key, mode: 'full'|'partial', collected,
+//              dueDate? }], methods, payMethod, payReference }: Partial prints
+//              "(partial)" and the amount typed; Full prints the whole fee and takes
+//              what was collected off (an invoice) or prints what's left (a receipt).
 import { buildInvoiceDoc, fmtDateMDY, money } from '../assets/invoiceDoc.js';
 import { esc, param } from '../assets/ui.js';
 
@@ -42,6 +33,8 @@ function parseCfg() {
 const request = () => ({
   source: param('source') || 'sale',
   id: param('id'),
+  entry: param('entry'),
+  sale: param('sale'),
   doc: param('doc') === 'receipt' ? 'receipt' : 'invoice',
   cfg: parseCfg()
 });
@@ -57,19 +50,25 @@ function partyCard(role, name, lines) {
 
 function render(d) {
   const r = d.isReceipt;
+  // The middle column: an invoice's Due by, a receipt's Received (date and method),
+  // or none (a stud receipt).
+  const col = d.colLabel ?? (r ? '' : 'Due by');
   const itemsBody = d.rows.length
-    ? d.rows.map((row) => r
+    ? d.rows.map((row) => !col
         ? `<tr><td>${esc(row.label)}</td><td class="num">${esc(money(row.amount))}</td></tr>`
         : `<tr>
             <td>${esc(row.label)}${row.marker ? `<sup>${esc(row.marker)}</sup>` : ''}</td>
             <td>${row.due ? esc(row.due) : '<span class="faint">—</span>'}</td>
             <td class="num">${esc(money(row.amount))}</td>
           </tr>`).join('')
-    : `<tr><td colspan="${r ? 2 : 3}" class="inv-empty">No line items.</td></tr>`;
+    : `<tr><td colspan="${col ? 3 : 2}" class="inv-empty">No line items.</td></tr>`;
   const foot = d.totals.map((t) => {
     const amount = t.amount < 0 ? `−${esc(money(-t.amount))}` : esc(money(t.amount));
-    return `<tr${t.total ? ' class="total"' : ''}><td${r ? '' : ' colspan="2"'}>${esc(t.label)}</td><td class="num">${amount}</td></tr>`;
+    return `<tr${t.total ? ' class="total"' : ''}><td${col ? ' colspan="2"' : ''}>${esc(t.label)}</td><td class="num">${amount}</td></tr>`;
   }).join('');
+  const summary = d.summary?.length
+    ? `<table class="inv-summary"><caption>Account summary</caption>${d.summary.map((t) => `<tr><td>${esc(t.label)}</td><td class="num">${esc(money(t.amount))}</td></tr>`).join('')}</table>`
+    : '';
 
   let payBox = '';
   if (d.pay) {
@@ -109,13 +108,14 @@ function render(d) {
       <thead>
         <tr>
           <th>Description</th>
-          ${r ? '' : '<th>Due by</th>'}
+          ${col ? `<th>${esc(col)}</th>` : ''}
           <th class="num">Amount</th>
         </tr>
       </thead>
       <tbody>${itemsBody}</tbody>
       <tfoot>${foot}</tfoot>
     </table>
+    ${summary}
 
     ${payBox}
 
@@ -128,24 +128,24 @@ function render(d) {
 
 async function main() {
   const req = request();
-  if (!req.id) { root.innerHTML = '<p class="inv-empty">No record specified.</p>'; return; }
-  // Opened from a waitlist family's page → back goes there, not to Financials.
-  if (req.source === 'waitlist') {
-    const back = document.getElementById('inv-back');
-    back.href = `waitlist-entry.html?id=${encodeURIComponent(req.id)}`;
-    back.textContent = '← Back to the family';
-  }
+  if (!req.id && !req.entry && !req.sale) { root.innerHTML = '<p class="inv-empty">No record specified.</p>'; return; }
   const d = await buildInvoiceDoc(req);
   if (!d) { root.innerHTML = '<p class="inv-empty">Record not found.</p>'; return; }
+  // A waitlist family's document → back goes to their page, not to Financials.
+  if (d.entryId && (req.source === 'waitlist' || req.entry)) {
+    const back = document.getElementById('inv-back');
+    back.href = `waitlist-entry.html?id=${encodeURIComponent(d.entryId)}`;
+    back.textContent = '← Back to the family';
+  }
   render(d);
-  // An invoice for a sale can go out with her payment link (Integrations plan §4).
-  if (req.source === 'sale' && req.doc === 'invoice') {
+  // An invoice with a sale can go out with her payment link (Integrations plan §4).
+  if (d.saleId && req.doc === 'invoice') {
     const btn = document.getElementById('inv-pay-link');
     btn.hidden = false;
     btn.addEventListener('click', async () => {
       try {
         const { openPaymentRequest } = await import('../assets/paymentRequestUI.js');
-        await openPaymentRequest({ saleId: req.id });
+        await openPaymentRequest({ saleId: d.saleId });
       } catch (e) {
         root.insertAdjacentHTML('afterbegin', `<div class="inline-error no-print">${esc(e.message || String(e))}</div>`);
       }

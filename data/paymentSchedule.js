@@ -225,9 +225,9 @@ function statusOf(owed, date, today) {
 //   fee: { charged, credited } | null,
 //   received: [{ kind: 'fee'|'credit'|'deposit'|'step'|'payment'|'paid_in_full', id, date,
 //                amount, unapplied, method?, pays: [{ key, amount, label }] }],
-//   deposit: { amount, paid, owed, date, status } | null,
+//   deposit: { amount, paid, owed, date, asked, status } | null,
 //   dueDates: [{ id, label, step, date, coveredTotal, threshold, ask, filled, owed,
-//                fresh, isFinal, status }],
+//                fresh, isFinal, status, from: [{ i, amount }] }],   (i: index in received)
 //   ownDated: [{ key, label, amount, paid, owed, date, status }],
 //   next: { kind: 'deposit'|'schedule'|'own', id, label, date, owed, isFinal } | null }
 export function paymentStatement(sale, opts = {}) {
@@ -301,7 +301,9 @@ export function paymentStatement(sale, opts = {}) {
   const deposit = depCharge ? (() => {
     const owed = ledger.left('deposit');
     const date = owed > 0 ? ymd(depositDueDate) : ymd(s.deposit_date);
-    return { amount: depCharge.amount, paid: cents(depCharge.amount - owed), owed, date, status: statusOf(owed, date, today) };
+    // `asked`: when it was asked for, kept once it's paid (a credit covering it is
+    // earned then, D21).
+    return { amount: depCharge.amount, paid: cents(depCharge.amount - owed), owed, date, asked: ymd(depositDueDate), status: statusOf(owed, date, today) };
   })() : null;
 
   // 2nd pass: the due dates' slices of the schedule's money (deposit asked first).
@@ -326,13 +328,14 @@ export function paymentStatement(sale, opts = {}) {
     prev = threshold;
     const isFinal = i === schedule.length - 1;
     return { id: st.id, label: st.label || (isFinal ? 'Final payment' : `Payment ${i + 1}`), step: st, date: dueDateOf(st, dated),
-      coveredTotal: covered, threshold, ask, filled: 0, owed: 0, fresh, isFinal, status: 'met' };
+      coveredTotal: covered, threshold, ask, filled: 0, owed: 0, fresh, isFinal, status: 'met', from: [] };
   });
   // Money toward the schedule (not the deposit, not own-dated extras), each piece
   // marked earlier money or not. Earlier money first, then payments by date.
+  // `from` on each due date: which money filled it ({ i: index in received, amount }).
   const schedKeys = new Set(charges.filter((c) => c.part === 'schedule').map((c) => c.key));
   const pool = received
-    .map((r) => ({ amount: cents(r.pays.filter((p) => schedKeys.has(p.key)).reduce((t, p) => t + p.amount, 0)), earlier: ['fee', 'credit', 'deposit'].includes(r.kind) }))
+    .map((r, i) => ({ i, amount: cents(r.pays.filter((p) => schedKeys.has(p.key)).reduce((t, p) => t + p.amount, 0)), earlier: ['fee', 'credit', 'deposit'].includes(r.kind) }))
     .filter((m) => m.amount > 0)
     .sort((a, b) => Number(b.earlier) - Number(a.earlier));
   const fill = (m, mayFresh) => {
@@ -340,7 +343,13 @@ export function paymentStatement(sale, opts = {}) {
       if (!(m.amount > 0)) return;
       if (d.fresh && !mayFresh) continue;
       const take = cents(Math.min(m.amount, d.ask - d.filled));
-      if (take > 0) { d.filled = cents(d.filled + take); m.amount = cents(m.amount - take); }
+      if (take > 0) {
+        d.filled = cents(d.filled + take);
+        m.amount = cents(m.amount - take);
+        const had = d.from.find((f) => f.i === m.i);
+        if (had) had.amount = cents(had.amount + take);
+        else d.from.push({ i: m.i, amount: take });
+      }
     }
   };
   for (const m of pool) fill(m, !m.earlier);
@@ -369,6 +378,110 @@ export function paymentStatement(sale, opts = {}) {
     || open[0] || null;
   return { ...base, remaining: cents(total - paid), deposit, dueDates, ownDated, next };
 }
+
+// --- Pieces: each charge split by the due date it falls in ------------------------------
+
+// The statement's money and what's still owed, cell by cell: one piece per charge and
+// due date (income, invoices and receipts read these, so they agree with the card).
+// A due date's money is the money that filled it (`from`); each money item's pays
+// (in charge order) are matched to the due dates it filled (in schedule order), and
+// what's still owed of each charge (in charge order) to the due dates' owed (in
+// order). The deposit is its own due date ('deposit'), an own-dated extra or step its
+// own (its key). An ended sale has no due dates: one piece per charge, dueId ''.
+// The application fee charge (credits paying the fee) is not the sale's, so not here.
+// → [{ key, label, component, part, dueId, dueLabel, dueDate, isFinal, amount, owed,
+//      paid: [{ ref, kind, id, date, amount, credited, label }] }]
+//   ordered by due date (deposit, the schedule's, own-dated), then charge order.
+//   `ref` = `${kind}:${id}` names the money item; `credited`: the application fee or a
+//   credit for funds received (labelled "<charge> (credited)").
+export function chargePieces(st) {
+  if (!st) return [];
+  const charges = new Map(st.charges.map((c, n) => [c.key, { ...c, n }]));
+  const cells = new Map();
+  const cell = (key, dueId, meta) => {
+    const id = `${key}@${dueId}`;
+    if (!cells.has(id)) {
+      const c = charges.get(key);
+      cells.set(id, { key, label: c.label, component: c.component, part: c.part, dueId, amount: 0, owed: 0, paid: [], n: c.n, ...meta });
+    }
+    return cells.get(id);
+  };
+  const addPaid = (p, r, amount, dueId, meta) => {
+    if (!(amount > 0)) return;
+    const c = cell(p.key, dueId, meta);
+    const credited = r.kind === 'fee' || r.kind === 'credit';
+    const had = c.paid.find((x) => x.ref === `${r.kind}:${r.id}`);
+    if (had) had.amount = cents(had.amount + amount);
+    else c.paid.push({ ref: `${r.kind}:${r.id}`, kind: r.kind, id: r.id, date: r.date || null, amount, credited, label: `${c.label}${credited ? ' (credited)' : ''}`,
+      ...(r.method ? { method: r.method } : {}), ...(r.account_id ? { account_id: r.account_id } : {}) });
+    c.amount = cents(c.amount + amount);
+  };
+  const addOwed = (key, amount, dueId, meta) => {
+    if (!(amount > 0)) return;
+    const c = cell(key, dueId, meta);
+    c.owed = cents(c.owed + amount);
+    c.amount = cents(c.amount + amount);
+  };
+
+  if (st.ended || !st.dueDates?.length) {
+    const meta = { dueLabel: '', dueDate: null, isFinal: false, order: 0 };
+    for (const r of st.received) for (const p of r.pays) if (charges.has(p.key)) addPaid(p, r, p.amount, '', meta);
+    if (!st.ended) for (const c of st.charges) addOwed(c.key, cents(c.amount - st.received.reduce((t, r) => t + r.pays.filter((p) => p.key === c.key).reduce((u, p) => u + p.amount, 0), 0)), '', meta);
+    return order(cells);
+  }
+
+  const depMeta = { dueLabel: 'Deposit', dueDate: st.deposit ? (st.deposit.asked || st.deposit.date || null) : null, isFinal: false, order: 0 };
+  const dueMeta = st.dueDates.map((d, i) => ({ dueLabel: d.label, dueDate: d.date || null, isFinal: d.isFinal, order: i + 1 }));
+  const ownByKey = new Map((st.ownDated || []).map((o) => [o.key, o]));
+  const ownMeta = (key) => ({ dueLabel: charges.get(key).label, dueDate: ownByKey.get(key)?.date || null, isFinal: false, order: st.dueDates.length + 1 });
+
+  // Paid: the deposit and own-dated charges go straight to their own due date;
+  // schedule money is matched to the due dates it filled.
+  st.received.forEach((r, i) => {
+    const sched = [];
+    for (const p of r.pays) {
+      const c = charges.get(p.key);
+      if (!c) continue; // the application fee charge
+      if (c.part === 'deposit') addPaid(p, r, p.amount, 'deposit', depMeta);
+      else if (c.part === 'own') addPaid(p, r, p.amount, p.key, ownMeta(p.key));
+      else sched.push({ p, left: p.amount });
+    }
+    const fills = st.dueDates.map((d, j) => ({ j, left: d.from.filter((f) => f.i === i).reduce((t, f) => t + f.amount, 0) })).filter((f) => f.left > 0);
+    zip(sched, fills, (a, b, amount) => addPaid(a.p, r, amount, st.dueDates[b.j].id, dueMeta[b.j]));
+  });
+  // Owed: the deposit's and own-dated charges' own; the schedule's matched to the
+  // due dates still owed.
+  const leftOf = (key) => cents(charges.get(key).amount - st.received.reduce((t, r) => t + r.pays.filter((p) => p.key === key).reduce((u, p) => u + p.amount, 0), 0));
+  const sched = [];
+  for (const c of st.charges) {
+    const left = leftOf(c.key);
+    if (c.part === 'deposit') addOwed(c.key, left, 'deposit', depMeta);
+    else if (c.part === 'own') addOwed(c.key, left, c.key, ownMeta(c.key));
+    else if (left > 0) sched.push({ key: c.key, left });
+  }
+  const owedDue = st.dueDates.map((d, j) => ({ j, left: d.owed })).filter((d) => d.left > 0);
+  zip(sched, owedDue, (a, b, amount) => addOwed(a.key, amount, st.dueDates[b.j].id, dueMeta[b.j]));
+  return order(cells);
+}
+
+// Walk two lists of { left } in step, calling take(a, b, amount) for each overlap.
+// Anything one side has beyond the other is left unmatched (the sums always agree).
+function zip(as, bs, take) {
+  let i = 0;
+  let j = 0;
+  while (i < as.length && j < bs.length) {
+    const amount = cents(Math.min(as[i].left, bs[j].left));
+    if (amount > 0) take(as[i], bs[j], amount);
+    as[i].left = cents(as[i].left - amount);
+    bs[j].left = cents(bs[j].left - amount);
+    if (!(as[i].left > 0)) i++;
+    if (!(bs[j].left > 0)) j++;
+  }
+}
+
+const order = (cells) => [...cells.values()]
+  .sort((a, b) => a.order - b.order || a.n - b.n)
+  .map(({ n: _n, order: _o, ...p }) => p);
 
 // --- Editing ----------------------------------------------------------------------------
 

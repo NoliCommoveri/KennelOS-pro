@@ -46,7 +46,8 @@ export function incomeEntries(incomeRows) {
   for (const r of incomeRows) {
     for (const c of r.components || []) {
       if (c.state !== 'earned' && c.state !== 'anticipated') continue; // pick is non-cash
-      out.push({ date: c.when || r.date || '', due: c.due || '', amount: Number(c.amount) || 0, state: c.state, component: c.component, source_type: r.source_type, row: r });
+      out.push({ date: c.when || r.date || '', due: c.due || '', amount: Number(c.amount) || 0, state: c.state, component: c.component, source_type: r.source_type, row: r,
+        ...(c.due_id != null ? { due_id: c.due_id } : {}), ...(c.credited ? { credited: true } : {}) });
     }
   }
   return out;
@@ -117,25 +118,41 @@ export function ageBucket(dueYMD, today) {
 }
 
 // Money still owed to the program: every anticipated income component (a deposit
-// not yet in, a balance, transport and boarding, a stud fee), aged by the due date
-// she SET (a sale's balance_due_date) — a component without one is "No due date",
-// never aged from the sale date,
-// plus foster costs fronted and not yet paid back (litterFinances.reimbursablePending,
+// not yet in, what's owed by each of a sale's due dates, a stud fee), aged by its due
+// date (a sale's from its payment schedule: incomeView.ledgerComponents). A sale's
+// components owed by the same due date are ONE row, with its own Due by (Payment
+// Schedule plan §5.2); `components` lists what it's for. One whose due date can't be
+// known yet is "No due date", never aged from the sale date. The part of a charge a
+// family's credit for funds received covers is left out: nothing is owed on it (D21).
+// Plus foster costs fronted and not yet paid back (litterFinances.reimbursablePending,
 // one row per litter, no due date). PURE. `fosterOwed` = [{ litter, amount, label }].
 export function receivableRows(entries, today, fosterOwed = []) {
-  const rows = entries.filter((e) => e.state === 'anticipated' && e.amount > 0).map((e) => ({
-    due: e.due || '',
-    amount: e.amount,
-    component: e.component,
-    who: e.row.counterparty,
-    what: e.row.dog,
-    href: e.row.href,
-    source_type: e.source_type,
-    bucket: ageBucket(e.due, today)
-  }));
+  const byDue = new Map();
+  for (const e of entries) {
+    if (e.state !== 'anticipated' || !(e.amount > 0) || e.credited) continue;
+    const id = `${e.source_type}|${e.row.source_id ?? e.row.href}|${e.due_id ?? `c:${e.component}`}|${e.due || ''}`;
+    const had = byDue.get(id);
+    if (had) {
+      had.amount = Math.round((had.amount + e.amount) * 100) / 100;
+      if (!had.components.includes(e.component)) had.components.push(e.component);
+      continue;
+    }
+    byDue.set(id, {
+      due: e.due || '',
+      amount: e.amount,
+      component: e.component,
+      components: [e.component],
+      who: e.row.counterparty,
+      what: e.row.dog,
+      href: e.row.href,
+      source_type: e.source_type,
+      bucket: ageBucket(e.due, today)
+    });
+  }
+  const rows = [...byDue.values()];
   for (const f of fosterOwed) {
     if (!(f.amount > 0)) continue;
-    rows.push({ due: '', amount: f.amount, component: 'foster_reimbursable', who: f.label, what: f.litterLabel || '', href: `litter.html?id=${encodeURIComponent(f.litter.id)}`, source_type: 'litter', bucket: 'undated' });
+    rows.push({ due: '', amount: f.amount, component: 'foster_reimbursable', components: ['foster_reimbursable'], who: f.label, what: f.litterLabel || '', href: `litter.html?id=${encodeURIComponent(f.litter.id)}`, source_type: 'litter', bucket: 'undated' });
   }
   return rows.sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'));
 }

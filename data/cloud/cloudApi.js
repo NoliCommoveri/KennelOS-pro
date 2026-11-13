@@ -307,6 +307,10 @@ export const releaseWaitlistLease = (token) => getJson('/waitlist/lease', { meth
 export const readWaitlistEvents = (token, since = 0) => getJson(`/waitlist/events?since=${encodeURIComponent(since)}`, { token });
 export const readWaitlistProjection = (token, publicId) =>
   getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { token });
+// Her preview of one family's status page ("View their page"): → { token, preview, until }.
+// 409 not_published / no_link.
+export const previewWaitlistPage = (token, publicId, entryId) =>
+  getJson('/waitlist/preview', { method: 'POST', token, json: { public_id: publicId, entry_id: entryId } });
 export const unpublishWaitlist = (token, publicId) =>
   getJson(`/waitlist/projection/${encodeURIComponent(publicId)}`, { method: 'DELETE', token });
 // An email to one family, in the kennel's name (W2 step 6). → { status: 'sent' | 'failed', sentAt }

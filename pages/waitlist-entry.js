@@ -8,7 +8,8 @@
 //  - Interact: what needs her (their status-page requests, a turn they hold, a lost
 //    pup) and what she can start: Offer pups / Move place for a family on the list
 //    (Approve, Fee received, Undo removal or Re-apply in other statuses), and
-//    Communicate… (email from her templates with a preview, or "Message via…").
+//    Communicate… (email from her templates with a preview, or "Message via…"),
+//    and View their page (their live status page as they see it signed in).
 //  - History: their messages and the emails sent, every offer, answer changes, key
 //    dates, and documents (fee receipt, Sale invoice/receipt as PDFs).
 // Archive, Delete and New status link sit in the header's ⋯ menu. Application
@@ -59,6 +60,7 @@ import {
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { getEntryCredit, getSaleStatement } from '../data/incomeView.js';
+import { loadFamilyAccount, familyDocs } from '../data/familyMoney.js';
 import { savedSchedules } from '../data/paymentSchedule.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { paymentsCardHtml, wirePaymentsCard, askAboutNewFees } from '../assets/paymentScheduleUI.js';
@@ -69,7 +71,8 @@ import { editionFlags } from '../data/editionConfig.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
-  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, statusLinkFor, copyLink, creditDialog
+  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, statusLinkFor, copyLink, creditDialog,
+  openStatusPage
 } from '../assets/waitlistUI.js';
 
 const els = {
@@ -158,6 +161,8 @@ async function reload() {
   const sale = familySale(ctx.entry, ctx.sales, ctx.kennelOffers, ctx.kennelEntries);
   ctx.payments = sale ? await getSaleStatement(sale) : null;
   ctx.paymentAccounts = editionFlags.accounts ? (await accountRepo.getAll({ includeArchived: true })).filter((a) => a.account_type === 'payment_service') : [];
+  // Their money across the fee and the sale, for the Documents card (Payment Schedule plan §6.2).
+  ctx.family = editionFlags.invoicing ? await loadFamilyAccount({ entryId: ctx.entry.id }) : null;
 }
 
 // --- Status card + actions --------------------------------------------------------
@@ -1798,51 +1803,50 @@ function timelineHtml() {
   </section>`;
 }
 
-// --- Documents: fee receipt, Sale invoice + receipt (Spec §15.2) ------------------------
+// --- Documents: one invoice and one receipt per charge (Payment Schedule plan §6.2) ----
 
-function familyDocs() {
-  const e = ctx.entry;
-  const docs = [];
-  if (e.fee_received_date && Number(e.fee_amount) > 0) docs.push({ label: 'Application fee receipt', source: 'waitlist', id: e.id, doc: 'receipt' });
-  for (const o of ctx.offers.filter((x) => isAwaitingDeposit(x) && x.sale_id && !x.is_archived)) {
-    docs.push({ label: `Puppy invoice for ${dogName(o.chosen_dog_id)} (deposit pending)`, source: 'sale', id: o.sale_id, doc: 'invoice' });
-  }
-  if (e.placed_sale_id) {
-    docs.push({ label: 'Puppy invoice', source: 'sale', id: e.placed_sale_id, doc: 'invoice' });
-    docs.push({ label: 'Puppy receipt', source: 'sale', id: e.placed_sale_id, doc: 'receipt' });
-  }
-  return docs;
+// The application fee's, the deposit's, a receipt for each payment and an invoice for
+// the next payment (familyMoney.familyDocs), each a pick the document reads live.
+function familyDocList() {
+  return ctx.family ? familyDocs(ctx.family.account, { money: fmtMoney, date: fmtDate }) : [];
 }
 
+const docHref = (d) => `invoice.html?source=family&entry=${encodeURIComponent(ctx.entry.id)}&doc=${d.doc}&cfg=${encodeURIComponent(JSON.stringify({ v: 2, pick: d.pick }))}`;
+
 function docsHtml() {
-  const docs = familyDocs();
+  const docs = familyDocList();
   if (!docs.length) return '';
-  const href = (d) => `invoice.html?source=${encodeURIComponent(d.source)}&id=${encodeURIComponent(d.id)}&doc=${d.doc}`;
   return `<section class="card">
       <h2 style="margin-top:0;">Documents</h2>
-      ${docs.map((d, i) => `<div class="row-between" style="padding:6px 0;border-top:${i ? '1px solid var(--border)' : '0'};">
+      ${docs.map((d, i) => `<div class="row-between" style="padding:6px 0;border-top:${i ? '1px solid var(--border)' : '0'};gap:8px;flex-wrap:wrap;">
           <span>${esc(d.label)}</span>
-          <span class="pill-row"><a class="btn btn-sm" href="${esc(href(d))}">View</a><button class="btn btn-sm btn-primary" data-pdf="${i}">Download PDF</button></span>
+          <span class="pill-row"><a class="btn btn-sm" href="${esc(docHref(d))}">View</a><button class="btn btn-sm btn-primary" data-pdf="${i}">Download PDF</button></span>
         </div>`).join('')}
-      <p class="field-hint" style="margin-bottom:0;">For partial payments, due dates or a custom number, use Invoice / Receipt in Financials.</p>
+      <div class="pill-row" style="margin-top:8px;"><button class="btn btn-sm" data-act="combined-doc">Make a combined invoice or receipt</button></div>
     </section>`;
 }
 
 function wireDocs(root) {
-  const docs = familyDocs();
+  const docs = familyDocList();
   root.querySelectorAll('[data-pdf]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       try {
         const { downloadInvoicePdf } = await import('../assets/invoicePdf.js');
         const d = docs[Number(btn.dataset.pdf)];
-        await downloadInvoicePdf({ source: d.source, id: d.id, doc: d.doc });
+        await downloadInvoicePdf({ source: 'family', entry: ctx.entry.id, doc: d.doc, cfg: { v: 2, pick: d.pick } });
       } catch (err) {
         showError(err.message || String(err));
       } finally {
         btn.disabled = false;
       }
     });
+  });
+  root.querySelector('[data-act="combined-doc"]')?.addEventListener('click', async () => {
+    try {
+      const { openInvoiceGenerator } = await import('../assets/invoiceGenerator.js');
+      await openInvoiceGenerator({ preselect: { source: 'entry', id: ctx.entry.id }, onClose: () => afterAction() });
+    } catch (err) { showError(err.message || String(err)); }
   });
 }
 
@@ -2160,7 +2164,9 @@ function interactButtons(e) {
     else if (e.fee_received_date) main += b('onlist', 'Put back on the list…');
   }
   const end = !lost && endableSale(e) ? b('endsale', 'End the sale…') : '';
-  return lost + main + end + b('communicate', 'Communicate…');
+  // Their live status page, as they see it signed in (only once it's online).
+  const page = statusLinkFor(e, ctx.kennel) ? b('viewpage', 'View their page ↗') : '';
+  return lost + main + end + b('communicate', 'Communicate…') + page;
 }
 
 function renderInteract() {
@@ -2177,12 +2183,13 @@ function renderInteract() {
     <section class="card">
       <h2 style="margin-top:0;">Do something</h2>
       <div class="pill-row">${interactButtons(e)}</div>
+      ${statusLinkFor(e, ctx.kennel) ? '<p class="field-hint" style="margin-bottom:0;"><strong>View their page</strong> publishes your latest changes, then opens their status page as they see it signed in. Its buttons work there, but nothing is sent.</p>' : ''}
     </section>`;
   wireRequests(pane);
   wireOffers(pane);
   wireSideSale(pane);
   wireSuggestions(pane);
-  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate };
+  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel) };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });

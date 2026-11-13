@@ -488,7 +488,32 @@ function renderIncomeSummary(rows) {
 // export, following the Active Breeding two-box pattern. `state` picks which
 // rolled-up amount the Amount column shows and which rows the box includes. A
 // part-paid sale (deposit in, balance owed) shows in BOTH boxes, each with its
-// own portion — that's the earned/anticipated split made visible.
+// own portion — that's the earned/anticipated split made visible. In the Anticipated
+// box a sale is one row per due date it still has money on (its payment schedule's,
+// the deposit's, an extra on its own dates), each with its own Due by (Payment
+// Schedule plan §5.2).
+function byDueDate(rows) {
+  const out = [];
+  for (const r of rows) {
+    if (r.source_type !== 'sale') { out.push({ ...r, due: '' }); continue; }
+    const groups = new Map();
+    for (const c of r.components) {
+      if (c.state !== 'anticipated' || c.component === 'processing_fee') continue;
+      const id = `${c.due_id ?? c.component}|${c.due || ''}`;
+      const g = groups.get(id) || { due: c.due || '', amount: 0 };
+      g.amount += c.amount;
+      groups.set(id, g);
+    }
+    // The processing fee follows the money it comes off, pro rata, so each row nets it.
+    const gross = [...groups.values()].reduce((t, g) => t + g.amount, 0);
+    for (const g of groups.values()) {
+      const amount = gross > 0 ? Math.round(r.anticipated * (g.amount / gross) * 100) / 100 : 0;
+      out.push({ ...r, anticipated: amount, due: g.due });
+    }
+  }
+  return out.sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'));
+}
+
 function makeIncomeBox(mountId, state, onChanged) {
   const year = (r) => (r.date || '').slice(0, 4);
   const sourceLabel = (v) => descriptor(INCOME_SOURCE_TYPES, v).label;
@@ -503,6 +528,7 @@ function makeIncomeBox(mountId, state, onChanged) {
       { id: 'year', label: 'Year', options: [], match: (r, v) => year(r) === v }
     ],
     columns: [
+      ...(state === 'anticipated' ? [{ header: 'Due by', value: (r) => (r.due ? fmtDate(r.due) : 'Not known yet'), csv: (r) => r.due || '' }] : []),
       { header: 'Date', value: (r) => (r.date ? fmtDate(r.date) : ''), csv: (r) => r.date || '' },
       { header: 'Source', value: (r) => r.source_type, badge: INCOME_SOURCE_TYPES, csv: (r) => sourceLabel(r.source_type) },
       { header: 'Dog', value: (r) => r.dog },
@@ -519,7 +545,8 @@ function makeIncomeBox(mountId, state, onChanged) {
     // waitlist entry, so open that instead.
     onRowClick: (r) => (r.source_type === 'waitlist' ? (location.href = r.href) : openAdjust(r, onChanged)),
     load: async () => {
-      const rows = (await getIncomeRows({ includeArchived: false })).filter((r) => amountOf(r) > 0);
+      const all = await getIncomeRows({ includeArchived: false });
+      const rows = (state === 'anticipated' ? byDueDate(all) : all).filter((r) => amountOf(r) > 0);
       const years = [...new Set(rows.map(year).filter(Boolean))].sort().reverse();
       const yearSel = document.querySelector(`#${mountId} select[aria-label="Year"]`);
       if (yearSel) {

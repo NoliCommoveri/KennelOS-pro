@@ -129,6 +129,8 @@ export const PRO_ONLY_STANDALONE = [
   // used only by the Pro invoice page and the waitlist family page, and the
   // vendored jsPDF they load on demand.
   'assets/invoiceDoc.js', 'assets/invoicePdf.js', 'vendor/jspdf.umd.min.js',
+  // A family's money for its invoices and receipts (Payment Schedule plan §6).
+  'data/familyMoney.js',
   // The Invoice / Receipt generator modal, opened from Financials and a Sale's
   // page — both import it dynamically only when editionFlags.invoicing is on.
   'assets/invoiceGenerator.js',

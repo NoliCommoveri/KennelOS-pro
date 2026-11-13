@@ -41,6 +41,40 @@ export function statusLinkFor(entry, kennel) {
   return statusPageLink(entry.status_token);
 }
 
+// "View their page" (the family's Interact tab): their live status page in a new
+// tab, as they see it signed in (cloudWaitlist.statusPagePreview publishes first).
+// The tab is opened at the tap, while the browser still counts it as hers, and
+// pointed at the page once it's ready; it holds no link back to the app.
+export async function openStatusPage(entry, kennel) {
+  let win = null;
+  try { win = window.open('', '_blank'); } catch { /* blocked */ }
+  if (win) {
+    try { win.opener = null; win.document.title = 'Opening their page…'; win.document.body.textContent = 'Opening their page…'; } catch { /* not ours to write */ }
+  }
+  const [{ statusPagePreview }, { onlineProblemText }] = await Promise.all([
+    import('../data/cloud/cloudWaitlist.js'), import('./waitlistOnlineUI.js')
+  ]);
+  let res;
+  try { res = await statusPagePreview(kennel, entry.id); } catch (err) { win?.close(); throw err; }
+  const notes = [];
+  if (res.publish?.status === 'error' || (res.publish?.status === 'skipped' && !['nothing-online', 'background', 'unavailable'].includes(res.publish.reason))) {
+    notes.push(`Your latest changes may not be on it yet. ${onlineProblemText(res.publish.reason)}`);
+  }
+  if (!res.url) {
+    win?.close();
+    await alertModal({ title: 'Their page isn\'t online yet', message: [`This family doesn't have a status page online yet. It appears once your list is published.`, ...notes].join('\n\n') });
+    return;
+  }
+  if (res.plain) {
+    notes.push(res.why === 'offline'
+      ? 'You seem to be offline, so the page may not open.'
+      : 'This shows their page as anyone with the link sees it. When they\'re signed in, they also see buttons to choose a pup, pass and send requests.');
+  }
+  if (win && !win.closed) win.location.replace(res.url);
+  else if (await confirmModal({ title: 'Open their page?', message: 'Your browser held back the new tab.', confirmLabel: 'Open their page' })) window.open(res.url, '_blank', 'noopener,noreferrer');
+  if (notes.length) await alertModal({ title: res.plain ? 'Their page, without the preview' : 'Their page is open', message: notes.join('\n\n') });
+}
+
 // Copy a link for her to paste into Messenger or a text. Where the clipboard
 // isn't allowed (plain http on a test server), the link is shown to copy by hand.
 export async function copyLink(link, btn = null, { title = 'Copy this link' } = {}) {
