@@ -102,10 +102,17 @@ export async function seedSampleData() {
         description: 'Crate, potty and leash basics before going home', family_can_request: true }
     ],
     extra_charge_groups: [
-      { name: 'Photo packages', request_until_weeks: 6, cancel_until_weeks: 5 },
+      // Photo packages are paid on their own dates, never on a sale's payment schedule.
+      { name: 'Photo packages', request_until_weeks: 6, cancel_until_weeks: 5, own_due_dates: true },
       { name: 'Training', request_from_weeks: 7, cancel_until_weeks: 8,
         payment_plan: [{ percent: 50, due: 'at_weeks', n: 8 }, { percent: 50, due: 'with_balance' }] }
-    ]
+    ],
+    // A saved payment schedule (Payment Schedule plan §3.4) and what she takes for the
+    // final payment.
+    payment_schedules: [{ id: crypto.randomUUID(), name: 'Transported pup', steps: [
+      { id: 'w7', due: 'at_weeks', n: 7, covers: ['all'], percent: 100, basis: 'total' }
+    ] }],
+    final_payment_methods: 'Cash or Zelle only'
   });
   const meadowRidge = await kennelRepo.create({
     kennel_name: 'Meadow Ridge Kennels', prefix: 'MDWR', location: 'Concord, NH', is_own_kennel: false
@@ -701,6 +708,14 @@ export async function seedSampleData() {
     deferred_boarding_amount: 25, deferred_boarding_frequency: 'Day', deferred_boarding_duration_days: 10,
     // A photo package from the price list, one invoice line of its own (§21.2).
     extra_charges: [{ id: crypto.randomUUID(), label: 'Gold photo package', amount: 150 }],
+    // A payment schedule (Payment Schedule plan §3.1): half the price by next week,
+    // counting the deposit, and everything else on the balance due date. No payments
+    // recorded yet.
+    payment_schedule: [
+      { id: crypto.randomUUID(), due: 'on_date', due_date: daysFromToday(7), covers: ['price'], percent: 50, basis: 'total' },
+      { id: crypto.randomUUID(), due: 'on_date', due_date: daysFromToday(21), covers: ['all'], percent: 100, basis: 'total' }
+    ],
+    payments: [],
     registration_type: 'full', status: 'deposit_paid', lead_source: 'Referral',
     notes: 'Reserved from the Autumn litter; buyer delayed pickup, boarding with us until then.'
   });

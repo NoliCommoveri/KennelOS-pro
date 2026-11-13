@@ -58,7 +58,10 @@ import {
   WAITLIST_REMOVED_REASON, WAITLIST_READY_TIMING, PLACEMENT_PURPOSE, FEE_CREDIT_POLICY, PAYMENT_METHODS, SEX, RELEASED_SALE_STATUSES, descriptor
 } from '../data/vocab.js';
 import { addDaysToYMD } from '../data/dateUtils.js';
-import { getEntryCredit } from '../data/incomeView.js';
+import { getEntryCredit, getSaleStatement } from '../data/incomeView.js';
+import { savedSchedules } from '../data/paymentSchedule.js';
+import { accountRepo } from '../data/accountRepo.js';
+import { paymentsCardHtml, wirePaymentsCard, askAboutNewFees } from '../assets/paymentScheduleUI.js';
 import { creditsOf } from '../data/receivedCredits.js';
 import { CREDIT_USES } from '../data/vocab.js';
 import { applicationFields, answerField, prefField as prefFieldHtml, privateField, readAnswers, readPrefs } from '../assets/waitlistApplicationForm.js';
@@ -150,6 +153,11 @@ async function reload() {
   ctx.contact = ctx.contacts.find((c) => c.id === ctx.entry.contact_id) || null;
   ctx.offers = await waitlistOfferRepo.getByEntry(ctx.entry.id);
   ctx.credit = (await getEntryCredit(ctx.entry.id)).credit;
+  // Their open sale's payments (Payment Schedule plan §5): the sale they're placed with,
+  // or their pick's while its deposit is pending.
+  const sale = familySale(ctx.entry, ctx.sales, ctx.kennelOffers, ctx.kennelEntries);
+  ctx.payments = sale ? await getSaleStatement(sale) : null;
+  ctx.paymentAccounts = editionFlags.accounts ? (await accountRepo.getAll({ includeArchived: true })).filter((a) => a.account_type === 'payment_service') : [];
 }
 
 // --- Status card + actions --------------------------------------------------------
@@ -760,8 +768,27 @@ async function onEndSale() {
 
 async function afterAction() {
   clearError();
+  const before = ctx.payments?.sale || null;
   await reload();
   renderAll();
+  // A transport fee, boarding or an extra just added to their sale by what she did
+  // here (Payment Schedule plan D17): show the schedule and ask whether to adjust it.
+  const after = ctx.payments?.sale || null;
+  if (before && after && before.id === after.id
+    && await askAboutNewFees({ before, after, savedList: savedSchedules(ctx.kennel) })) {
+    await reload();
+    renderAll();
+  }
+}
+
+// Their sale's payments: the deposit, each due date, extras on their own dates and the
+// money received, with Record a payment and the schedule editor.
+function paymentsHtml() {
+  if (!ctx.payments) return '';
+  return `<section class="card" data-payments>${paymentsCardHtml(ctx.payments, {
+    accountsById: new Map(ctx.paymentAccounts.map((a) => [a.id, a])),
+    finalMethods: ctx.kennel?.final_payment_methods || ''
+  })}<p class="field-hint" style="margin:8px 0 0;"><a href="sale.html?id=${encodeURIComponent(ctx.payments.sale.id)}">Open the sale</a></p></section>`;
 }
 
 // --- Emails to families (W2 step 6) -------------------------------------------------
@@ -2002,6 +2029,7 @@ function renderDetails() {
       <h2 style="margin:0 0 6px;">${badge(WAITLIST_ENTRY_STATUS, e.status)}</h2>
       ${statusLines(e).map((l) => `<p style="margin:4px 0;">${l}</p>`).join('')}
     </section>
+    ${paymentsHtml()}
     ${creditsHtml(e)}
     <section class="card">
       <div class="row-between"><h2 style="margin:0;">Their details</h2><button class="btn btn-sm" data-act="edit">Edit</button></div>
@@ -2010,6 +2038,8 @@ function renderDetails() {
     </section>`;
   pane.querySelector('[data-act="edit"]').addEventListener('click', startEdit);
   const fail = (err) => showError(err.message || String(err));
+  const payCard = pane.querySelector('[data-payments]');
+  if (payCard) wirePaymentsCard(payCard, { loaded: ctx.payments, accounts: ctx.paymentAccounts, savedList: savedSchedules(ctx.kennel), onChanged: () => afterAction() });
   pane.querySelector('[data-act="credit-add"]').addEventListener('click', () => onAddCredit().catch(fail));
   pane.querySelectorAll('[data-credit-edit]').forEach((b) => b.addEventListener('click', () => onAddCredit(creditsOf(ctx.entry).find((c) => c.id === b.dataset.creditEdit)).catch(fail)));
   pane.querySelectorAll('[data-credit-remove]').forEach((b) => b.addEventListener('click', () => onRemoveCredit(b.dataset.creditRemove).catch(fail)));

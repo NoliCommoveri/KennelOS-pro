@@ -553,6 +553,36 @@ export const PLACEMENT_METHODS = ['Flight nanny', 'Ground transport', 'Local pic
 // field, same posture as the *_SUGGESTIONS lists above.
 export const PAYMENT_METHODS = ['Cash', 'Check', 'Credit/debit card', 'Bank transfer', 'PayPal', 'Venmo', 'Zelle', 'Money order', 'Other'];
 
+// A sale's payment schedule (Sale.payment_schedule, Payment Schedule plan §3.1).
+// When a due date falls: `n` is weeks old (at_weeks) or days before pickup.
+export const SCHEDULE_DUE = Object.freeze([
+  { value: 'at_weeks',      label: 'At an age',          unit: 'weeks old',          needsN: true },
+  { value: 'on_date',       label: 'On a date',          unit: '',                   needsN: false },
+  { value: 'before_pickup', label: 'Before pickup',      unit: 'days before pickup', needsN: true },
+  { value: 'at_pickup',     label: 'At pickup',          unit: '',                   needsN: false }
+]);
+// What a due date covers, besides `all` (every charge but extras on their own
+// dates) and single extras (`extra:<id>`). `price` is the whole purchase price,
+// deposit included.
+export const SCHEDULE_COVERS = Object.freeze([
+  { value: 'price',     label: 'Purchase price' },
+  { value: 'boarding',  label: 'Boarding' },
+  { value: 'extras',    label: 'Extras' },
+  { value: 'transport', label: 'Transport' }
+]);
+// A percent due date: of the TOTAL it covers, counting everything paid so far, or of
+// what REMAINS after the earlier due dates, as new money only.
+export const SCHEDULE_BASIS = Object.freeze([
+  { value: 'total',     label: 'Percent of total' },
+  { value: 'remaining', label: 'Percent of remaining' }
+]);
+// An amount due date: whether money already received (application fee, deposit,
+// credits) can cover it, or only payments recorded on the sale.
+export const SCHEDULE_PRIOR_FUNDS = Object.freeze([
+  { value: 'count',      label: 'Earlier money can cover it' },
+  { value: 'dont_count', label: 'Only new payments cover it' }
+]);
+
 // Invoice/receipt line-item labels, keyed by income component (§24). Deliberately
 // distinct from INCOME_COMPONENTS' Financials-view labels ("Deposits", "Balance"…)
 // — a customer-facing document names the balance "Remaining Purchase Price", etc.

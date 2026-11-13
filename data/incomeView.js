@@ -34,6 +34,12 @@ import { inScopeOnly } from './kennelScope.js';
 import { ourRole } from './studRules.js';
 import { editionFlags } from './editionConfig.js';
 import { saleExtraCharges, stepLabel } from './extraCharges.js';
+import { litterRepo } from './litterRepo.js';
+import { eventRepo } from './eventRepo.js';
+import { paymentStatement } from './paymentSchedule.js';
+import { expectedPickupDate } from './goHome.js';
+import { businessDays, waitlistConfig } from './waitlistRules.js';
+import { todayYMD } from './dateUtils.js';
 import { INCOME_COMPONENTS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
@@ -308,11 +314,16 @@ const CREDIT_USE_OF = { deposit: 'deposit', balance: 'price', transport: 'extras
 // A sale's charges a family's credit can pay, keyed like its invoice lines, at
 // their full amounts (paid or not: a credit's share of a charge doesn't move once
 // the rest is paid). None for a returned, cancelled or voided sale.
+// In the order money pays them (Payment Schedule plan D16): deposit, price, boarding,
+// extras, transport last.
+const CREDIT_ORDER = { deposit: 0, balance: 1, boarding: 2, extra: 3, transport: 4 };
 export function saleCreditCharges(sale, feeCredit = 0) {
   if (!sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) return [];
   return saleComponents({ ...sale, status: 'deposit_pending', end_reason: null }, feeCredit)
     .filter((c) => CREDIT_USE_OF[c.component])
-    .map((c) => ({ key: c.key || c.component, use: CREDIT_USE_OF[c.component], amount: c.amount }));
+    .map((c, i) => ({ key: c.key || c.component, use: CREDIT_USE_OF[c.component], amount: c.amount, rank: CREDIT_ORDER[c.component] * 1000 + i }))
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ rank: _rank, ...c }) => c);
 }
 
 // How a family's credits are used: their fee, then their sale (`sale` may be null).
@@ -359,6 +370,47 @@ export async function getSaleCredits(saleId) {
   const sale = ctx?.sales.find((s) => s.id === saleId) || null;
   const entry = creditEntryFor(sale, ctx);
   return { feeCredit, credit: entry ? familyCredit(entry, sale, feeCredit) : null, entry };
+}
+
+// When the application fee credited toward this sale was received (the earliest, if
+// more than one family record credits it), for the statement's money list. null = none.
+function feeCreditDate(sale, ctx) {
+  const dates = ctx.entries
+    .filter((e) => feeReceived(e) && e.fee_credit_policy === 'credited_to_purchase'
+      && (e.placed_sale_id || creditSale(e, ctx.sales, ctx.offers, ctx.entries)?.id) === sale.id)
+    .map((e) => e.fee_received_date).sort();
+  return dates[0] || null;
+}
+
+// A sale's payment statement (Payment Schedule plan §4, paymentSchedule.paymentStatement)
+// with everything it reads gathered here: the pup's birth date (else its litter's whelp
+// date), its pickup date as a contract reads it (goHome.expectedPickupDate), her open
+// days, the application fee credited toward it, the family's credits for funds received,
+// and when the deposit is due (a side sale's due date, else the open offer's respond-by).
+// → { statement, sale, kennel, birthDate, pickupDate, opts } | null; `opts` are what
+// paymentStatement was given, so a page can preview a changed sale the same way.
+export async function getSaleStatement(saleOrId, { today = todayYMD() } = {}) {
+  const sale = typeof saleOrId === 'string' ? await saleRepo.getById(saleOrId) : saleOrId;
+  if (!sale) return null;
+  const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
+  const [litter, events, kennel, ctx] = await Promise.all([
+    dog?.litter_id ? litterRepo.getById(dog.litter_id) : null,
+    dog ? eventRepo.getForSubject('dog', dog.id) : [],
+    sale.kennel_id ? kennelRepo.getById(sale.kennel_id) : null,
+    loadCreditContext()
+  ]);
+  const birthDate = dog?.date_of_birth || litter?.whelp_date || null;
+  const pickupDate = expectedPickupDate({ sale, events, litter, today }) || null;
+  const fee = ctx ? feeCreditsBySale(ctx.entries, ctx).get(sale.id) : null;
+  const entry = creditEntryFor(sale, ctx);
+  const offer = ctx ? ctx.offers.find((o) => o.sale_id === sale.id && o.outcome === 'open' && !o.is_archived) : null;
+  const opts = {
+    birthDate, pickupDate, today, openDays: businessDays(waitlistConfig(kennel)),
+    feeCredit: fee && fee.amount > 0 ? { ...fee, date: feeCreditDate(sale, ctx) } : null,
+    credits: entry ? creditsOf(entry) : [], feeCharges: entry ? feeCharge(entry) : [],
+    depositDueDate: sale.side_deposit_due || offer?.respond_by_date || null
+  };
+  return { statement: paymentStatement(sale, opts), sale, kennel, birthDate, pickupDate, opts };
 }
 
 // A contract's payment table for one sale: the purchase price only (no transport,

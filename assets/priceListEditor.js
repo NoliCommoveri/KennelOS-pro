@@ -2,8 +2,8 @@
 // Family Requests plan §3, §3.1): her extras in groups ("Photo packages",
 // "Training"), each a name and a price with optional details (a line families
 // see, whether families can ask for it, the pup's age window, boarding days, a
-// payment plan), and each group's defaults that its extras follow unless they set
-// their own. The group an extra is in is the section it sits in, so renaming a
+// payment plan, whether it's paid on its own dates, never on a sale's payment
+// schedule), and each group's defaults that its extras follow unless they set their own. The group an extra is in is the section it sits in, so renaming a
 // group renames it for all of its extras.
 //
 // priceListHtml(kennel, { familyRequests }) → the card's inner HTML;
@@ -56,7 +56,7 @@ function rowHtml(x, { familyRequests, groups }) {
         <button type="button" class="btn btn-sm" data-xc="remove-row" aria-label="Remove">✕</button>
       </div>
       <details class="xc-details" style="margin-top:6px;">
-        <summary class="faint">Details${r.family_can_request ? ' · families can ask' : ''}${r.payment_plan ? ` · ${esc(planText(r.payment_plan))}` : ''}</summary>
+        <summary class="faint">Details${r.family_can_request ? ' · families can ask' : ''}${r.payment_plan ? ` · ${esc(planText(r.payment_plan))}` : ''}${r.own_due_dates === true ? ' · its own dates' : ''}</summary>
         <div class="field"><label>Group</label><select class="xc-move"></select></div>
         <div class="field"><label>What families see under the name (optional)</label>
           <input class="xc-desc" type="text" maxlength="300" value="${esc(r.description || '')}" placeholder="e.g. Two weeks of crate and potty training"></div>
@@ -65,6 +65,13 @@ function rowHtml(x, { familyRequests, groups }) {
         <div class="field" style="margin-top:8px;">${numInput('xc-board', r.boarding_days, 'The pup stays with you for', 'days')}
           <span class="field-hint">For a package like training: offers to log the boarding stay when you approve it.</span></div>
         <div class="field"><label>When it's paid</label>${planFields(r.payment_plan, r.group ? `Blank: the group's plan${groups.length ? ` (${esc(groupPlan.toLowerCase())})` : ''}.` : 'Blank: all with the balance.')}</div>
+        <div class="field"><label>Paid on its own dates, never on a sale's payment schedule</label>
+          <select class="xc-own" style="width:auto;">
+            <option value=""${typeof r.own_due_dates !== 'boolean' ? ' selected' : ''}>Same as its group${r.group && inherited.own_due_dates ? ' (yes)' : r.group ? ' (no)' : ''}</option>
+            <option value="yes"${r.own_due_dates === true ? ' selected' : ''}>Yes, its own dates</option>
+            <option value="no"${r.own_due_dates === false ? ' selected' : ''}>No, with the sale's schedule</option>
+          </select>
+          <span class="field-hint">For something paid apart from the puppy, like a photo package. Not in a group: "Same as its group" means no.</span></div>
       </details>
     </div>`;
 }
@@ -77,6 +84,7 @@ function groupHtml(group, items, { familyRequests, groups }, named = group !== U
            <details class="xcg-rules" style="margin-bottom:4px;"><summary class="faint">Rules for every extra in this group</summary>
              ${familyRequests ? windowFields(rules, 'Ages families can ask for these and cancel them. An extra with its own ages uses those instead.') : ''}
              <div class="field" style="margin-top:8px;"><label>When they're paid</label>${planFields(rules.payment_plan, 'Blank: all with the balance. An extra with its own plan uses that instead.')}</div>
+             <label class="check-inline" style="display:block; margin:6px 0;"><input class="xcg-own" type="checkbox"${rules.own_due_dates ? ' checked' : ''}> Paid on their own dates, never on a sale's payment schedule</label>
            </details>`
         : '<h3 class="xcg-title" style="margin:0 0 4px; font-size:1em;">Not in a group</h3>'}
       <div class="xcg-rows">${items.map((x) => rowHtml(x, { familyRequests, groups })).join('')}</div>
@@ -192,7 +200,7 @@ export function readPriceListForm(root, { familyRequests = false } = {}) {
     if (sec.dataset.named && !name && filled.length) return { rows: [], groups: [], error: 'Give each group a name, or move its extras to "Not in a group".' };
     if (sec.dataset.named && name) {
       const rules = sec.querySelector('.xcg-rules');
-      groups.push({ name, ...(familyRequests ? readWindows(rules) : {}), payment_plan: readPlan(rules) });
+      groups.push({ name, ...(familyRequests ? readWindows(rules) : {}), payment_plan: readPlan(rules), own_due_dates: rules.querySelector('.xcg-own').checked });
     }
     for (const el of secRows) {
       const d = el.querySelector('.xc-details');
@@ -203,7 +211,9 @@ export function readPriceListForm(root, { familyRequests = false } = {}) {
         group: name,
         description: d.querySelector('.xc-desc').value,
         boarding_days: d.querySelector('.xc-board').value,
-        payment_plan: readPlan(d)
+        payment_plan: readPlan(d),
+        // '' = its group's choice (not stored), else yes/no.
+        own_due_dates: { yes: true, no: false }[d.querySelector('.xc-own').value]
       };
       if (familyRequests) Object.assign(row, { family_can_request: d.querySelector('.xc-can').checked }, readWindows(d));
       rows.push(row);

@@ -30,6 +30,8 @@ import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, FEE_CREDIT_T
 import { editionFlags } from '../data/editionConfig.js';
 import { kennelChargeList, readPriceList, readChargeGroups } from '../data/extraCharges.js';
 import { priceListHtml, wirePriceList, readPriceListForm } from '../assets/priceListEditor.js';
+import { savedSchedules, readSavedSchedules } from '../data/paymentSchedule.js';
+import { stepsEditorHtml, wireStepsEditor, readStepsEditor } from '../assets/paymentScheduleUI.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
 import { MILEAGE_BASIS } from '../data/transportFee.js';
@@ -95,6 +97,7 @@ const SECTIONS = [
   { key: 'expenses', label: 'Kennel expenses', when: () => true },
   { key: 'extra-charges', label: 'Extra charges price list', when: (k) => k.is_own_kennel && editionFlags.extraCharges },
   { key: 'nudges', label: 'Lifecycle nudges', when: (k) => k.is_own_kennel },
+  { key: 'payment-schedules', label: 'Payment schedules', when: (k) => k.is_own_kennel },
   { key: 'logo', label: 'Logo', when: () => true },
   { key: 'tests', label: 'Preferred tests', when: (k) => k.is_own_kennel },
   { key: 'puppy-record', label: 'Puppy Record fields', when: (k) => k.is_own_kennel && editionFlags.puppyRecord },
@@ -384,7 +387,7 @@ function renderConfig() {
   const asked = openFirst;
   if (asked) { openWaitlistGroups.add(asked); openFirst = null; }
   // The waitlist online's card moved to the waitlist's Publish list page (2026-10-08).
-  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + waitlistCard(kennel) + pickupCard(kennel);
+  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + paymentSchedulesCard(kennel) + waitlistCard(kennel) + pickupCard(kennel);
   wireConfig();
   if (asked) els.config.querySelector(`details[data-wl-group="${CSS.escape(asked)}"]`)?.scrollIntoView({ block: 'start' });
 }
@@ -845,6 +848,65 @@ async function onSaveCharges() {
   } catch (err) { showError(err.message || String(err)); }
 }
 
+// Payment schedules (Payment Schedule plan §3.4): schedules she saves to start a
+// sale's schedule from (none is ever applied by itself, D23), each a name and its due
+// dates by age or pickup, and what she takes for the final payment. Stored as
+// Kennel.payment_schedules and Kennel.final_payment_methods.
+function savedScheduleHtml(x = { id: '', name: '', steps: null }) {
+  return `<div class="pss-item" data-pss-id="${esc(x.id || '')}" style="border-top:1px solid var(--border); padding:10px 0;">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input class="pss-name" type="text" maxlength="80" value="${esc(x.name)}" placeholder="e.g. Transported pup" aria-label="Schedule name" style="flex:1; min-width:0; font-weight:600;">
+        <button type="button" class="btn btn-sm" data-act="pss-remove" aria-label="Remove this saved schedule">✕</button>
+      </div>
+      <div class="pss-steps">${stepsEditorHtml(x.steps, { saved: true })}</div>
+    </div>`;
+}
+
+function paymentSchedulesCard(k) {
+  return `
+    <section class="card" data-ks="payment-schedules">
+      <h2 style="margin-top:0;">Payment schedules</h2>
+      <p class="field-hint">Schedules you use often, by the pup's age or pickup. A sale never starts with one: on a sale, <strong>Add a payment schedule</strong> lets you start from one of these, then change it for that family.</p>
+      <div id="pss-list">${savedSchedules(k).map(savedScheduleHtml).join('')}</div>
+      <button type="button" class="btn btn-sm" data-act="pss-add">+ New saved schedule</button>
+      <div class="field" style="margin-top:14px;"><label for="pss-final">How the final payment is paid (optional)</label>
+        <input id="pss-final" type="text" maxlength="200" value="${esc(k.final_payment_methods || '')}" placeholder="e.g. Cash or Zelle only">
+        <span class="field-hint">Shown with the final payment. Earlier payments follow your usual payment instructions.</span></div>
+      <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-payment-schedules">Save</button></div>
+    </section>`;
+}
+
+function wirePaymentSchedules() {
+  const card = els.config.querySelector('[data-ks="payment-schedules"]');
+  if (!card) return;
+  card.querySelectorAll('.pss-steps').forEach((box) => wireStepsEditor(box, { saved: true }));
+  card.querySelector('[data-act="pss-add"]').addEventListener('click', () => {
+    card.querySelector('#pss-list').insertAdjacentHTML('beforeend', savedScheduleHtml());
+    const item = card.querySelector('#pss-list').lastElementChild;
+    wireStepsEditor(item.querySelector('.pss-steps'), { saved: true });
+    item.querySelector('.pss-name').focus();
+  });
+  card.querySelector('#pss-list').addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-act="pss-remove"]')) ev.target.closest('.pss-item').remove();
+  });
+  card.querySelector('[data-act="save-payment-schedules"]').addEventListener('click', onSavePaymentSchedules);
+}
+
+async function onSavePaymentSchedules() {
+  clearError();
+  const card = els.config.querySelector('[data-ks="payment-schedules"]');
+  const rows = [...card.querySelectorAll('.pss-item')].map((el) => ({
+    id: el.dataset.pssId || null, name: el.querySelector('.pss-name').value, steps: readStepsEditor(el.querySelector('.pss-steps'))
+  }));
+  const { list, error } = readSavedSchedules(rows);
+  if (error) { showError(error); return; }
+  try {
+    await kennelRepo.update(kennel.id, { payment_schedules: list, final_payment_methods: card.querySelector('#pss-final').value.trim() || null });
+    await reloadKennel();
+    renderConfig();
+  } catch (err) { showError(err.message || String(err)); }
+}
+
 // Lifecycle nudges (Data Integrity Brief §3.2) — opt-in, per-kennel: an enable
 // checkbox + two month thresholds, saved together.
 function nudgeCard(k) {
@@ -1027,6 +1089,7 @@ function wireConfig() {
   if (saveNudges) saveNudges.addEventListener('click', onSaveNudges);
   els.config.querySelector('[data-act="save-puppy-record"]')?.addEventListener('click', onSavePuppyRecord);
   els.config.querySelector('[data-act="save-charges"]')?.addEventListener('click', onSaveCharges);
+  wirePaymentSchedules();
   const chargesCard = els.config.querySelector('[data-ks="extra-charges"]');
   if (chargesCard) wirePriceList(chargesCard, { familyRequests: editionFlags.waitlist });
   els.config.querySelector('[data-act="puppy-record-all"]')?.addEventListener('click', () => tickAllPuppyRecordFields(els.config));

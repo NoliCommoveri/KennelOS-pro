@@ -5,10 +5,12 @@
 // (vocab.CREDIT_USES; every use ticked by default). Nothing about how a credit is
 // used is stored: it's worked out here, every time, from what the family is
 // charged. Credits are used oldest first; each one pays, in order, the
-// application fee, the deposit, the rest of the purchase price, then transport,
-// boarding and extras, only toward the uses it's ticked for. Whatever's left is
-// their credit remaining. Pure: incomeView supplies the sale's charges.
+// application fee, the deposit, the rest of the purchase price, boarding, extras,
+// then transport last (Payment Schedule plan D16), only toward the uses it's ticked
+// for. Whatever's left is their credit remaining. Pure: incomeView supplies the
+// sale's charges, in that order.
 import { CREDIT_USES } from './vocab.js';
+import { allocateMoney } from './paymentSchedule.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
 const cents = (n) => Math.round(n * 100) / 100;
@@ -47,26 +49,11 @@ export function feeCharge(entry) {
 
 // Spread the credits over the charges ([{ key, use, amount }], in order).
 // → { byKey: { key: credited }, total, applied, remaining, perCredit: { id: applied } }
+// The same allocator the sale's payment statement uses (paymentSchedule.allocateMoney).
 export function allocateCredits(credits, charges) {
-  const left = new Map(charges.map((c) => [c.key, num(c.amount)]));
-  const byKey = {};
-  const perCredit = {};
-  for (const cr of credits) {
-    let have = cr.amount;
-    perCredit[cr.id] = 0;
-    for (const ch of charges) {
-      if (!(have > 0)) break;
-      if (!cr.applies_to.includes(ch.use)) continue;
-      const take = cents(Math.min(have, left.get(ch.key)));
-      if (!(take > 0)) continue;
-      left.set(ch.key, cents(left.get(ch.key) - take));
-      byKey[ch.key] = cents((byKey[ch.key] || 0) + take);
-      perCredit[cr.id] = cents(perCredit[cr.id] + take);
-      have = cents(have - take);
-    }
-  }
+  const { byKey, perItem, applied } = allocateMoney(credits.map((cr) => ({ id: cr.id, amount: cr.amount, uses: cr.applies_to })), charges);
+  const perCredit = Object.fromEntries(credits.map((cr) => [cr.id, cents((perItem[cr.id] || []).reduce((t, p) => t + p.amount, 0))]));
   const total = cents(credits.reduce((t, c) => t + c.amount, 0));
-  const applied = cents(Object.values(byKey).reduce((t, v) => t + v, 0));
   return { byKey, total, applied, remaining: cents(total - applied), perCredit };
 }
 

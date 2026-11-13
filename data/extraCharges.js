@@ -56,6 +56,9 @@ function cleanList(list, { mintIds = false } = {}) {
     // backed out (Family Requests plan §7.2).
     if (ymd(x.completed_date)) row.completed_date = x.completed_date;
     if (x.kept_after_cancel === true) row.kept_after_cancel = true;
+    // Paid on its own dates, never part of the sale's payment schedule (Payment
+    // Schedule plan §3.3).
+    if (x.own_due_dates === true) row.own_due_dates = true;
     out.push(row);
   }
   return out;
@@ -165,7 +168,7 @@ export const PLAN_DUE = Object.freeze([
 ]);
 const DUE_VALUES = PLAN_DUE.map((d) => d.value);
 export const WINDOW_FIELDS = Object.freeze(['request_from_weeks', 'request_until_weeks', 'cancel_until_weeks']);
-const PRICE_ROW_FIELDS = ['group', 'description', 'family_can_request', ...WINDOW_FIELDS, 'boarding_days', 'payment_plan'];
+const PRICE_ROW_FIELDS = ['group', 'description', 'family_can_request', ...WINDOW_FIELDS, 'boarding_days', 'payment_plan', 'own_due_dates'];
 
 // A whole number ≥ 0, or null for blank/anything else.
 function count(v) {
@@ -239,6 +242,10 @@ function cleanPriceList(list, { mintIds = false } = {}) {
     }
     const plan = cleanPlan(src.payment_plan);
     if (plan) row.payment_plan = plan;
+    // Paid on its own dates, never on a sale's payment schedule (Payment Schedule plan
+    // §3.3): true or false set on the row; not set = its group's.
+    delete row.own_due_dates;
+    if (typeof src.own_due_dates === 'boolean') row.own_due_dates = src.own_due_dates;
     return row;
   });
 }
@@ -264,6 +271,7 @@ export function kennelChargeGroups(kennel) {
     }
     const plan = cleanPlan(g.payment_plan);
     if (plan) row.payment_plan = plan;
+    if (g.own_due_dates === true) row.own_due_dates = true;
     out.push(row);
   }
   return out;
@@ -284,13 +292,16 @@ export function groupedChargeList(list) {
 }
 
 // The rules an extra follows: its own window and plan where set, else its group's.
-// → { request_from_weeks, request_until_weeks, cancel_until_weeks, payment_plan }
-// (each window null = no limit; the plan is never null: no plan = all with the balance).
+// → { request_from_weeks, request_until_weeks, cancel_until_weeks, payment_plan,
+//     own_due_dates }
+// (each window null = no limit; the plan is never null: no plan = all with the balance;
+// own_due_dates: the extra's own true/false, else its group's, else false).
 export function chargeRules(item, groups = []) {
   const g = item?.group ? groups.find((x) => x.name.toLowerCase() === item.group.toLowerCase()) : null;
   const out = {};
   for (const k of WINDOW_FIELDS) out[k] = item?.[k] ?? g?.[k] ?? null;
   out.payment_plan = cleanPlan(item?.payment_plan) || cleanPlan(g?.payment_plan) || [{ percent: 100, due: 'with_balance' }];
+  out.own_due_dates = typeof item?.own_due_dates === 'boolean' ? item.own_due_dates : g?.own_due_dates === true;
   return out;
 }
 
@@ -359,11 +370,14 @@ export function newExtraCharge() {
 // its group, its payment plan as dated steps (the row's, else its group's:
 // `groups` = kennelChargeGroups), and the days the pup stays for it.
 export function chargeFromPriceList(item, { groups = [], approvalDate, birthDate = null, openDays } = {}) {
-  const payments = planSteps(chargeRules(item, groups).payment_plan, item.amount, { approvalDate, birthDate, openDays });
+  const rules = chargeRules(item, groups);
+  const payments = planSteps(rules.payment_plan, item.amount, { approvalDate, birthDate, openDays });
   return {
     id: crypto.randomUUID(), label: text(item.label), amount: cents(num(item.amount)), list_id: item.id,
     ...(item.group ? { group: item.group } : {}), ...(payments ? { payments } : {}),
-    ...(item.boarding_days ? { boarding_days: item.boarding_days } : {})
+    ...(item.boarding_days ? { boarding_days: item.boarding_days } : {}),
+    // Paid on its own dates, never on the sale's payment schedule (§3.3).
+    ...(rules.own_due_dates ? { own_due_dates: true } : {})
   };
 }
 

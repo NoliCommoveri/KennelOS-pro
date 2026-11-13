@@ -131,7 +131,10 @@ export const SYNC_REGISTRY = Object.freeze({
       // and its groups' rules and payment plans.
       'extra_charge_list', 'extra_charge_groups',
       // Her pickup places (Family Requests plan §4): addresses, private.
-      'pickup_locations'],
+      'pickup_locations',
+      // Her saved payment schedules and what she takes for the final payment
+      // (Payment Schedule plan §3.4, D5): private like her price list.
+      'payment_schedules', 'final_payment_methods'],
     pending: []
   },
 
@@ -223,7 +226,10 @@ export const SYNC_REGISTRY = Object.freeze({
       // (plan §4 → §5): money, private like price and processing_fee_amount.
       'payment_link_amount', 'processing_fee_reports',
       // Extra charges (guide §21.2): names and amounts, money like price.
-      'extra_charges'
+      'extra_charges',
+      // Its payment schedule and the payments received (Payment Schedule plan §3.1,
+      // §3.2, D5): money, private like price.
+      'payment_schedule', 'payments'
     ],
     pending: []
   },
