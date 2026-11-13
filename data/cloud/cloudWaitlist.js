@@ -45,6 +45,8 @@ import { setHomeLocation } from '../waitlistActions.js';
 import { locationRuleOn } from '../waitlistForm.js';
 import { standardLocation } from '../pickupSlots.js';
 import { familySale } from '../familyExtras.js';
+import { getSaleStatements } from '../incomeView.js';
+import { isOpenSale } from '../vocab.js';
 
 export const WAITLIST_ONLINE_EVENT = 'kennelos:waitlistonline';
 // After a change, wait this long for more before publishing (one publish per burst).
@@ -459,8 +461,11 @@ export async function projectionFor(kennel, { today = todayYMD() } = {}) {
   const pickupEvents = [...(await eventRepo.getByType('placement')), ...(await eventRepo.getByType('boarding'))];
   // Signed contracts: her puppy portal's link from a family's signed contract on.
   const contracts = await contractRepo.getAll({ includeArchived: true });
+  // Each open sale's payment statement, read as her Payments card reads it: the
+  // family's Payments card and their deposit (Payment Schedule plan §7).
+  const statements = await getSaleStatements(sales.filter((s) => !s.is_archived && isOpenSale(s)), { today });
   return buildProjection({
-    kennel, entries, offers, programsById, litters, pairings, dogs, ancestors, sales, contacts, events, accounts, today, pickupEvents, contracts,
+    kennel, entries, offers, programsById, litters, pairings, dogs, ancestors, sales, contacts, events, accounts, today, pickupEvents, contracts, statements,
     formKey: currentFormKey(kennel.waitlist_form_keys), eventsThrough: getWaitlistOnlineState().eventsCursor || 0
   });
 }

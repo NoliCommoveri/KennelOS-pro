@@ -1,7 +1,7 @@
 // stripeLinks.js — one-use Stripe payment links from her own Stripe account
 // (Integrations plan §4, step 6; her own restricted key, decided 2026-10-12).
 //   Connect: her restricted key, checked with Stripe, kept on this device only.
-//   Make a link: for exactly what's owed on a sale (deposit, or the rest), with
+//   Make a link: for exactly what's owed on a sale (deposit, or a payment), with
 //     the sale's id in Stripe's metadata; the link goes on the sale
 //     (payment_link_*), replacing an unpaid one.
 //   Check: when she opens KennelOS (at most every CHECK_EVERY_MS), her device asks
@@ -59,13 +59,16 @@ function localDate(sec) {
 
 // A one-use link on her Stripe account (account = the Payment service Account
 // holding the key, the one that part is paid via) for exactly `amount`, recorded
-// on the sale. 'all' (everything owed) is paid as the balance. → the saved sale.
-export async function makeSaleLink({ sale, account, component, amount, pupName = '' }) {
+// on the sale. Anything but the deposit (the next payment, everything owed) is a
+// 'payment': paid, it becomes a row in the sale's payments (integrationEvents,
+// Payment Schedule plan D34). `label` names it for the buyer ("Final payment").
+// → the saved sale.
+export async function makeSaleLink({ sale, account, component, amount, pupName = '', label = '' }) {
   const conn = await getStripeKey(account.id);
   if (!conn) throw new StripeError('auth', 'Stripe isn\'t connected on this device.');
-  const part = component === 'deposit' ? 'deposit' : 'balance';
+  const part = component === 'deposit' ? 'deposit' : 'payment';
   if (sale.payment_link_ref) await deactivatePaymentLink(conn, sale.payment_link_ref);
-  const name = `${part === 'deposit' ? 'Deposit' : 'Balance'}${pupName ? `: ${pupName}` : ''}`;
+  const name = `${part === 'deposit' ? 'Deposit' : (String(label).trim() || 'Payment')}${pupName ? `: ${pupName}` : ''}`;
   const link = await createPaymentLink(conn, { amount, name, saleId: sale.id, component: part });
   return saleRepo.update(sale.id, {
     payment_link_url: link.url, payment_link_ref: link.id, payment_link_component: part,

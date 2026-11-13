@@ -52,21 +52,35 @@ export function salePayAccount(sale, accounts = [], part = 'deposit') {
   return takesPayments(a) ? a : null;
 }
 
-// What she can ask for, from the sale's invoice lines (incomeView.incomeLineItems):
-// the unpaid deposit, the unpaid rest (balance, transport, boarding), or both.
-// → [{ key: 'deposit' | 'balance' | 'all', label, amount }], first = the default.
-export function paymentOptions(items = []) {
-  const owed = items.filter((x) => x && x.state === 'anticipated' && num(x.amount) > 0);
-  const deposit = cents(owed.filter((x) => x.component === 'deposit').reduce((t, x) => t + num(x.amount), 0));
-  const rest = cents(owed.filter((x) => x.component !== 'deposit').reduce((t, x) => t + num(x.amount), 0));
+// What she can ask for, from the sale's payment statement (paymentSchedule.paymentStatement,
+// Payment Schedule plan §7): the deposit still owed, the next payment on the schedule
+// (what's still owed by its date), and everything owed, each once (an option that
+// would ask for the same amount as one before it is left out).
+// → [{ key: 'deposit' | 'next' | 'all', label, amount, due, atPickup, final }], first =
+// the default. `due` YYYY-MM-DD or null; `final`: it ends the schedule, so her
+// final-payment methods go with it (D9).
+export function paymentOptions(statement) {
+  const st = statement;
+  if (!st || st.ended) return [];
   const out = [];
-  if (deposit > 0) out.push({ key: 'deposit', label: 'Deposit', amount: deposit });
-  if (rest > 0) out.push({ key: 'balance', label: deposit > 0 ? 'The rest of the price' : 'Balance', amount: rest });
-  if (deposit > 0 && rest > 0) out.push({ key: 'all', label: 'Everything owed', amount: cents(deposit + rest) });
+  const dep = st.deposit && num(st.deposit.owed) > 0 ? st.deposit : null;
+  if (dep) out.push({ key: 'deposit', label: 'Deposit', amount: cents(num(dep.owed)), due: dep.date || null, atPickup: false, final: false });
+  const step = (st.dueDates || []).find((d) => num(d.owed) > 0);
+  if (step) {
+    out.push({
+      key: 'next', label: step.isFinal ? (st.dueDates.length > 1 ? 'Final payment' : 'Balance') : `Next payment${step.label ? ` (${step.label})` : ''}`,
+      amount: cents(num(step.owed)), due: step.date || null, atPickup: !step.date && step.step?.due === 'at_pickup', final: Boolean(step.isFinal)
+    });
+  }
+  const all = cents(num(st.remaining));
+  if (all > 0 && !out.some((o) => o.amount === all) && out.length) {
+    const last = (st.dueDates || [])[st.dueDates.length - 1];
+    out.push({ key: 'all', label: 'Everything owed', amount: all, due: last?.date || null, atPickup: !last?.date && last?.step?.due === 'at_pickup', final: true });
+  }
   return out;
 }
 
-const WHAT = { deposit: 'deposit', balance: 'balance', all: 'payment' };
+const WHAT = { deposit: 'deposit', balance: 'balance', next: 'next payment', final: 'final payment', all: 'payment' };
 
 // The payment lines of any message: the link, then the account's instructions.
 // → string[] (empty when the account has neither).
@@ -80,8 +94,9 @@ export function paymentLines(account) {
 // → { subject, body }. The caller formats money and dates.
 //   who          the buyer's first name
 //   pupName      the pup
-//   what         'deposit' | 'balance' | 'all'
-//   amount       formatted ("$500.00"); due formatted, optional
+//   what         'deposit' | 'next' | 'final' | 'all' ('balance': before schedules)
+//   amount       formatted ("$500.00"); due formatted, optional; atPickup: due at pickup
+//   finalMethods her final-payment methods ("Cash or Zelle only"), for the final payment
 //   account      the account paid through ({ payment_link, payment_instructions })
 //   kennelName   signs it
 export function paymentRequestMessage(p = {}) {
@@ -90,13 +105,15 @@ export function paymentRequestMessage(p = {}) {
   const what = WHAT[p.what] || 'payment';
   const amount = text(p.amount);
   const due = text(p.due);
+  const when = due ? `, due by ${due}` : p.atPickup ? ', due at pickup' : '';
   const lines = [who ? `Hi ${who},` : 'Hi,', ''];
   const forPup = pup ? ` for ${pup}` : '';
   lines.push(amount
-    ? `Here's how to pay the ${what} of ${amount}${forPup}${due ? `, due by ${due}` : ''}.`
-    : `Here's how to pay the ${what}${forPup}${due ? `, due by ${due}` : ''}.`);
+    ? `Here's how to pay the ${what} of ${amount}${forPup}${when}.`
+    : `Here's how to pay the ${what}${forPup}${when}.`);
   const pay = paymentLines(p.account);
   if (pay.length) lines.push('', ...pay);
+  if (text(p.finalMethods)) lines.push('', `For the final payment: ${text(p.finalMethods)}`);
   lines.push('', 'Let me know once it\'s sent, or if you have any questions.', '', 'Thank you!');
   if (text(p.kennelName)) lines.push(text(p.kennelName));
   return { subject: pup ? `${pup}: your ${what}` : `Your puppy: ${what}`, body: lines.join('\n') };

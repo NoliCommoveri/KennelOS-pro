@@ -112,8 +112,11 @@ export function paymentsCardHtml(loaded, { accountsById = new Map(), finalMethod
   if (st.ended) {
     return `${head}${totals}<p class="muted" style="margin:0 0 8px;">This sale has ended: what was paid stands, and nothing more is owed on it.</p>${receivedHtml(st, { accountsById, canEdit: false })}`;
   }
+  // Everything paid but the sale not marked (D34, whichever way the money came in:
+  // recorded here, an invoice, a Stripe link): the button that marks it (D22).
+  const offer = canEdit ? paidInFullOffer(st, sale) : null;
   const next = st.next ? `<p style="margin:0 0 8px;">Next: <strong>${esc(money(st.next.owed))}</strong> ${st.next.date ? `by ${esc(fmtDate(st.next.date))}` : esc(st.next.label === 'Deposit' ? 'for the deposit' : '(date not known yet)')}${st.next.kind === 'own' ? ` <span class="faint">for ${esc(st.next.label)}</span>` : ''}</p>`
-    : (st.total > 0 ? '<p style="margin:0 0 8px;"><span class="badge badge-green">Everything is paid</span></p>' : '');
+    : (st.total > 0 ? `<p style="margin:0 0 8px;"><span class="badge badge-green">Everything is paid</span>${offer ? ` <button class="btn btn-sm btn-primary" data-ps="paid-in-full">Mark paid in full</button>` : ''}</p>` : '');
   const line = (title, sub, owedHtml, badgeHtml) => `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border); align-items:flex-start; gap:8px; flex-wrap:nowrap;">
       <div style="flex:1 1 auto; min-width:0;"><strong>${esc(title)}</strong><div class="faint" style="font-size:13px;">${sub}</div></div>
       <div style="flex:0 0 auto; text-align:right; white-space:nowrap;">${owedHtml}<div>${badgeHtml}</div></div>
@@ -163,6 +166,7 @@ export function wirePaymentsCard(root, { loaded, accounts = [], savedList = [], 
   const fail = (err) => { root.insertAdjacentHTML('afterbegin', `<div class="inline-error">${esc(err.message || String(err))}</div>`); };
   root.querySelector('[data-ps="record"]')?.addEventListener('click', () => openPaymentDialog({ loaded, accounts }).then((ok) => ok && onChanged()).catch(fail));
   root.querySelector('[data-ps="schedule"]')?.addEventListener('click', () => openScheduleEditor({ loaded, savedList }).then((ok) => ok && onChanged()).catch(fail));
+  root.querySelector('[data-ps="paid-in-full"]')?.addEventListener('click', () => offerPaidInFull(loaded.sale).then((ok) => ok && onChanged()).catch(fail));
   root.querySelectorAll('[data-ps-edit]').forEach((b) => b.addEventListener('click', () => {
     const payment = (loaded.sale.payments || []).find((p) => p.id === b.dataset.psEdit);
     if (payment) openPaymentDialog({ loaded, accounts, payment }).then((ok) => ok && onChanged()).catch(fail);
@@ -428,15 +432,16 @@ async function removePayment(loaded, id) {
 async function offerPaidInFull(sale) {
   const fresh = await getSaleStatement(sale);
   const offer = fresh && paidInFullOffer(fresh.statement, sale);
-  if (!offer) return;
+  if (!offer) return false;
   const date = offer.date || todayYMD();
   const ok = await confirmModal({
     title: 'Everything is paid',
     message: `Mark the sale paid in full on ${fmtDate(date)}?${['deposit_pending', 'deposit_paid'].includes(sale.status) ? ' Its status becomes Paid in full.' : ''}`,
     confirmLabel: 'Mark paid in full', cancelLabel: 'Not now'
   });
-  if (!ok) return;
+  if (!ok) return false;
   await saleRepo.update(sale.id, { balance_paid_date: date, ...(['deposit_pending', 'deposit_paid'].includes(sale.status) ? { status: 'paid_in_full' } : {}) });
+  return true;
 }
 
 // --- Fees added (D17) ---------------------------------------------------------------------------

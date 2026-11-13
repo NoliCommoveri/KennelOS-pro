@@ -136,7 +136,7 @@ export function feeSessionPayment(session, { timeZoneDate = (sec) => new Date(se
 // transaction fee (what Stripe kept), in her account's currency.
 export function sessionPayment(session, { timeZoneDate = (sec) => new Date(sec * 1000).toISOString().slice(0, 10) } = {}) {
   const meta = session?.metadata || {};
-  if (!meta.kennelos_sale_id || !['deposit', 'balance'].includes(meta.kennelos_component)) return null;
+  if (!meta.kennelos_sale_id || !['deposit', 'balance', 'payment'].includes(meta.kennelos_component)) return null;
   const pi = session.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
   const bt = pi?.latest_charge?.balance_transaction;
   const fee = bt && typeof bt === 'object' && Number.isFinite(bt.fee) ? bt.fee / 100 : undefined;

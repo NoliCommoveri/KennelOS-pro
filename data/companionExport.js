@@ -26,7 +26,8 @@
 // formats it. Bundle evolution is additive; COMPANION_BUNDLE_VERSION bumps only
 // on a breaking shape change.
 import { dogRepo } from './dogRepo.js';
-import { getSaleCredits, feeCreditSplit } from './incomeView.js';
+import { getSaleStatement } from './incomeView.js';
+import { familyPaymentsView } from './paymentSchedule.js';
 import { saleExtraCharges } from './extraCharges.js';
 import { saleRepo } from './saleRepo.js';
 import { contractRepo } from './contractRepo.js';
@@ -335,7 +336,7 @@ export async function buildFamilyBundle(contact) {
       // Deferred pickup boarding: a rate (`amount`) charged per frequency unit
       // (Day/Week/Month), for a count of those units (`deferred_boarding_duration_days`
       // now holds the number of frequency units, not days — owner decision). The
-      // total is `amount × units` and feeds the remaining balance; the line only
+      // total is `amount × units` (the statement counts it as boarding); the line only
       // appears when an amount is present.
       const deferredAmount = nonEmpty(sale.deferred_boarding_amount);
       let deferredPickup = null;
@@ -355,20 +356,27 @@ export async function buildFamilyBundle(contact) {
       // Extra charges (§21.2): photo packages, a payment fee charged back. Only
       // each one's name and amount go out.
       const extraCharges = saleExtraCharges(sale).map((x) => ({ label: x.label, amount: x.amount }));
-      const extrasTotal = extraCharges.reduce((t, x) => t + x.amount, 0);
 
-      // Remaining balance is COMPUTED here, never stored: price + transport fee +
-      // deferred boarding + extra charges − deposit − a credited waitlist
-      // application fee already paid toward the price (Waitlist Spec §5.3; the same
-      // credit the Financials ledger and the invoice apply; only its part toward the
-      // balance, since a part toward the deposit is inside the deposit) − what the family's
-      // credit for funds already received paid beyond the deposit (receivedCredits.js;
-      // its share of the deposit is inside the deposit). Absent components count as 0.
-      const { feeCredit, credit } = await getSaleCredits(sale.id);
-      const pastDeposit = Object.entries(credit?.received.byKey || {}).reduce((t, [k, v]) => (k === 'deposit' ? t : t + v), 0);
-      const remainingBalance = price != null
-        ? Number(price) + Number(transportFee || 0) + deferredTotal + extrasTotal - Number(deposit || 0) - feeCreditSplit(sale, feeCredit).balance - pastDeposit
-        : null;
+      // Remaining balance and the due dates come from the sale's payment statement
+      // (Payment Schedule plan §7, paymentSchedule.paymentStatement), the same one her
+      // Payments card and the family's status page read: never summed here. Copied by
+      // name through familyPaymentsView, which builds its own fields (no settings,
+      // notes, accounts or methods). The final due date stands in for the balance due date.
+      const stmt = await getSaleStatement(sale);
+      const payView = stmt ? familyPaymentsView(stmt.statement) : null;
+      const remainingBalance = payView ? payView.remaining : null;
+      const finalDue = payView ? payView.due.find((d) => d.final) : null;
+      const payments = payView ? {
+        total: payView.total,
+        paid: payView.paid,
+        remaining: payView.remaining,
+        deposit: payView.deposit,
+        due: payView.due,
+        own: payView.own,
+        received: payView.received,
+        next: payView.next,
+        finalMethods: String(stmt.kennel?.final_payment_methods || '').trim()
+      } : null;
 
       // Deferred Pickup Boarding section — pinned to the top of the event history,
       // but only when the sale carries a COMPLETE deferred pickup (amount +
@@ -400,7 +408,10 @@ export async function buildFamilyBundle(contact) {
         deferredPickup: showFin ? deferredPickup : null,
         extraCharges: showFin ? extraCharges : [],
         remainingBalance: showFin ? remainingBalance : null,
-        balanceDueDate: showFin ? (sale.balance_due_date || null) : null,
+        balanceDueDate: showFin ? ((finalDue && finalDue.date) || sale.balance_due_date || null) : null,
+        // The due dates, what's been paid and what's next (additive: older shells
+        // ignore it and show remainingBalance / balanceDueDate).
+        payments: showFin ? payments : null,
         // Owner/breeder kennel — populated only when this pup came from a foster
         // litter and the owner leaves the flag on; empty otherwise (§20/§4).
         breederKennel: (inc.fosterOwnerKennel && litter) ? await fosterOwnerKennelName(litter) : '',

@@ -1,9 +1,10 @@
 // paymentRequestUI.js — "Send payment link" on a Sale and its Invoice
-// (Integrations plan §4). She picks what the payment is for (the unpaid deposit,
-// the rest, or both) and the Payment service account the buyer pays via (the
+// (Integrations plan §4). She picks what the payment is for (the deposit still owed,
+// the next payment on the schedule, or everything owed, all from the sale's payment
+// statement: Payment Schedule plan §7) and the Payment service account the buyer pays via (the
 // account that part of the sale is already paid via first), then the message
 // opens in the composer (Email / Text / Copy) with the amount, the link and the
-// account's instructions.
+// account's instructions, and her final-payment methods on the final payment (D9).
 // The account becomes that part's "paid via" (deposit_paid_via_account_id /
 // balance_paid_via_account_id) when none is set; a different one asks first. The
 // fee estimate follows (processingFees.saleFeeEstimate), only while the sale's
@@ -19,7 +20,7 @@ import { accountRepo } from '../data/accountRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { incomeLineItems, getSaleFeeCredit, getCreditedByLine } from '../data/incomeView.js';
+import { getSaleStatement } from '../data/incomeView.js';
 import { saleFeeEstimate } from '../data/processingFees.js';
 import { splitName } from '../data/contractForms.js';
 import { paymentAccounts, salePaidVia, paidViaField, paymentOptions, paymentLink, paymentRequestMessage } from '../data/paymentLinks.js';
@@ -135,17 +136,14 @@ export async function openPaymentRequest({ saleId }) {
   for (const a of all) if ((stripeIds.has(a.id) || own.has(a.id)) && !accounts.some((x) => x.id === a.id)) accounts.push(a);
   if (!accounts.length) return noAccountsModal();
 
-  const [dog, buyer, kennel, feeCredit, credited] = await Promise.all([
+  const [dog, buyer, kennel, stmt] = await Promise.all([
     sale.dog_id ? dogRepo.getById(sale.dog_id) : null,
     sale.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null,
     sale.kennel_id ? kennelRepo.getById(sale.kennel_id) : null,
-    getSaleFeeCredit(sale.id),
-    getCreditedByLine('sale', sale.id)
+    getSaleStatement(sale)
   ]);
-  // What's still owed, less what the family's credit for funds already received paid.
-  const owed = incomeLineItems('sale', sale, { feeCredit }).map((x) => (x.state === 'anticipated' && credited[x.key]
-    ? { ...x, amount: Math.max(0, Math.round((x.amount - credited[x.key]) * 100) / 100) } : x));
-  const options = paymentOptions(owed);
+  // What's still owed, after the deposit, payments, credits and a credited fee.
+  const options = paymentOptions(stmt?.statement);
   const pupName = dog?.call_name || dog?.registered_name || '';
   const picked = await chooseModal({
     title: `Send payment link${pupName ? `: ${pupName}` : ''}`,
@@ -155,13 +153,16 @@ export async function openPaymentRequest({ saleId }) {
   if (!picked) return false;
   const { option } = picked;
   const part = option?.key || 'all';
+  // The paid-via part it is: the deposit, everything while the deposit is still
+  // owed (both parts), else the balance (the payments beyond the deposit).
+  const viaPart = part === 'deposit' ? 'deposit' : part === 'all' && options.some((o) => o.key === 'deposit') ? 'all' : 'balance';
   let { account } = picked;
 
   let changed = false;
   let isPaidVia = true;
-  const changes = paidViaChanges(sale, account, part, accountsById);
+  const changes = paidViaChanges(sale, account, viaPart, accountsById);
   if (changes) {
-    const current = salePaidVia(sale, all, part);
+    const current = salePaidVia(sale, all, viaPart);
     const ok = !current || await confirmModal({
       title: `Paid via ${account.name}?`,
       message: `This part of the sale is paid via ${current.name}. Change it to ${account.name}, so its processing fee follows the account the buyer pays through?`,
@@ -170,28 +171,34 @@ export async function openPaymentRequest({ saleId }) {
     if (ok) { sale = await saleRepo.update(sale.id, changes); changed = true; } else isPaidVia = false;
   }
 
-  let hint = 'When they pay, record it on the sale (Deposit received, or the balance paid date) as usual.';
+  let hint = 'When they pay, record it on the sale (Deposit received, or Record a payment on its Payments card).';
   if (picked.stripe && option) {
     if (!isPaidVia) {
       hint = 'No Stripe link: a one-time link is checked with the key of the account that part is paid via, which you kept.';
     } else {
-      const linkPart = part === 'deposit' ? 'deposit' : 'balance';
+      const linkPart = part === 'deposit' ? 'deposit' : 'payment';
       // The open link for this same payment is sent again, not replaced.
       const reuse = sale.payment_link_ref && sale.payment_link_component === linkPart && Number(sale.payment_link_amount) === option.amount;
-      if (!reuse) sale = await makeSaleLink({ sale, account, component: part, amount: option.amount, pupName });
+      if (!reuse) sale = await makeSaleLink({ sale, account, component: linkPart, amount: option.amount, pupName, label: option.key === 'deposit' ? '' : option.label.replace(/ \(.*\)$/, '') });
       account = { ...account, payment_link: sale.payment_link_url };
       changed = true;
-      hint = 'A one-time Stripe link for exactly this amount. When they pay, KennelOS marks it received (it checks Stripe when you open the app).';
+      hint = part === 'deposit'
+        ? 'A one-time Stripe link for exactly this amount. When they pay, KennelOS marks it received (it checks Stripe when you open the app).'
+        : 'A one-time Stripe link for exactly this amount. When they pay, KennelOS records the payment on the sale (it checks Stripe when you open the app); you mark it paid in full.';
     }
   }
 
-  const due = option && option.key !== 'deposit' && sale.balance_due_date ? fmtDate(sale.balance_due_date) : '';
+  const finalMethods = option?.final ? String(kennel?.final_payment_methods || '').trim() : '';
+  const what = !option ? 'all' : option.key === 'next' ? (option.final ? (option.label === 'Balance' ? 'balance' : 'final') : 'next')
+    : option.key === 'all' && viaPart === 'balance' ? 'balance' : option.key;
   const msg = paymentRequestMessage({
     who: buyer ? splitName(buyer.name)[0] : '',
     pupName: dog?.call_name || '',
-    what: part,
+    what,
     amount: option ? fmtMoney(option.amount) : '',
-    due,
+    due: option?.due ? fmtDate(option.due) : '',
+    atPickup: Boolean(option?.atPickup),
+    finalMethods,
     account,
     kennelName: kennel?.kennel_name || ''
   });

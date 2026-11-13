@@ -649,3 +649,72 @@ export function scheduleSummary(statement, { money = (n) => `$${n}`, date = (d) 
   });
   return parts.join('; ');
 }
+
+// The next payment in words, for messages: "$1,150 by Dec 4", "$500 for the deposit,
+// by Nov 20", "$2,000 at pickup". '' when nothing is owed. `money` and `date` as above.
+export function nextPaymentText(statement, { money = (n) => `$${n}`, date = (d) => d } = {}) {
+  const n = statement?.next;
+  if (!n || !(n.owed > 0)) return '';
+  const step = n.kind === 'schedule' ? statement.dueDates.find((d) => d.id === n.id)?.step : null;
+  const when = n.date ? `by ${date(n.date)}` : step?.due === 'at_pickup' ? 'at pickup' : '';
+  if (n.kind === 'deposit') return `${money(n.owed)} for the deposit${when ? `, ${when}` : ''}`;
+  if (n.kind === 'own') return `${money(n.owed)} for ${n.label}${when ? `, ${when}` : ''}`;
+  return `${money(n.owed)}${when ? ` ${when}` : ''}`;
+}
+
+// --- What the family is shown ------------------------------------------------------------
+
+// A sale's statement as the family's own pages show it (their status page and their
+// Companion page, Payment Schedule plan §7): built field by field, never a copy of the
+// statement, so nothing about her settings, notes, accounts or methods goes out. Only
+// money on this sale: the application fee itself and a credit left over aren't in it.
+//   total, paid, remaining      paid + remaining = total
+//   deposit   { amount, owed, date, state } | null
+//   due       [{ label, date, at_pickup, amount, owed, final, state }]  the schedule's
+//             due dates in order; `amount` what that due date asks for
+//   own       [{ label, amount, owed, date, state }]  extras paid on their own dates
+//   received  [{ date, label, amount }]  each charge each piece of money paid, oldest
+//             first; a credit's or the application fee's labelled "<charge> (credited)".
+//             They add up to `paid`.
+//   next      { label, date, at_pickup, owed, final, deposit } | null
+// `state`: 'met' (nothing owed), 'next' (the next payment), 'past' (its date has gone
+// by and it isn't marked received: the family page says "Was due …", never Overdue),
+// or 'later'. → the view, or null for an ended sale or one with nothing on it.
+export function familyPaymentsView(st) {
+  if (!st || st.ended || !(st.total > 0)) return null;
+  const next = st.next;
+  const isNext = (kind, id) => Boolean(next && next.kind === kind && next.id === id);
+  const stateOf = (owed, status, kind, id) => (!(owed > 0) ? 'met' : isNext(kind, id) ? 'next' : status === 'not_received' ? 'past' : 'later');
+  const saleKeys = new Set(st.charges.map((c) => c.key));
+  const received = [];
+  for (const r of [...st.received].sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))) {
+    for (const p of r.pays) {
+      if (!saleKeys.has(p.key) || !(p.amount > 0)) continue;
+      received.push({ date: r.date || null, label: String(p.label), amount: cents(p.amount) });
+    }
+  }
+  const atPickup = (step) => Boolean(step && step.due === 'at_pickup');
+  const nextStep = next && next.kind === 'schedule' ? st.dueDates.find((d) => d.id === next.id) : null;
+  return {
+    total: cents(st.total),
+    paid: cents(st.paid),
+    remaining: cents(st.remaining),
+    deposit: st.deposit ? {
+      amount: cents(st.deposit.amount), owed: cents(st.deposit.owed), date: st.deposit.date || null,
+      state: stateOf(st.deposit.owed, st.deposit.status, 'deposit', 'deposit')
+    } : null,
+    due: st.dueDates.map((d) => ({
+      label: String(d.label), date: d.date || null, at_pickup: atPickup(d.step), amount: cents(d.ask), owed: cents(d.owed),
+      final: Boolean(d.isFinal), state: stateOf(d.owed, d.status, 'schedule', d.id)
+    })),
+    own: st.ownDated.map((o) => ({
+      label: String(o.label), amount: cents(o.amount), owed: cents(o.owed), date: o.date || null,
+      state: stateOf(o.owed, o.status, 'own', o.key)
+    })),
+    received,
+    next: next ? {
+      label: String(next.label), date: next.date || null, at_pickup: atPickup(nextStep?.step), owed: cents(next.owed),
+      final: Boolean(next.isFinal), deposit: next.kind === 'deposit'
+    } : null
+  };
+}

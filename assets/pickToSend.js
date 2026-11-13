@@ -28,13 +28,13 @@ import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from './salePrompts.js';
 import { rankForms, splitName, isFirmaForm } from '../data/contractForms.js';
-import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, balanceDueOn, contractForForm, saleAddOns, logPickup } from '../data/contractSend.js';
+import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, contractForForm, saleAddOns, logPickup } from '../data/contractSend.js';
 import { pickupToSet } from '../data/contractAddOns.js';
-import { depositRequestMessage } from '../data/depositRequest.js';
+import { depositRequestMessage, depositMessageMoney } from '../data/depositRequest.js';
 import { salePayAccount, salePaidVia } from '../data/paymentLinks.js';
 import { stripeConnection, makeSaleLink } from '../data/stripeLinks.js';
 import { logOwnMessage } from '../data/waitlistOutbox.js';
-import { depositPaid } from '../data/incomeView.js';
+import { depositPaid, getSaleStatement } from '../data/incomeView.js';
 import { photoLink } from '../data/waitlistProjection.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, fmtMoney, promptModal } from './ui.js';
@@ -290,18 +290,19 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
 
     // The payment part of the message: the step-1 channel's link and instructions,
     // or, with her Stripe key for that account on this device, a one-time link for
-    // exactly the deposit (plan §4, step 6), kept on the sale and reused while open.
+    // exactly the deposit still owed after credits (plan §4, step 6; Waitlist Fixes
+    // K8-1), kept on the sale and reused while open.
     let payAccount = null;
     let stripeNote = '';
-    async function paymentAccount() {
-      if (depositPaid(sale)) return null; // nothing to pay now: no link, no Stripe link
+    async function paymentAccount(statement) {
+      const deposit = statement?.deposit ? statement.deposit.owed : (Number(sale.deposit_amount) || 0);
+      if (depositPaid(sale) || !(deposit > 0)) return null; // nothing to pay now: no link, no Stripe link
       const via = salePaidVia(sale, accounts, 'deposit');
-      const deposit = Number(sale.deposit_amount) || 0;
       if (via && deposit > 0 && await stripeConnection(via.id)) {
         try {
           const open = sale.payment_link_ref && sale.payment_link_component === 'deposit' && Number(sale.payment_link_amount) === deposit;
           if (!open) { sale = await makeSaleLink({ sale, account: via, component: 'deposit', amount: deposit, pupName: dog?.call_name || '' }); changed = true; }
-          stripeNote = 'The deposit link is a one-time Stripe link for exactly the deposit. When they pay, Today tells you; then tap Deposit received on this page.';
+          stripeNote = 'The deposit link is a one-time Stripe link for exactly the deposit owed. When they pay, Today tells you; then tap Deposit received on this page.';
           return { ...via, payment_link: sale.payment_link_url };
         } catch (err) {
           stripeNote = `No Stripe link: ${err.message}`;
@@ -312,20 +313,23 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
 
     async function drawSend() {
       if (!message) {
-        payAccount = await paymentAccount();
-        const balance = await balanceDueOn(sale);
-        const rest = Math.max(0, balance - (Number(sale.deposit_amount) || 0));
-        const paid = depositPaid(sale);
+        // The money from the sale's payment statement, as the invoice and the
+        // family's page read it (Payment Schedule plan §7, K8-1).
+        const got = await getSaleStatement(sale);
+        const statement = got?.statement || null;
+        payAccount = await paymentAccount(statement);
+        const money = depositMessageMoney(statement, { money: fmtMoney, date: fmtDate, depositDate: sale.deposit_date || null });
         message = depositRequestMessage({
           who, pupName: dog?.call_name || '', litterLabel,
-          deposit: sale.deposit_amount != null ? fmtMoney(sale.deposit_amount) : '',
+          deposit: money.deposit, depositCredit: money.depositCredit,
           depositDue: offer.respond_by_date ? fmtDate(offer.respond_by_date) : '',
-          depositPaid: paid ? (sale.deposit_date ? fmtDate(sale.deposit_date) : true) : false,
+          depositPaid: depositPaid(sale) ? (sale.deposit_date ? fmtDate(sale.deposit_date) : true) : money.depositPaid,
           payAccount, paymentText,
           contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '',
           invoice: true,
           pupPhotos: photoLink(dog?.url) || '',
-          balance: rest > 0 ? fmtMoney(rest) : '', balanceDue: sale.balance_due_date ? fmtDate(sale.balance_due_date) : '',
+          balance: money.balance, balanceDue: money.balanceDue, schedule: money.schedule,
+          finalMethods: String(got?.kennel?.final_payment_methods || '').trim(),
           kennelName
         });
       }

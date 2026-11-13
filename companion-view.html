@@ -120,6 +120,46 @@
       var n = Number(v);
       return isNaN(n) ? esc(v) : '$' + n.toFixed(2);
     }
+    // A pup's payments (Payment Schedule plan §7): each due date with what's still
+    // owed, what's been received, and the next payment. A date gone by without the
+    // payment marked received reads "Was due …", never Overdue (D35).
+    function payWhen(x) {
+      return x.date ? fmtDate(x.date) : x.at_pickup ? 'At pickup' : 'Date to be set';
+    }
+    function payRow(label, x) {
+      var amount = money(x.amount);
+      if (x.state !== 'met' && x.owed > 0 && x.owed < x.amount) amount += ', ' + money(x.owed) + ' left';
+      var status = x.state === 'met' ? 'Paid'
+        : x.state === 'next' ? 'Next · ' + (x.date ? 'Due ' + fmtDate(x.date) : payWhen(x))
+          : x.state === 'past' ? 'Was due ' + fmtDate(x.date)
+            : payWhen(x);
+      return '<div class="row"><span class="k">' + esc(label) + '</span><span class="v">' + esc(amount) + '<span class="subnote">' + esc(status) + '</span></span></div>';
+    }
+    function paymentsBlock(pay) {
+      if (!pay || !(Number(pay.total) > 0)) return '';
+      var out = '<div class="evt-group"><h3>Payments</h3>';
+      var n = pay.next;
+      if (n && n.owed > 0) {
+        var what = n.deposit ? 'Your deposit' : n.final ? 'Your final payment' : 'Your next payment';
+        var when = n.date ? ', due ' + fmtDate(n.date) : n.at_pickup ? ', due at pickup' : '';
+        out += '<p><strong>' + esc(money(n.owed)) + '</strong> · ' + esc(what + when) + '</p>';
+        if (n.final && pay.finalMethods) out += '<p class="disclaimer">Final payment: ' + esc(pay.finalMethods) + '</p>';
+      } else {
+        out += '<p><strong>Paid in full.</strong> Thank you!</p>';
+      }
+      if (pay.deposit) out += payRow('Deposit', pay.deposit);
+      (pay.due || []).forEach(function (d) { out += payRow(d.label, d); });
+      (pay.own || []).forEach(function (o) { out += payRow(o.label, o); });
+      out += row('Paid', esc(money(pay.paid)));
+      if ((pay.received || []).length) {
+        out += '<ul class="clean">';
+        pay.received.forEach(function (r) {
+          out += '<li><span class="k">' + esc(fmtDate(r.date)) + '</span> ' + esc(r.label) + ' — ' + esc(money(r.amount)) + '</li>';
+        });
+        out += '</ul>';
+      }
+      return out + '</div>';
+    }
     var FEE_LABELS = {
       flat_fee: 'Flat fee', pick_of_litter: 'Pick of litter',
       flat_plus_pick: 'Flat + pick', other: 'Other'
@@ -451,8 +491,10 @@
         }
         (p.extraCharges || []).forEach(function (x) { facts += row(x.label, esc(money(x.amount))); });
         facts += row('Remaining balance', money(p.remainingBalance) ? esc(money(p.remainingBalance)) : '');
-        if (p.balanceDueDate) facts += row('Balance due', esc(fmtDate(p.balanceDueDate)));
+        // With the due dates (newer bundles), they replace the one Balance due line.
+        if (p.balanceDueDate && !(p.payments && p.payments.due && p.payments.due.length)) facts += row('Balance due', esc(fmtDate(p.balanceDueDate)));
         if (facts) h += '<div style="margin-top:10px;">' + facts + '</div>';
+        h += paymentsBlock(p.payments);
 
         var sections = Array.isArray(p.eventSections) ? p.eventSections : [];
         for (var s = 0; s < sections.length; s++) {

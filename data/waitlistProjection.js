@@ -42,6 +42,7 @@ import { backOutReasons, backOutPolicyText } from './backOut.js';
 import { standardLocation } from './pickupSlots.js';
 import { EXTRAS_INTRO_DEFAULT, extrasInfoLink } from './waitlistRules.js';
 import { portalEntryView, portalOn } from './portalFeed.js';
+import { familyPaymentsView } from './paymentSchedule.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -182,6 +183,11 @@ function entryView(entry, ctx) {
   // a price; absent without an open sale or anything to show.
   const extras = companion ? ctx.extrasFor(entry) : null;
   if (extras) view.extras = extras;
+  // Their payments (Payment Schedule plan §7): the sale's statement as they may see
+  // it (paymentSchedule.familyPaymentsView), with her payment instructions and her
+  // final-payment methods (D9); absent without an open sale or anything on it.
+  const payments = companion ? ctx.paymentsFor(entry) : null;
+  if (payments) view.payments = payments;
   // Pickup (Family Requests plan §4): their times, booking, requests, and whether
   // they may suggest their own place; absent without an open sale.
   const pickup = companion ? ctx.pickupFor(entry) : null;
@@ -303,9 +309,9 @@ function entryView(entry, ctx) {
         // available pups, so it comes with the offer).
         ...(o.chosen_dog_id ? { deposit_amount: ctx.depositFor(o), picked_pup: ctx.pickedPup(o.chosen_dog_id) } : {}),
         // What their credit for funds already received covers of that deposit, and
-        // what their application fee does when she credits it toward the deposit.
-        ...(o.chosen_dog_id && o.sale_id && ctx.creditFor(entry)?.byKey.deposit ? { deposit_credit: ctx.creditFor(entry).byKey.deposit } : {}),
-        ...(o.chosen_dog_id && o.sale_id && ctx.feeDepositFor(entry, o) > 0 ? { deposit_fee_credit: ctx.feeDepositFor(entry, o) } : {})
+        // what their application fee does when she credits it toward the deposit:
+        // the sale's payment statement, so it agrees with their Payments card.
+        ...(o.chosen_dog_id && o.sale_id ? ctx.depositCreditsFor(entry, o) : {})
       }))
   });
   return view;
@@ -470,7 +476,9 @@ const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by,
 // `ancestors`: her pedigree-only dogs (dogRepo leaves them out of `dogs`). They're
 // only looked up by id: a parent's own sire and dam, or a parent that is itself
 // pedigree-only; never pups, parent choices or breeds.
-export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], ancestors = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0, pickupEvents = [], contracts = [] }) {
+// `statements`: Map(saleId → its payment statement, incomeView.getSaleStatements) for
+// the families' sales; a sale without one shows no Payments card.
+export function buildProjection({ kennel, entries = [], offers = [], programsById = new Map(), litters = [], pairings = [], dogs = [], ancestors = [], sales = [], contacts = [], events = [], accounts = [], today, formKey = null, eventsThrough = 0, pickupEvents = [], contracts = [], statements = new Map() }) {
   if (!kennel || !kennel.public_id) throw new Error('This kennel has no public identity yet.');
   if (!today) throw new Error('buildProjection needs today.');
   const config = waitlistConfig(kennel);
@@ -653,6 +661,28 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       const sale = sales.find((x) => x.id === o.sale_id);
       return sale ? feeCreditSplit(sale, ctx.feeCreditFor(entry)).deposit : 0;
     },
+    // A pick's deposit as credits pay it: { deposit_credit?, deposit_fee_credit? }.
+    // From the sale's statement (what its application fee and credits for funds
+    // received paid of the deposit); without one, worked out as before.
+    depositCreditsFor: (entry, o) => {
+      const st = statements.get(o.sale_id);
+      const fromSt = (kind) => (st ? Math.round(st.received.filter((r) => r.kind === kind)
+        .reduce((t, r) => t + r.pays.filter((p) => p.key === 'deposit').reduce((u, p) => u + p.amount, 0), 0) * 100) / 100 : null);
+      const credit = st ? fromSt('credit') : (ctx.creditFor(entry)?.byKey.deposit || 0);
+      const fee = st ? fromSt('fee') : ctx.feeDepositFor(entry, o);
+      return { ...(credit > 0 ? { deposit_credit: credit } : {}), ...(fee > 0 ? { deposit_fee_credit: fee } : {}) };
+    },
+    // Their Payments card (Payment Schedule plan §7), or null.
+    paymentsFor: (entry) => {
+      const sale = familySale(entry, sales, familyOffers, live);
+      const view = sale ? familyPaymentsView(statements.get(sale.id)) : null;
+      if (!view) return null;
+      return {
+        ...view,
+        how_to_pay: config.payment_instructions || '',
+        final_methods: String(kennel.final_payment_methods || '').trim()
+      };
+    },
     // A family's own Pay link for a fee of `fee` (Integrations plan §4), or null.
     feePayFor: (fee, entryId) => {
       const pay = feePay(kennel, accounts, fee);
@@ -726,7 +756,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
         extras_intro: (config.extras_intro_text || '').trim() || EXTRAS_INTRO_DEFAULT,
         ...(extrasInfoLink(config.extras_info_url) ? { extras_info_url: extrasInfoLink(config.extras_info_url) } : {})
       } : {}),
-      ...(applyPay ? { fee_pay: { url: applyPay.url, amount: applyPay.amount, ref_param: applyPay.stripe, instructions: config.payment_instructions || '' } } : {})
+      ...(applyPay ? { fee_pay: { url: applyPay.url, amount: applyPay.amount, fee: Number(feeForEntry(config, null)), ref_param: applyPay.stripe, instructions: config.payment_instructions || '' } } : {})
     },
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
     // the page is served (publicList, familyPages.listView).

@@ -472,6 +472,37 @@ export async function getSaleStatement(saleOrId, { today = todayYMD() } = {}) {
   return { statement: paymentStatement(sale, opts), sale, kennel, birthDate: opts.birthDate, pickupDate: opts.pickupDate, opts };
 }
 
+// Several sales' statements at once, each read exactly as getSaleStatement reads it
+// (the same statementOpts over the same records), loading everything once: the
+// family pages' feed (cloudWaitlist.projectionFor) publishes many at a time.
+// → Map(saleId → statement)
+export async function getSaleStatements(sales, { today = todayYMD() } = {}) {
+  const list = (sales || []).filter(Boolean);
+  const out = new Map();
+  if (!list.length) return out;
+  const [dogs, litters, kennels, pickups, ctx] = await Promise.all([
+    dogRepo.getAll({ includeArchived: true }),
+    litterRepo.getAll({ includeArchived: true }),
+    kennelRepo.getAll({ includeArchived: true }),
+    eventRepo.getByType('placement', { includeArchived: true }),
+    loadCreditContext()
+  ]);
+  const dogById = new Map(dogs.map((d) => [d.id, d]));
+  const litterById = new Map(litters.map((l) => [l.id, l]));
+  const kennelById = new Map(kennels.map((k) => [k.id, k]));
+  const feeBySale = ctx ? feeCreditsBySale(ctx.entries, ctx) : null;
+  for (const sale of list) {
+    const dog = sale.dog_id ? dogById.get(sale.dog_id) || null : null;
+    const opts = statementOpts(sale, {
+      dog, litter: dog?.litter_id ? litterById.get(dog.litter_id) || null : null,
+      events: dog ? pickups.filter((e) => e.subject_type === 'dog' && e.subject_id === dog.id) : [],
+      kennel: sale.kennel_id ? kennelById.get(sale.kennel_id) || null : null, ctx, feeBySale, today
+    });
+    out.set(sale.id, paymentStatement(sale, opts));
+  }
+  return out;
+}
+
 // What paymentStatement reads for one sale, from records already loaded: `events` the
 // pup's (only its pickups are read), `ctx` loadCreditContext's (or null without the
 // waitlist), `feeBySale` feeCreditsBySale over it. getSaleStatement and the Financials
