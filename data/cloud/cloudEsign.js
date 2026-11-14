@@ -59,10 +59,10 @@ export function factFields() {
 }
 
 // The fields already in her workspace whose label the Worker brings up to date (the
-// group prefixes, Payment Schedule plan §8.2 step 1). One first, to prove on a real send
-// that a relabelled field still fills (Firma keeps the name, so it should); then every
-// fact, by listing them all here. A field added new always gets its grouped label.
-export const RELABEL_FIELDS = ['buyerEmail'];
+// group prefixes, Payment Schedule plan §8.2 step 1): every fact. A relabelled field
+// still fills (proven on `buyerEmail` with a preview: Firma keeps the name). A field
+// added new always gets its grouped label.
+export const RELABEL_FIELDS = Object.freeze(factFields().map((f) => f.name));
 
 // Make the facts her workspace's custom fields, so Firma's editor offers them, and
 // relabel the ones RELABEL_FIELDS names. Safe to repeat: the Worker adds only the
