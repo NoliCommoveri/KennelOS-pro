@@ -9,7 +9,9 @@
 // Every finding offers "Not now" (skipped this visit) and an answer that she
 // remembers on this device (nudgeState, `tidy:<key>`): "Don't ask again", "Not
 // the same dog", "Parents unknown"… Edition: the contact, kennel and stud
-// service checks need editionFlags.contactsSection / studServices (tidyRules).
+// service checks need editionFlags.contactsSection / studServices (tidyRules), the
+// duplicate applications editionFlags.waitlist (merged in assets/applicationMergeUI.js,
+// imported only then: it's Pro-only).
 import { dogRepo, dogName } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
@@ -35,6 +37,10 @@ import { renderUpgradeNudge } from './upgradeNudge.js';
 import { FindingsTask, plural } from './kelsFindings.js';
 import { field, kennelNameField, addContactInChat, VET_WHY, VET_NAME_HINT } from './kelsSteps.js';
 import { isVet } from '../data/contactSearch.js';
+import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
+import { entryName } from '../data/waitlistRules.js';
+import { duplicateDismissKeys, matchReasonText } from '../data/applicationDuplicates.js';
+import { isDismissed } from '../data/nudgeState.js';
 
 const ROLE = { sire: { field: 'sire_id', sex: 'male', word: 'sire' }, dam: { field: 'dam_id', sex: 'female', word: 'dam' } };
 const label = (vocab, v) => descriptor(vocab, v).label;
@@ -55,7 +61,8 @@ const KIND_WORDS = {
   'event-no-vet': ['vet not in your contacts', 'vets not in your contacts'],
   'no-vet': ['missing vet contact', 'missing vet contacts'],
   'duplicate-dogs': ['possible duplicate dog', 'possible duplicate dogs'],
-  'duplicate-contacts': ['possible duplicate contact', 'possible duplicate contacts']
+  'duplicate-contacts': ['possible duplicate contact', 'possible duplicate contacts'],
+  'duplicate-applications': ['family who may have applied twice', 'families who may have applied twice']
 };
 
 export async function runTidyTask(chat, { onExit = () => {} } = {}) {
@@ -72,13 +79,14 @@ class Tidy extends FindingsTask {
 
   async load() {
     const flags = editionFlags;
-    const [litters, pairings, sales, allDogs, studServices, contacts, kennels, vetEvents] = await Promise.all([
+    const [litters, pairings, sales, allDogs, studServices, contacts, kennels, vetEvents, waitlistEntries] = await Promise.all([
       litterRepo.getAll(), pairingRepo.getAll(), saleRepo.getAll(),
       dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
       flags.studServices ? studServiceRepo.getAll() : [],
       contactRepo.getAll({ includeArchived: true }),
       kennelRepo.getAll({ includeArchived: true }),
-      flags.contactsSection ? Promise.all(T.VET_EVENT_TYPES.map((t) => eventRepo.getByType(t))).then((l) => l.flat()) : []
+      flags.contactsSection ? Promise.all(T.VET_EVENT_TYPES.map((t) => eventRepo.getByType(t))).then((l) => l.flat()) : [],
+      flags.waitlist ? waitlistEntryRepo.getAll() : []
     ]);
     this.dogsById = new Map(allDogs.map((d) => [d.id, d]));
     this.littersById = new Map(litters.map((l) => [l.id, l]));
@@ -93,10 +101,13 @@ class Tidy extends FindingsTask {
       studServices: inScopeOnly(studServices),
       dogs: dogsInScope(allDogs.filter((d) => !d.is_archived && !d.pedigree_only)),
       allDogs, contacts: this.contacts, kennels: this.kennels, vetEvents,
-      flags: { contactsSection: flags.contactsSection, studServices: flags.studServices },
+      waitlistEntries: inScopeOnly(waitlistEntries),
+      flags: { contactsSection: flags.contactsSection, studServices: flags.studServices, waitlist: flags.waitlist },
       today: this.today
     });
-    this.findings = this.notDismissed(this.findings);
+    // A pair she said wasn't one family anywhere (the waitlist, Today, the scan).
+    this.findings = this.notDismissed(this.findings)
+      .filter((f) => f.kind !== 'duplicate-applications' || !duplicateDismissKeys(f.a.id, f.b.id).some((k) => isDismissed(k)));
   }
 
   start() {
@@ -141,6 +152,7 @@ class Tidy extends FindingsTask {
       case 'no-vet': return this.noVet(f);
       case 'duplicate-dogs': return this.duplicate(f, 'dog');
       case 'duplicate-contacts': return this.duplicate(f, 'contact');
+      case 'duplicate-applications': return this.duplicateApplication(f);
       default: return null;
     }
   }
@@ -650,6 +662,23 @@ class Tidy extends FindingsTask {
   }
 
   // --- Duplicates ----------------------------------------------------------------
+
+  // One family on one waitlist twice: the waitlist's own merge dialog (which one to
+  // keep, which answers win, their contact cards), opened over the chat.
+  async duplicateApplication(f) {
+    const line = (e) => `${this.b(entryName(e, this.contactsById.get(e.contact_id)))}: ${esc([
+      e.status === 'active' ? 'on the list' : e.status === 'approved' ? 'approved' : 'applied, not reviewed',
+      e.applied_date && `applied ${fmtDate(e.applied_date)}`, this.kennel(e.kennel_id)].filter(Boolean).join(' · '))}`;
+    const pick = await this.ask(f, `These two waitlist applications might be the same family. They have ${esc(matchReasonText(f))}.
+      <ul class="kels-list"><li>${line(f.a)}</li><li>${line(f.b)}</li></ul>`, [
+      { label: 'Yes, merge them', value: 'merge', primary: f.strength === 'certain' }
+    ], { never: 'Not the same family' });
+    if (pick !== 'merge') return pick;
+    const { sameFamilyDialog, mergedMessage } = await import('./applicationMergeUI.js');
+    const res = await sameFamilyDialog({ entryId: f.b.id, otherId: f.a.id });
+    if (!res) { await this.chat.say('Okay, I left them as they are.'); return null; }
+    return this.done(esc(mergedMessage(res)));
+  }
 
   // One record as a line of plain text, to tell two apart (callers esc() it).
   describe(kind, r) {

@@ -36,6 +36,8 @@ import { ownKennels, getActiveKennel } from '../data/kennelScope.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { waitlistNudgeItems, extraDueItems, paymentDueItems } from '../data/nudges.js';
 import { snooze, snoozedUntil } from '../data/nudgeState.js';
+import { applicationMatches, matchReasonText } from '../data/applicationDuplicates.js';
+import { sameFamilyDialog, mergedMessage, isPairDismissed, markNotSame } from './applicationMergeUI.js';
 import { readNudgeKey, STEP_OF, REVIEW_STEPS, reviewSummary, readinessProblems, outcomeReport } from '../data/waitlistReview.js';
 import * as actions from '../data/waitlistActions.js';
 import {
@@ -928,14 +930,31 @@ class Review {
         .filter((q) => !['name', 'email'].includes(q.key) && answerText(q, app[q.id]))
         .slice(0, 8)
         .map((q) => `<span class="faint">${esc(q.label)}:</span> ${esc(answerText(q, app[q.id]).slice(0, 160))}`);
-      await this.chat.say(`<strong>${esc(this.name(e))}</strong> applied ${esc(fmtDate(e.applied_date))}. Wants: ${prefsSummary(e)}.${answers.length ? `<br>${answers.join('<br>')}` : ''}`, { typing: 800 });
+      // Another application on this list that may be the same family: said first,
+      // and merging is offered before approving (applicationDuplicates.js).
+      const dup = applicationMatches(e, this.entries, { contactsById: this.contactsById, dismissed: isPairDismissed })[0];
+      const dupLine = dup ? `<br><strong>This may be the same family as ${esc(this.name(dup.entry))}</strong> (applied ${esc(fmtDate(dup.entry.applied_date))}): ${esc(matchReasonText(dup))}.` : '';
+      await this.chat.say(`<strong>${esc(this.name(e))}</strong> applied ${esc(fmtDate(e.applied_date))}. Wants: ${prefsSummary(e)}.${answers.length ? `<br>${answers.join('<br>')}` : ''}${dupLine}`, { typing: 800 });
       const pick = await this.chat.choose([
-        { label: 'Approve', value: 'approve', primary: true },
+        ...(dup ? [{ label: 'Same family: merge them', value: 'same', primary: true }, { label: 'Not the same family', value: 'notsame' }] : []),
+        { label: 'Approve', value: 'approve', primary: !dup },
         { label: 'Decline', value: 'decline' },
         { label: 'Ask a question', value: 'ask' },
         { label: 'Decide later', value: '__skip' }
       ]);
       if (pick === '__skip') { this.skipped++; continue; }
+      if (pick === 'same') {
+        const res = await sameFamilyDialog({ entryId: e.id, otherId: dup.entry.id });
+        if (res) await this.chat.say(esc(mergedMessage(res)));
+        else { await this.chat.say('Okay, nothing changed. Their application stays here.'); this.skipped++; }
+        continue;
+      }
+      if (pick === 'notsame') {
+        markNotSame(e.id, dup.entry.id);
+        await this.chat.say('Got it, I won\'t ask about those two again.');
+        ids.push(e.id); // review it again, now as its own application
+        continue;
+      }
       if (pick === 'ask') {
         const { communicateDialog } = await import('./waitlistEmailUI.js');
         const c = this.contactOf(e);

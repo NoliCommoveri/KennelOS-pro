@@ -31,6 +31,8 @@ import { formQuestions } from '../data/waitlistForm.js';
 import { programSuggestions } from '../data/programSuggest.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { entryDoNotSellMatches } from '../data/doNotSell.js';
+import { applicationMatches } from '../data/applicationDuplicates.js';
+import { isPairDismissed } from '../assets/applicationMergeUI.js';
 
 const els = {
   title: document.getElementById('wl-title'),
@@ -94,10 +96,15 @@ async function main() {
   // Before she opens an application: whether it's on her do-not-sell list, and the
   // programs its answers suggest ("Add to …?" waits on the family's page).
   const form = formQuestions(config);
+  // …and whether it may be the same family as another application on this list
+  // (applicationDuplicates.js; merged from the family's page after she confirms).
+  const contactMap = new Map(contacts.map((c) => [c.id, c]));
   const reviewFlags = (e) => {
     const dns = entryDoNotSellMatches(e, doNotSell);
+    const dup = applicationMatches(e, entries, { contactsById: contactMap, dismissed: isPairDismissed })[0];
     const flags = [
       ...(dns.length ? [`<span class="badge badge-red" title="Open the application to see who it matches">${dns[0].strength === 'certain' ? 'Do not sell' : 'Maybe do not sell'}</span>`] : []),
+      ...(dup ? [`<span class="badge badge-amber" title="Open the application to compare it with the other one">${dup.strength === 'certain' ? 'Likely a duplicate' : 'Maybe a duplicate'}</span>`] : []),
       ...programSuggestions(e, form, programs).map((s) => `<span class="badge badge-green" title="Their answers suggest this program: open the application to add them">Add to ${esc(s.program.name)}?</span>`)
     ];
     return flags.length ? `<div class="row-flags">${flags.join('')}</div>` : '';

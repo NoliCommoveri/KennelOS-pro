@@ -6,6 +6,7 @@
 // everything that pointed at the other one (its history included) moves to it,
 // and the other is deleted. "Not the same" is remembered on this device (nudge ledger, `dup:`;
 // for dogs and contacts the tidy-up's key too). Nothing changes until she merges.
+// Two waitlist families open the waitlist's own merge (assets/applicationMergeUI.js).
 import { esc, fmtDate } from './ui.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { scanTables, RECORD_WORDS, dismissKeys } from '../data/duplicateScan.js';
@@ -125,6 +126,18 @@ export function mountDuplicateScan(root, { flash = () => {} } = {}) {
     }
     if (!m) return;
     const f = findings[Number(m.dataset.merge)];
+    // One family on one waitlist twice: the waitlist's own merge (their place, their
+    // fee as a credit, their contact cards). Pro-only, so imported only here.
+    if (f.table === 'waitlist_entries') {
+      try {
+        const { sameFamilyDialog, mergedMessage } = await import('./applicationMergeUI.js');
+        const res = await sameFamilyDialog({ entryId: f.b.id, otherId: f.a.id });
+        if (res) { flash(mergedMessage(res)); await scan(); }
+      } catch (err) {
+        flash(`I couldn't merge them: ${err.message || String(err)}`, 'err');
+      }
+      return;
+    }
     const picked = await mergeModal(f);
     if (!picked) return;
     try {

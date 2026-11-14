@@ -16,6 +16,7 @@ import { MATCH_RULES, dogNever } from './restoreMatch.js';
 import { dogRegKeys, dogNameKeys } from './dogSearch.js';
 import { normName, normEmail, normPhone } from './contactSearch.js';
 import { duplicateDogFindings, duplicateContactFindings } from './tidyRules.js';
+import { duplicateApplicationPairs, duplicateDismissKeys } from './applicationDuplicates.js';
 
 // The tables scanned, in the order she sees them: parents before what hangs off
 // them, so merging two dogs first can make their litters a pair.
@@ -180,6 +181,12 @@ export function findDuplicates({ rows = {}, flags = {}, dismissed = () => false 
   if (tables.includes('contacts')) {
     for (const f of duplicateContactFindings(live.contacts)) add('contacts', f.a, f.b, 'ask');
   }
+  // One family who applied twice to one list, by who they say they are (an open
+  // application has no contact yet): the waitlist's own rule.
+  if (tables.includes('waitlist_entries')) {
+    const contactsById = new Map((rows.contacts || []).map((c) => [c.id, c]));
+    for (const p of duplicateApplicationPairs(live.waitlist_entries, { contactsById })) add('waitlist_entries', p.a, p.b, p.strength === 'certain' ? 'same' : 'ask');
+  }
 
   const out = [...found.values()]
     .map(({ level, ...f }) => ({ ...f, strength: level === 'same' ? 'certain' : 'possible', shared: sharedDetails(f.table, f.a, f.b) }))
@@ -189,11 +196,13 @@ export function findDuplicates({ rows = {}, flags = {}, dismissed = () => false 
 }
 
 // The nudge-ledger keys a "Not the same" is remembered under: the scan's own, and
-// for dogs and contacts the tidy-up's too, so Kels doesn't ask about it either.
+// for dogs and contacts the tidy-up's too, so Kels doesn't ask about it either;
+// for waitlist families the waitlist's own and Today's as well.
 export function dismissKeys(f) {
   const pk = pairKey(f.a.id, f.b.id);
   const keys = [`dup:${f.key}`];
   if (f.table === 'dogs') keys.push(`tidy:dupdog:${pk}`);
   if (f.table === 'contacts') keys.push(`tidy:dupcontact:${pk}`);
+  if (f.table === 'waitlist_entries') return duplicateDismissKeys(f.a.id, f.b.id);
   return keys;
 }

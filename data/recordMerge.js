@@ -357,12 +357,23 @@ export async function mergeDuplicate(table, keepId, dropId, choices = {}) {
 
   const changes = duplicateChanges(table, keep, drop, choices);
   if (Object.keys(changes).length) await repo.update(keepId, changes);
-  const moved = await repointEverywhere(dropId, keepId);
-  if (moved) markDataChanged(); // cloud backup dirty signal (Cloud Phase 1 §3.2)
-  await deleteDuplicate(table, drop);
-  remapStoredIds((v) => rekey(v, new Map([[dropId, keepId]])));
+  const { moved } = await replaceAndDelete(table, keepId, drop);
   if (table === 'contacts') await syncContactWaitlistStatus(keepId);
   if (table === 'waitlist_entries' && drop.contact_id && drop.contact_id !== keep.contact_id) await syncContactWaitlistStatus(drop.contact_id);
+  return { moved };
+}
+
+// Steps 2–4 of a merge, once the kept record has its changes: everything that
+// named `drop` names `keepId`, `drop` is deleted (the registry confirms nothing
+// still points at it), and this app's settings follow. For a merge with its own
+// rules for the kept record (waitlistActions.mergeApplications). → { moved }.
+export async function replaceAndDelete(table, keepId, drop) {
+  assertWritable();
+  if (!REPOS[table]) throw new Error(`Can't merge ${table} records.`);
+  const moved = await repointEverywhere(drop.id, keepId);
+  if (moved) markDataChanged(); // cloud backup dirty signal (Cloud Phase 1 §3.2)
+  await deleteDuplicate(table, drop);
+  remapStoredIds((v) => rekey(v, new Map([[drop.id, keepId]])));
   return { moved };
 }
 

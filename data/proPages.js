@@ -101,6 +101,10 @@ export const PRO_ONLY_STANDALONE = [
   // Kels's "Review my waitlist" (pages/kels.js imports it on start, only with the
   // waitlist). Its rules, data/waitlistReview.js, stay shared: Today's nudges use them.
   'assets/waitlistReviewUI.js',
+  // "Same family": merging a duplicate waitlist application (the family's page,
+  // Review my waitlist; Tidy up and the Import/Export scan import it dynamically,
+  // only with the waitlist). Its rules, data/applicationDuplicates.js, stay shared.
+  'assets/applicationMergeUI.js',
   // A waitlist application's fields: the Waitlist entry page's and Kels's "Set up my waitlist".
   'assets/waitlistApplicationForm.js',
   // Kels's applicant step (a family put on the waitlist in the chat): Set up my

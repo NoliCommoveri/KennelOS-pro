@@ -12,7 +12,9 @@
 //    and View their page (their live status page as they see it signed in).
 //  - History: their messages and the emails sent, every offer, answer changes, key
 //    dates, and documents (fee receipt, Sale invoice/receipt as PDFs).
-// Archive, Delete and New status link sit in the header's ⋯ menu. Application
+// Archive, Delete, New status link and "Same family as another application…" (a
+// duplicate application, merged after she confirms: assets/applicationMergeUI.js)
+// sit in the header's ⋯ menu. Application
 // answers follow her own form (Spec §15.1, data/waitlistForm.js). Every multi-step
 // write goes through data/waitlistActions.js. Pro-only page (proPages.js).
 import { waitlistEntryRepo, ReferenceBlockedError } from '../data/waitlistEntryRepo.js';
@@ -35,6 +37,8 @@ import { locationRuleOn } from '../data/waitlistForm.js';
 import { programSuggestions, suggestionWhy } from '../data/programSuggest.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { entryDoNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
+import { applicationMatches, matchReasonText, isLiveEntry } from '../data/applicationDuplicates.js';
+import { sameFamilyDialog, mergedMessage, isPairDismissed, markNotSame } from '../assets/applicationMergeUI.js';
 import { PLACEMENT_METHODS } from '../data/vocab.js';
 import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf, boardingChargeText } from '../data/goHome.js';
 import { eventRepo } from '../data/eventRepo.js';
@@ -855,6 +859,53 @@ function dnsWarningHtml(e) {
       <p style="margin:0;"><span class="badge badge-red">Do not sell</span> ${esc(doNotSellWarning(m))}</p>
       <p class="field-hint" style="margin:6px 0 0;">Only a warning: nothing is declined for you. <a href="do-not-sell.html">Your do-not-sell list →</a></p>
     </section>`;
+}
+
+// "This may be the same family as …": another open application or family on this
+// list that shares their email, phone or name (applicationDuplicates.js). Only a
+// suggestion: Same family… opens the merge (she confirms and picks which to keep);
+// Not the same is remembered on this device.
+function duplicateMatches(e) {
+  const contactsById = new Map(ctx.contacts.map((c) => [c.id, c]));
+  return applicationMatches(e, ctx.kennelEntries, { contactsById, dismissed: isPairDismissed }).slice(0, 3);
+}
+
+function duplicatesHtml(e) {
+  const contactsById = new Map(ctx.contacts.map((c) => [c.id, c]));
+  return duplicateMatches(e).map((m) => {
+    const o = m.entry;
+    const status = descriptor(WAITLIST_ENTRY_STATUS, o.status).label.toLowerCase();
+    return `<section class="card dup-alert">
+      <p style="margin:0;"><span class="badge badge-amber">${m.strength === 'certain' ? 'Likely a duplicate' : 'Maybe a duplicate'}</span>
+        This may be the same family as <a href="waitlist-entry.html?id=${encodeURIComponent(o.id)}">${esc(entryName(o, contactsById.get(o.contact_id)))}</a> (applied ${esc(fmtDate(o.applied_date))}, ${esc(status)}): ${esc(matchReasonText(m))}.</p>
+      <div class="pill-row" style="margin-top:8px;">
+        <button class="btn btn-sm" data-dup-same="${esc(o.id)}">Same family…</button>
+        <button class="btn btn-sm" data-dup-not="${esc(o.id)}">Not the same</button>
+      </div>
+    </section>`;
+  }).join('');
+}
+
+function wireDuplicates(root) {
+  const fail = (err) => showError(err.message || String(err));
+  root.querySelectorAll('[data-dup-same]').forEach((b) => b.addEventListener('click', () => onSameFamily(b.dataset.dupSame).catch(fail)));
+  root.querySelectorAll('[data-dup-not]').forEach((b) => b.addEventListener('click', () => {
+    markNotSame(ctx.entry.id, b.dataset.dupNot);
+    renderAll();
+  }));
+}
+
+// Merge a duplicate application (picked, or `otherId` suggested). When this page's
+// entry is the one deleted, the kept one's page opens.
+async function onSameFamily(otherId = null) {
+  const res = await sameFamilyDialog({ entryId: ctx.entry.id, otherId });
+  if (!res) return;
+  await alertModal({ title: 'Merged', message: mergedMessage(res) });
+  if (res.droppedId === ctx.entry.id) {
+    location.href = `waitlist-entry.html?id=${encodeURIComponent(res.keptId)}`;
+    return;
+  }
+  await afterAction();
 }
 
 // "Add to [program]?" as a Yes / No dropdown, one per program their answers suggest
@@ -1793,6 +1844,7 @@ function timelineHtml() {
     [e.removed_date, `Removed${e.removed_reason ? ` (${descriptor(WAITLIST_REMOVED_REASON, e.removed_reason).label.toLowerCase()})` : ''}`],
     ...offerTimeline(e),
     ...requestTimeline(e),
+    ...(e.merged_applications || []).map((x) => [x.date, `Merged a duplicate application${x.name ? ` from ${x.name}` : ''}${x.applied_date ? ` (applied ${fmtDate(x.applied_date)})` : ''}; it was deleted${x.fee_credit ? `, and its ${fmtMoney(x.fee_credit)} fee became a credit` : ''}`]),
     ...(e.pref_change_log || []).map((x) => [x.date, `${PREF_FIELD_LABEL[x.field] || x.field}: ${prefValueText(x.field, x.from)} → ${prefValueText(x.field, x.to)}${x.declined ? ' (they asked; you declined)' : x.by === 'request' ? ' (they asked)' : ''}`])
   ].filter(([d]) => d)
     // Newest first, and within a day the later step first (items are listed in order).
@@ -1932,12 +1984,14 @@ async function renderHeaderActions() {
       <button class="btn btn-sm" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More">⋯</button>
       <div class="action-menu-list" role="menu" hidden>
         ${link ? '<button type="button" role="menuitem" id="btn-newlink" title="Make a new link; the old one stops working">New status link…</button><hr>' : ''}
+        ${isLiveEntry(e) ? '<button type="button" role="menuitem" id="btn-samefamily" title="They applied twice: merge the two and delete one">Same family as another application…</button><hr>' : ''}
         <button type="button" role="menuitem" id="btn-archive">${e.is_archived ? 'Unarchive' : 'Archive'}</button>
         <button type="button" role="menuitem" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete…</button>
       </div>
     </div>`;
   wireActionMenu(document.getElementById('entry-manage'));
   document.getElementById('btn-newlink')?.addEventListener('click', () => onNewLink().catch((err) => showError(err.message || String(err))));
+  document.getElementById('btn-samefamily')?.addEventListener('click', () => onSameFamily().catch((err) => showError(err.message || String(err))));
   document.getElementById('btn-archive').onclick = async () => {
     const verb = e.is_archived ? 'Unarchive' : 'Archive';
     if (!(await confirmModal({ title: `${verb} this entry?`, message: e.is_archived ? '' : `Archived entries are hidden from the waitlist and drop off the list.${openOfferWarning()}`, confirmLabel: verb }))) return;
@@ -2028,6 +2082,7 @@ function renderDetails() {
   const pane = els.panes.details;
   pane.innerHTML = `
     ${dnsWarningHtml(e)}
+    ${duplicatesHtml(e)}
     ${suggestionsHtml(e)}
     <section class="card">
       <h2 style="margin:0 0 6px;">${badge(WAITLIST_ENTRY_STATUS, e.status)}</h2>
@@ -2050,6 +2105,7 @@ function renderDetails() {
   pane.querySelector('[data-act="leave"]')?.addEventListener('click', () => onLeave().catch((err) => showError(err.message || String(err))));
   pane.querySelector('[data-act="dns"]')?.addEventListener('click', () => onAddDoNotSell().catch(fail));
   wireSuggestions(pane);
+  wireDuplicates(pane);
   // "Ready now?" answered for them (they told her by phone or message).
   pane.querySelector('[data-ready="yes"]')?.addEventListener('click', () => actions.recordReadyAnswer(e.id, { answer: 'yes', by: 'breeder' })
     .then(afterAction).catch((err) => showError(err.message || String(err))));
@@ -2175,6 +2231,7 @@ function renderInteract() {
   const pane = els.panes.interact;
   pane.innerHTML = `
     ${dnsWarningHtml(e)}
+    ${duplicatesHtml(e)}
     ${['applied', 'approved'].includes(e.status) ? suggestionsHtml(e) : ''}
     ${requestsHtml(e)}
     ${lost ? `<section class="card"><p style="margin:0;">${lost}</p><p class="field-hint" style="margin-bottom:0;">Their place in line can come back for a pup lost through no fault of theirs.</p></section>` : ''}
@@ -2189,6 +2246,7 @@ function renderInteract() {
   wireOffers(pane);
   wireSideSale(pane);
   wireSuggestions(pane);
+  wireDuplicates(pane);
   const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel) };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));

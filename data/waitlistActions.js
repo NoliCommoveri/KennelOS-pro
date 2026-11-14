@@ -31,7 +31,7 @@ import { kennelRepo } from './kennelRepo.js';
 import { creditsOf, feeCharge, allocateCredits } from './receivedCredits.js';
 import { familyCredit } from './incomeView.js';
 import { contactRepo } from './contactRepo.js';
-import { waitlistEntryRepo } from './waitlistEntryRepo.js';
+import { waitlistEntryRepo, syncContactWaitlistStatus } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { litterRepo } from './litterRepo.js';
@@ -45,6 +45,8 @@ import { eventRepo } from './eventRepo.js';
 import { kennelChargeList, kennelChargeGroups, chargeFromPriceList, saleExtraCharges } from './extraCharges.js';
 import { expectedPricing } from './saleDefaults.js';
 import { todayYMD } from './dateUtils.js';
+import { applicationMergeBlocker, applicationMergeChanges } from './applicationDuplicates.js';
+import { replaceAndDelete, mergeDuplicate, mergeBlocker } from './recordMerge.js';
 import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
 import { RELEASED_SALE_STATUSES, SALE_END_REASON, registrationsForPurposes, descriptor } from './vocab.js';
 import {
@@ -401,6 +403,42 @@ export async function markSoonNotified(litterIdsByEntry, { date = todayYMD() } =
   for (const [entryId, litterIds] of litterIdsByEntry) {
     await waitlistEntryRepo.update(entryId, { soon_notified_date: date, soon_notified_litter_ids: [...litterIds] });
   }
+}
+
+// --- Duplicate applications (docs/KennelOS_Duplicate_Applications_Plan.md) ---------
+//
+// One family on one list twice. She confirms; nothing here runs by itself. The
+// kept entry keeps its own place, status, fee, link and requests; it takes the
+// other's answers where she chose them (blanks fill in), both histories, and a
+// fee the other paid as a credit (applicationDuplicates.applicationMergeChanges).
+// Then everything that named the other entry (its offers) names the kept one and
+// the other is deleted (recordMerge.replaceAndDelete). `mergeContacts` (when each
+// had its own contact) merges the other's contact into the kept one's in the same
+// step, `contactChoices` as recordMerge's. → { entry, moved, contactsMerged }.
+export async function mergeApplications(keepId, dropId, { choices = {}, mergeContacts = false, contactChoices = {}, date = todayYMD(), dropName = '' } = {}) {
+  const [keep, drop] = await Promise.all([waitlistEntryRepo.getById(keepId), waitlistEntryRepo.getById(dropId)]);
+  if (!keep || !drop) throw new Error('One of those applications no longer exists.');
+  const offers = [...await waitlistOfferRepo.getByEntry(keepId), ...await waitlistOfferRepo.getByEntry(dropId)];
+  const blocker = applicationMergeBlocker(keep, drop, offers);
+  if (blocker) throw new Error(blocker);
+  const twoContacts = Boolean(keep.contact_id && drop.contact_id && keep.contact_id !== drop.contact_id);
+  if (mergeContacts && twoContacts) {
+    // Checked before anything is written: their other places, the deleted one left out.
+    const [kc, dc, all] = await Promise.all([contactRepo.getById(keep.contact_id), contactRepo.getById(drop.contact_id), waitlistEntryRepo.getAll()]);
+    if (!kc || !dc) throw new Error('One of their contacts no longer exists.');
+    const why = mergeBlocker('contact', kc, dc, { waitlistEntries: all.filter((e) => e.id !== drop.id) });
+    if (why) throw new Error(why);
+  }
+  const changes = applicationMergeChanges(keep, drop, choices, { today: date, dropName });
+  await waitlistEntryRepo.update(keepId, changes);
+  const { moved } = await replaceAndDelete('waitlist_entries', keepId, drop);
+  if (drop.contact_id && drop.contact_id !== (changes.contact_id || keep.contact_id)) await syncContactWaitlistStatus(drop.contact_id);
+  let contactsMerged = false;
+  if (mergeContacts && twoContacts) {
+    await mergeDuplicate('contacts', keep.contact_id, drop.contact_id, contactChoices);
+    contactsMerged = true;
+  }
+  return { entry: await waitlistEntryRepo.getById(keepId), moved, contactsMerged };
 }
 
 // --- Offers: turns (Spec §6.4–§6.5, §16.1) ------------------------------------------

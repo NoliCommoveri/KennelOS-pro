@@ -15,6 +15,7 @@ import { RELEASED_SALE_STATUSES, EVENT_TYPES, WHELPED_OR_LATER } from './vocab.j
 import { studParents } from './studRules.js';
 import { similarNamed, dogRegKeys, dogNameKeys, sameRegistration, sameRegisteredName, registrationsConflict } from './dogSearch.js';
 import { normName, normEmail, normPhone, hasVet, isVet } from './contactSearch.js';
+import { duplicateApplicationPairs } from './applicationDuplicates.js';
 
 export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
@@ -31,7 +32,8 @@ export const TIDY_KINDS = [
   'event-no-vet',        // vet visits / surgeries with a typed vet and no vet contact (Pro)
   'no-vet',              // nobody in her contacts is a vet (Pro)
   'duplicate-dogs',      // two dog records for one dog
-  'duplicate-contacts'   // two contact records for one person (Pro)
+  'duplicate-contacts',  // two contact records for one person (Pro)
+  'duplicate-applications' // one family on one waitlist twice (Pro, waitlist)
 ];
 
 const blank = (v) => v == null || (typeof v === 'string' && v.trim() === '');
@@ -402,14 +404,24 @@ export function duplicateDogFindings(dogs) {
   return out.sort((x, y) => (x.strength === y.strength ? 0 : x.strength === 'certain' ? -1 : 1));
 }
 
+// One family who applied twice to the same waitlist: applicationDuplicates.js's
+// rule (the same contact, email or phone is certain; the same or a near name only
+// possible), live applications and families on the list only.
+export function duplicateApplicationFindings(entries, contacts = []) {
+  const contactsById = new Map(contacts.map((c) => [c.id, c]));
+  return duplicateApplicationPairs(entries, { contactsById })
+    .map((p) => ({ key: `dupapplication:${p.key}`, kind: 'duplicate-applications', a: p.a, b: p.b, strength: p.strength, reason: p.reason }));
+}
+
 // --- Everything ------------------------------------------------------------------
 
 // Every finding, in TIDY_KINDS order. `flags` are the edition's (editionFlags):
-// contactsSection gates the contact and kennel checks, studServices the stud one.
+// contactsSection gates the contact and kennel checks, studServices the stud one,
+// waitlist the duplicate applications (`waitlistEntries`, in kennel scope).
 // `scoped` rows (litters, sales, studServices, dogs) are already in kennel scope;
 // `allDogs` is every dog (archived and pedigree-only included) for counting
 // litters and matching duplicates; contacts and kennels are program-wide.
-export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], vetEvents = [], flags = {}, today }) {
+export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], vetEvents = [], waitlistEntries = [], flags = {}, today }) {
   const littersById = new Map(litters.map((l) => [l.id, l]));
   const all = [
     ...litterCountFindings(litters, allDogs),
@@ -426,7 +438,8 @@ export function tidyFindings({ litters, pairings, sales, studServices = [], dogs
     ...(flags.contactsSection ? vetContactFindings(vetEvents, contacts) : []),
     ...(flags.contactsSection ? noVetFindings(contacts, dogs) : []),
     ...duplicateDogFindings(allDogs),
-    ...(flags.contactsSection ? duplicateContactFindings(contacts) : [])
+    ...(flags.contactsSection ? duplicateContactFindings(contacts) : []),
+    ...(flags.waitlist ? duplicateApplicationFindings(waitlistEntries, contacts) : [])
   ];
   return all.sort((a, b) => TIDY_KINDS.indexOf(a.kind) - TIDY_KINDS.indexOf(b.kind));
 }

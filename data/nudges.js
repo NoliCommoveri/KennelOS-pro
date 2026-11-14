@@ -52,6 +52,8 @@ import { editionFlags } from './editionConfig.js';
 import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
+import { duplicateApplicationPairs, duplicateDismissKeys, matchReasonText } from './applicationDuplicates.js';
+import { isDismissed } from './nudgeState.js';
 import { contactRepo } from './contactRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { goHomeDate, daysBetween, followUpMessage, sharedReferrals, FOLLOW_UP_DAYS, FOLLOW_UP_WINDOW_DAYS } from './referralShare.js';
@@ -1104,6 +1106,21 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
       detail: 'Review and approve or decline.',
       subjectHref: `waitlist.html?kennel=${encodeURIComponent(kennelId)}`,
       actions: [{ label: 'Review', run: async () => { location.href = `waitlist.html?kennel=${encodeURIComponent(kennelId)}`; } }]
+    });
+  }
+
+  // Two applications on one list that may be one family (applicationDuplicates.js).
+  // Only a suggestion: Compare opens the newer one's page, where Same family… merges
+  // them after she confirms. Dismissing it is "Not the same" (its key is one of the
+  // pair's, so the Import/Export scan and Kels don't ask either).
+  const pairDismissed = (a, b) => duplicateDismissKeys(a, b).some((k) => isDismissed(k));
+  for (const p of duplicateApplicationPairs(entries, { contactsById, dismissed: pairDismissed })) {
+    out.push({
+      key: `waitlist-duplicate:${p.key}`,
+      title: `${name(p.b)} may have applied twice`,
+      detail: `${name(p.b)} (applied ${p.b.applied_date || 'undated'}) and ${name(p.a)} (applied ${p.a.applied_date || 'undated'}) have ${matchReasonText(p)} on one waitlist. If they're one family, merge them and keep one. Dismiss if they're not the same.`,
+      subjectHref: `waitlist-entry.html?id=${encodeURIComponent(p.b.id)}`,
+      actions: [{ label: 'Compare', run: async () => { location.href = `waitlist-entry.html?id=${encodeURIComponent(p.b.id)}`; } }]
     });
   }
 

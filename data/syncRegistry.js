@@ -435,7 +435,11 @@ export const SYNC_REGISTRY = Object.freeze({
       'pickup_requests', 'home_place', 'home_miles', 'home_measured_date', 'own_place_override',
       // Their request to back out (Family Requests plan §7), with their reason and
       // note: private like a pass reason.
-      'back_out_request'
+      'back_out_request',
+      // Duplicate applications merged into this one (applicationDuplicates.js): the
+      // deleted one's name, dates and any fee moved over as a credit. Private like
+      // the answers it came from.
+      'merged_applications'
     ],
     pending: []
   },
