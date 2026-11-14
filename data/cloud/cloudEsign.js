@@ -210,10 +210,11 @@ export async function previewLink({ contract, form, facts, signer }) {
   };
 }
 
-// Throw a preview's draft away (best effort: a draft left behind costs nothing).
-export async function discardPreview(previewId) {
+// Throw a preview's draft away, freeing the place it holds (best effort: the Worker's
+// hourly sweep gets one left behind). `keepalive` when she's leaving the page.
+export async function discardPreview(previewId, { keepalive = false } = {}) {
   if (!previewId) return false;
-  try { return (await api.discardEsignPreview(requireSession(), previewId)).discarded === true; } catch { return false; }
+  try { return (await api.discardEsignPreview(requireSession(), previewId, { keepalive })).discarded === true; } catch { return false; }
 }
 
 // → { url, partial, status }
@@ -237,6 +238,7 @@ export function esignProblem(err) {
   if (code === 'already_sent') return { kind: 'already_sent', message: 'This contract is already out for signature through Firma.' };
   if (code === 'esign_limit_reached') {
     const n = Number.isInteger(err.usage?.limit) ? `${err.usage.limit} ` : '';
+    if (err.usage?.held > 0) return { kind: 'limit', message: `This month's ${n}e-sign places are taken: ${err.usage.used} sent, and ${heldText(err.usage.held)}. Firma hasn't confirmed that preview is gone yet; KennelOS checks again within the hour and frees it then.` };
     return { kind: 'limit', message: `You've sent this month's ${n}e-sign contracts.${resetText(err.usage)} Until then you can send one of your own contract forms' links.` };
   }
   if (code === 'esign_unknown') return { kind: 'unknown', message: 'Firma didn\'t answer, so this contract may have gone out. Don\'t send it again yet: if the buyer got it, it comes back Signed by itself. Check again in a few minutes.' };
@@ -261,6 +263,9 @@ export function esignProblem(err) {
   if (err instanceof api.CloudOfflineError || code === 'esign_unavailable' || code === 'esign_setup_failed') return { kind: 'offline', message: 'Couldn\'t reach Firma right now. Check your connection and try again.' };
   return { kind: 'other', message: err?.message || String(err) };
 }
+
+// "1 held by an open preview" / "2 held by open previews".
+export const heldText = (n) => (n === 1 ? '1 held by an open preview' : `${n} held by open previews`);
 
 // The label a fact has in Firma's editor (FIRMA_LABELS), else what it holds.
 const factLabels = () => new Map(factFields().map((f) => [f.name, f.label]));
@@ -296,14 +301,19 @@ function whereToFill(name) {
 export function previewNotes(form, facts, fields) {
   if (!Array.isArray(fields)) return null;
   const labels = factLabels();
-  const ofKind = new Set([...(PREFILL_FIELDS.every || []), ...fieldGroupsFor(form?.form_type).flatMap((g) => PREFILL_FIELDS[g] || [])].map(([n]) => n));
-  const have = new Set(prefillValues(form, facts).map(([n]) => n));
+  // Firma may hold a field's name in another case (the Worker fills it case aside), so
+  // names are compared lower-cased.
+  const lc = (n) => String(n).toLowerCase();
+  const ofKind = new Set([...(PREFILL_FIELDS.every || []), ...fieldGroupsFor(form?.form_type).flatMap((g) => PREFILL_FIELDS[g] || [])].map(([n]) => lc(n)));
+  const have = new Set(prefillValues(form, facts).map(([n]) => lc(n)));
+  const canonical = new Map([...labels.keys()].map((n) => [lc(n), n]));
   const empty = fields.filter((f) => f && !f.filled).map((f) => {
-    const label = String(f.label || (f.fact && labels.get(f.fact)) || 'A field');
-    if (!f.fact) return { label, why: 'Not one of KennelOS\'s details, so KennelOS can\'t fill it. Remove it in Place fields, or set its prefilled data to a KennelOS detail.' };
-    if (f.sent || have.has(f.fact)) return { label, why: 'KennelOS sent a value, but Firma left it empty. Check the field in Place fields.' };
-    if (!ofKind.has(f.fact)) return { label, why: `KennelOS doesn't fill this detail on a template marked "${descriptor(CONTRACT_FORM_TYPE, form?.form_type).label}", so it stays blank. Remove it in Place fields, or mark the template as a kind that fills it.` };
-    return { label, why: `Blank on this contract: add it on ${whereToFill(f.fact)}, then preview again.` };
+    const fact = f.fact ? canonical.get(lc(f.fact)) || f.fact : null;
+    const label = String(f.label || (fact && labels.get(fact)) || 'A field');
+    if (!fact) return { label, why: 'Not one of KennelOS\'s details, so KennelOS can\'t fill it. Remove it in Place fields, or set its prefilled data to a KennelOS detail.' };
+    if (f.sent || have.has(lc(fact))) return { label, why: 'KennelOS sent a value, but Firma left it empty. Check the field in Place fields.' };
+    if (!ofKind.has(lc(fact))) return { label, why: `KennelOS doesn't fill this detail on a template marked "${descriptor(CONTRACT_FORM_TYPE, form?.form_type).label}", so it stays blank. Remove it in Place fields, or mark the template as a kind that fills it.` };
+    return { label, why: `Blank on this contract: add it on ${whereToFill(fact)}, then preview again.` };
   });
   return { total: fields.length, filled: fields.filter((f) => f && f.filled).length, empty };
 }

@@ -326,11 +326,12 @@ export const FIRMA_LABELS = {
   dogMicrochip: 'Dog · Microchip', leaseStart: 'Lease · Start date', leaseEnd: 'Lease · End date'
 };
 
-// Which groups a form type fills, after `every`.
+// Which groups a form type fills, after `every`. Other can sit on a sale or on a dog,
+// so it fills both, as co-own does.
 export function fieldGroupsFor(formType) {
   if (formType === 'stud_service') return ['stud_service'];
-  if (['lease', 'foster', 'other'].includes(formType)) return ['dog'];
-  if (formType === 'co_own') return ['sale', 'dog'];
+  if (['lease', 'foster'].includes(formType)) return ['dog'];
+  if (formType === 'co_own' || formType === 'other') return ['sale', 'dog'];
   if (['transport', 'boarding', 'extra'].includes(formType)) return ['sale', formType];
   return ['sale'];
 }

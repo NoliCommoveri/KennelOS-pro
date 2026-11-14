@@ -94,7 +94,7 @@ async function readError(res) {
 
 // One request. `json` sends a JSON body; `body` sends a Blob as-is. Returns the
 // Response for the caller to read (ok statuses only); everything else throws.
-async function send(path, { method = 'GET', token = null, json, body, contentType, timeoutMs = JSON_TIMEOUT_MS, okStatuses = [] } = {}) {
+async function send(path, { method = 'GET', token = null, json, body, contentType, timeoutMs = JSON_TIMEOUT_MS, okStatuses = [], keepalive = false } = {}) {
   const base = cloudBaseUrl();
   if (!base) throw new CloudUnavailableError();
   const headers = {};
@@ -111,7 +111,8 @@ async function send(path, { method = 'GET', token = null, json, body, contentTyp
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
-    res = await globalThis.fetch(`${base}${path}`, { method, headers, body: payload, signal: controller.signal });
+    // keepalive: a request that should outlive the page (a preview discarded as she leaves).
+    res = await globalThis.fetch(`${base}${path}`, { method, headers, body: payload, signal: controller.signal, ...(keepalive ? { keepalive: true } : {}) });
   } catch {
     throw new CloudOfflineError(); // network down, DNS, CORS-blocked, or the timeout
   } finally {
@@ -350,7 +351,7 @@ export const sendForEsign = (token, body) => getJson('/integrations/esign/send',
 // → { url, expiresAt, partial, status }: a short-lived link to the signed PDF
 // A draft of that send, for a read-only preview (never sent, never counted). → { previewId, token, expiresAt }
 export const esignPreview = (token, body) => getJson('/integrations/esign/preview', { method: 'POST', token, json: body, timeoutMs: 60 * 1000 });
-export const discardEsignPreview = (token, id) => getJson(`/integrations/esign/preview?id=${encodeURIComponent(id)}`, { method: 'DELETE', token });
+export const discardEsignPreview = (token, id, { keepalive = false } = {}) => getJson(`/integrations/esign/preview?id=${encodeURIComponent(id)}`, { method: 'DELETE', token, keepalive });
 export const esignDocument = (token, ref) => getJson(`/integrations/esign/document?ref=${encodeURIComponent(ref)}`, { token });
 // → { url }: her own signing link on a contract she countersigns (D32), asked for when she taps Countersign
 export const esignCountersign = (token, ref) => getJson(`/integrations/esign/countersign?ref=${encodeURIComponent(ref)}`, { token });

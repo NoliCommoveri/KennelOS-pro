@@ -15,7 +15,7 @@
 import {
   esignSignedIn, esignStatus, setUpEsign, templateList, uploadTemplate, editorLink,
   sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES,
-  previewLink, discardPreview, sendDetails, previewNotes
+  previewLink, discardPreview, sendDetails, previewNotes, heldText
 } from '../data/cloud/cloudEsign.js';
 import { mergeTemplates, setTemplateType, signingKennel, forgetMissingTemplates, forgetTemplate, kennelSignerName, firmaAccountOf, signsDefault } from '../data/esignTemplates.js';
 import { breederFor } from '../data/contractSend.js';
@@ -41,8 +41,9 @@ function overlayOf(html, { wide = false } = {}) {
   return overlay;
 }
 
+// The month's count; an open preview's held place (never a send) said apart.
 const usageLine = (u) => (u
-  ? `${u.used} of ${u.limit} e-sign contract${u.limit === 1 ? '' : 's'} sent this month${u.resetsOn ? ` (resets ${esc(fmtDate(u.resetsOn))})` : ''}.`
+  ? `${u.used} of ${u.limit} e-sign contract${u.limit === 1 ? '' : 's'} sent this month${u.held > 0 ? `, ${heldText(u.held)}` : ''}${u.resetsOn ? ` (resets ${esc(fmtDate(u.resetsOn))})` : ''}.`
   : '');
 
 // One pick for a template's kind: her contract types, and each of her extras by
@@ -274,7 +275,12 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
     const box = overlay.querySelector('.modal');
     let busy = false;
     const previews = []; // drafts opened from this dialog, discarded when it closes
-    const done = (v) => { overlay.remove(); previews.splice(0).forEach((id) => { discardPreview(id); }); resolve(v); };
+    // Leaving the page (reload, another page, closing the app) discards them too, with
+    // keepalive so the request outlives the page. Not on hidden: opening the preview's
+    // own tab hides this one.
+    const onLeave = () => { previews.splice(0).forEach((id) => { discardPreview(id, { keepalive: true }); }); };
+    window.addEventListener('pagehide', onLeave);
+    const done = (v) => { window.removeEventListener('pagehide', onLeave); overlay.remove(); previews.splice(0).forEach((id) => { discardPreview(id); }); resolve(v); };
     overlay.addEventListener('click', (e) => { if (e.target === overlay && !busy) done(null); });
     const details = sendDetails(form, facts);
     const filled = details.length;
@@ -336,7 +342,7 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
         }));
         if (!box.isConnected) return;
         const head = opened
-          ? 'The preview is open in a new tab: your template, with a box where each field is. Firma shows the boxes, not what\'s in them. Nothing was sent or counted.'
+          ? 'The preview is open in a new tab: your template, with a box where each field is. Firma shows the boxes, not what\'s in them. Nothing was sent or counted; the preview holds one of this month\'s places until you close this dialog or leave the page.'
           : 'Your browser blocked the new tab. Allow pop-ups for KennelOS, then tap Preview again.';
         $('#fs-msg').innerHTML = `<p class="field-hint">${head}</p>${previewNotesHtml(previewNotes(form, facts, fields))}`;
       } catch (err) {

@@ -161,7 +161,7 @@ function fieldNamesHtml() {
   return `<details class="field-wide" style="margin-top:6px;"><summary>Field names KennelOS fills in</summary>
     <p class="field-hint">Give your form's fields these names (the name its link fills in, which your form service may call a unique name or a URL parameter). KennelOS adds them to the link when you send the form; fields with other names are left for the signer. Make prefilled fields read-only so they can't be changed, and make the reference fields hidden.</p>
     ${group('Every contract', PREFILL_FIELDS.every)}
-    ${group('Sale contracts (pet home, breeding rights, deposit, co-own sale)', PREFILL_FIELDS.sale)}
+    ${group('Sale contracts (pet home, breeding rights, deposit, co-own, other)', PREFILL_FIELDS.sale)}
     ${group('Stud service contracts', PREFILL_FIELDS.stud_service)}
     ${group('Co-own, lease, foster and other contracts', PREFILL_FIELDS.dog)}
     ${group('Transport agreements (with the sale contract names)', PREFILL_FIELDS.transport)}
