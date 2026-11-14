@@ -68,6 +68,10 @@ export const SYNC_REGISTRY = Object.freeze({
       // Imported, and its Country of origin while ticked (Website Contract Plan C4): facts
       // about the dog like registry (owner decision 2026-11-13).
       'imported', 'import_country',
+      // Its titles held ([{ abbr, organization, earned_on }]) and its country of origin,
+      // apart from Imported (Dog Titles Field Plan D2, D8): facts about the dog like
+      // registry; title_earned events already go to the cloud (owner decision 2026-11-14).
+      'titles', 'country_of_origin',
       // Its Dog Card id (Shared Dogs Plan §3.1): a random kosd1_ id, minted when it first
       // goes on a card or received with one. Cloud so every device of hers matches the
       // same dog on the next card.

@@ -156,6 +156,8 @@ const PRECACHE_URLS = [
   'data/demoMode.js',
   'data/documentRepo.js',
   'data/dogRepo.js',
+  'data/dogTitles.js',
+  'data/registryCountries.js',
   'data/dropbox.js',
   'data/editionConfig.js',
   'data/editionTour.js',

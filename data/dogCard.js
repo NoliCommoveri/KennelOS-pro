@@ -30,6 +30,7 @@ import { kennelRepo, isPublicId } from './kennelRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { applyKennelCard, previewKennelCard } from './kennelCard.js';
 import { cloudDetailKeys } from './syncRegistry.js';
+import { normalizeTitles } from './dogTitles.js';
 import { descriptor, EVENT_TYPES } from './vocab.js';
 
 export const DOG_CARD_VERSION = 1;
@@ -68,7 +69,11 @@ export const DOG_FIELDS = [
   { card: 'additionalRegistrations', field: 'additional_registrations', label: 'Other registrations', kind: 'registrations' },
   { card: 'microchipId', field: 'microchip_id', label: 'Microchip', kind: 'text' },
   { card: 'photosUrl', field: 'url', label: 'Photos link', kind: 'text' },
-  { card: 'recordedCoi', field: 'recorded_coi', label: 'Recorded COI', kind: 'number' }
+  { card: 'recordedCoi', field: 'recorded_coi', label: 'Recorded COI', kind: 'number' },
+  // Its titles held, from the field only: title_earned events already travel as
+  // events (Dog Titles Field Plan §8 phase 1). Old cards read both as empty.
+  { card: 'titles', field: 'titles', label: 'Titles', kind: 'titles' },
+  { card: 'countryOfOrigin', field: 'country_of_origin', label: 'Country of origin', kind: 'text' }
 ];
 const DOG_KEYS = ['publicId', 'sent', 'status', 'sirePublicId', 'damPublicId', 'breederKennelRef', 'events', ...DOG_FIELDS.map((f) => f.card)];
 
@@ -94,9 +99,10 @@ function cardValue(kind, v) {
   if (kind === 'number') return v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v);
   if (kind === 'date') return isYmd(text(v)) ? text(v) : '';
   if (kind === 'registrations') return normalizeRegistrations(v);
+  if (kind === 'titles') return normalizeTitles(v);
   return text(v);
 }
-const supplied = (kind, v) => (kind === 'bool' ? v === true : kind === 'number' ? v != null : kind === 'registrations' ? v.length > 0 : v !== '');
+const supplied = (kind, v) => (kind === 'bool' ? v === true : kind === 'number' ? v != null : kind === 'registrations' || kind === 'titles' ? v.length > 0 : v !== '');
 const sameValue = (kind, a, b) => JSON.stringify(cardValue(kind, a)) === JSON.stringify(cardValue(kind, b));
 
 // --- Building (sender side) --------------------------------------------------

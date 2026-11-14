@@ -28,6 +28,7 @@ import { formQuestions, isAnswerQuestion, snapshotQuestions, columnsFor, IMPORT_
 import { waitlistConfig, kennelBreeds, resolveBreed } from './waitlistRules.js';
 import { todayYMD } from './dateUtils.js';
 import { normReg } from './pedigreeImport.js';
+import { normalizeTitles } from './dogTitles.js';
 import { dogRegKeys, dogRegisteredNames } from './dogSearch.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
 import {
@@ -205,7 +206,7 @@ const DOG_MAPPING = {
     'call_name', 'registered_name', 'sex', 'date_of_birth', 'breed',
     'sire_registered_name', 'dam_registered_name', 'ownership_type', 'status',
     'owner_name', 'kennel_name', 'breeder_kennel_name', 'color_markings', 'registry', 'registration_number', 'microchip_id',
-    'coi_value', 'coi_method', 'coi_source', 'coi_as_of', 'notes'
+    'titles', 'country_of_origin', 'coi_value', 'coi_method', 'coi_source', 'coi_as_of', 'notes'
   ],
   requiredForCreate: ['call_name', 'sex', 'breed', 'ownership_type', 'status'],
 
@@ -288,11 +289,15 @@ const DOG_MAPPING = {
     }
     for (const [key, ...aliases] of [
       ['color_markings', 'color', 'markings'], ['registry'], ['registration_number', 'reg_number'],
-      ['microchip_id', 'microchip'], ['notes']
+      ['microchip_id', 'microchip'], ['country_of_origin', 'origin_country'], ['notes']
     ]) {
       const v = col(row, key, ...aliases);
       if (v) record[key] = v;
     }
+    // Titles held (Dog Titles Field Plan §8 phase 1): abbreviations separated by
+    // spaces or commas, "GCH CH" or "GCH, CH, CGC".
+    const titles = normalizeTitles(col(row, 'titles', 'title').split(/[\s,]+/));
+    if (titles.length) record.titles = titles;
 
     // Owner (dogRepo: an external or leased-in dog needs owner_contact_id). By
     // contact name against EXISTING contacts only; an unknown name is flagged.
@@ -389,6 +394,8 @@ const DOG_MAPPING = {
     // Dogs list, not counted against a dog cap. Only ever on a NEW dog: an update
     // never turns a dog already in the app into a pedigree-only one.
     const changes = buildDogChanges(record);
+    // On an update, titles are add-only: the row never drops a title she has.
+    if (match && changes.titles) changes.titles = normalizeTitles([...(match.titles || []), ...changes.titles]);
     if (!match && ownership === 'external' && !ownerName) {
       record.pedigree_only = true;
       if (!record.status) record.status = 'external_reference';

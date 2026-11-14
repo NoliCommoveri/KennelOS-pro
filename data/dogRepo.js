@@ -8,6 +8,7 @@ import { todayYMD } from './dateUtils.js';
 import { enforceDogCap } from './editionConfig.js';
 import { SCOPED_OWNERSHIP, assertOwnKennel } from './kennelScope.js';
 import { splitTitles } from './pedigreeParse.js';
+import { normalizeTitles } from './dogTitles.js';
 
 const base = makeRepo('dogs', DOG_REFERENCES);
 
@@ -172,11 +173,14 @@ async function validateDog(candidate, existingId = null) {
 // carry one unless status is 'puppy'. Enforced centrally here so every writer —
 // the dog form, sale-side disposition offers, CSV import — lands the same
 // invariant, and a life-stage change out of 'puppy' clears any lingering value.
-// additional_registrations is normalized on every write that carries it.
+// additional_registrations and titles (Dog Titles Field Plan §8.0) are normalized,
+// and country_of_origin trimmed, on every write that carries them.
 function withRegistrations(record) {
-  return 'additional_registrations' in record
-    ? { ...record, additional_registrations: normalizeRegistrations(record.additional_registrations) }
-    : record;
+  const out = { ...record };
+  if ('additional_registrations' in record) out.additional_registrations = normalizeRegistrations(record.additional_registrations);
+  if ('titles' in record) out.titles = normalizeTitles(record.titles);
+  if ('country_of_origin' in record) out.country_of_origin = String(record.country_of_origin ?? '').replace(/\s+/g, ' ').trim();
+  return out;
 }
 
 // Which co-owner a co-owned dog lives with now (empty: with her). Only a co-owned

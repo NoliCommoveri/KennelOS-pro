@@ -75,8 +75,28 @@ const COLOR_WORDS = new Set([...Object.keys(COLOR_ABBR), 'white', 'black', 'brin
   'champagne', 'gold', 'golden', 'yellow', 'apricot', 'silver', 'tricolor', 'tri', 'parti', 'wheaten',
   'mahogany', 'orange', 'lemon', 'buff', 'platinum', 'harlequin', 'mantle', 'roan', 'ticked', 'spotted',
   'markings', 'and', '&', 'with', 'w/', '/', ',']);
-const TITLES = new Set(['CH', 'GCH', 'GCHB', 'GCHS', 'GCHG', 'GCHP', 'INT', 'MBIS', 'MBISS', 'BIS', 'BISS',
-  'RBIS', 'NBISS', 'UCH', 'GRCH', 'DC', 'FC', 'AFC', 'OTCH', 'MACH', 'PACH', 'CT', 'TC', 'BPIS', 'MBPIS']);
+// The titles printed in front of a name (Dog Titles Field Plan D3): the
+// championship and show-win abbreviations charts print there, plus AKC's
+// published prefix titles (docs/KennelOS_Registry_Title_Facts.md §3). Every other
+// title goes after the name, AKC's default. Upper case, no dots.
+export const TITLE_PREFIXES = Object.freeze(new Set([
+  'CH', 'GCH', 'GCHB', 'GCHS', 'GCHG', 'GCHP', 'INT', 'MBIS', 'MBISS', 'BIS', 'BISS',
+  'RBIS', 'NBISS', 'UCH', 'GRCH', 'DC', 'FC', 'AFC', 'OTCH', 'MACH', 'PACH', 'CT', 'TC', 'BPIS', 'MBPIS',
+  // AKC's main prefix list
+  'AGCH', 'CCH', 'CFC', 'CGCH', 'CGF', 'CGN', 'CGW', 'CNC', 'CSG', 'CSGF', 'CSGN', 'CSGW', 'CWC', 'CWSG',
+  'GDSC', 'GAFC', 'GFC', 'HC', 'NAC', 'NAFC', 'NAGDC', 'NFC', 'NGDC', 'NOC', 'PNAC', 'POC', 'RACH', 'RAFC',
+  'RFC', 'RGDSC', 'RNC', 'RWAFC', 'RWFC', 'VCCH', 'WNC',
+  // AKC's alphabetical list, beyond the main one
+  'CJN', 'CRCG', 'CWGN', 'FCB', 'FCGD', 'FCLP', 'NBC', 'NLPC', 'NSPC', 'NWGDC'
+]));
+const TITLES = TITLE_PREFIXES;
+// A prefix token as looked up: upper case, a trailing dot gone, and a repeat
+// number allowed on the end (GCHP2, MACH3).
+const prefixToken = (tok) => {
+  const t = tok.replace(/\.$/, '').toUpperCase();
+  const m = t.match(/^([A-Z]+)\d{1,2}$/);
+  return TITLES.has(t) || (m && TITLES.has(m[1])) ? t : '';
+};
 const HEADER = /^(name|akc\s*#|birth\s*date|date of birth|date whelped|micro\s*chip|breed|sex|colou?rs?\b|breeder|report date|registration|owner|dob|whelped)\b|(american kennel club|research pedigree|certified pedigree|executive secretary|founded 18\d\d|\bgeneration\b|recreated|copyright|©|all rights|reserved|accuracy|warranty)/i;
 // A column heading is the whole line ("Dog", "Gr-Gr-", "Great-Grandparents"),
 // never just its first word — a dog may well be named "Dog Gone It".
@@ -195,11 +215,12 @@ function parseRunOn(text) {
   return out;
 }
 
-// "CH Crazy Crys Key To Smitten's Heart" → { name, titles: ['CH'] }.
+// "CH Crazy Crys Key To Smitten's Heart" → { name, titles: ['CH'] };
+// "GCHP2 CH Bella" → { name: 'Bella', titles: ['GCHP2', 'CH'] }.
 export function splitTitles(name) {
   const tokens = name.trim().split(/\s+/);
   const titles = [];
-  while (tokens.length > 1 && TITLES.has(tokens[0].replace(/\.$/, '').toUpperCase())) titles.push(tokens.shift().replace(/\.$/, '').toUpperCase());
+  while (tokens.length > 1 && prefixToken(tokens[0])) titles.push(prefixToken(tokens.shift()));
   return { name: tokens.join(' '), titles };
 }
 

@@ -43,6 +43,7 @@ import { standardLocation } from './pickupSlots.js';
 import { EXTRAS_INTRO_DEFAULT, extrasInfoLink } from './waitlistRules.js';
 import { portalEntryView, portalOn } from './portalFeed.js';
 import { familyPaymentsView } from './paymentSchedule.js';
+import { titlesByDogId, titleAbbrs } from './dogTitles.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -350,18 +351,15 @@ function parentsSection(kennel, live, { dogs, litters, pairings }) {
   return { sires: choices.sires.map(named), dams: choices.dams.map(named) };
 }
 
-// Each dog's earned titles (her logged `title_earned` events' abbreviations), in
-// the order earned, for the pairings and early litters she shows (§16.4, Q32).
-export function titlesByDog(events = []) {
+// Each dog's titles as abbreviations, in display order (data/dogTitles.js
+// titlesOf: the dog's Titles field, its non-archived title_earned events and any
+// titles on the front of its registered name), each once, for the pairings and
+// early litters she shows (§16.4, Q32). → Map(dogId → ['GCH', 'CH', …]).
+export function titlesByDog(events = [], dogs = []) {
   const out = new Map();
-  const earned = events
-    .filter((ev) => ev.event_type === 'title_earned' && ev.subject_type === 'dog' && !ev.is_archived && String(ev.details?.title_abbreviation ?? '').trim())
-    .sort((a, b) => String(a.event_date || '').localeCompare(String(b.event_date || '')) || String(a.id).localeCompare(String(b.id)));
-  for (const ev of earned) {
-    const list = out.get(ev.subject_id) || [];
-    const t = String(ev.details.title_abbreviation).trim();
-    if (!list.includes(t)) list.push(t);
-    out.set(ev.subject_id, list);
+  for (const [id, list] of titlesByDogId(events, dogs)) {
+    const abbrs = titleAbbrs(list);
+    if (abbrs.length) out.set(id, abbrs);
   }
   return out;
 }
@@ -487,7 +485,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const live = entries.filter((e) => !e.is_archived && e.kennel_id === kennel.id);
   const kennelOffers = offers.filter((o) => !o.is_archived && o.kennel_id === kennel.id);
   const opts = { today, config, programsById };
-  const titles = titlesByDog(events);
+  const titles = titlesByDog(events, [...dogsById.values()]);
   const testsOf = parentTestsOf(dogsById, config, events);
   const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true });
 

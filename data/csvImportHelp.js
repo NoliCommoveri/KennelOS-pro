@@ -68,6 +68,8 @@ const HELP = {
       registry: { need: 'optional', text: 'The registry, e.g. AKC or UKC.' },
       registration_number: { need: 'optional', aliases: ['reg_number'], text: 'Registration number. Also matches the dog on its own, written any way ("NP888072/07 03-25" and "np88807207" are the same), so a dog from a pedigree needs no date of birth.' },
       microchip_id: { need: 'optional', aliases: ['microchip'], text: 'Microchip number.' },
+      titles: { need: 'optional', aliases: ['title'], text: 'Titles the dog holds, as abbreviations separated by spaces or commas, e.g. "GCH CH" or "CH, CGC". Titles in front of the name go first, the way they\'re written. On a dog already in KennelOS they\'re added to its titles; none it has are taken away.' },
+      country_of_origin: { need: 'optional', aliases: ['origin_country'], text: 'The country the dog comes from, e.g. Serbia, whether or not you imported it.' },
       coi_value: { need: 'optional', aliases: ['coi'], text: 'A recorded inbreeding coefficient (COI) as a number, e.g. 6.25. The three COI columns below are saved only when this is filled in.' },
       coi_method: { need: 'optional', text: 'How the COI was worked out, e.g. "10 generations".' },
       coi_source: { need: 'optional', text: 'Where the COI came from, e.g. a registry or database name.' },

@@ -38,12 +38,18 @@
 //    to four generations (lineage). Ancestors go by name and titles only, pedigree-
 //    only dogs and dogs that aren't hers included: never an owner, a contact, a
 //    kennel or a date of birth. Import-descended is KennelPort's to work out from
-//    the ancestors' `imported` (sent on each with both sections).
+//    the ancestors' `imported` (sent on each with both sections). A dog's
+//    `country_of_origin` on its own, imported or not (origin_country, on each dog
+//    and ancestor; Dog Titles Field Plan §6.1).
+//  - Titles through data/dogTitles.js titlesOf (her Titles field, title_earned
+//    events, titles on the front of the name), and a registered name sent without
+//    the titles on its front (Dog Titles Field Plan D5a).
 //  - Her waitlist's settings as values (contract C9, waitlist_facts section), for
 //    the website's own wording: `steps` and `payment` still go beside them.
 //    The worked-out values they replace (a puppy's `status`, a product's
 //    `transport`) keep going until KennelPort has moved.
 import { titlesByDog } from './waitlistProjection.js';
+import { titlesByDogId, feedOrder, nameTitles } from './dogTitles.js';
 import { completedTestsByDog } from './healthTestLog.js';
 import { waitlistConfig, waitlistIsSetUp } from './waitlistRules.js';
 import { feePay } from './waitlistFeePay.js';
@@ -172,25 +178,22 @@ const isMarked = (r) => r?.show_on_website === true;
 
 // --- dogs ---------------------------------------------------------------------
 
-// Each dog's titles with their organization and date (titles_detail section), from
-// her title_earned events, in the order earned. The same title from the same
-// organization counts once, at its first date; the same abbreviation from two
-// organizations is two titles. → Map(dogId → [{ abbr, organization, date }]).
-export function titleDetailsByDog(events = []) {
+// Each dog's titles with their organization and date (titles_detail section),
+// through data/dogTitles.js titlesOf: its Titles field, its non-archived
+// title_earned events and titles on the front of its registered name. Dated
+// titles by date, then undated ones in display order (feedOrder); a title held
+// with no date or organization goes with nulls. The same title (case and dots
+// ignored) with the same or a blank organization counts once, at its earliest
+// date; the same abbreviation from two organizations is two titles.
+// → Map(dogId → [{ abbr, organization, date }]).
+export function titleDetailsByDog(events = [], dogs = []) {
   const out = new Map();
-  const earned = events
-    .filter((ev) => ev && ev.event_type === 'title_earned' && ev.subject_type === 'dog' && !ev.is_archived && line(ev.details?.title_abbreviation, 30))
-    .sort((a, b) => String(a.event_date || '').localeCompare(String(b.event_date || '')) || String(a.id).localeCompare(String(b.id)));
-  const seen = new Set();
-  for (const ev of earned) {
-    const abbr = line(ev.details.title_abbreviation, 30);
-    const organization = line(ev.details.organization, 60);
-    const k = `${ev.subject_id}|${abbr.toLowerCase()}|${(organization || '').toLowerCase()}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    const list = out.get(ev.subject_id) || [];
-    list.push(assertOnlyKeys({ abbr, organization, date: ymd(ev.event_date) }, TITLE_KEYS, 'title'));
-    out.set(ev.subject_id, list);
+  for (const [id, list] of titlesByDogId(events, dogs)) {
+    const sent = feedOrder(list)
+      .map((t) => ({ abbr: line(t.abbr, 30), organization: line(t.organization, 60), date: ymd(t.earned_on) }))
+      .filter((t) => t.abbr)
+      .map((t) => assertOnlyKeys(t, TITLE_KEYS, 'title'));
+    if (sent.length) out.set(id, sent);
   }
   return out;
 }
@@ -231,6 +234,16 @@ const originOf = (d) => {
   const imported = d.imported === true;
   return { imported, import_country: imported ? line(d.import_country, 60) : null };
 };
+// Its country of origin on its own (origin_country section, Dog Titles Field Plan
+// §6.1): `country_of_origin`, else `import_country` while Imported is ticked.
+export const ORIGIN_COUNTRY_KEYS = ['country_of_origin'];
+const originCountryOf = (d) => ({
+  country_of_origin: line(d.country_of_origin, 60) || (d.imported === true ? line(d.import_country, 60) : null)
+});
+// The registered name as sent: without the titles on its front (D5a). The website
+// shows titles before the name, so a title left in it would show twice; those
+// titles go in `titles` (titlesOf reads them off the name).
+const sentRegName = (d, max) => line(nameTitles(d?.registered_name).name, max);
 
 // A dog's titles as sent: the detail objects (titles_detail) or the abbreviations.
 const titlesSent = (titles, id, detail) => (detail
@@ -240,24 +253,25 @@ const titlesSent = (titles, id, detail) => (detail
 // A dog's lineage (lineage section): its breed, parents' ids, and its ancestors to
 // four generations, nearest first, by name and titles only; with the origin
 // section each ancestor also says whether it was imported.
-function lineageOf(dog, { dogsById, titles, titlesDetail, origin }) {
+function lineageOf(dog, { dogsById, titles, titlesDetail, origin, originCountry }) {
   const ancestors = ancestorsOf(dog, dogsById, { generations: MAX_GENERATIONS }).slice(0, SITE_MAX.ancestors).map(({ dog: a, path }) => assertOnlyKeys({
     id: a.id,
     path,
     call_name: line(a.call_name, 40),
-    registered_name: line(a.registered_name, 120),
+    registered_name: sentRegName(a, 120),
     titles: titlesSent(titles, a.id, titlesDetail),
-    ...(origin ? originOf(a) : {})
-  }, origin ? [...ANCESTOR_KEYS, ...ORIGIN_KEYS] : ANCESTOR_KEYS, 'ancestor'));
+    ...(origin ? originOf(a) : {}),
+    ...(originCountry ? originCountryOf(a) : {})
+  }, [...ANCESTOR_KEYS, ...(origin ? ORIGIN_KEYS : []), ...(originCountry ? ORIGIN_COUNTRY_KEYS : [])], 'ancestor'));
   return { breed: line(dog.breed, 60), sire_id: dog.sire_id || null, dam_id: dog.dam_id || null, ancestors };
 }
 
-function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposition = false, healthType = false, titlesDetail = false, lineage = null, origin = false) {
+function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposition = false, healthType = false, titlesDetail = false, lineage = null, origin = false, originCountry = false) {
   const done = (tests.get(dog.id) || []).slice(0, SITE_MAX.health);
   return assertOnlyKeys({
     id: dog.id,
-    call_name: line(dog.call_name || dog.registered_name, 40),
-    registered_name: line(dog.registered_name, 120),
+    call_name: line(dog.call_name || sentRegName(dog, 120), 40),
+    registered_name: sentRegName(dog, 120),
     ...registryOf(dog, registry),
     sex: dog.sex,
     date_of_birth: ymd(dog.date_of_birth),
@@ -284,8 +298,9 @@ function dogEntry(dog, titles, tests, registry = false, coOwned = null, disposit
     ...(coOwned ? coOwnership(dog, coOwned) : {}),
     ...dispositionOf(dog, disposition),
     ...(origin ? originOf(dog) : {}),
-    ...(lineage ? lineageOf(dog, { ...lineage, titles, titlesDetail, origin }) : {})
-  }, [...withDisposition(withCoOwned(withRegistry(DOG_KEYS, registry), Boolean(coOwned)), disposition), ...(origin ? ORIGIN_KEYS : []), ...(lineage ? LINEAGE_KEYS : [])], 'dog');
+    ...(originCountry ? originCountryOf(dog) : {}),
+    ...(lineage ? lineageOf(dog, { ...lineage, titles, titlesDetail, origin, originCountry }) : {})
+  }, [...withDisposition(withCoOwned(withRegistry(DOG_KEYS, registry), Boolean(coOwned)), disposition), ...(origin ? ORIGIN_KEYS : []), ...(originCountry ? ORIGIN_COUNTRY_KEYS : []), ...(lineage ? LINEAGE_KEYS : [])], 'dog');
 }
 
 // The dogs she shows: her own kennel's, marked, with a status the website has.
@@ -631,7 +646,7 @@ const FIELD_WORDS = {
   expected_on: 'expected date', born_on: 'birth date', ready_on: 'going-home date', deposits_on: 'deposits date', prices: 'prices',
   planned_on: 'planned date', month: 'month', pairing_id: 'pairing', registration: 'registration',
   co_owned: 'co-owned', co_owner_kennel_ids: 'co-owner kennels',
-  imported: 'imported', import_country: 'country of origin', breed: 'breed', ancestors: 'pedigree'
+  imported: 'imported', import_country: 'country of origin', country_of_origin: 'country of origin', breed: 'breed', ancestors: 'pedigree'
 };
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 export function bundleChanges(before = {}, after = {}) {
@@ -718,7 +733,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const pairingsById = new Map(pairings.map((p) => [p.id, p]));
   const titlesDetail = has(sections, 'titles_detail');
-  const titles = titlesDetail ? titleDetailsByDog(events) : titlesByDog(events);
+  const titles = titlesDetail ? titleDetailsByDog(events, dogs) : titlesByDog(events, dogs);
   const tests = completedTestsByDog(events);
   const config = waitlistConfig(kennel);
   const registry = has(sections, 'registry');
@@ -729,7 +744,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
 
   const shown = {
     dogs: websiteDogs(kennel, dogs).map((d) => dogEntry(d, titles, tests, registry, coOwned, has(sections, 'disposition'), has(sections, 'health_detail'), titlesDetail,
-      has(sections, 'lineage') ? { dogsById } : null, has(sections, 'origin'))),
+      has(sections, 'lineage') ? { dogsById } : null, has(sections, 'origin'), has(sections, 'origin_country'))),
     litters: websiteLitters(kennel, litters, pairingsById).map((l) => litterEntry(l, ctx)),
     pairings: websitePairings(kennel, pairings, litters).map((p) => pairingEntry(p, dogsById, heatOf)),
     heats: websiteHeats(kennel, { dogs, events, pairings, today }).map((h) => assertOnlyKeys({ ...h, dam_name: dogName(dogsById.get(h.dam_id)) }, HEAT_KEYS, 'heat'))

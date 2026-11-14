@@ -30,6 +30,7 @@ import {
 } from '../data/vocab.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { getShowRecord } from '../data/showPoints.js';
+import { titlesOf, displayName } from '../data/dogTitles.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from '../assets/salePrompts.js';
@@ -1014,12 +1015,24 @@ function renderTitle() {
     return;
   }
   const d = ctx.original;
-  els.title.innerHTML = esc(nameOf(d))
-    + (d.pedigree_only ? ' <span class="badge badge-neutral">Pedigree only</span>' : '')
-    + (d.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
-  els.subtitle.innerHTML = ctx.bringIn
-    ? 'Choose an ownership and status to bring this dog into regular use.'
-    : (d.call_name && d.registered_name ? esc(d.registered_name) : '');
+  // The name with its titles (Dog Titles Field Plan §8 phase 2): the field's and the
+  // name's at once, then again with its title_earned events once they're read.
+  const draw = (events = []) => {
+    const titles = titlesOf(d, events);
+    const full = displayName(d, titles);
+    els.title.innerHTML = esc(d.call_name || full || nameOf(d))
+      + (d.pedigree_only ? ' <span class="badge badge-neutral">Pedigree only</span>' : '')
+      + (d.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
+    els.subtitle.innerHTML = ctx.bringIn
+      ? 'Choose an ownership and status to bring this dog into regular use.'
+      : (d.call_name && (d.registered_name || titles.length) ? esc(full) : '');
+  };
+  draw();
+  if (d.id) {
+    eventRepo.getForSubject('dog', d.id).then((events) => {
+      if (ctx.original === d && events.some((e) => e.event_type === 'title_earned')) draw(events);
+    }).catch(() => {});
+  }
 }
 
 // New-dog-only cap counter (cap spec §6): a plain read of the same counting
@@ -1211,11 +1224,11 @@ async function renderShowRecordSection() {
   if (!editionFlags.shows) { els.showRecord.innerHTML = ''; return; } // Pro-only
   if (ctx.mode !== 'view' || !ctx.original) { els.showRecord.innerHTML = ''; return; }
   const d = ctx.original;
-  const { tracks, history } = await getShowRecord(d.id);
+  const { tracks, history } = await getShowRecord(d.id, { held: d.titles });
   if (!history.length) { els.showRecord.innerHTML = ''; return; }
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  const trackHtml = tracks.map(({ track, progress: p, titleEvent }) => {
+  const trackHtml = tracks.map(({ track, progress: p, titleEvent, heldTitle }) => {
     const parts = [
       `${p.points} / ${track.points} pts`,
       `majors ${p.majors} / ${track.majors}${p.majorJudges < p.majors ? ` (${plural(p.majorJudges, 'judge')})` : ''}`,
@@ -1224,6 +1237,8 @@ async function renderShowRecordSection() {
     if (track.championDefeats) parts.push(`champions defeated ${p.championDefeats} / ${track.championDefeats}`);
     let status;
     if (titleEvent) status = `<span class="badge badge-green">${esc(track.title)} earned ${esc(fmtDate(titleEvent.event_date))}</span>`;
+    // A title on the dog's Titles (Dog.titles): "Held" when it has no date.
+    else if (heldTitle) status = `<span class="badge badge-green">${esc(track.title)} ${heldTitle.earned_on ? `earned ${esc(fmtDate(heldTitle.earned_on))}` : 'Held'}</span>`;
     else if (p.complete) status = `<span class="badge badge-green">Complete</span> <span class="faint">finished ${esc(fmtDate(p.completedOn))} — log the ${esc(track.title)} title in the Event History</span>`;
     else status = `<span class="muted">Needs: ${esc(p.missing.join(', '))}</span>`;
     const notCounted = p.notCounted

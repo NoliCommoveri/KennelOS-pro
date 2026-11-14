@@ -1,8 +1,9 @@
 // showPoints.js — the derived championship-points engine (Show Tracking Spec §4).
 //
 // Points, majors and title progress are DERIVED from a dog's `show` events, never
-// stored (guide §4.2): there is no Dog.points / Dog.titles / "is major" field
-// anywhere. Track rules are data (vocab.js TITLE_TRACKS) — nothing here hardcodes
+// stored (guide §4.2): there is no Dog.points / "is major" field anywhere. Titles
+// HELD are stored (Dog.titles, Dog Titles Field Plan D6) and read here only to
+// unlock a track; progress stays derived. Track rules are data (vocab.js TITLE_TRACKS) — nothing here hardcodes
 // a number.
 //
 // Split the same way as scopePredicates.js: a db-free PURE core (trackProgress,
@@ -16,6 +17,7 @@
 // (the "Log the title?" nudge, spec §5.4).
 import { HistoryEvent } from './eventRepo.js';
 import { TITLE_TRACKS } from './vocab.js';
+import { normalizeTitles, holdsTitle } from './dogTitles.js';
 
 // A show event's points as a number. The form saves a number, but a CSV
 // `details_json` can carry "3" — coerce, and treat blank / non-numeric /
@@ -106,12 +108,15 @@ function gaps(t, track) {
 //            date. Only wins dated AFTER it count; the rest are reported in
 //            `notCounted`. With no `since`, such a track shows its raw tally but
 //            is never complete ("CH not yet earned").
+//   requiredHeld — the dog holds the required title with no date (a bought
+//            champion, Dog.titles): the track is unlocked and every win aimed at
+//            it counts. A `since` still wins when both are given.
 //
 // Returns { points, majors, majorJudges, judges, championDefeats, complete,
 // completedOn, missing[], notCounted }. `completedOn` is the date of the win that
 // first satisfied every requirement (null while incomplete) — the date a
 // completed CH unlocks GCH from, and the date the title nudge prefills.
-export function trackProgress(events, track, { since = null } = {}) {
+export function trackProgress(events, track, { since = null, requiredHeld = false } = {}) {
   const earning = (events || []).filter((ev) => earnsToward(ev, track)).sort(byDateAsc);
   const gated = !!track.requires;
   const counting = gated && since ? earning.filter((ev) => (ev.event_date || '') > since) : earning;
@@ -119,7 +124,7 @@ export function trackProgress(events, track, { since = null } = {}) {
 
   const t = tally(counting, track);
   const missing = gaps(t, track);
-  const blockedByRequired = gated && !since;
+  const blockedByRequired = gated && !since && !requiredHeld;
   if (blockedByRequired) missing.unshift(`${requiredTitle(track)} not yet earned`);
   const complete = missing.length === 0;
 
@@ -156,34 +161,44 @@ export function titleEarnedEvent(events, title) {
 //
 //   tracks  — one row per TITLE_TRACKS entry the dog has (non-archived) show
 //             events aimed at, in TITLE_TRACKS order:
-//             { track, progress, titleEvent, since }
+//             { track, progress, titleEvent, heldTitle, since }
 //             `titleEvent` = a logged title_earned for this track's title (or
-//             null); `since` = the required-title date used (or null).
+//             null); `heldTitle` = the dog's Dog.titles entry for it (or null);
+//             `since` = the required-title date used (or null).
 //   history — the dog's non-archived show events, newest first.
 //
+//   held    — the dog's `Dog.titles` (Dog Titles Field Plan §3). A held entry
+//             with `earned_on` counts like a logged title_earned event; one with
+//             no date unlocks the next track with every aimed win counting.
+//
 // The required-title date for a `requires` track is the EARLIEST of the
-// required title's title_earned event and the date its own track completed —
-// so a dog that finished before the owner used KennelOS still unlocks GCH.
-export function showRecordFrom(events, tracks = TITLE_TRACKS) {
+// required title's title_earned event, its held date and the date its own track
+// completed — so a dog that finished before the owner used KennelOS still
+// unlocks GCH.
+export function showRecordFrom(events, tracks = TITLE_TRACKS, { held = [] } = {}) {
   const shows = (events || []).filter((ev) => ev.event_type === 'show' && !ev.is_archived);
+  const heldList = normalizeTitles(held);
+  const heldEntry = (title) => heldList.find((t) => holdsTitle([t], title)) || null;
   const progressByTrack = new Map();
 
-  const requiredDate = (track, seen = new Set()) => {
-    if (!track.requires || seen.has(track.value)) return null;
+  const required = (track, seen = new Set()) => {
+    if (!track.requires || seen.has(track.value)) return { since: null, requiredHeld: false };
     seen.add(track.value);
     const req = tracks.find((t) => t.value === track.requires);
-    if (!req) return null;
+    if (!req) return { since: null, requiredHeld: false };
     const dates = [];
     const logged = titleEarnedEvent(events, req.title);
     if (logged?.event_date) dates.push(logged.event_date);
+    const h = heldEntry(req.title);
+    if (h?.earned_on) dates.push(h.earned_on);
     const reqProgress = progressFor(req, seen);
     if (reqProgress.completedOn) dates.push(reqProgress.completedOn);
-    return dates.length ? dates.sort()[0] : null;
+    return { since: dates.length ? dates.sort()[0] : null, requiredHeld: !!h };
   };
   function progressFor(track, seen = new Set()) {
     if (progressByTrack.has(track.value)) return progressByTrack.get(track.value).progress;
-    const since = requiredDate(track, seen);
-    const progress = trackProgress(shows, track, { since });
+    const { since, requiredHeld } = required(track, seen);
+    const progress = trackProgress(shows, track, { since, requiredHeld });
     progressByTrack.set(track.value, { progress, since });
     return progress;
   }
@@ -192,15 +207,16 @@ export function showRecordFrom(events, tracks = TITLE_TRACKS) {
     .filter((track) => shows.some((ev) => ev.details?.points_toward === track.value))
     .map((track) => {
       const progress = progressFor(track);
-      return { track, progress, since: progressByTrack.get(track.value).since, titleEvent: titleEarnedEvent(events, track.title) };
+      return { track, progress, since: progressByTrack.get(track.value).since, titleEvent: titleEarnedEvent(events, track.title), heldTitle: heldEntry(track.title) };
     });
   const history = [...shows].sort((a, b) => byDateAsc(b, a));
   return { tracks: rows, history };
 }
 
 // Loader: one compound-index probe for the dog's events (shows and its
-// title_earned events both live there), then the pure core.
-export async function getShowRecord(dogId) {
+// title_earned events both live there), then the pure core. `held`: the dog's
+// Dog.titles.
+export async function getShowRecord(dogId, { held = [] } = {}) {
   const events = await HistoryEvent.getForSubject('dog', dogId);
-  return showRecordFrom(events);
+  return showRecordFrom(events, TITLE_TRACKS, { held });
 }

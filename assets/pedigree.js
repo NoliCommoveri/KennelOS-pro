@@ -24,6 +24,8 @@ import { dogRepo, dogName } from '../data/dogRepo.js';
 import { esc, fmtDate, dogOptgroups } from './ui.js';
 import { setParent, addNewParent, spotCandidates, sexCorrectable } from '../data/pedigreeEdit.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { eventRepo } from '../data/eventRepo.js';
+import { titlesOf, displayName } from '../data/dogTitles.js';
 
 const NODE_W = 190;
 const NODE_H = 56;
@@ -73,7 +75,17 @@ function flatten(root) {
 
 function fixAttrs(n) { return `data-fix-child="${esc(n.childId)}" data-fix-role="${esc(n.role)}"`; }
 
-function nodeHtml(n, editable) {
+// A box's two names, with its titles (Dog Titles Field Plan §8 phase 2): the call
+// name, and under it the registered name with titles; a dog with no call name is
+// named by its registered name with titles.
+function boxNames(d, titleEvents) {
+  const titles = titlesOf(d, titleEvents.get(d.id) || []);
+  const full = displayName(d, titles);
+  if (!d.call_name) return { name: full || dogName(d), reg: '' };
+  return { name: d.call_name, reg: d.registered_name || titles.length ? full : '' };
+}
+
+function nodeHtml(n, editable, titleEvents = new Map()) {
   if (n.placeholder) {
     const add = editable && n.childId ? `<button type="button" class="btn btn-sm ped-add" ${fixAttrs(n)} title="Add the ${esc(n.role)}">+ Add ${esc(n.role)}</button>` : '';
     return `<div class="ped-node ped-unknown" style="width:${NODE_W}px;height:${NODE_H}px;">
@@ -82,15 +94,16 @@ function nodeHtml(n, editable) {
   }
   const d = n.dog;
   const dob = d.date_of_birth ? fmtDate(d.date_of_birth) : '';
-  const reg = d.registered_name ? `<div class="ped-reg">${esc(d.registered_name)}</div>` : '';
+  const names = boxNames(d, titleEvents);
+  const reg = names.reg ? `<div class="ped-reg">${esc(names.reg)}</div>` : '';
   // A departed (archived) ancestor in Lite must stay a static node (cap spec §7):
   // no re-center link, no "arch" badge, no ↗ open-record link — otherwise a
   // curious user could open it, see it's only "archived", and infer an un-archive
   // bypass. The name still renders for lineage; it's just not clickable.
   const hideArchive = d.is_archived && !editionFlags.archivedDogLinks;
   const nameHtml = hideArchive
-    ? `<span class="ped-name ped-name-static">${esc(dogName(d) || '(unnamed)')}</span>`
-    : `<a href="#" class="ped-name" data-nav="${esc(d.id)}" title="Re-center on this dog">${esc(dogName(d) || '(unnamed)')}</a>`;
+    ? `<span class="ped-name ped-name-static">${esc(names.name || '(unnamed)')}</span>`
+    : `<a href="#" class="ped-name" data-nav="${esc(d.id)}" title="Re-center on this dog">${esc(names.name || '(unnamed)')}</a>`;
   const archBadge = d.is_archived && !hideArchive ? '<span class="badge badge-gray ped-arch">arch</span>' : '';
   const openLink = hideArchive ? '' : `<a class="ped-open" href="dog.html?id=${encodeURIComponent(d.id)}" title="Open record">↗</a>`;
   const fix = editable && n.childId && !hideArchive
@@ -113,9 +126,18 @@ function nodeHtml(n, editable) {
 //   editable — offer the fix-a-spot buttons (see the top of this file).
 export async function renderPedigree(opts) {
   const { mount, rootId, generations = 3, onNavigate, editable = false } = opts;
-  const dogs = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
+  const [dogs, earned] = await Promise.all([
+    dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
+    eventRepo.getByType('title_earned')
+  ]);
   const byId = new Map(dogs.map((d) => [d.id, d]));
   const rootDog = byId.get(rootId);
+  const titleEvents = new Map();
+  for (const e of earned) {
+    if (e.subject_type !== 'dog') continue;
+    if (!titleEvents.has(e.subject_id)) titleEvents.set(e.subject_id, []);
+    titleEvents.get(e.subject_id).push(e);
+  }
 
   if (!rootDog) {
     mount.innerHTML = `<div class="empty-state">Dog not found.</div>`;
@@ -145,7 +167,7 @@ export async function renderPedigree(opts) {
 
   const nodesHtml = nodes.map((n) => {
     const top = cyCenter(n) - NODE_H / 2;
-    return `<div class="ped-pos" style="left:${cx(n)}px;top:${top}px;">${nodeHtml(n, editable)}</div>`;
+    return `<div class="ped-pos" style="left:${cx(n)}px;top:${top}px;">${nodeHtml(n, editable, titleEvents)}</div>`;
   }).join('');
 
   // Build offspring section

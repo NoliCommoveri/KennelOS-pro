@@ -788,8 +788,9 @@ export async function computeNudges() {
     for (const d of scopedDogs) {
       const dogEvents = eventsByDog.get(d.id);
       if (!dogEvents?.some((e) => e.event_type === 'show')) continue;
-      for (const { track, progress, titleEvent } of showRecordFrom(dogEvents).tracks) {
-        if (!progress.complete || titleEvent) continue;
+      // A title she holds on the dog (Dog.titles) is done too: she isn't asked again.
+      for (const { track, progress, titleEvent, heldTitle } of showRecordFrom(dogEvents, undefined, { held: d.titles }).tracks) {
+        if (!progress.complete || titleEvent || heldTitle) continue;
         const qs = new URLSearchParams({
           id: d.id,
           logEvent: 'title_earned',
