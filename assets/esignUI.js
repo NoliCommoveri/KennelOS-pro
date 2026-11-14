@@ -15,7 +15,7 @@
 import {
   esignSignedIn, esignStatus, setUpEsign, templateList, uploadTemplate, editorLink,
   sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES,
-  previewLink, discardPreview
+  previewLink, discardPreview, sendDetails, previewNotes
 } from '../data/cloud/cloudEsign.js';
 import { mergeTemplates, setTemplateType, signingKennel, forgetMissingTemplates, forgetTemplate, kennelSignerName, firmaAccountOf, signsDefault } from '../data/esignTemplates.js';
 import { breederFor } from '../data/contractSend.js';
@@ -25,7 +25,6 @@ import { getActiveKennelId } from '../data/kennelScope.js';
 import { getMyKennelId } from '../data/settings.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
-import { prefillValues } from '../data/contractForms.js';
 import { CONTRACT_FORM_TYPE } from '../data/vocab.js';
 import { esc, fmtDate, confirmModal } from './ui.js';
 
@@ -257,6 +256,14 @@ export function openContractTemplates() {
 
 // --- Send with Firma ------------------------------------------------------------------
 
+// What a preview found in the template's prefilled fields (cloudEsign.previewNotes).
+function previewNotesHtml(notes) {
+  if (!notes || !notes.total) return '';
+  if (!notes.empty.length) return `<p class="field-hint">All ${notes.total} of the template's detail fields are filled in.</p>`;
+  return `<div class="inline-warn"><strong>${notes.filled} of ${notes.total} detail fields filled in.</strong> Left blank:
+    <ul style="margin:6px 0 0; padding-left:18px;">${notes.empty.map((e) => `<li><strong>${esc(e.label)}</strong>: ${esc(e.why)}</li>`).join('')}</ul></div>`;
+}
+
 // One contract out through one of her Firma templates. `signer` is the contact
 // who signs (buyer or other party). With emailChoice off (Pick to send) the
 // signing link goes in her own message instead of Firma's email.
@@ -269,7 +276,8 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
     const previews = []; // drafts opened from this dialog, discarded when it closes
     const done = (v) => { overlay.remove(); previews.splice(0).forEach((id) => { discardPreview(id); }); resolve(v); };
     overlay.addEventListener('click', (e) => { if (e.target === overlay && !busy) done(null); });
-    const filled = prefillValues(form, facts).length;
+    const details = sendDetails(form, facts);
+    const filled = details.length;
     const counter = countersignerFor(form, facts);
 
     async function draw() {
@@ -278,6 +286,10 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
       const full = usage && usage.used >= usage.limit;
       box.innerHTML = `<h2 style="margin-top:0;">Send ${esc(form.label)}</h2>
         <p class="field-hint" style="margin-top:0;">Through Firma, with ${filled} detail${filled === 1 ? '' : 's'} of this contract filled in where you placed them on the template. ${usage ? usageLine(usage) : ''}</p>
+        ${filled ? `<details class="esign-details"><summary>What goes in (${filled})</summary>
+          <p class="field-hint">These fill the fields you placed for them on the template. A field you placed with nothing here stays blank. Firma's preview shows where each field is, not what's in it.</p>
+          <dl class="esign-detail-list">${details.map((d) => `<dt>${esc(d.label)}</dt><dd>${esc(d.value)}</dd>`).join('')}</dl>
+        </details>` : ''}
         <div class="form-grid">
           <div class="field"><label for="fs-name">Who signs</label><input id="fs-name" type="text" value="${esc(signer?.name || '')}"></div>
           <div class="field"><label for="fs-email">Their email</label><input id="fs-email" type="email" value="${esc(signer?.email || '')}"></div>
@@ -316,12 +328,17 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
       $('#fs-msg').innerHTML = '<p class="field-hint">Making the preview…</p>';
       try {
         // A preview that comes back after the dialog closed is discarded straight away.
+        let fields = null;
         const opened = await openInNewTab(previewLink({ contract, form, facts, signer: { name, email } }).then((r) => {
           if (box.isConnected) previews.push(r.previewId); else discardPreview(r.previewId);
+          fields = r.fields;
           return r.url;
         }));
         if (!box.isConnected) return;
-        $('#fs-msg').innerHTML = `<p class="field-hint">${opened ? 'The preview is open in a new tab: your template with these details. Nothing was sent or counted.' : 'Your browser blocked the new tab. Allow pop-ups for KennelOS, then tap Preview again.'}</p>`;
+        const head = opened
+          ? 'The preview is open in a new tab: your template, with a box where each field is. Firma shows the boxes, not what\'s in them. Nothing was sent or counted.'
+          : 'Your browser blocked the new tab. Allow pop-ups for KennelOS, then tap Preview again.';
+        $('#fs-msg').innerHTML = `<p class="field-hint">${head}</p>${previewNotesHtml(previewNotes(form, facts, fields))}`;
       } catch (err) {
         const p = esignProblem(err);
         if (p.kind === 'template_missing') await forgetTemplate(form.template_id).catch(() => {});

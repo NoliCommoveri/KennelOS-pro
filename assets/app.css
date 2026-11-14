@@ -1357,3 +1357,10 @@ body:has(> .kels-fab) main { padding-bottom: 104px; }
 .program-suggest-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 0; font-weight: normal; }
 .program-suggest-row select { min-width: 9em; flex: 0 0 auto; }
 .row-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+
+/* Send for e-signature: what goes in (assets/esignUI.js) */
+.esign-details { margin: 4px 0 10px; }
+.esign-details summary { cursor: pointer; font-weight: 600; }
+.esign-detail-list { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 4px 12px; margin: 6px 0 0; max-height: 260px; overflow: auto; }
+.esign-detail-list dt { color: var(--text-muted); overflow-wrap: anywhere; }
+.esign-detail-list dd { margin: 0; overflow-wrap: anywhere; }

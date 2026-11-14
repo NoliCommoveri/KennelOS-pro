@@ -12,6 +12,8 @@
 //   editorLink(templateId)  Firma's editor in its own tab (the Worker's sandboxed page)
 //   sendForEsign(...)       send a contract; the contract is marked Sent
 //   previewLink(...)        a free draft of that send, read-only in Firma's editor
+//   sendDetails(...)        what this send fills in, by label, for the Send dialog
+//   previewNotes(...)       the template's prefilled fields a preview found empty, and why
 //   signedCopyLink(ref)     a short-lived link to the signed PDF
 //   countersignLink(ref)    her own signing link, on a contract she countersigns (D32)
 //
@@ -24,9 +26,10 @@ import { refreshConnections } from './cloudIntegrations.js';
 import { editionFlags } from '../editionConfig.js';
 import { isDemo } from '../demoMode.js';
 import { contractRepo } from '../contractRepo.js';
-import { PREFILL_FIELDS, FIRMA_LABELS, prefillValues, splitName } from '../contractForms.js';
+import { PREFILL_FIELDS, FIRMA_LABELS, prefillValues, splitName, fieldGroupsFor } from '../contractForms.js';
 import { todayYMD } from '../dateUtils.js';
 import { kennelSignerName } from '../esignTemplates.js';
+import { CONTRACT_FORM_TYPE, descriptor } from '../vocab.js';
 
 // Firma refuses a request body over about 6 MB; a PDF grows by a third as base64.
 export const TEMPLATE_MAX_BYTES = 4_500_000;
@@ -194,10 +197,17 @@ export async function sendForEsign({ contract, form, facts, signer, emailSigner 
 // A preview of this send: her real template with the contract's values, as a
 // Firma draft (free, never counted) opened read-only on the Worker's editor page.
 // → { url, previewId }. Discard it with discardPreview once she's done.
+// `fields` (when the Worker could read them back): the draft's prefilled fields,
+// [{ fact, label, filled, sent, signer }], never a value. Firma's read-only editor
+// shows a field's box, not what's in it, so the Send dialog says this instead.
 export async function previewLink({ contract, form, facts, signer }) {
   const token = requireSession();
   const res = await api.esignPreview(token, sendBody({ contract, form, facts, signer, emailSigner: false }));
-  return { url: `${cloudBaseUrl()}/esign/editor#${new URLSearchParams({ t: res.token, sr: res.previewId })}`, previewId: res.previewId };
+  return {
+    url: `${cloudBaseUrl()}/esign/editor#${new URLSearchParams({ t: res.token, sr: res.previewId })}`,
+    previewId: res.previewId,
+    fields: Array.isArray(res.fields) ? res.fields : null
+  };
 }
 
 // Throw a preview's draft away (best effort: a draft left behind costs nothing).
@@ -250,4 +260,50 @@ export function esignProblem(err) {
   if (code === 'too_large') return { kind: 'other', message: 'That PDF is too large for Firma. Save a smaller copy and try again.' };
   if (err instanceof api.CloudOfflineError || code === 'esign_unavailable' || code === 'esign_setup_failed') return { kind: 'offline', message: 'Couldn\'t reach Firma right now. Check your connection and try again.' };
   return { kind: 'other', message: err?.message || String(err) };
+}
+
+// The label a fact has in Firma's editor (FIRMA_LABELS), else what it holds.
+const factLabels = () => new Map(factFields().map((f) => [f.name, f.label]));
+
+// What this send fills in, in prefill order: [{ name, label, value }] (values from
+// this device only; nothing is fetched).
+export function sendDetails(form, facts) {
+  const labels = factLabels();
+  return prefillValues(form, facts).map(([name, value]) => ({ name, label: labels.get(name) || name, value }));
+}
+
+// Where a blank fact is filled in, for the hint beside it.
+function whereToFill(name) {
+  if (/^buyer/.test(name)) return 'the buyer\'s contact';
+  if (/^breeder/.test(name)) return 'your own contact (the one linked to your kennel)';
+  if (/^kennel/.test(name)) return 'your kennel';
+  if (/^partner/.test(name)) return 'the other party\'s contact';
+  if (/^(puppy|sire|dam|breed)/.test(name)) return 'the pup\'s record';
+  if (/^(dog|lease)/.test(name)) return 'the dog\'s record';
+  if (/^(stud|service)/.test(name)) return 'the stud service';
+  if (/^(transport|delivery)/.test(name)) return 'the sale\'s transport';
+  if (/^boarding/.test(name)) return 'the sale\'s boarding';
+  if (/^extra/.test(name)) return 'the sale\'s extra';
+  return 'the sale';
+}
+
+// A preview's prefilled fields Firma left empty, each with why (pure):
+// → { total, filled, empty: [{ label, why }] }, or null when there's no list.
+//   - a fact this contract's kind fills but has no value here: "blank: add it on <where>"
+//   - a fact this kind doesn't fill: KennelOS doesn't fill it on a template of that kind
+//   - a field that isn't one of KennelOS's: "not a KennelOS detail"
+//   - sent but still empty: Firma's side
+export function previewNotes(form, facts, fields) {
+  if (!Array.isArray(fields)) return null;
+  const labels = factLabels();
+  const ofKind = new Set([...(PREFILL_FIELDS.every || []), ...fieldGroupsFor(form?.form_type).flatMap((g) => PREFILL_FIELDS[g] || [])].map(([n]) => n));
+  const have = new Set(prefillValues(form, facts).map(([n]) => n));
+  const empty = fields.filter((f) => f && !f.filled).map((f) => {
+    const label = String(f.label || (f.fact && labels.get(f.fact)) || 'A field');
+    if (!f.fact) return { label, why: 'Not one of KennelOS\'s details, so KennelOS can\'t fill it. Remove it in Place fields, or set its prefilled data to a KennelOS detail.' };
+    if (f.sent || have.has(f.fact)) return { label, why: 'KennelOS sent a value, but Firma left it empty. Check the field in Place fields.' };
+    if (!ofKind.has(f.fact)) return { label, why: `KennelOS doesn't fill this detail on a template marked "${descriptor(CONTRACT_FORM_TYPE, form?.form_type).label}", so it stays blank. Remove it in Place fields, or mark the template as a kind that fills it.` };
+    return { label, why: `Blank on this contract: add it on ${whereToFill(f.fact)}, then preview again.` };
+  });
+  return { total: fields.length, filled: fields.filter((f) => f && f.filled).length, empty };
 }
