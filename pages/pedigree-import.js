@@ -13,6 +13,7 @@ import { readPedigreeFile } from '../data/pedigreeReader.js';
 import { wordsToSegments, parsePedigree } from '../data/pedigreeParse.js';
 import { planImport, commitImport, breederName, matchBreederContacts } from '../data/pedigreeImport.js';
 import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
+import { titleSuggestions, splitTitleInput, normalizeTitles } from '../data/dogTitles.js';
 import { esc, badge } from '../assets/ui.js';
 import { SEX } from '../data/vocab.js';
 
@@ -234,6 +235,46 @@ function statusCell(r) {
   return '<span class="badge badge-neutral">New · pedigree only</span>';
 }
 
+// Titles and where it comes from (Dog Titles Field Plan §4, §8 phase 4). A new
+// dog's titles are chips she can remove or add to, its country an editable box,
+// and Imported a tick when the chart suggests it (pre-ticked or not, D8). A dog
+// she already has only gets what it lacks, each as an unticked offer.
+const fillBox = (r, kind, label) => `<label class="check-inline" style="font-size:13px;"><input type="checkbox" data-fill="${kind}" data-key="${esc(r.key)}"${r.fill[`${kind}On`] ? ' checked' : ''}> ${label}</label>`;
+
+function titlesCell(r) {
+  if (r.action === 'existing') {
+    return r.fill?.titles.length ? fillBox(r, 'titles', `Add ${esc(r.fill.titles.map((t) => t.abbr).join(' '))} to its titles`) : '<span class="faint">—</span>';
+  }
+  const chips = r.titles.map((t, i) => `<span class="title-chip"><strong>${esc(t.abbr)}</strong>${t.organization ? ` <span class="faint">${esc(t.organization)}</span>` : ''}<button type="button" class="title-chip-remove" data-title-remove="${i}" data-key="${esc(r.key)}" aria-label="Remove ${esc(t.abbr)}">×</button></span>`).join('');
+  return `<div class="title-chips">${chips}</div>
+    <input type="text" class="ped-title-add" data-title-add="${esc(r.key)}" list="ped-title-suggestions" placeholder="+ title" aria-label="Add a title" style="min-width:6em; width:7em; margin-top:4px;">`;
+}
+
+function originCell(r) {
+  if (r.action === 'existing') {
+    const f = r.fill;
+    const parts = [
+      f?.country ? fillBox(r, 'country', `Country of origin: ${esc(f.country)}`) : '',
+      f?.imported ? fillBox(r, 'imported', `Imported${f.importCountry ? ` from ${esc(f.importCountry)}` : ''}`) : ''
+    ].filter(Boolean);
+    return parts.length ? parts.join('<br>') : '<span class="faint">—</span>';
+  }
+  const from = !r.country_of_origin && r.importCountry ? ` from ${esc(r.importCountry)}` : '';
+  return `<input type="text" data-edit="country_of_origin" data-key="${esc(r.key)}" value="${esc(r.country_of_origin)}" placeholder="Country of origin" aria-label="Country of origin" style="width:9em; min-width:8em;">
+    ${r.importOffer ? `<label class="check-inline" style="font-size:13px; margin-top:4px;"><input type="checkbox" data-edit-check="imported" data-key="${esc(r.key)}"${r.imported ? ' checked' : ''}> Imported${from}</label>` : ''}`;
+}
+
+// A change to one row's field, written to every box it came from, so it re-matches.
+function editRow(key, field, value) {
+  const row = state.plan.rows.find((r) => r.key === key);
+  if (!row) return;
+  for (const s of row.sources) {
+    const k = `${s.fileId}:${s.path}`;
+    state.edits[k] = { ...(state.edits[k] || {}), [field]: value };
+  }
+  replan();
+}
+
 function renderReview() {
   const plan = state.plan;
   els.review.hidden = !plan;
@@ -250,19 +291,23 @@ function renderReview() {
   const shown = (view === 'attention' ? attention : plan.rows)
     .slice().sort((a, b) => depth(a) - depth(b) || a.name.localeCompare(b.name));
   els.rows.innerHTML = shown.length ? `<div class="ped-table-wrap"><table class="data ped-table">
-    <thead><tr><th>Name</th><th>Registration #</th><th>Color</th><th>Sex</th><th>Sire</th><th>Dam</th><th>Status</th></tr></thead>
+    <thead><tr><th>Name</th><th>Registration #</th><th>Titles</th><th>Origin</th><th>Color</th><th>Sex</th><th>Sire</th><th>Dam</th><th>Status</th></tr></thead>
     <tbody>${shown.map((r) => `<tr>
       <td><input type="text" data-edit="registered_name" data-key="${esc(r.key)}" value="${esc(r.name)}"${r.name ? '' : ' class="ped-needs"'}>
         ${r.subjectOf.length ? '<div class="muted" style="font-size:12px;">The pedigree’s dog</div>' : ''}
         ${r.issues.map((i) => `<div class="ped-issue">${esc(i)}</div>`).join('')}
         ${r.action === 'new' && !r.breed ? '<div class="ped-issue">Needs a breed — set it on the pedigree above.</div>' : ''}</td>
-      <td><input type="text" data-edit="registration_number" data-key="${esc(r.key)}" value="${esc(r.registration_number)}" style="width:9.5em;"></td>
+      <td><input type="text" data-edit="registration_number" data-key="${esc(r.key)}" value="${esc(r.registration_number)}" style="width:9.5em;">
+        ${(r.additional_registrations || []).map((a) => `<div class="faint" style="font-size:12px;">also ${esc(a.registration_number)}</div>`).join('')}</td>
+      <td>${titlesCell(r)}</td>
+      <td>${originCell(r)}</td>
       <td><input type="text" data-edit="color_markings" data-key="${esc(r.key)}" value="${esc(r.color_markings)}" style="width:9em;"></td>
       <td>${badge(SEX, r.sex)}</td>
       <td>${parentCell(r, 'sire')}</td>
       <td>${parentCell(r, 'dam')}</td>
       <td>${statusCell(r)}</td>
-    </tr>`).join('')}</tbody></table></div>`
+    </tr>`).join('')}</tbody></table></div>
+    <datalist id="ped-title-suggestions">${titleSuggestions().map((a) => `<option value="${esc(a)}"></option>`).join('')}</datalist>`
     : '<p class="muted">Nothing needs attention.</p>';
 
   els.commit.disabled = !plan.ready;
@@ -283,11 +328,16 @@ els.rows.addEventListener('change', (e) => {
   const t = e.target;
   if (t.dataset.edit) {
     // An edit applies to every box this dog came from, so it re-matches correctly.
-    const row = state.plan.rows.find((r) => r.key === t.dataset.key);
-    for (const s of row.sources) {
-      const k = `${s.fileId}:${s.path}`;
-      state.edits[k] = { ...(state.edits[k] || {}), [t.dataset.edit]: t.value.trim() };
-    }
+    editRow(t.dataset.key, t.dataset.edit, t.value.trim());
+  } else if (t.dataset.editCheck) {
+    editRow(t.dataset.key, t.dataset.editCheck, t.checked);
+  } else if (t.dataset.titleAdd) {
+    const row = state.plan.rows.find((r) => r.key === t.dataset.titleAdd);
+    const added = splitTitleInput(t.value).map((abbr) => ({ abbr, organization: '', earned_on: '' }));
+    if (row && added.length) editRow(row.key, 'titles', normalizeTitles([...row.titles, ...added]));
+  } else if (t.dataset.fill) {
+    const k = `fill:${t.dataset.fill}:${t.dataset.key}`;
+    if (t.checked) state.decisions[k] = true; else delete state.decisions[k];
     replan();
   } else if (t.dataset.decide) {
     if (t.value) state.decisions[t.dataset.decide] = t.value; else delete state.decisions[t.dataset.decide];
@@ -297,6 +347,17 @@ els.rows.addEventListener('change', (e) => {
     if (t.value) state.decisions[k] = t.value; else delete state.decisions[k];
     replan();
   }
+});
+
+els.rows.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-title-remove]');
+  if (!b) return;
+  const row = state.plan.rows.find((r) => r.key === b.dataset.key);
+  if (row) editRow(row.key, 'titles', row.titles.filter((_, i) => i !== Number(b.dataset.titleRemove)));
+});
+// Enter in a title box adds it (a change event), not a form submit.
+els.rows.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.dataset?.titleAdd) { e.preventDefault(); e.target.dispatchEvent(new Event('change', { bubbles: true })); }
 });
 
 els.commit.addEventListener('click', async () => {

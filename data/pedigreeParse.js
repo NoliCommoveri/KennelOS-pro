@@ -14,6 +14,11 @@
 //
 // Ancestors are addressed by PATH from the dog: '' is the dog, 's' its sire, 'd'
 // its dam, 'sd' the sire's dam, and so on. A path's last letter is its sex.
+//
+// Its one import is registryCountries.js (pure, import-free too): which country a
+// registry code belongs to, for reading every registry on the map and for the
+// country-of-origin and Imported suggestions (Dog Titles Field Plan D7, D8).
+import { REGISTRY_COUNTRIES, normCode, countryOfRegistry, countryName } from './registryCountries.js';
 
 // ---------------------------------------------------------------------------
 // 1. Words → segments
@@ -125,13 +130,49 @@ export function expandColor(text) {
   return t.split(' ').map((w) => COLOR_ABBR[w.toLowerCase()] || w).join(' ');
 }
 
-// A foreign or non-AKC registration: an uppercase registry code, then something
-// with a digit, and no ordinary lowercase words ("MET BOST.T.915/19",
-// "PKR IX-75080", "KCSB 3847CY", "ACR A 394-22/140").
+// Every registry code on the map (D7) as a pattern for the start of a line: as
+// printed, its dots optional, longest first so "RKF R." wins over "RKF" and
+// "KSS JR" reads as KSS then the number. A code must be followed by a space, a dot
+// or a hyphen, or by a digit when it's all letters ("S12345/2019").
+const escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const MAP_CODES = [...new Set(Object.values(REGISTRY_COUNTRIES).flat())]
+  .sort((a, b) => normCode(b).length - normCode(a).length)
+  .map((code) => {
+    // As printed ("JoKC", "N Reg") or in capitals, dots optional after any letter.
+    const pat = (c) => c.replace(/\./g, '').replace(/\s+/g, ' ').trim().replace(/-$/, '').split('')
+      .map((ch) => (ch === ' ' ? '\\.?\\s+' : `${escRe(ch)}\\.?`)).join('');
+    const alts = [...new Set([pat(code), pat(normCode(code))])].join('|');
+    return { code, re: new RegExp(`^((?:${alts})-?)(?=[\\s./-]|\\d)`) };
+  });
+// A registry code at the start of a line: one on the map, else 2–5 plain capitals
+// (a registry the map leaves out on purpose: CKC, KCSB…). → { code, rest } | null,
+// `code` as printed without a trailing dot or hyphen.
+function regCodeAt(t) {
+  for (const { re } of MAP_CODES) {
+    const m = t.match(re);
+    // As printed, less a trailing hyphen, and a trailing dot unless it's dotted
+    // throughout ("K.C.T." stays, "RKF R." → "RKF R").
+    if (m) return { code: m[1].replace(/-$/, '').replace(/^([^.]*)\.$/, '$1'), rest: t.slice(m[0].length).replace(/^[.\s/-]+/, ''), mapped: true };
+  }
+  const m = t.match(/^([A-Z]{2,5})\.?\s+(.*)$/);
+  return m ? { code: m[1], rest: m[2], mapped: false } : null;
+}
+
+// A line that starts with another registry on the map ("KC AV01234501") is that
+// registry's, even when its number looks like an unslashed AKC one.
+const leadsWithOtherReg = (t) => isOtherReg(t) && regCodeAt(t.trim()).mapped && normCode(regCodeAt(t.trim()).code) !== 'AKC';
+
+// A foreign or non-AKC registration: a registry code (any on the map, D7, or 2–5
+// capitals), then something with a digit, and no ordinary lowercase words
+// ("MET BOST.T.915/19", "PKR IX-75080", "KCSB 3847CY", "ACR A 394-22/140",
+// "ÖHZB 1234/19", "K.C.T. 2020/123").
 export function isOtherReg(text) {
   const t = text.trim();
-  if (!/^[A-Z]{2,5}\.?\s/.test(t) || !/\d/.test(t)) return false;
-  return !/\b(?!bost\b|bst\b)[a-z]{3,}\b/.test(t.replace(/^[A-Z]{2,5}/, ''));
+  // "AKC DNA V516516", "OFA…", "CHIC…" are an AKC dog's details, not a registration.
+  if (/\b(DNA|CHIC|OFA)\b/i.test(t)) return false;
+  const at = regCodeAt(t);
+  if (!at || !/\d/.test(at.rest)) return false;
+  return !/\b(?!bost\b|bst\b)[a-z]{3,}\b/.test(at.rest);
 }
 
 export function isColorOnly(text) {
@@ -154,35 +195,48 @@ export function parseDetails(lines) {
   // An AKC Certified Pedigree runs a dog's details on as one wrapped paragraph
   // ("NP24941501 (10-11) OFA46G CHIC80937 BLK BRDL &" / "WH AKC DNA V627089"),
   // so when its number is in that unslashed form the lines are read as one.
-  const first = lines.map((l) => findAkc(l.trim())).find(Boolean);
+  const first = lines.map((l) => (leadsWithOtherReg(l) ? null : findAkc(l.trim()))).find(Boolean);
   if (first?.run) return parseRunOn(lines.join(' '));
-  const out = { registration_number: '', registry: '', color_markings: '', notes: [] };
+  const out = { registration_number: '', registry: '', color_markings: '', notes: [], additional_registrations: [], country: '' };
+  // The first registration read is the dog's; a second one (a dual-registered
+  // dog, D8) is kept in additional_registrations.
+  const addReg = (registry, registration_number) => {
+    if (!out.registration_number) { out.registry = registry; out.registration_number = registration_number; }
+    else out.additional_registrations.push({ registry, registration_number, registered_name: '' });
+  };
+  let akcSeen = false;
   for (const raw of lines) {
     let t = raw.trim();
-    const akc = findAkc(t);
-    if (akc && !out.registration_number) {
-      out.registration_number = akc.number;
-      out.registry = 'AKC';
+    const akc = leadsWithOtherReg(t) ? null : findAkc(t);
+    if (akc && !akcSeen) {
+      akcSeen = true;
+      let number = akc.number;
       t = t.slice(0, akc.at) + t.slice(akc.at + akc.length);
       // The four digits AKC prints after the number ("NP888072/07 03-25") are
       // part of it as breeders record it, so they're kept, as printed.
       const tail = t.slice(akc.at).match(AKC_TAIL);
-      if (tail) { out.registration_number += ` ${tail[1] || tail[2]}`; t = t.slice(0, akc.at) + t.slice(akc.at + tail[0].length); }
-    } else if (!out.registration_number && isOtherReg(t)) {
-      const m = t.match(/^([A-Z]{2,5})\.?\s+(.*)$/);
-      out.registry = m[1];
-      // Peel a trailing color phrase off ("NP… Black & White" on one line).
-      const colorTail = m[2].match(/\s((?:[A-Za-z]+\s*(?:&|and)?\s*)+)$/);
+      if (tail) { number += ` ${tail[1] || tail[2]}`; t = t.slice(0, akc.at) + t.slice(akc.at + tail[0].length); }
+      addReg('AKC', number);
+    } else if (isOtherReg(t) && out.additional_registrations.length < 3) {
+      const { code, rest } = regCodeAt(t);
+      // The number as printed, code and all ("KSS JR 71592 BST"). Peel a trailing
+      // color phrase off ("MET 1234/19 Black & White" on one line).
+      const printed = t.replace(/\s+/g, ' ');
+      const colorTail = rest.match(/\s((?:[A-Za-z]+\s*(?:&|and)?\s*)+)$/);
       if (colorTail && isColorOnly(colorTail[1])) {
-        out.registration_number = `${m[1]} ${m[2].slice(0, -colorTail[0].length)}`.trim();
+        addReg(code, printed.slice(0, -colorTail[0].length).trim());
         if (!out.color_markings) out.color_markings = colorTail[1].trim();
       } else {
-        out.registration_number = `${m[1]} ${m[2]}`.trim();
+        addReg(code, printed);
       }
       continue;
     }
     const country = t.match(/\(([^)]+)\)/);
-    if (country) { out.notes.push(`Registered in ${country[1].trim()}`); t = t.replace(country[0], ''); }
+    if (country) {
+      out.notes.push(`Registered in ${country[1].trim()}`);
+      if (!out.country && !/\d/.test(country[1])) out.country = countryName(country[1]);
+      t = t.replace(country[0], '');
+    }
     t = t.trim();
     if (!t) continue;
     if (/\bDNA\b/i.test(t)) out.notes.push(t.replace(/\s+/g, ' '));
@@ -196,7 +250,7 @@ export function parseDetails(lines) {
 // One AKC Certified Pedigree detail paragraph:
 // "<number> (<date>) [OFA…] [CHIC…] <color> [(<country>)] [AKC DNA V…]".
 function parseRunOn(text) {
-  const out = { registration_number: '', registry: 'AKC', color_markings: '', notes: [] };
+  const out = { registration_number: '', registry: 'AKC', color_markings: '', notes: [], additional_registrations: [], country: '' };
   let t = ` ${text.replace(/\s+/g, ' ')} `;
   const akc = findAkc(t);
   out.registration_number = akc.number;
@@ -204,7 +258,10 @@ function parseRunOn(text) {
   const tail = t.slice(akc.at).match(AKC_TAIL);
   if (tail) { out.registration_number += ` ${tail[1] || tail[2]}`; t = t.slice(0, akc.at) + t.slice(akc.at + tail[0].length); }
   const take = (re, fn) => { t = t.replace(re, (...m) => { fn(...m); return ' '; }); };
-  take(/\(([^)]+)\)/g, (_, c) => out.notes.push(`Registered in ${c.trim()}`));
+  take(/\(([^)]+)\)/g, (_, c) => {
+    out.notes.push(`Registered in ${c.trim()}`);
+    if (!out.country && !/\d/.test(c)) out.country = countryName(c);
+  });
   take(/\bOFA\s?#?[A-Z0-9]*\d[A-Z0-9]*\b/g, (m) => out.notes.push(m.replace(/\s+/g, '')));
   take(/\bCHIC\s?#?\d+\b/g, (m) => out.notes.push(m.replace(/\s+/g, '')));
   take(/\b(?:AKC\s+)?DNA\s*#?\s*(V?\d+)\b/g, (_, n) => out.notes.push(`AKC DNA ${n}`));
@@ -259,6 +316,8 @@ export function parseHeader(segs) {
   const reg = all.match(/AKC\s*#:?\s*([A-Z]{2})\s?(\d{6})\s?\/\s?(\d{2})(?:[ \t]+(\d{2}[-/]\d{2})(?![\d/-]))?/i);
   h.registration_number = reg ? `${reg[1].toUpperCase()}${reg[2]}/${reg[3]}${reg[4] ? ` ${reg[4]}` : ''}` : '';
   h.registry = /american kennel club|\bAKC\b/i.test(all) ? 'AKC' : '';
+  // An AKC Certified Pedigree prints only AKC titles, so its titles are AKC's.
+  h.certified = /certified pedigree/i.test(all) && /american kennel club|\bAKC\b/i.test(all);
   return h;
 }
 
@@ -334,10 +393,16 @@ export function parsePedigree(segs, page) {
     const raw = e.name.replace(/\s+/g, ' ').replace(/[|_]+/g, '').trim();
     const { name, titles } = splitTitles(path.length === 1 ? raw.replace(/^(Sire|Dam)[\s:]+(?=[^a-z]*$)/, '') : raw);
     const det = parseDetails(e.details);
-    const notes = [...(titles.length ? [`Titles: ${titles.join(' ')}`] : []), ...det.notes];
+    // Titles go to the dog's Titles (Dog Titles Field Plan §8 phase 4), not notes.
+    // On an AKC Certified Pedigree they're AKC's; on any other chart the
+    // organization is left blank.
     return {
       path, registered_name: name, registration_number: det.registration_number, registry: det.registry,
-      color_markings: det.color_markings, notes, sex: path ? (path.endsWith('s') ? 'male' : 'female') : '', cy: e.cy
+      additional_registrations: det.additional_registrations,
+      titles: titles.map((abbr) => ({ abbr, organization: header.certified ? 'AKC' : '', earned_on: '' })),
+      // The bracketed country an AKC chart prints on a dog born abroad ("(SRB)").
+      origin_printed: det.country,
+      color_markings: det.color_markings, notes: [...det.notes], sex: path ? (path.endsWith('s') ? 'male' : 'female') : '', cy: e.cy
     };
   };
 
@@ -360,8 +425,21 @@ export function parsePedigree(segs, page) {
     root = gens[0][0];
   }
   const subject = toDog(root, '');
-  if (header.name) subject.registered_name = splitTitles(header.name).name;
-  if (header.registration_number) { subject.registration_number = header.registration_number; subject.registry = 'AKC'; }
+  if (header.name) {
+    const h = splitTitles(header.name);
+    subject.registered_name = h.name;
+    for (const abbr of h.titles) {
+      if (!subject.titles.some((t) => t.abbr === abbr)) subject.titles.push({ abbr, organization: header.certified ? 'AKC' : '', earned_on: '' });
+    }
+  }
+  if (header.registration_number) {
+    // The header's AKC number is the dog's; a different one read from its box stays as a second.
+    if (subject.registration_number && subject.registry !== 'AKC') {
+      subject.additional_registrations.unshift({ registry: subject.registry, registration_number: subject.registration_number, registered_name: '' });
+    }
+    subject.registration_number = header.registration_number;
+    subject.registry = 'AKC';
+  }
   if (!subject.color_markings && header.color_markings) subject.color_markings = header.color_markings;
   subject.sex = header.sex || 'unknown';
   subject.date_of_birth = header.date_of_birth;
@@ -395,4 +473,57 @@ export function parsePedigree(segs, page) {
   }
   for (const d of dogs.values()) delete d.cy;
   return { header, dogs, generations: gens.length - 1, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// 5. Country of origin and Imported (Dog Titles Field Plan §4, D7, D8)
+// ---------------------------------------------------------------------------
+// What a chart says about where each dog comes from, given her home country
+// (registryCountries.homeCountry). Worked out over the chart's tree, since a dog's
+// parents are the best sign it was imported. Only ever suggestions: the review
+// screen shows each one for her to keep, change or untick.
+//
+// dogs: Map(path → parsed dog). → Map(path → { country, imported, importCountry })
+//   country       the dog's country of origin: the bracketed country first
+//                 (countryName), then the first registry on the map that isn't
+//                 home, else '' (a home-only or unmapped dog gets none)
+//   imported      'ticked' (pre-ticked): a home registration plus a bracketed
+//                 foreign country, or dual-registered (home and foreign), or both
+//                 parents foreign-only;
+//                 'offer' (unticked): a home registration with one foreign-only parent;
+//                 null: foreign-only (a chart can't say it left), or an all-home line
+//   importCountry the country it'd be imported from: its own, else its foreign
+//                 parent's (the sire's first)
+export function originSuggestions(dogs, home) {
+  const regCountries = (d) => [d?.registry, ...(d?.additional_registrations || []).map((r) => r.registry)]
+    .map((code) => countryOfRegistry(code)).filter(Boolean);
+  const facts = new Map();
+  for (const [path, d] of dogs || []) {
+    const cs = regCountries(d);
+    const printed = d.origin_printed ? countryName(d.origin_printed) : '';
+    const foreignReg = cs.find((c) => c !== home) || '';
+    facts.set(path, {
+      hasHome: cs.includes(home),
+      foreignOnly: cs.length > 0 && !cs.includes(home),
+      printed,
+      country: printed || foreignReg,
+      foreignReg
+    });
+  }
+  const out = new Map();
+  for (const [path, f] of facts) {
+    const sire = facts.get(`${path}s`);
+    const dam = facts.get(`${path}d`);
+    let imported = null;
+    if (f.hasHome) {
+      const printedForeign = f.printed && f.printed !== home;
+      const foreignParents = [sire, dam].filter((p) => p?.foreignOnly);
+      if (printedForeign || f.foreignReg || (sire?.foreignOnly && dam?.foreignOnly)) imported = 'ticked';
+      else if (foreignParents.length === 1) imported = 'offer';
+    }
+    const parentCountry = [sire, dam].find((p) => p?.foreignOnly)?.country || '';
+    const country = f.country && f.country !== home ? f.country : '';
+    out.set(path, { country, imported, importCountry: imported ? (country || parentCountry) : '' });
+  }
+  return out;
 }

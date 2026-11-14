@@ -28,6 +28,9 @@ import { documentRepo } from './documentRepo.js';
 import { fileRepo } from './fileRepo.js';
 import { resolveKennelIdForWrite } from './kennelScope.js';
 import { normReg, nameKey, dogRegKeys, dogNameKeys, registrationsConflict, dogRegistrationNumbers } from './dogSearch.js';
+import { originSuggestions } from './pedigreeParse.js';
+import { homeCountry } from './registryCountries.js';
+import { normalizeTitles, titlesOf, sameTitle } from './dogTitles.js';
 
 // normReg (a registration number's key) lives in dogSearch.js; kept exported here
 // for the importers that read it from this module.
@@ -65,20 +68,39 @@ export function matchBreederContacts(name, contacts = []) {
   return k ? contacts.filter((c) => !c.is_archived && personKey(c.name) === k) : [];
 }
 
+// A dog's country of origin as it reads (D8): the field, else the import country
+// while it's marked imported.
+const countryOf = (d) => String(d?.country_of_origin || '').trim() || (d?.imported ? String(d.import_country || '').trim() : '');
+const OFFER_RANK = { ticked: 2, offer: 1 };
+
 // files: [{ id, name, breed, dogs: Map(path → parsed dog) }]
 // existing: every dog in the app (archived and pedigree-only included).
-// edits: { 'fileId:path': { registered_name?, registration_number?, color_markings? } }
+// edits: { 'fileId:path': { registered_name?, registration_number?, color_markings?,
+//          titles?, country_of_origin?, imported? } }
 // decisions: { candKey: 'new' | 'existing:<dogId>' | 'same:<candKey>' | ... ,
-//              'sire:<candKey>': <candKey>, 'dam:<candKey>': <candKey> }
-export function planImport({ files, existing = [], edits = {}, decisions = {} }) {
-  // 1. Every box in every chart, with the review screen's edits applied.
+//              'sire:<candKey>': <candKey>, 'dam:<candKey>': <candKey>,
+//              'fill:titles|country|imported:<candKey>': true (an existing dog's
+//              offered fill-ins, each unticked until she ticks it) }
+// home: her home country (registryCountries.homeCountry of `existing` when not given).
+export function planImport({ files, existing = [], edits = {}, decisions = {}, home = homeCountry(existing) }) {
+  // 1. Every box in every chart, with the review screen's edits applied, and what
+  //    its chart says about where it comes from (Dog Titles Field Plan §4, D8).
   const nodes = [];
   for (const f of files) {
+    const origins = originSuggestions(f.dogs, home);
     for (const [path, d] of f.dogs) {
       const e = edits[srcId(f.id, path)] || {};
+      const o = origins.get(path) || { country: '', imported: null, importCountry: '' };
       nodes.push({
         fileId: f.id, path, breed: f.breed || '',
-        dog: { ...d, ...e, notes: [...(d.notes || [])] }
+        dog: {
+          ...d, ...e, notes: [...(d.notes || [])],
+          titles: normalizeTitles('titles' in e ? e.titles : d.titles),
+          additional_registrations: d.additional_registrations || [],
+          country_of_origin: 'country_of_origin' in e ? String(e.country_of_origin || '').trim() : o.country,
+          imported: 'imported' in e ? !!e.imported : o.imported === 'ticked'
+        },
+        origin: o
       });
     }
   }
@@ -91,7 +113,8 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
     const key = reg ? `r:${reg}` : `n:${srcId(n.fileId, n.path)}`;
     let c = cands.get(key);
     if (!c) {
-      c = { key, reg, fields: {}, sources: [], sexes: new Set(), breed: '', subjectOf: [], sireKeys: new Map(), damKeys: new Map(), issues: [] };
+      c = { key, reg, fields: {}, sources: [], sexes: new Set(), breed: '', subjectOf: [], sireKeys: new Map(), damKeys: new Map(), issues: [],
+        titles: [], extraRegs: [], country: '', imported: false, importOffer: null, importCountry: '' };
       cands.set(key, c);
     }
     c.sources.push({ fileId: n.fileId, path: n.path });
@@ -102,10 +125,24 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
       else if (f === 'color_markings' && normName(v) !== normName(c.fields[f])) c.issues.push(`Colors differ between charts (“${c.fields[f]}” kept, “${v}” not).`);
     }
     c.fields.notes = [...new Set([...(c.fields.notes || []), ...n.dog.notes])];
+    addOrigin(c, n);
     if (n.dog.sex && n.dog.sex !== 'unknown') c.sexes.add(n.dog.sex);
     if (!c.breed && n.breed) c.breed = n.breed;
     if (!n.path) c.subjectOf.push(n.fileId);
     candOf.set(srcId(n.fileId, n.path), key);
+  }
+
+  function addOrigin(c, n) {
+    c.titles = normalizeTitles([...c.titles, ...n.dog.titles]);
+    for (const r of n.dog.additional_registrations) {
+      const k = normReg(r.registration_number);
+      if (k && k !== c.reg && !c.extraRegs.some((x) => normReg(x.registration_number) === k)) c.extraRegs.push({ ...r });
+    }
+    if (!c.country && n.dog.country_of_origin) c.country = n.dog.country_of_origin;
+    if (n.dog.imported) c.imported = true;
+    const rank = OFFER_RANK[n.origin.imported] || 0;
+    if (rank > (OFFER_RANK[c.importOffer] || 0)) c.importOffer = n.origin.imported;
+    if (!c.importCountry && n.origin.importCountry) c.importCountry = n.origin.importCountry;
   }
 
   // 3. "Same dog" decisions fold one candidate into another.
@@ -127,6 +164,12 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
     to.subjectOf.push(...from.subjectOf);
     to.issues.push(...from.issues);
     if (!to.breed) to.breed = from.breed;
+    to.titles = normalizeTitles([...to.titles, ...from.titles]);
+    for (const r of from.extraRegs) if (!to.extraRegs.some((x) => normReg(x.registration_number) === normReg(r.registration_number))) to.extraRegs.push(r);
+    if (!to.country) to.country = from.country;
+    to.imported = to.imported || from.imported;
+    if ((OFFER_RANK[from.importOffer] || 0) > (OFFER_RANK[to.importOffer] || 0)) to.importOffer = from.importOffer;
+    if (!to.importCountry) to.importCountry = from.importCountry;
     cands.delete(k);
   }
   for (const [s, k] of candOf) candOf.set(s, resolve(k));
@@ -181,12 +224,17 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
       sireOptions: [...c.sireKeys.keys()], damOptions: [...c.damKeys.keys()],
       sireFrom: Object.fromEntries([...c.sireKeys].map(([k, v]) => [k, [...v]])),
       damFrom: Object.fromEntries([...c.damKeys].map(([k, v]) => [k, [...v]])),
-      sireKey: null, damKey: null
+      sireKey: null, damKey: null,
+      titles: c.titles, additional_registrations: c.extraRegs,
+      country_of_origin: c.country, imported: c.imported, importOffer: c.importOffer, importCountry: c.importCountry,
+      fill: null
     };
     if (c.sexes.size > 1) row.issues.push('Appears as a sire in one place and a dam in another.');
     if (!name) row.issues.push('No name was read.');
 
-    const regMatch = c.reg ? byReg.get(c.reg) : null;
+    // A second number (a dual-registered dog) matches as well as its first.
+    const regMatch = (c.reg ? byReg.get(c.reg) : null)
+      || c.extraRegs.map((r) => byReg.get(normReg(r.registration_number))).find(Boolean) || null;
     if (regMatch) {
       row.action = 'existing';
       row.existingId = regMatch.id;
@@ -212,6 +260,29 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
       }
     }
     rows.push(row);
+  }
+
+  // 5a. A row matched to a dog she has only offers what that dog lacks: chart
+  //     titles it doesn't hold, a country when it has none, Imported when it isn't
+  //     marked. Each starts unticked and never overwrites what she set.
+  const existingById0 = new Map(existing.map((d) => [d.id, d]));
+  for (const r of rows) {
+    if (r.action !== 'existing') continue;
+    const ex = existingById0.get(r.existingId);
+    if (!ex) continue;
+    const held = titlesOf(ex);
+    const titles = r.titles.filter((t) => !held.some((h) => sameTitle(h, t)));
+    const hasCountry = !!countryOf(ex);
+    const country = hasCountry ? '' : (r.country_of_origin || (r.importOffer ? r.importCountry : ''));
+    const imported = !ex.imported && !!r.importOffer;
+    if (!titles.length && !country && !imported) continue;
+    r.fill = {
+      titles, country, imported,
+      importCountry: imported ? (countryOf(ex) || r.country_of_origin || r.importCountry) : '',
+      titlesOn: !!titles.length && decisions[`fill:titles:${r.key}`] === true,
+      countryOn: !!country && decisions[`fill:country:${r.key}`] === true,
+      importedOn: imported && decisions[`fill:imported:${r.key}`] === true
+    };
   }
 
   // 6. Parent choices. A parent already on an existing dog stays; otherwise a
@@ -248,6 +319,14 @@ export function planImport({ files, existing = [], edits = {}, decisions = {} })
     },
     ready: blocking.length === 0 && missingBreed.length === 0
   };
+}
+
+// A new dog's country and Imported (D8): the country she kept; ticked Imported
+// also writes it as the import country, falling back to the country it'd be
+// imported from when she left the box blank.
+export function originFields(r) {
+  const country = String(r.country_of_origin || '').trim() || (r.imported ? String(r.importCountry || '').trim() : '');
+  return { country_of_origin: country, imported: !!r.imported, import_country: r.imported ? country : '' };
 }
 
 // Writes a ready plan. storeFiles: [{ fileId, blob, filename, kennelId? }] — the
@@ -292,13 +371,27 @@ export async function commitImport(plan, { storeFiles = [], breeders = [] } = {}
         const fill = { registered_name: r.name, registration_number: r.registration_number, registry: r.registry,
           color_markings: r.color_markings, date_of_birth: r.date_of_birth, microchip_id: r.microchip_id, sire_id, dam_id };
         for (const [f, v] of Object.entries(fill)) if (v && !ex[f]) changes[f] = v;
+        const extra = (r.additional_registrations || []).filter((a) => !dogRegKeys(ex).includes(normReg(a.registration_number)));
+        if (extra.length && !(ex.additional_registrations || []).length) changes.additional_registrations = extra;
+        // What she ticked of the offered fill-ins (titles, country, Imported).
+        const o = r.fill;
+        if (o?.titlesOn) changes.titles = normalizeTitles([...(ex.titles || []), ...o.titles]);
+        if (o?.countryOn && !countryOf(ex)) changes.country_of_origin = o.country;
+        if (o?.importedOn && !ex.imported) {
+          const country = countryOf(ex) || changes.country_of_origin || o.importCountry || '';
+          changes.imported = true;
+          changes.import_country = country;
+          if (country && !String(ex.country_of_origin || '').trim()) changes.country_of_origin = country;
+        }
         if (Object.keys(changes).length) { await dogRepo.update(ex.id, changes); updated++; }
         idOf.set(r.key, ex.id);
       } else {
         const d = await dogRepo.createPedigreeOnly({
           registered_name: r.name, sex: r.sex || 'unknown', breed: r.breed,
           registration_number: r.registration_number, registry: r.registry, color_markings: r.color_markings,
-          date_of_birth: r.date_of_birth || '', microchip_id: r.microchip_id || '', notes: r.notes.join('\n'), sire_id, dam_id
+          date_of_birth: r.date_of_birth || '', microchip_id: r.microchip_id || '', notes: r.notes.join('\n'), sire_id, dam_id,
+          titles: r.titles || [], additional_registrations: r.additional_registrations || [],
+          ...originFields(r)
         });
         idOf.set(r.key, d.id);
         created++;

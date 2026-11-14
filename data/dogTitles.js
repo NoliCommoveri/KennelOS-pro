@@ -164,3 +164,62 @@ export function titleAbbrs(titles) {
   }
   return out;
 }
+
+// Suffix titles offered as suggestions on the Dog form (Dog Titles Field Plan §8
+// phase 3): AKC's published suffix list, main page plus the extra ones confirmed
+// from its alphabetical list (docs/KennelOS_Registry_Title_Facts.md §3). Only a
+// suggestion list: she can type any title, and anything not on TITLE_PREFIXES
+// goes after the name whether it's here or not.
+export const TITLE_SUFFIXES = Object.freeze([
+  'ACT1', 'ACT2', 'ACT1J', 'ACT2J', 'AJP', 'ATT', 'AX', 'AXJ', 'AXP', 'BCAT', 'BN', 'BN-V', 'CA', 'CAA', 'CAX',
+  'CAX2', 'CD', 'CD-V', 'CDX', 'CGC', 'CGCA', 'CGCU', 'CM', 'DCAT', 'EE', 'FCAT', 'FDC', 'FITB', 'FITS', 'FITG',
+  'FTA', 'FTC', 'FTCP', 'FTI', 'FTN', 'FTR', 'GN', 'GO', 'HI', 'HIAdsc', 'HIBdsc', 'HICs', 'HS', 'HSAdsc', 'HSBdsc',
+  'HSCs', 'HT', 'HX', 'HXAdsc', 'HXBdsc', 'HXCs', 'JC', 'JE', 'JH', 'JHA', 'JHR', 'JHU', 'LCX', 'MC', 'ME', 'MFB',
+  'MFC', 'MFG', 'MFP', 'MFPB', 'MFPC', 'MFPG', 'MFPS', 'MFS', 'MH', 'MHA', 'MHR', 'MHU', 'MJB', 'MJC', 'MJG', 'MJP',
+  'MJPB', 'MJPC', 'MJPG', 'MJPS', 'MJS', 'MNH', 'MX', 'MXB', 'MXC', 'MXF', 'MXG', 'MXJ', 'MXP', 'MXPB', 'MXPC',
+  'MXPG', 'MXPS', 'MXS', 'NA', 'NAJ', 'NAP', 'NE', 'NF', 'NFP', 'NJP', 'OA', 'OAJ', 'OAP', 'OF', 'OFP', 'OGM', 'OJP',
+  'OM', 'PAD', 'PADP', 'PAX', 'PCD', 'PCDX', 'PDB', 'PDBP', 'PDC', 'PDCP', 'PDG', 'PDGP', 'PDS', 'PDSP', 'PJB',
+  'PJBP', 'PJC', 'PJCP', 'PJD', 'PJDP', 'PJG', 'PJGP', 'PJS', 'PJSP', 'PT', 'PUDX', 'PUTD', 'RN', 'RA', 'RC', 'RE',
+  'RAE', 'RI', 'RM', 'SBA', 'SBAE', 'SBE', 'SBEE', 'SBM', 'SBME', 'SBN', 'SBNE', 'SC', 'SCA', 'SCAE', 'SCE', 'SCEE',
+  'SCM', 'SCME', 'SCN', 'SCNE', 'SE', 'SEA', 'SEAE', 'SEE', 'SEEE', 'SEM', 'SEME', 'SEN', 'SENE', 'SH', 'SHA',
+  'SHDA', 'SHDAE', 'SHDE', 'SHDEE', 'SHDM', 'SHDME', 'SHDN', 'SHDNE', 'SHR', 'SHU', 'SIA', 'SIAE', 'SIE', 'SIEE',
+  'SIM', 'SIME', 'SIN', 'SINE', 'STR', 'SWA', 'SWAE', 'SWD', 'SWE', 'SWEE', 'SWM', 'SWME', 'SWN', 'SWNE', 'T2B',
+  'T2BP', 'TD', 'TDU', 'TDX', 'THD', 'THDA', 'THDD', 'THDN', 'THDS', 'THDX', 'TKN', 'TKI', 'TKA', 'TKP', 'TKE',
+  'TQX', 'TQXP', 'UD', 'UDX', 'VCD1', 'VCD2', 'VCD3', 'VCD4', 'VER', 'VHMA', 'VHMP', 'VST', 'VSWB', 'VSWI', 'VSWE',
+  'XF', 'XFP',
+  // AKC's alphabetical list, beyond the main one
+  'AE', 'AEA', 'AEX', 'AJ', 'CI', 'CIT', 'CS', 'CX', 'CXT', 'NBDD', 'NDD', 'QA2'
+]);
+
+// Every suggestion for the Dog form's title box: the prefixes, then the suffixes,
+// each once (case and dots ignored).
+export function titleSuggestions() {
+  return titleAbbrs([...TITLE_PREFIXES, ...TITLE_SUFFIXES].map((abbr) => ({ abbr })));
+}
+
+// What she typed in the "add a title" box, split into titles: spaces or commas
+// between them ("GCH CH", "CGC, TKN"). Order kept, blanks dropped.
+export function splitTitleInput(text) {
+  return String(text ?? '').split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+// The Dog form's chips (§8 phase 3) from the draft and the dog's events:
+//   field — Dog.titles as she has them, editable; `event_id` when a logged
+//           title_earned event is the same title (the chip links to it)
+//   event — logged titles the field doesn't hold: read-only, each with its event
+//   name  — titles on the front of the registered name the field doesn't hold
+export function formTitleChips(dog, events = []) {
+  const field = (Array.isArray(dog?.titles) ? dog.titles : []).map((t) => ({
+    abbr: String(t?.abbr ?? ''), organization: String(t?.organization ?? ''), earned_on: String(t?.earned_on ?? '')
+  }));
+  const merged = titlesOf({ ...dog, titles: field }, events);
+  for (const f of field) {
+    const m = merged.find((t) => t.source === 'field' && t.event_id && sameTitle(t, f));
+    if (m) f.event_id = m.event_id;
+  }
+  return {
+    field,
+    event: merged.filter((t) => t.source === 'event'),
+    name: merged.filter((t) => t.source === 'name')
+  };
+}

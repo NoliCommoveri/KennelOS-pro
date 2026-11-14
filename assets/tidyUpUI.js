@@ -40,7 +40,7 @@ import { isVet } from '../data/contactSearch.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { entryName } from '../data/waitlistRules.js';
 import { duplicateDismissKeys, matchReasonText } from '../data/applicationDuplicates.js';
-import { isDismissed } from '../data/nudgeState.js';
+import { isDismissed, dismiss } from '../data/nudgeState.js';
 
 const ROLE = { sire: { field: 'sire_id', sex: 'male', word: 'sire' }, dam: { field: 'dam_id', sex: 'female', word: 'dam' } };
 const label = (vocab, v) => descriptor(vocab, v).label;
@@ -55,6 +55,8 @@ const KIND_WORDS = {
   'litter-pairing-parents': ['litter and its breeding', 'litters and their breedings'],
   'pup-litter-parents': ['litter\'s puppy parents', 'litters\' puppy parents'],
   'dog-no-parents': ['dog without parents', 'dogs without parents'],
+  'dog-titles-in-notes': ['list of titles in notes', 'lists of titles in notes'],
+  'dog-titles-in-name': ['list of titles in names', 'lists of titles in names'],
   'stud-unlinked': ['stud service', 'stud services'],
   'breeder-no-kennel': ['breeder without a kennel', 'breeders without a kennel'],
   'kennel-no-contact': ['kennel without a contact', 'kennels without a contact'],
@@ -79,14 +81,15 @@ class Tidy extends FindingsTask {
 
   async load() {
     const flags = editionFlags;
-    const [litters, pairings, sales, allDogs, studServices, contacts, kennels, vetEvents, waitlistEntries] = await Promise.all([
+    const [litters, pairings, sales, allDogs, studServices, contacts, kennels, vetEvents, waitlistEntries, titleEvents] = await Promise.all([
       litterRepo.getAll(), pairingRepo.getAll(), saleRepo.getAll(),
       dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
       flags.studServices ? studServiceRepo.getAll() : [],
       contactRepo.getAll({ includeArchived: true }),
       kennelRepo.getAll({ includeArchived: true }),
       flags.contactsSection ? Promise.all(T.VET_EVENT_TYPES.map((t) => eventRepo.getByType(t))).then((l) => l.flat()) : [],
-      flags.waitlist ? waitlistEntryRepo.getAll() : []
+      flags.waitlist ? waitlistEntryRepo.getAll() : [],
+      eventRepo.getByType('title_earned')
     ]);
     this.dogsById = new Map(allDogs.map((d) => [d.id, d]));
     this.littersById = new Map(litters.map((l) => [l.id, l]));
@@ -100,7 +103,7 @@ class Tidy extends FindingsTask {
       litters: inScopeOnly(litters), pairings, sales: inScopeOnly(sales),
       studServices: inScopeOnly(studServices),
       dogs: dogsInScope(allDogs.filter((d) => !d.is_archived && !d.pedigree_only)),
-      allDogs, contacts: this.contacts, kennels: this.kennels, vetEvents,
+      allDogs, contacts: this.contacts, kennels: this.kennels, vetEvents, titleEvents,
       waitlistEntries: inScopeOnly(waitlistEntries),
       flags: { contactsSection: flags.contactsSection, studServices: flags.studServices, waitlist: flags.waitlist },
       today: this.today
@@ -145,6 +148,8 @@ class Tidy extends FindingsTask {
       case 'litter-pairing-parents': return this.litterPairing(f);
       case 'pup-litter-parents': return this.pupParents(f);
       case 'dog-no-parents': return this.dogParents(f);
+      case 'dog-titles-in-notes': return this.titles(f, 'notes');
+      case 'dog-titles-in-name': return this.titles(f, 'name');
       case 'stud-unlinked': return this.stud(f);
       case 'breeder-no-kennel': return this.breederKennel(f);
       case 'kennel-no-contact': return this.kennelContact(f);
@@ -612,6 +617,67 @@ class Tidy extends FindingsTask {
     if (!c) return null;
     this.contactsById.set(c.id, c);
     return c.id;
+  }
+
+  // --- Titles (Dog Titles Field Plan §5) ------------------------------------------
+
+  // Titles kept in notes ("Titles: GCH CH", from older chart imports) or on the
+  // front of registered names, for every dog at once: one list with ticks, then
+  // Add to titles. The name finding also takes them off the front of the name;
+  // the notes line stays (D4). Writes go through dogRepo.update.
+  async titles(f, where) {
+    // Once a visit: what she unticked comes back as a new list, asked next time.
+    this.titleKinds ||= new Set();
+    if (this.titleKinds.has(f.kind)) return null;
+    this.titleKinds.add(f.kind);
+    const n = f.items.length;
+    const lead = where === 'notes'
+      ? `${n === 1 ? 'A dog has' : `${n} dogs have`} titles written in ${n === 1 ? 'its' : 'their'} notes that aren't on ${n === 1 ? 'its' : 'their'} titles yet. Add them, so they show with ${n === 1 ? 'its name' : 'their names'} and go to your website? The notes stay as they are.`
+      : `${n === 1 ? 'A dog has' : `${n} dogs have`} titles at the front of ${n === 1 ? 'its' : 'their'} registered name. Move them to ${n === 1 ? 'its' : 'their'} titles? They'll still show in front of the name.`;
+    const row = (it, i) => {
+      const titles = it.titles.map((t, j) => `<label class="check-inline" style="margin-right:8px;"><input type="checkbox" data-t="${i}:${j}" checked> ${esc(t)}</label>`).join('');
+      const after = where === 'name' ? `<div class="faint" style="font-size:12px;">Name becomes ${esc(it.name)}</div>` : '';
+      return `<div class="gl-plan-row" style="display:block; margin-bottom:8px;">
+        <label class="check-inline"><input type="checkbox" data-dog="${i}" checked> <strong>${esc(dogName(it.dog) || it.dog.registered_name || 'Unnamed dog')}</strong></label>
+        <div style="margin-left:24px;">${titles}${after}</div></div>`;
+    };
+    await this.chat.say(lead);
+    const res = await this.chat.form({
+      html: `<span class="kels-lead">Untick a dog or a title to leave it out.</span>${f.items.map(row).join('')}`,
+      submitLabel: 'Add to titles',
+      cancelLabel: 'Skip',
+      typing: 0,
+      submit: async (root) => {
+        let saved = 0;
+        for (const [i, it] of f.items.entries()) {
+          if (!root.querySelector(`[data-dog="${i}"]`).checked) continue;
+          const picked = it.titles.filter((_, j) => root.querySelector(`[data-t="${i}:${j}"]`).checked);
+          if (!picked.length) continue;
+          // The name loses only the titles she kept ticked from its front.
+          const name = where === 'name' && picked.length === it.titles.length ? it.name : null;
+          await dogRepo.update(it.dog.id, T.titlesFix(it.dog, picked, { name }));
+          saved++;
+        }
+        return { saved };
+      },
+      reply: () => 'Add to titles'
+    });
+    if (!res.done) {
+      // Skip: not now, or don't ask again about this list.
+      const pick = await this.chat.choose([
+        { label: 'Not now', value: 'later' },
+        { label: 'Don\'t ask me again', value: 'never' },
+        { label: 'Stop for now', value: 'stop' }
+      ], { stagger: 120 });
+      if (pick === 'never') {
+        dismiss(this.dismissKey(f));
+        await this.chat.say('Got it. I won\'t bring that one up again.', { typing: 400 });
+      }
+      return pick;
+    }
+    const k = res.result.saved;
+    if (!k) { await this.chat.say('Nothing ticked, so I left them as they are.'); return null; }
+    return this.done(`Done. ${k === 1 ? 'That dog\'s titles are' : `${k} dogs' titles are`} saved${where === 'name' ? `, and ${k === 1 ? 'its name no longer starts' : 'their names no longer start'} with them` : ''}.`);
   }
 
   // --- Vets (Pro) -----------------------------------------------------------------

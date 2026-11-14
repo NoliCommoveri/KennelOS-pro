@@ -30,7 +30,7 @@ import {
 } from '../data/vocab.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { getShowRecord } from '../data/showPoints.js';
-import { titlesOf, displayName } from '../data/dogTitles.js';
+import { titlesOf, displayName, formTitleChips, titleSuggestions, splitTitleInput, MAX_ABBR, MAX_ORGANIZATION } from '../data/dogTitles.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from '../assets/salePrompts.js';
@@ -69,7 +69,8 @@ const blankDog = () => ({
   date_of_death: '', breed: '', color_markings: '', registry: '', registration_number: '',
   microchip_id: '', url: '', photos_online: false, show_on_website: false, heats_online: false, sire_id: '', dam_id: '', ownership_type: '', owner_contact_id: '',
   co_owner_contact_ids: [], lives_with_contact_id: '', litter_id: '', breeder_kennel_id: '', kennel_id: '', status: '', status_date: '', disposition: '', intended_registration: '', notes: '',
-  planned_tests: [], additional_registrations: [], imported: false, import_country: ''
+  planned_tests: [], additional_registrations: [], imported: false, import_country: '',
+  titles: [], country_of_origin: ''
 });
 
 const ctx = {
@@ -85,6 +86,7 @@ const ctx = {
   allLitters: [],
   allKennels: [],
   breeds: [],
+  titleEvents: [],     // the dog's title_earned events while editing (the Titles row's read-only chips)
   dogsById: new Map(),
   contactsById: new Map(),
   littersById: new Map(),
@@ -293,7 +295,8 @@ function renderView() {
       ${row('Registry', esc(d.registry))}
       ${row('Registration #', esc(d.registration_number))}
       ${row('Other registrations', otherRegistrationsHtml(d.additional_registrations))}
-      ${row('Imported', d.imported ? (d.import_country ? `Yes, from ${esc(d.import_country)}` : 'Yes') : '')}
+      ${row('Imported', d.imported ? 'Yes' : '')}
+      ${row('Country of origin', esc(countryOfOrigin(d)))}
       ${row('Microchip', esc(d.microchip_id))}
       ${row('URL', d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a>${editionFlags.waitlist && d.photos_online ? ' <span class="badge badge-blue">Shown on waitlist pages</span>' : ''}` : '')}
       ${websiteLinkOffered() && (d.show_on_website || d.heats_online) ? row('Your website', `${d.show_on_website ? '<span class="badge badge-blue">Shown on website</span> ' : ''}${d.heats_online ? '<span class="badge badge-neutral">Heats shown</span>' : ''}`) : ''}
@@ -311,6 +314,12 @@ function renderView() {
       ${d.status === 'puppy' ? row('Intended registration', d.intended_registration ? badge(REGISTRATION_TYPE, d.intended_registration) : '') : ''}
       ${row('Notes', d.notes ? esc(d.notes).replace(/\n/g, '<br>') : '')}
     </dl>`;
+}
+
+// Country of origin (Dog Titles Field Plan D8): the field, else the import
+// country an older record carries while Imported is ticked.
+function countryOfOrigin(d) {
+  return String(d?.country_of_origin || '').trim() || (d?.imported ? String(d.import_country || '').trim() : '');
 }
 
 // A dog's additional registrations, one per line: "UKC · P123-456 · Registered as …".
@@ -360,8 +369,9 @@ function renderEdit() {
       ${field('Registry', `<input id="f-registry" type="text" value="${esc(d.registry)}">`)}
       ${field('Registration #', `<input id="f-registration_number" type="text" value="${esc(d.registration_number)}">`)}
       ${registrationsEditor(d.additional_registrations)}
+      ${titlesEditor(d)}
       ${field('Imported', `<label class="check-inline"><input id="f-imported" type="checkbox"${d.imported ? ' checked' : ''}> Imported from another country</label>`)}
-      ${d.imported ? field('Country of origin', `<input id="f-import_country" type="text" value="${esc(d.import_country || '')}">`) : ''}
+      ${field('Country of origin', `<input id="f-country_of_origin" type="text" value="${esc(d.country_of_origin || '')}" maxlength="60">`, { hint: 'The country this dog was born or first registered in. While Imported is ticked, it\'s also the country it was imported from.' })}
       ${field('Microchip', `<input id="f-microchip_id" type="text" value="${esc(d.microchip_id)}">`)}
       ${field('URL', `<input id="f-url" type="url" value="${esc(d.url || '')}" placeholder="https://…">`, { hint: 'A link to this dog\'s photos (an album, a gallery page).' })}
       ${editionFlags.waitlist ? field('Photos online', `<label class="check-inline"><input id="f-photos_online" type="checkbox"${d.photos_online ? ' checked' : ''}> Show the URL as a photos link on waitlist pages</label>`, { hint: 'Families see it as a parent of a litter (public list and family pages) and as a pup on their turn or their pick. Off until you tick it.' }) : ''}
@@ -392,12 +402,7 @@ function renderEdit() {
     </div>
     <div id="form-warn"></div>`;
 
-  // Country of origin shows only while Imported is ticked; unticking clears it.
-  document.getElementById('f-imported')?.addEventListener('change', () => {
-    ctx.draft = readForm();
-    renderEdit();
-    if (ctx.draft.imported) document.getElementById('f-import_country')?.focus();
-  });
+  wireTitlesEditor();
 
   // Lives with offers the co-owners chosen above: re-draw as they change.
   document.getElementById('f-co_owner_contact_ids')?.addEventListener('change', () => {
@@ -511,6 +516,113 @@ function registrationsEditor(list) {
   </div>`;
 }
 
+// --- Titles row (Dog Titles Field Plan §4, §8 phase 3) ----------------------
+// Field titles are chips she can edit and remove: an abbreviation, with an
+// organization and an earned-on date behind "details". Logged title_earned events
+// the field doesn't hold show read-only (open the event to change or archive it),
+// and titles on the front of the registered name say so. Blank chips are kept
+// while editing and dropped on save (dogRepo normalizeTitles).
+function titlesEditor(d) {
+  const { field: fieldChips, event: eventChips, name: nameChips } = formTitleChips(d, ctx.titleEvents);
+  const meta = (t) => [t.organization, t.earned_on ? fmtDate(t.earned_on) : ''].filter(Boolean).map(esc).join(' · ');
+  const chips = fieldChips.map((t, i) => `
+    <span class="title-chip" data-title="${i}">
+      <input class="title-abbr" type="text" list="title-suggestions" value="${esc(t.abbr)}" maxlength="${MAX_ABBR}" aria-label="Title" size="${Math.max(3, Math.min(12, t.abbr.length + 1))}">
+      <details class="title-details">
+        <summary>${meta(t) || 'details'}</summary>
+        <span class="title-details-body">
+          <input class="title-org" type="text" value="${esc(t.organization)}" maxlength="${MAX_ORGANIZATION}" placeholder="Organization (AKC…)" aria-label="Organization">
+          <input class="title-date" type="date" max="${todayYMD()}" value="${esc(t.earned_on)}" aria-label="Earned on">
+        </span>
+      </details>
+      ${t.event_id ? `<button type="button" class="title-chip-link" data-title-event="${esc(t.event_id)}" title="Open the logged event">logged</button>` : ''}
+      <button type="button" class="title-chip-remove" data-title-remove="${i}" aria-label="Remove ${esc(t.abbr || 'this title')}">×</button>
+    </span>`).join('');
+  const evChips = eventChips.map((t) => `
+    <button type="button" class="title-chip title-chip-readonly" data-title-event="${esc(t.event_id)}" title="Logged as an event. Open it to change it, or archive it to remove the title.">
+      <strong>${esc(t.abbr)}</strong>${meta(t) ? ` <span class="faint">${meta(t)}</span>` : ''} <span class="faint">· logged</span>
+    </button>`).join('');
+  const nmChips = nameChips.map((t) => `
+    <span class="title-chip title-chip-readonly"><strong>${esc(t.abbr)}</strong> <span class="faint">· in the registered name</span></span>`).join('');
+  const options = titleSuggestions().map((a) => `<option value="${esc(a)}"></option>`).join('');
+  return `<div class="field field-wide" id="f-titles">
+    <label for="title-add-input">Titles</label>
+    <div class="title-chips" id="title-chips">${chips}${evChips}<span id="title-name-chips">${nmChips}</span></div>
+    <div class="title-add">
+      <input id="title-add-input" type="text" list="title-suggestions" placeholder="Add a title (CH, GCH, CGC…)" aria-label="Add a title">
+      <button type="button" class="btn btn-sm" id="title-add">+ Add</button>
+    </div>
+    <datalist id="title-suggestions">${options}</datalist>
+    <span class="field-hint">Titles this dog holds, e.g. CH for a champion you bought. Several at once: "GCH CH". Titles logged as events show here too.</span>
+  </div>`;
+}
+
+function wireTitlesEditor() {
+  const holder = document.getElementById('f-titles');
+  if (!holder) return;
+  const add = () => {
+    const input = document.getElementById('title-add-input');
+    const abbrs = splitTitleInput(input.value);
+    if (!abbrs.length) { input.focus(); return; }
+    ctx.draft = readForm();
+    ctx.draft.titles = [...ctx.draft.titles, ...abbrs.map((abbr) => ({ abbr: abbr.slice(0, MAX_ABBR), organization: '', earned_on: '' }))];
+    renderEdit();
+    document.getElementById('title-add-input')?.focus();
+  };
+  document.getElementById('title-add').addEventListener('click', add);
+  document.getElementById('title-add-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); add(); }
+  });
+  holder.querySelectorAll('[data-title-remove]').forEach((btn) => btn.addEventListener('click', () => {
+    ctx.draft = readForm();
+    const i = Number(btn.dataset.titleRemove);
+    ctx.draft.titles = ctx.draft.titles.filter((_, j) => j !== i);
+    renderEdit();
+    document.getElementById('title-add-input')?.focus();
+  }));
+  // A logged title opens its event in place, so the form's other changes stay.
+  holder.querySelectorAll('[data-title-event]').forEach((btn) => btn.addEventListener('click', async () => {
+    const ev = ctx.titleEvents.find((e) => e.id === btn.dataset.titleEvent);
+    if (!ev || !ctx.original) return;
+    ctx.draft = readForm();
+    await openEventForm({ subjectType: 'dog', subjectId: ctx.original.id, event: ev, onSaved: () => loadTitleEvents() });
+  }));
+  // The registered name's own titles follow what she types there.
+  document.getElementById('f-registered_name')?.addEventListener('input', () => {
+    const span = document.getElementById('title-name-chips');
+    if (!span) return;
+    const { name } = formTitleChips({ ...ctx.draft, titles: readTitles(), registered_name: document.getElementById('f-registered_name').value }, ctx.titleEvents);
+    span.innerHTML = name.map((t) => `<span class="title-chip title-chip-readonly"><strong>${esc(t.abbr)}</strong> <span class="faint">· in the registered name</span></span>`).join('');
+  });
+}
+
+// The dog's title_earned events, for the read-only chips; re-draws the form once
+// read, keeping what she has typed.
+async function loadTitleEvents() {
+  const dog = ctx.original;
+  if (!dog?.id) return;
+  let events = [];
+  try { events = (await eventRepo.getForSubject('dog', dog.id)).filter((e) => e.event_type === 'title_earned'); } catch { return; }
+  if (ctx.original !== dog || ctx.mode !== 'edit') return;
+  const before = ctx.titleEvents;
+  ctx.titleEvents = events;
+  if (!events.length && !before.length) return;
+  const focusId = document.activeElement?.id;
+  ctx.draft = readForm();
+  renderEdit();
+  if (focusId) document.getElementById(focusId)?.focus();
+}
+
+function readTitles() {
+  const holder = document.getElementById('f-titles');
+  if (!holder) return [...(ctx.draft?.titles || [])];
+  return [...holder.querySelectorAll('.title-chip[data-title]')].map((el) => ({
+    abbr: el.querySelector('.title-abbr').value.trim(),
+    organization: el.querySelector('.title-org').value.trim(),
+    earned_on: el.querySelector('.title-date').value
+  }));
+}
+
 function readRegistrations() {
   const holder = document.getElementById('f-additional_registrations');
   if (!holder) return [...(ctx.draft?.additional_registrations || [])];
@@ -537,8 +649,12 @@ function readForm() {
     registry: val('f-registry').trim(),
     registration_number: val('f-registration_number').trim(),
     additional_registrations: readRegistrations(),
+    titles: readTitles(),
     imported: document.getElementById('f-imported')?.checked || false,
-    import_country: document.getElementById('f-imported')?.checked ? val('f-import_country').trim() : '',
+    country_of_origin: val('f-country_of_origin').replace(/\s+/g, ' ').trim(),
+    // While Imported is ticked the import country is the country of origin (D8);
+    // unticked, it's cleared as before.
+    import_country: document.getElementById('f-imported')?.checked ? val('f-country_of_origin').replace(/\s+/g, ' ').trim() : '',
     microchip_id: val('f-microchip_id').trim(),
     url: val('f-url').trim(),
     // Only read when its field rendered (Pro with the waitlist), else kept.
@@ -724,7 +840,12 @@ function enterEdit({ bringIn = false } = {}) {
   ctx.bringIn = bringIn;
   ctx.coiEditing = false;
   ctx.draft = { ...ctx.original, co_owner_contact_ids: [...(ctx.original.co_owner_contact_ids || [])],
-    additional_registrations: (ctx.original.additional_registrations || []).map((r) => ({ ...r })) };
+    additional_registrations: (ctx.original.additional_registrations || []).map((r) => ({ ...r })),
+    titles: (Array.isArray(ctx.original.titles) ? ctx.original.titles : []).map((t) => ({ ...t })),
+    // An older record kept its country only as the import country: the one row shows it.
+    country_of_origin: countryOfOrigin(ctx.original) };
+  ctx.titleEvents = [];
+  loadTitleEvents();
   // Bringing a pedigree-only dog into use: its placeholder ownership/status
   // (external / external reference) are cleared so both are chosen deliberately.
   if (bringIn) Object.assign(ctx.draft, { ownership_type: '', status: '' });

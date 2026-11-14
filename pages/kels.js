@@ -247,9 +247,9 @@ const TASKS = [
   {
     id: 'tidy-up',
     label: () => 'Tidy up my records',
-    sub: 'Find records that don\'t agree, and duplicates, and fix them',
+    sub: 'Find records that don\'t agree, duplicates, and titles kept in notes or names, and fix them',
     keywords: ['clean up', 'cleanup', 'fix', 'check', 'mistakes', 'errors', 'duplicate', 'duplicates', 'merge', 'combine', 'same dog', 'mismatch',
-      'parents', 'sire', 'dam', 'pedigree', 'count', 'placed', 'audit',
+      'parents', 'sire', 'dam', 'pedigree', 'count', 'placed', 'audit', 'titles', 'title', 'champion',
       ...(editionFlags.contactsSection ? ['kennel', 'contact', 'breeder', 'vet', 'veterinarian'] : []), ...(editionFlags.studServices ? ['stud'] : [])],
     available: () => true,
     priority: () => 30,

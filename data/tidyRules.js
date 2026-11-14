@@ -16,6 +16,7 @@ import { studParents } from './studRules.js';
 import { similarNamed, dogRegKeys, dogNameKeys, sameRegistration, sameRegisteredName, registrationsConflict } from './dogSearch.js';
 import { normName, normEmail, normPhone, hasVet, isVet } from './contactSearch.js';
 import { duplicateApplicationPairs } from './applicationDuplicates.js';
+import { titlesOf, abbrKey, nameTitles, splitTitleInput } from './dogTitles.js';
 
 export const TIDY_KINDS = [
   'litter-count',        // a litter's born count ≠ its puppy records
@@ -26,6 +27,8 @@ export const TIDY_KINDS = [
   'litter-pairing-parents', // a litter's parents ≠ its breeding's
   'pup-litter-parents',  // a litter's pups have blank or different parents
   'dog-no-parents',      // a dog of hers with no litter has a blank sire or dam
+  'dog-titles-in-notes', // dogs whose notes have a "Titles: …" line their titles lack (one finding)
+  'dog-titles-in-name',  // dogs whose registered name starts with titles (one finding)
   'stud-unlinked',       // a stud service past its date with no breeding linked (Pro)
   'breeder-no-kennel',   // a Breeder contact with no kennel (Pro)
   'kennel-no-contact',   // an outside kennel no contact belongs to (Pro)
@@ -161,6 +164,87 @@ export function dogParentFindings(dogs, littersById) {
     out.push({ key: `dogpar:${d.id}:${missing.join('+')}`, kind: 'dog-no-parents', dog: d, missing });
   }
   return out;
+}
+
+// --- Titles (Dog Titles Field Plan §5) --------------------------------------------
+// One finding per kind for all the dogs, not one per dog: a chart import can
+// leave dozens of ancestors. The key comes from the dogs and titles in it, so a
+// new import (or a new title) raises it again after "Don't ask me again".
+
+// A short, stable hash for a finding key (djb2), so a long list keeps a short key.
+function hashKey(text) {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+const groupKey = (prefix, items) => {
+  const parts = items.map((it) => `${it.dog.id}=${it.titles.map(abbrKey).join('+')}`).sort();
+  return `${prefix}:${items.length}:${hashKey(parts.join(','))}`;
+};
+
+// Each dog's title_earned events, by dog id.
+function titleEventsByDog(events) {
+  const by = new Map();
+  for (const e of events || []) {
+    if (!e || e.event_type !== 'title_earned' || e.is_archived) continue;
+    if (!by.has(e.subject_id)) by.set(e.subject_id, []);
+    by.get(e.subject_id).push(e);
+  }
+  return by;
+}
+
+// The abbreviations on a dog's "Titles: …" notes lines (what chart imports wrote
+// before titles had a field), each once, in order.
+export function notesTitleAbbrs(notes) {
+  const out = [];
+  for (const m of String(notes ?? '').matchAll(/^[ \t]*Titles:[ \t]*(.+)$/gim)) {
+    for (const abbr of splitTitleInput(m[1])) {
+      // A title has a capital in it and is short ("CH", "HIAdsc"); a word she
+      // wrote there ("none", "pending") isn't one.
+      if (!/[A-Z]/.test(abbr) || abbr.length > 12) continue;
+      if (!out.some((a) => abbrKey(a) === abbrKey(abbr))) out.push(abbr);
+    }
+  }
+  return out;
+}
+
+// Dogs (pedigree-only included) whose notes name titles that aren't among their
+// titles (titlesOf: the field, logged events, the name). The notes line is left
+// as it is (D4). → [] or one { kind: 'dog-titles-in-notes', items: [{ dog, titles }] }.
+export function titlesInNotesFindings(dogs, events = []) {
+  const evBy = titleEventsByDog(events);
+  const items = [];
+  for (const d of dogs || []) {
+    if (!d || d.is_archived) continue;
+    const abbrs = notesTitleAbbrs(d.notes);
+    if (!abbrs.length) continue;
+    const held = new Set(titlesOf(d, evBy.get(d.id) || []).map((t) => abbrKey(t.abbr)));
+    const titles = abbrs.filter((a) => !held.has(abbrKey(a)));
+    if (titles.length) items.push({ dog: d, titles });
+  }
+  return items.length ? [{ key: groupKey('titlesnotes', items), kind: 'dog-titles-in-notes', items }] : [];
+}
+
+// Dogs whose registered name starts with titles ("GCH A-K Bella", D5b): the
+// titles would go to their titles and come off the front of the name.
+// → [] or one { kind: 'dog-titles-in-name', items: [{ dog, titles, name }] }.
+export function titlesInNameFindings(dogs) {
+  const items = [];
+  for (const d of dogs || []) {
+    if (!d || d.is_archived) continue;
+    const { name, titles } = nameTitles(d.registered_name);
+    if (titles.length && name) items.push({ dog: d, titles, name });
+  }
+  return items.length ? [{ key: groupKey('titlesname', items), kind: 'dog-titles-in-name', items }] : [];
+}
+
+// What saving one dog's titles writes: its titles with these added (dogRepo
+// normalizes and dedupes, so answering twice adds nothing), and for the name
+// finding the name without its front titles.
+export function titlesFix(dog, titles, { name = null } = {}) {
+  const changes = { titles: [...(Array.isArray(dog.titles) ? dog.titles : []), ...titles.map((abbr) => ({ abbr, organization: '', earned_on: '' }))] };
+  if (name) changes.registered_name = name;
+  return changes;
 }
 
 // Pups with a sale that's going ahead (open or delivered) whose plan isn't Placed.
@@ -421,7 +505,8 @@ export function duplicateApplicationFindings(entries, contacts = []) {
 // `scoped` rows (litters, sales, studServices, dogs) are already in kennel scope;
 // `allDogs` is every dog (archived and pedigree-only included) for counting
 // litters and matching duplicates; contacts and kennels are program-wide.
-export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], vetEvents = [], waitlistEntries = [], flags = {}, today }) {
+// `titleEvents`: title_earned events, so a title already logged isn't asked about.
+export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], vetEvents = [], titleEvents = [], waitlistEntries = [], flags = {}, today }) {
   const littersById = new Map(litters.map((l) => [l.id, l]));
   const all = [
     ...litterCountFindings(litters, allDogs),
@@ -432,6 +517,8 @@ export function tidyFindings({ litters, pairings, sales, studServices = [], dogs
     ...litterPairingFindings(litters, pairings),
     ...pupParentFindings(litters, dogs),
     ...dogParentFindings(dogs, littersById),
+    ...titlesInNotesFindings(allDogs, titleEvents),
+    ...titlesInNameFindings(allDogs),
     ...(flags.studServices ? studFindings(studServices, pairings, today, allDogs) : []),
     ...(flags.contactsSection ? breederKennelFindings(contacts) : []),
     ...(flags.contactsSection ? kennelContactFindings(kennels, contacts, allDogs) : []),
