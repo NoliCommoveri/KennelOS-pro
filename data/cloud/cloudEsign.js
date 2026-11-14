@@ -242,6 +242,7 @@ export function esignProblem(err) {
     return { kind: 'limit', message: `You've sent this month's ${n}e-sign contracts.${resetText(err.usage)} Until then you can send one of your own contract forms' links.` };
   }
   if (code === 'esign_unknown') return { kind: 'unknown', message: 'Firma didn\'t answer, so this contract may have gone out. Don\'t send it again yet: if the buyer got it, it comes back Signed by itself. Check again in a few minutes.' };
+  if (code === 'esign_workspace_gone') return { kind: 'other', message: 'Your Firma workspace is gone (deleted in Firma). Set up e-signing again to make a new one.' };
   if (code === 'esign_not_connected') return { kind: 'other', message: 'E-signing isn\'t set up yet: open Contracts → Contract templates.' };
   if (code === 'pro_required') return { kind: 'other', message: 'E-signing comes with KennelOS Pro on your cloud account.' };
   if (code === 'esign_not_configured') return { kind: 'other', message: 'E-signing isn\'t available right now. Try again later.' };

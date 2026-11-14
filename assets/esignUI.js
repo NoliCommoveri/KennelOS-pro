@@ -137,7 +137,11 @@ export function openContractTemplates() {
       if (complete) await forgetMissingTemplates(new Set(list.map((t) => t.id)));
       accounts = await accountRepo.getAll();
       rows = mergeTemplates(list, accounts);
-    } catch (err) { frame(''); problem(err); return; }
+    } catch (err) {
+      // Her workspace was deleted in Firma: the Worker dropped the link, so set up again.
+      if (err?.code === 'esign_workspace_gone') { await drawSetUp(); say(`<div class="inline-error">${esc(esignProblem(err).message)}</div>`); return; }
+      frame(''); problem(err); return;
+    }
     // Her name as she countersigns, per own kennel (Kennel.esign_signer_name);
     // blank falls back to the contact linked to the kennel, else the kennel's name
     // (kennelSignerName).
