@@ -202,6 +202,17 @@ db.version(7).stores({
   do_not_sell: 'id, contact_id, is_archived'
 });
 
+// version(8), 2026-11-15: `sync_lost`, device-only. A version of a record this
+// device lost to live sync (an edit waiting to be sent, or its own sent version,
+// replaced or deleted by another device's), kept 30 days so she can put it back:
+// id `<table>:<row id>:<seq of the version that replaced it>`, `at` (when it was
+// lost, ISO, indexed for the 30-day sweep), `tbl`, `row_id`, `row` (the whole
+// local row as it was), `kind`, `by`, `op`. data/cloud/syncLost.js reads it;
+// data/syncApply.js writes it inside the page's transaction.
+db.version(8).stores({
+  sync_lost: 'id, at'
+});
+
 // --- Schema upgrade hand-off between open copies ---------------------------
 // A new version(N) can only install once every other open copy of the app on
 // this device lets go of the older database. A live copy does that by itself
@@ -245,8 +256,9 @@ db.on('versionchange', () => { announce(DB_VERSIONCHANGE_EVENT); });
 // iterates dataTables(), not db.tables.
 //
 // `sync_meta` (version 2) is device-only for the same reasons: it records what
-// THIS device has synced (Cloud Phase 2 plan §3.4), so it never travels.
-export const DEVICE_ONLY_TABLES = Object.freeze(['device_secrets', 'sync_meta']);
+// THIS device has synced (Cloud Phase 2 plan §3.4), so it never travels. So is
+// `sync_lost` (version 8): versions THIS device lost to sync, kept for 30 days.
+export const DEVICE_ONLY_TABLES = Object.freeze(['device_secrets', 'sync_meta', 'sync_lost']);
 
 export function dataTables() {
   return db.tables.filter((t) => !DEVICE_ONLY_TABLES.includes(t.name));

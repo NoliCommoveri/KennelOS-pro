@@ -18,7 +18,7 @@
 //
 // Data layer: reads through importExport.exportAll, never db directly. Network
 // only through cloudApi.
-import { exportAll, restoreBackup, planCloudMerge, VAULT_PAYLOAD_FORMAT, cloudSnapshotRows, planJoinMatches, mergeJoinMatches } from '../importExport.js';
+import { exportAll, restoreBackup, planCloudMerge, planVaultMerge, VAULT_PAYLOAD_FORMAT, cloudSnapshotRows, planJoinMatches, mergeJoinMatches } from '../importExport.js';
 import {
   getSampleDataManifest, getCloudDirtyAt, getCloudDirtySince, clearCloudDirty,
   getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT,
@@ -533,8 +533,16 @@ export function getBackupStatus() {
     // A pending change of the account's email (plan §2.6), from the last check-in.
     emailChange: state.emailChange || null,
     paused: isBackupBlocked(state),
-    dirty: !!getCloudDirtyAt()
+    dirty: !!getCloudDirtyAt(),
+    // Live sync is on here but can't be in step (paused, or joining): backups
+    // wait for it (snapshotSyncSeq), so the status line says so (K03 review, 9).
+    syncWaiting: syncKeepsBackupWaiting(getCloudSyncState())
   };
+}
+
+function syncKeepsBackupWaiting(s) {
+  if (!s.enabled) return false;
+  return !!s.joining || !!(s.lastError && !['offline', 'pro_required'].includes(s.lastError.code));
 }
 
 // True when a restore elsewhere would bring everything back (Lite → Pro bridge,
@@ -617,9 +625,65 @@ export async function downloadSnapshot(snapshotId) {
   return envelope;
 }
 
-// The confirmation screen's numbers, without writing (plan §4.3).
-export function previewRestore(envelope, { overwrite = false } = {}) {
-  return planCloudMerge(envelope, { overwrite });
+// The confirmation screen's numbers, without writing (plan §4.3): planCloudMerge's
+// plan, plus `vault` (the same snapshot's vault part planned too, when this
+// device is unlocked and the snapshot has one; else null), `counts`, the
+// distinct records that would be { updated, inserted } by either part, and
+// `records`, those same records one each: { key: '<table>:<id>', tbl, id,
+// insert, row } (row: the backup's version, the whole row when the vault part
+// has it), for Choose records…. So a roll back that only changes private fields
+// (a note, a price, a phone number) isn't "Nothing to restore" (K03 review, 7).
+// Files rows aren't offered on their own: they come with their document.
+export async function previewRestore(envelope, { overwrite = false } = {}) {
+  const plan = await planCloudMerge(envelope, { overwrite });
+  const vaultPlan = await previewSnapshotVault(envelope, { overwrite });
+  const byKey = new Map();
+  for (const [writes, whole] of [[plan.writes, false], [vaultPlan?.writes, true]]) {
+    for (const [table, list] of Object.entries(writes || {})) {
+      for (const w of list) {
+        const key = `${table}:${w.row.id}`;
+        const had = byKey.get(key);
+        byKey.set(key, { key, tbl: table, id: w.row.id, insert: (had?.insert || false) || w.insert, row: whole || !had ? w.row : had.row });
+      }
+    }
+  }
+  const records = [...byKey.values()];
+  const counts = { updated: records.filter((r) => !r.insert).length, inserted: records.filter((r) => r.insert).length };
+  return { ...plan, vault: vaultPlan ? { summary: vaultPlan.summary } : null, counts, records: records.filter((r) => r.tbl !== 'files') };
+}
+
+// Choose records…: the chosen keys, plus the file of each chosen document or
+// expense receipt (a document restored without its file would show nothing).
+function withTheirFiles(only, envelope) {
+  const out = new Set(only);
+  const rows = { ...(envelope.collections || {}) };
+  const byId = (table) => new Map((rows[table] || []).filter((r) => r?.id).map((r) => [r.id, r]));
+  const docs = byId('documents');
+  const expenses = byId('expenses');
+  for (const key of only) {
+    const [table, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
+    const fileId = table === 'documents' ? docs.get(id)?.file_id : table === 'expenses' ? expenses.get(id)?.receipt_file_id : null;
+    if (fileId) out.add(`files:${fileId}`);
+  }
+  return out;
+}
+
+// planVaultMerge of a downloaded snapshot's vault part, or null when there's
+// nothing this device can plan (not from downloadSnapshot, locked here, no
+// vault part, or one made under a replaced key).
+async function previewSnapshotVault(envelope, { overwrite }) {
+  const snapshotId = envelopeIds.get(envelope);
+  const vault = snapshotId ? await getVaultKey(currentAccount()?.programId) : null;
+  if (!vault) return null;
+  let bytes;
+  try {
+    bytes = new Uint8Array(await (await api.getSnapshotVault(requireToken(), snapshotId)).arrayBuffer());
+  } catch (err) {
+    if (err instanceof api.CloudRequestError && err.status === 404) return null;
+    throw err;
+  }
+  if (readVaultHeader(bytes)?.keyId !== vault.keyId) return null;
+  return planVaultMerge(await openVaultPayload(bytes, vault), { overwrite });
 }
 
 // Records entered both here and in the backup (the same dog typed on each
@@ -653,19 +717,24 @@ async function pairWithSnapshot(envelope, ask) {
 // overwrite: true  — "Restore as of…" (a deliberate rollback).
 // Missing files are fetched by sha256; `onProgress(done, total)` reports them.
 // `ask`: pairWithSnapshot's questions. → { cancelled: true } when she cancelled one.
+// `only` (a Set of '<table>:<id>'): restore just those records, with their files,
+// from both parts, and pair nothing (Choose records…: one record back, not a
+// merge of two devices' records).
 // For an envelope from downloadSnapshot, the same snapshot's vault part is
 // merged too when this device is unlocked (Private Vault Plan §4.4): the
 // result's `vault` is { status: 'restored', summary, missingFiles }, or
 // { status } 'none' (no vault part), 'locked' (one this device can't open yet),
 // or 'stale' (made under a key that has since been replaced).
-export async function restoreSnapshot(envelope, { overwrite = false, onProgress, ask = null } = {}) {
+export async function restoreSnapshot(envelope, { overwrite = false, onProgress, ask = null, only = null } = {}) {
   const token = requireToken();
-  const matched = await pairWithSnapshot(envelope, ask);
+  if (only) only = withTheirFiles(only, envelope);
+  const matched = only ? 0 : await pairWithSnapshot(envelope, ask);
   if (matched === null) return { cancelled: true };
   const total = (envelope.collections?.files || []).length;
   let done = 0;
   const result = await restoreBackup(envelope, 'cloud-merge', {
     overwrite,
+    only,
     fetchFile: async (sha256) => {
       const blob = await api.getFile(token, sha256);
       done++;
@@ -674,12 +743,12 @@ export async function restoreSnapshot(envelope, { overwrite = false, onProgress,
     }
   });
   const snapshotId = envelopeIds.get(envelope);
-  return { ...result, matched, vault: snapshotId ? await restoreSnapshotVault(snapshotId, { overwrite, onProgress }) : { status: 'none' } };
+  return { ...result, matched, vault: snapshotId ? await restoreSnapshotVault(snapshotId, { overwrite, onProgress, only }) : { status: 'none' } };
 }
 
 // The 'vault-merge' of one snapshot's vault part. Also how an unlock merges the
 // private tier in after a "Not now" restore (cloudVault.js).
-export async function restoreSnapshotVault(snapshotId, { overwrite = false, onProgress } = {}) {
+export async function restoreSnapshotVault(snapshotId, { overwrite = false, onProgress, only = null } = {}) {
   const token = requireToken();
   const vault = await getVaultKey(currentAccount()?.programId);
   // Locked here: say so without downloading what can't be opened.
@@ -697,6 +766,7 @@ export async function restoreSnapshotVault(snapshotId, { overwrite = false, onPr
   let done = 0;
   const r = await restoreBackup(payload, 'vault-merge', {
     overwrite,
+    only,
     fetchFile: async (vf, row) => {
       const blob = await api.getFile(token, vf.sha256);
       let out = blob;

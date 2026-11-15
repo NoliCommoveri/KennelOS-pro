@@ -18,7 +18,8 @@ import {
 } from '../data/cloud/cloudSync.js';
 import { pushIfDirty } from '../data/cloud/cloudBackup.js';
 import { listDevices } from '../data/cloud/cloudDevices.js';
-import { describeActivity } from '../data/cloud/syncActivity.js';
+import { describeActivity, recordName } from '../data/cloud/syncActivity.js';
+import { keptLostIds, describeLostVersion, putMineBack, forgetLostVersion, KEEP_DAYS } from '../data/cloud/syncLost.js';
 import { askSame, askClashes } from './mergeQuestions.js';
 import { SYNC_APPLIED_EVENT } from '../data/syncApply.js';
 import { getMyKennelName } from '../data/kennelSetup.js';
@@ -56,6 +57,7 @@ export function pausedText(code, detail = null) {
     case 'resync_required': return ['This device was away too long to catch up change by change. Catching up brings everything down and deletes nothing.', ['rejoin', 'Catch up…']];
     case 'shrink': return [`This device would delete ${detail?.deletes ?? 'most'} of ${detail?.total ?? 'your'} synced records on every device, so it stopped.`, ['shrink', 'Decide…']];
     case 'signed_out': return ['Your cloud sign-in has expired.', ['signin', 'Sign in again']];
+    case 'error': return [`Something went wrong on this device${detail?.message ? ` (${detail.message})` : ''}. It tries again by itself; if this stays, reload the app.`, ['retry', 'Try now']];
     default: return [`Something stopped it (${code}). It tries again by itself.`, ['retry', 'Try now']];
   }
 }
@@ -65,6 +67,7 @@ export function onLine(s, now = Date.now()) {
   const parts = ['On'];
   if (s.devices >= 2) parts.push(`${s.devices} devices`);
   if (s.offline) parts.push('changes waiting: no internet');
+  else if (s.needsUpdate?.length) parts.push('some changes need an update of KennelOS here');
   else if (s.lastPullAt || s.lastCheckAt) {
     const at = [s.lastPullAt, s.lastCheckAt].filter(Boolean).sort().pop();
     parts.push(`synced ${relativeTime(at, now)}`);
@@ -360,6 +363,16 @@ async function turnOffEverywhereFlow() {
 }
 
 // --- The activity list (plan §2.3) ---------------------------------------------------------
+// A line whose lost version this device still keeps (data/cloud/syncLost.js, 30
+// days) offers Put mine back and Forget it; Clear the list leaves those lines.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_FIELDS = 6;
+
+function fieldsText(fields) {
+  if (fields.length <= MAX_FIELDS) return fields.join(', ');
+  return `${fields.slice(0, MAX_FIELDS).join(', ')} and ${fields.length - MAX_FIELDS} more`;
+}
+
 async function activityModal() {
   const items = syncStatus().activity;
   let labels = new Map();
@@ -367,24 +380,64 @@ async function activityModal() {
     try { labels = new Map((await listDevices()).map((d) => [d.id, d.label])); } catch { /* "another device" */ }
   }
   const lines = await describeActivity(items, labels);
-  await new Promise((resolve) => {
+  const kept = await keptLostIds();
+  const lost = await Promise.all(items.map((i) => (i.lost && kept.has(i.lost) ? describeLostVersion(i.lost) : null)));
+  const keptLine = (l, i) => {
+    const v = lost[i];
+    if (!v) return '';
+    const until = snapshotLabel(new Date(Date.parse(v.at) + KEEP_DAYS * DAY_MS).toISOString());
+    const what = v.fields.length ? `It differs from the record here in: ${fieldsText(v.fields)}.` : 'It\'s the same as the record here now.';
+    return `<div class="field-hint">Your version is kept on this device until ${esc(until)}. ${esc(what)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+        <button class="btn btn-sm" type="button" data-put="${i}">Put mine back</button>
+        <button class="btn btn-sm" type="button" data-forget="${i}">Forget it</button>
+      </div>`;
+  };
+  const again = await new Promise((resolve) => {
     const overlay = openModal(`
       <h2 style="margin-top:0;">Recent sync activity</h2>
       ${lines.length
-        ? `<p class="muted">What syncing decided by itself in the last 30 days. An older version is still in that day's backups (Restore as of…).</p>
-           <ul style="list-style:none;padding:0;margin:0;">${lines.map((l) => `<li style="padding:8px 0;border-top:1px solid var(--border);">
-             ${esc(l.text)}<div class="field-hint">${esc(snapshotLabel(l.at))}</div></li>`).join('')}</ul>`
+        ? `<p class="muted">What syncing decided by itself in the last 30 days. Where your version was replaced, this device keeps it for ${KEEP_DAYS} days: Put mine back makes it the record again, on every device in step.</p>
+           <ul style="list-style:none;padding:0;margin:0;">${lines.map((l, i) => `<li style="padding:8px 0;border-top:1px solid var(--border);">
+             ${esc(l.text)}<div class="field-hint">${esc(snapshotLabel(l.at))}</div>${keptLine(l, i)}</li>`).join('')}</ul>`
         : '<p class="muted">Nothing to report: syncing hasn\'t had to decide anything in the last 30 days.</p>'}
       <div class="form-actions">
         ${lines.length ? '<button class="btn" data-v="clear">Clear the list</button>' : ''}
         <button class="btn btn-primary" data-v="close">Close</button>
       </div>`, { width: 540 });
     overlay.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => {
-      if (b.dataset.v === 'clear') clearSyncActivity();
+      if (b.dataset.v === 'clear') clearSyncActivity({ keep: kept });
       overlay.remove();
-      resolve();
+      resolve(false);
+    }));
+    overlay.querySelectorAll('[data-put]').forEach((b) => b.addEventListener('click', async () => {
+      const i = Number(b.dataset.put);
+      const v = lost[i];
+      overlay.remove();
+      const name = recordName(v.tbl, v.row);
+      const ok = await confirmModal({
+        title: `Put your version of ${name} back?`,
+        message: `${v.current ? 'It replaces the one here now' : 'It brings the record back'}, and goes to your other devices with the next sync.${v.fields.length ? `\n\nWhat changes: ${fieldsText(v.fields)}.` : ''}`,
+        confirmLabel: 'Put mine back'
+      });
+      if (ok) {
+        try {
+          await putMineBack(items[i].lost);
+          syncNow().catch(() => {});
+          await alertModal({ title: 'Put back', message: `${name} is your version again. Reload any page that shows it.` });
+        } catch (e) {
+          await alertModal({ title: "That didn't work", message: errorText(e) });
+        }
+      }
+      resolve(true);
+    }));
+    overlay.querySelectorAll('[data-forget]').forEach((b) => b.addEventListener('click', async () => {
+      await forgetLostVersion(items[Number(b.dataset.forget)].lost);
+      overlay.remove();
+      resolve(true);
     }));
   });
+  if (again) return activityModal();
 }
 
 // --- An open page while records arrive (plan §2.2, §12 decision 7) --------------------------

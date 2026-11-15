@@ -4,7 +4,11 @@
 // version 2): one row per synced record, `{ id: '<table>:<row id>', tbl,
 // row_id, seq, hash }`, where `seq` is the server's seq for the version this
 // device last pushed or pulled and `hash` is syncRecords.rowHash of the row
-// then. Like `device_secrets` it never travels: not in exportAll, a file or
+// then. Two optional, unindexed fields: `mine` (that version was this device's
+// own push, so a later version built without it is reported, K03 review 1) and
+// `missing_file` (a files row that came down without its bytes: the record's
+// file reference, for syncApply.retryMissingFiles, K03 review 5).
+// Like `device_secrets` it never travels: not in exportAll, a file or
 // Dropbox backup, a snapshot, or the sample manifest. Reset App clears it.
 //
 // The scan (§3.3): rather than hooking every writer, compare every syncing
@@ -24,10 +28,13 @@ export async function readSyncMeta() {
   return new Map(rows.map((m) => [m.id, m]));
 }
 
-// entries: [{ tbl, row_id, seq, hash }]
+// entries: [{ tbl, row_id, seq, hash, mine?, missing_file? }]
 export async function writeSyncMeta(entries) {
   if (!entries.length) return;
-  await db.sync_meta.bulkPut(entries.map((e) => ({ id: metaId(e.tbl, e.row_id), tbl: e.tbl, row_id: e.row_id, seq: e.seq, hash: e.hash })));
+  await db.sync_meta.bulkPut(entries.map((e) => ({
+    id: metaId(e.tbl, e.row_id), tbl: e.tbl, row_id: e.row_id, seq: e.seq, hash: e.hash,
+    ...(e.mine ? { mine: true } : {}), ...(e.missing_file ? { missing_file: e.missing_file } : {})
+  })));
 }
 
 export async function removeSyncMeta(entries) {

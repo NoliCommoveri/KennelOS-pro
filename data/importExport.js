@@ -478,7 +478,9 @@ function assertCloudSnapshot(snapshot) {
 // { writes: { table: rows[] }, summary }, where summary counts per table
 // { inserted, updated, keptLocal, unchanged } — `updated` is the "N records will
 // be rolled back" number for "Restore as of…" (plan §4.3).
-export async function planCloudMerge(snapshot, { overwrite = false } = {}) {
+// `only`: a Set of '<table>:<id>' to restore just those records (Restore as of…'s
+// Choose records…); every other row is left out of the plan.
+export async function planCloudMerge(snapshot, { overwrite = false, only = null } = {}) {
   assertCloudSnapshot(snapshot);
   const known = new Set(dataTables().map((t) => t.name));
   const writes = {};
@@ -489,6 +491,7 @@ export async function planCloudMerge(snapshot, { overwrite = false } = {}) {
     const out = [];
     for (const snapRow of rows) {
       if (!snapRow || !snapRow.id) continue;
+      if (only && !only.has(`${name}:${snapRow.id}`)) continue;
       const local = await db.table(name).get(snapRow.id);
       if (!local) {
         out.push({ row: snapshotRowToLocal(name, snapRow), insert: true, snapRow });
@@ -526,9 +529,9 @@ export function cloudSnapshotRows(snapshot) {
   return out;
 }
 
-export async function restoreCloudMerge(snapshot, { overwrite = false, fetchFile = null } = {}) {
+export async function restoreCloudMerge(snapshot, { overwrite = false, fetchFile = null, only = null } = {}) {
   assertWritable();
-  const { writes, summary } = await planCloudMerge(snapshot, { overwrite });
+  const { writes, summary } = await planCloudMerge(snapshot, { overwrite, only });
 
   // Files to fetch: inserted file rows need their bytes before anything is written.
   const missingFiles = [];
@@ -625,7 +628,8 @@ function vaultRowToLocal(row) {
   return rest;
 }
 
-export async function planVaultMerge(payload, { overwrite = false } = {}) {
+// `only`: as planCloudMerge's.
+export async function planVaultMerge(payload, { overwrite = false, only = null } = {}) {
   assertVaultPayload(payload);
   const known = new Set(dataTables().map((t) => t.name));
   const writes = {};
@@ -636,6 +640,7 @@ export async function planVaultMerge(payload, { overwrite = false } = {}) {
     const out = [];
     for (const vaultRow of rows) {
       if (!vaultRow || !vaultRow.id) continue;
+      if (only && !only.has(`${name}:${vaultRow.id}`)) continue;
       const local = await db.table(name).get(vaultRow.id);
       if (!local) {
         out.push({ row: vaultRowToLocal(vaultRow), insert: true, vaultRow });
@@ -659,9 +664,9 @@ export async function planVaultMerge(payload, { overwrite = false } = {}) {
   return { writes, summary };
 }
 
-export async function restoreVaultMerge(payload, { overwrite = false, fetchFile = null } = {}) {
+export async function restoreVaultMerge(payload, { overwrite = false, fetchFile = null, only = null } = {}) {
   assertWritable();
-  const { writes, summary } = await planVaultMerge(payload, { overwrite });
+  const { writes, summary } = await planVaultMerge(payload, { overwrite, only });
 
   const missingFiles = [];
   if (writes.files) {

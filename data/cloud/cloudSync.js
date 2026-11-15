@@ -7,7 +7,9 @@
 //   syncNow()      push, then pull, one at a time across tabs
 //   startSyncScheduler()  10 s after a local change, at once when the page
 //                  hides, on start-up, when it comes back, and every 60 s while
-//                  visible (a cheap /sync/head first)
+//                  visible (a cheap /sync/head first). Every pull goes through a
+//                  push first, so an edit waiting here is never thrown away for
+//                  an older one that happened to arrive first (K03 review, 2).
 //
 //   enableSync()   turn it on for the program, then join (plan §2.1)
 //   joinSync()     this device joins a syncing program: records entered on both
@@ -30,7 +32,8 @@
 // or the vault was: this device stops syncing and says so), resync_required
 // (offline past the tombstone horizon: re-join),
 // shrink (a push would delete most records: the user decides, as backup does),
-// signed_out. `offline` is not a stop: the next run retries.
+// signed_out, error (anything unexpected, with its message: the next run
+// retries, K03 review 3). `offline` is not a stop: the next run retries.
 import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
 import { editionFlags } from '../editionConfig.js';
@@ -40,7 +43,9 @@ import { VaultLockedError } from './vaultCrypto.js';
 import { buildPutRecord, buildDeleteRecord, sealFileRow, readRecord } from './syncRecords.js';
 import { scanLocalChanges, writeSyncMeta, removeSyncMeta, clearSyncMeta, metaId } from './syncState.js';
 import { isBackupBlocked } from './cloudBackup.js';
-import { applyPulledRecords } from '../syncApply.js';
+import { applyPulledRecords, retryMissingFiles } from '../syncApply.js';
+import { db } from '../db.js';
+import { pruneLostVersions, clearLostVersions } from './syncLost.js';
 import { planJoinMatches, mergeJoinMatches } from '../importExport.js';
 import { CloudKeyError } from '../syncRegistry.js';
 import { getCloudSyncState, updateCloudSyncState, getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT, SYNC_STATUS_EVENT } from '../settings.js';
@@ -118,7 +123,9 @@ function fromError(err) {
     if (err.code === 'pro_required') return pause('pro_required');
     if (err.status === 410 || err.code === 'resync_required') return pause('resync_required');
   }
-  throw err;
+  // Anything else is recorded, never thrown: a scheduler run that throws leaves
+  // the status line saying "synced" while nothing moves (K03 review, 3).
+  return pause('error', { message: String(err?.message ?? err).slice(0, 200) });
 }
 
 // --- Push (§5.1) ---------------------------------------------------------------------
@@ -167,6 +174,7 @@ export async function pushChanges({ allowShrink = false, onProgress = null } = {
     let pushed = 0;
     let deleted = 0;
     const replaced = [];
+    const me = currentAccount()?.deviceId ?? null;
     let sent = 0;
     progress(onProgress, 'push', 0, items.length);
     for (const page of pages(items)) {
@@ -177,7 +185,7 @@ export async function pushChanges({ allowShrink = false, onProgress = null } = {
       for (const a of res.accepted || []) {
         const item = byKey.get(metaId(a.tbl, a.id));
         if (!item) continue;
-        if (item.meta.deleted) { metaDrops.push(item.meta); deleted++; } else { metaPuts.push({ ...item.meta, seq: a.seq }); pushed++; }
+        if (item.meta.deleted) { metaDrops.push(item.meta); deleted++; } else { metaPuts.push({ ...item.meta, seq: a.seq, mine: true }); pushed++; }
         delete nowRejected[metaId(a.tbl, a.id)];
       }
       for (const d of res.dropped || []) {
@@ -185,7 +193,11 @@ export async function pushChanges({ allowShrink = false, onProgress = null } = {
         if (item && !item.meta.deleted) nowRejected[metaId(d.tbl, d.id)] = item.meta.hash;
         dropped.push({ kind: 'dropped', tbl: d.tbl, id: d.id, reason: d.reason });
       }
-      for (const s of res.superseded || []) replaced.push({ kind: 'replaced_theirs', tbl: s.tbl, id: s.id });
+      // A version this device sent itself (its answer was lost) is no one's loss.
+      for (const s of res.superseded || []) {
+        if (me && s.overwrote_device === me) continue;
+        replaced.push({ kind: 'replaced_theirs', tbl: s.tbl, id: s.id, by: s.overwrote_device ?? null });
+      }
       await writeSyncMeta(metaPuts);
       await removeSyncMeta(metaDrops);
       sent += page.length;
@@ -225,23 +237,31 @@ function* pages(items) {
 // → { status: 'pulled', applied, keptOurs, cursor } | { status: 'paused', code } | { status: 'offline' }.
 // `merge` (a join, §5.5): the newer updated_at wins and nothing is deleted;
 // `total` is the server's seq, for the progress bar.
+//
+// Records for a table this build doesn't have are left out (K03 review, 3): the
+// first seq of each such table goes in the sync state's `waiting`, once with a
+// line in the activity list, and the cursor moves on, so every other change
+// still arrives. Once an update brings the table, the pull starts again from the
+// earliest waiting seq (what's already here is skipped as an echo).
 export async function pullChanges({ merge = false, onProgress = null, total = null } = {}) {
   try {
     const { token, vault } = await requireSync();
-    let cursor = getCloudSyncState().cursor || 0;
+    const fetchFile = (sha) => api.getFile(token, sha);
+    let cursor = resumeWaiting(getCloudSyncState().cursor || 0);
     let applied = 0;
     let keptOurs = 0;
     for (;;) {
       const res = await api.pullSync(token, cursor);
-      const out = await applyPulledRecords(res.records || [], {
-        vault, fetchFile: (sha) => api.getFile(token, sha), merge
-      });
+      const out = await applyPulledRecords(res.records || [], { vault, fetchFile, merge });
       applied += out.applied;
       keptOurs += out.keptOurs || 0;
       noteActivity([
-        ...out.keptTheirs.map((x) => ({ kind: 'kept_theirs', tbl: x.tbl, id: x.id, by: x.by })),
+        ...out.keptTheirs.map((x) => ({ kind: 'kept_theirs', tbl: x.tbl, id: x.id, by: x.by, op: x.op, ...(x.reason ? { reason: x.reason } : {}), ...(x.lost ? { lost: x.lost } : {}) })),
+        ...out.replacedMine.map((x) => ({ kind: 'replaced_mine', tbl: x.tbl, id: x.id, by: x.by, op: x.op, ...(x.lost ? { lost: x.lost } : {}) })),
+        ...out.clock.map((x) => ({ kind: 'clock', tbl: x.tbl, id: x.id, where: x.where })),
         ...out.archivedInstead.map((x) => ({ kind: 'archived_instead', tbl: x.tbl, id: x.id })),
-        ...out.missingFiles.map((x) => ({ kind: 'missing_file', tbl: x.tbl, id: x.id }))
+        ...out.missingFiles.map((x) => ({ kind: 'missing_file', tbl: x.tbl, id: x.id })),
+        ...noteWaiting(out.unknownTables)
       ]);
       // Every record up to `seq` is in hand once nothing more is waiting.
       cursor = res.more ? res.through : Math.max(res.through ?? cursor, res.seq ?? cursor);
@@ -249,6 +269,10 @@ export async function pullChanges({ merge = false, onProgress = null, total = nu
       progress(onProgress, 'pull', cursor, total ?? res.seq ?? cursor);
       if (!res.more) break;
     }
+    // A file that didn't come down before is tried again (K03 review, 5), and
+    // versions lost more than 30 days ago go (syncLost.js).
+    await retryMissingFiles({ vault, fetchFile });
+    await pruneLostVersions();
     const state = updateCloudSyncState({ lastPullAt: new Date().toISOString(), lastError: null });
     if (!state.lastCursorSentAt || Date.now() - Date.parse(state.lastCursorSentAt) >= CURSOR_EVERY_MS) {
       try {
@@ -260,6 +284,34 @@ export async function pullChanges({ merge = false, onProgress = null, total = nu
   } catch (err) {
     return fromError(err);
   }
+}
+
+// Tables this build lacked, and the first seq each was seen at: { tbl: seq }.
+// → activity items for the newly waiting tables.
+function noteWaiting(unknown) {
+  if (!unknown.length) return [];
+  const waiting = { ...(getCloudSyncState().waiting || {}) };
+  const items = [];
+  for (const { tbl, seq } of unknown) {
+    if (!(tbl in waiting)) items.push({ kind: 'needs_update', tbl, id: null });
+    waiting[tbl] = Math.min(waiting[tbl] ?? seq, seq);
+  }
+  updateCloudSyncState({ waiting });
+  return items;
+}
+
+// The cursor to pull from: back to before the earliest record of a waiting table
+// this build now has (the app was updated), which is then no longer waiting.
+function resumeWaiting(cursor) {
+  const waiting = getCloudSyncState().waiting || {};
+  const known = new Set(db.tables.map((t) => t.name));
+  const ready = Object.keys(waiting).filter((t) => known.has(t));
+  if (!ready.length) return cursor;
+  const from = Math.min(...ready.map((t) => waiting[t])) - 1;
+  const rest = Object.fromEntries(Object.entries(waiting).filter(([t]) => !known.has(t)));
+  const next = Math.max(0, Math.min(cursor, from));
+  updateCloudSyncState({ waiting: rest, cursor: next });
+  return next;
 }
 
 // --- Both, one at a time ---------------------------------------------------------
@@ -289,7 +341,9 @@ export function syncNow({ pull = true, allowShrink = false } = {}) {
   });
 }
 
-// The poll: a cheap head check, then a pull only when the server moved on.
+// The poll: a cheap head check, then, only when the server moved on, a push
+// and a pull, as syncNow (K03 review, 2: a pull alone would throw away an edit
+// waiting here for an older one; a shrink or pause stops both, as there).
 export function pullIfBehind() {
   return exclusive(async () => {
     if (!isSyncAvailable() || !getCloudSyncState().enabled) return null;
@@ -307,13 +361,24 @@ export function pullIfBehind() {
     } catch (err) {
       return fromError(err);
     }
+    const push = await pushChanges();
+    if (push.status === 'paused' || push.status === 'shrink') return push;
     return pullChanges();
   });
 }
 
-// The status line's device count, from the last head check.
+// From the last head check: the status line's device count, and the Worker's
+// cloud field list. A new list means a newer Worker, so what the old one
+// dropped for a field or table it didn't know is sent again (K03 review, 11).
 function noteHead(head) {
-  if (Number.isInteger(head.devices)) updateCloudSyncState({ devices: head.devices });
+  const s = getCloudSyncState();
+  const patch = {};
+  if (Number.isInteger(head.devices)) patch.devices = head.devices;
+  if (typeof head.fields === 'string' && head.fields !== s.fieldsVersion) {
+    patch.fieldsVersion = head.fields;
+    if (s.fieldsVersion && Object.keys(s.rejected || {}).length) patch.rejected = {};
+  }
+  if (Object.keys(patch).length) updateCloudSyncState(patch);
 }
 
 // `pausedDetail` is the stop's detail (the shrink's { deletes, total }).
@@ -323,13 +388,16 @@ export function syncStatus() {
   return {
     enabled: s.enabled, joining: !!s.joining, cursor: s.cursor, lastPushAt: s.lastPushAt, lastPullAt: s.lastPullAt,
     lastCheckAt: s.lastCheckAt || null, paused, pausedDetail: paused ? s.lastError.detail ?? null : null,
-    offline: s.lastError?.code === 'offline', activity: s.activity || [], devices: s.devices ?? null
+    offline: s.lastError?.code === 'offline', activity: s.activity || [], devices: s.devices ?? null,
+    needsUpdate: Object.keys(s.waiting || {})
   };
 }
 
-// The activity list's "Got it": clear what's been read.
-export function clearSyncActivity() {
-  updateCloudSyncState({ activity: [] });
+// The activity list's "Clear the list": clear what's been read. `keep` (a Set of
+// sync_lost ids still kept) leaves the lines that can still Put mine back.
+export function clearSyncActivity({ keep = null } = {}) {
+  const activity = keep ? (getCloudSyncState().activity || []).filter((a) => a.lost && keep.has(a.lost)) : [];
+  updateCloudSyncState({ activity });
 }
 
 // A stop she's read and set aside (sync_off: turned off elsewhere).
@@ -390,7 +458,7 @@ async function joinNow({ onProgress = null, answers = {}, clashChoices = null } 
       updateCloudSyncState({ matched });
       fetched = null;
       await clearSyncMeta();
-      updateCloudSyncState({ enabled: true, joining: true, cursor: 0, rejected: {}, lastError: null, lastPushAt: null, lastPullAt: null });
+      updateCloudSyncState({ enabled: true, joining: true, cursor: 0, rejected: {}, waiting: {}, lastError: null, lastPushAt: null, lastPullAt: null });
     }
     const pull = await pullChanges({ merge: true, onProgress, total: head.seq });
     if (pull.status !== 'pulled') return pull;
@@ -479,8 +547,9 @@ export async function programSyncs() {
 // This device stops (§2.4): it keeps every record and goes back to being an
 // ordinary backup device. What it synced is forgotten here; a later join starts over.
 async function stopHere() {
-  updateCloudSyncState({ enabled: false, joining: false, cursor: 0, rejected: {}, lastError: null });
+  updateCloudSyncState({ enabled: false, joining: false, cursor: 0, rejected: {}, waiting: {}, lastError: null });
   await clearSyncMeta();
+  await clearLostVersions(); // the activity list that offers them isn't shown while off
 }
 
 export function disableSyncHere() {
@@ -508,16 +577,19 @@ export function startSyncScheduler({ win = globalThis } = {}) {
   started = true;
   let pushTimer = null;
   const visible = () => win.document?.visibilityState !== 'hidden';
+  // fromError records what stops a run; this only keeps a bug from surfacing
+  // as an unhandled rejection.
+  const run = (p) => { p.catch(() => {}); };
   win.addEventListener?.(CLOUD_DATA_CHANGED_EVENT, () => {
     clearTimeout(pushTimer);
-    pushTimer = setTimeout(() => { syncNow(); }, PUSH_DEBOUNCE_MS);
+    pushTimer = setTimeout(() => { run(syncNow()); }, PUSH_DEBOUNCE_MS);
   });
   win.document?.addEventListener?.('visibilitychange', () => {
-    if (visible()) pullIfBehind();
-    else { clearTimeout(pushTimer); syncNow({ pull: false }); }
+    if (visible()) run(pullIfBehind());
+    else { clearTimeout(pushTimer); run(syncNow({ pull: false })); }
   });
-  win.addEventListener?.('pagehide', () => { syncNow({ pull: false }); });
-  win.addEventListener?.('online', () => { syncNow(); });
-  setInterval(() => { if (visible()) pullIfBehind(); }, POLL_MS);
-  syncNow();
+  win.addEventListener?.('pagehide', () => { run(syncNow({ pull: false })); });
+  win.addEventListener?.('online', () => { run(syncNow()); });
+  setInterval(() => { if (visible()) run(pullIfBehind()); }, POLL_MS);
+  run(syncNow());
 }

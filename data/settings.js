@@ -805,11 +805,15 @@ export function clearCloudBackupState() {
 //   lastPushAt / lastPullAt / lastCursorSentAt   ISO times
 //   lastError   { code, at, detail } | null: what paused it (vault_locked,
 //               pro_required, sync_off, vault_key_stale, resync_required,
-//               shrink, offline …)
+//               shrink, error { message }, offline …)
 //   rejected    { '<table>:<id>': hash } — records the server dropped; skipped
-//               until they change again (plan §11)
-//   activity    [{ at, kind: 'kept_theirs' | 'archived_instead' | 'dropped', tbl,
-//               id, by }] — the last 30 days, newest first, at most 100
+//               until they change again, or until the Worker's field list does
+//               (plan §11)
+//   fieldsVersion  the Worker's cloud field fingerprint at the last head check
+//   waiting     { '<table>': seq } — tables this build lacks, from the first seq
+//               seen; pulled again once an update has the table
+//   activity    [{ at, kind, tbl, id, by, op?, reason?, where? }] — kinds in
+//               data/cloud/syncActivity.js; the last 30 days, newest first, at most 100
 // Outside KEYS like the backup state. Reset App clears it (appReset.js).
 const CLOUD_SYNC_STATE_KEY = 'kennelOS.cloudSyncState';
 const CLOUD_SYNC_STATE_DEFAULTS = {

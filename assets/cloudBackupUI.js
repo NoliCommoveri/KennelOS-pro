@@ -23,6 +23,7 @@
 //
 // Layering: talks to data/cloud/* only (never cloudApi's fetch directly, never db).
 import { esc, confirmModal, alertModal, promptModal } from './ui.js';
+import { recordName, recordKind } from '../data/cloud/syncActivity.js';
 import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered, isSyncOffered } from '../data/cloud/cloudConfig.js';
 import { askSame, askClashes } from './mergeQuestions.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -93,6 +94,8 @@ export function statusLine(status, now = Date.now()) {
   const age = now - Date.parse(status.lastPushedAt);
   if (status.dirty && age > DAY) {
     const days = Math.max(1, Math.round(age / DAY));
+    // Not the internet: a syncing device backs up only once it's in step (K03, 9).
+    if (status.syncWaiting) return `Not backed up for ${days} day${days === 1 ? '' : 's'}: backups wait until keeping devices in step can carry on (see Keep my devices in step).`;
     return `Not backed up for ${days} day${days === 1 ? '' : 's'}: no internet?`;
   }
   return `Backed up ${relativeTime(status.lastPushedAt, now)}.`;
@@ -490,9 +493,20 @@ export async function turnOnFlow({ email = '' } = {}) {
 // --- Push results → the user (plan §3.4, §3.5) ------------------------------------
 export async function handlePushResult(result) {
   switch (result?.status) {
+    case 'skipped':
+      // Back up now on a syncing device that isn't in step: say so, don't just
+      // flash a progress bar (K03 review, 9).
+      if (result.reason === 'sync_behind') {
+        await alertModal({
+          title: 'Backup is waiting',
+          message: getCloudSyncState().lastError && getCloudSyncState().lastError.code !== 'offline'
+            ? 'This device keeps your devices in step, and that is paused (see Keep my devices in step on the Cloud pane). Backups carry on once it\'s fixed.'
+            : 'This device keeps your devices in step and has changes still to send or bring down. It backs up as soon as it\'s in step, usually within a minute.'
+        });
+      }
+      return;
     case 'pushed':
     case 'unchanged':
-    case 'skipped':
       return;
     case 'offline':
       await alertModal({ title: 'Backup is on', message: "There's no internet connection right now, so it will back up automatically when you're back online." });
@@ -672,32 +686,47 @@ async function rollBackTo(id, snapshots) {
     return alertModal({ title: "Couldn't load that backup", message: errorText(e) });
   }
   pg.close();
-  const sum = (k) => Object.values(preview.summary).reduce((n, s) => n + (s[k] || 0), 0);
-  const updated = sum('updated');
-  const inserted = sum('inserted');
+  // Distinct records either part of the backup would change: the sensitive
+  // part counts too, when this device can open it (K03 review, 7).
+  const { updated, inserted } = preview.counts;
   if (!updated && !inserted) return alertModal({ title: 'Nothing to restore', message: `Your records already match the backup from ${snapshotLabel(chosen.createdAt)}.` });
+  const syncing = getCloudSyncState().enabled;
 
-  const ok = await confirmModal({
+  const sensitiveLine = chosen.vaultKeyId && getBackupStatus().vault === 'on'
+    ? 'Their sensitive records (phone numbers, prices, notes…) roll back too, from the encrypted backup.'
+    : 'Their sensitive records (phone numbers, prices, notes…) keep their current values: those aren\'t in this backup, so they can\'t roll back.';
+  const choice = await rollBackChoice({
     title: `Roll back to ${snapshotLabel(chosen.createdAt)}?`,
-    message: [
+    canChoose: preview.records.length > 0,
+    paragraphs: [
       updated ? `${updated} record(s) will be rolled back to how they were then.` : '',
       inserted ? `${inserted} record(s) missing here will be added back.` : '',
       chosen.vaultKeyId && getBackupStatus().vault === 'on'
         ? 'Their sensitive records (phone numbers, prices, notes…) roll back too, from the encrypted backup.'
         : 'Their sensitive records (phone numbers, prices, notes…) keep their current values: those aren\'t in this backup, so they can\'t roll back.',
-      'Records added since then stay. Archive them by hand if you don\'t want them.'
-    ].filter(Boolean).join('\n\n'),
-    confirmLabel: 'Roll back',
-    danger: true
+      // A syncing device sends the rolled-back records to every device (K03, 6).
+      syncing
+        ? 'This device keeps your devices in step, so the roll back reaches all of them: a change made on any device since then is undone everywhere.'
+        : '',
+      'Records added since then stay. Archive them by hand if you don\'t want them.',
+      'To bring back only some records (one dog\'s notes, a contact deleted by mistake), choose them instead.'
+    ].filter(Boolean)
   });
-  if (!ok) return;
+  if (!choice) return;
+  let only = null;
+  if (choice === 'choose') {
+    only = await chooseRecordsModal(preview.records, chosen, { syncing, sensitiveLine });
+    if (!only) return;
+  }
   const pg2 = progressModal('Restoring…');
   try {
-    const r = await restoreSnapshot(envelope, { overwrite: true, ask: askRestore, onProgress: (d, t) => pg2.update(`Downloading documents: ${d} of ${t}…`, d, t) });
+    const r = await restoreSnapshot(envelope, {
+      overwrite: true, ask: askRestore, only, onProgress: (d, t) => pg2.update(`Downloading documents: ${d} of ${t}…`, d, t)
+    });
     pg2.close();
     if (r.cancelled) return;
     await alertModal({
-      title: 'Rolled back',
+      title: only ? 'Restored' : 'Rolled back',
       message: r.missingFiles?.length ? `Done. ${r.missingFiles.length} document file(s) couldn't be downloaded.` : 'Done. Reloading…'
     });
     location.reload();
@@ -705,6 +734,67 @@ async function rollBackTo(id, snapshots) {
     pg2.close();
     await alertModal({ title: "That didn't work", message: errorText(e) });
   }
+}
+
+// Roll back everything, or Choose records…: → 'all' | 'choose' | null.
+function rollBackChoice({ title, paragraphs, canChoose }) {
+  return new Promise((resolve) => {
+    const overlay = openModal(`
+      <h2 style="margin-top:0;">${esc(title)}</h2>
+      ${paragraphs.map((p) => `<p>${esc(p)}</p>`).join('')}
+      <div class="form-actions" style="flex-wrap:wrap;">
+        <button class="btn" type="button" data-v="">Cancel</button>
+        ${canChoose ? '<button class="btn" type="button" data-v="choose">Choose records…</button>' : ''}
+        <button class="btn btn-danger" type="button" data-v="all">Roll back everything</button>
+      </div>`, { width: 540 });
+    overlay.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => {
+      overlay.remove();
+      resolve(b.dataset.v || null);
+    }));
+  });
+}
+
+// Restore one record (or a few) from a backup: every record the backup would
+// change, ticked by her, newest-looking names first by kind. → a Set of
+// '<table>:<id>', or null. A chosen document brings its file (cloudBackup).
+function chooseRecordsModal(records, chosen, { syncing, sensitiveLine }) {
+  const sorted = [...records].map((r) => ({ ...r, name: recordName(r.tbl, r.row), kind: recordKind(r.tbl) }))
+    .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  return new Promise((resolve) => {
+    const overlay = openModal(`
+      <h2 style="margin-top:0;">Choose what to restore</h2>
+      <p class="muted">From the backup of ${esc(snapshotLabel(chosen.createdAt))}. Each record you tick goes back to how it was then${syncing ? ', on every device in step' : ''}; everything else stays as it is.</p>
+      <p class="field-hint">${esc(sensitiveLine)}</p>
+      ${sorted.length > 8 ? '<div class="field"><input type="search" data-filter aria-label="Find a record" placeholder="Find a record…"></div>' : ''}
+      <ul data-list style="list-style:none;padding:0;margin:0;max-height:50vh;overflow:auto;">
+        ${sorted.map((r) => `<li data-name="${esc(`${r.name} ${r.kind}`.toLowerCase())}" style="padding:6px 0;border-top:1px solid var(--border);">
+          <label style="display:flex;gap:8px;align-items:flex-start;">
+            <input type="checkbox" value="${esc(r.key)}">
+            <span>${esc(r.name)}<span class="field-hint" style="display:block;">${esc(r.kind)} · ${r.insert ? 'missing here: added back' : 'changed since then'}</span></span>
+          </label></li>`).join('')}
+      </ul>
+      <div class="form-actions">
+        <button class="btn" type="button" data-v="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-v="restore" disabled>Restore</button>
+      </div>`, { width: 540 });
+    const go = overlay.querySelector('[data-v="restore"]');
+    const boxes = [...overlay.querySelectorAll('input[type="checkbox"]')];
+    const count = () => {
+      const n = boxes.filter((b) => b.checked).length;
+      go.disabled = n === 0;
+      go.textContent = n ? `Restore ${n} record${n === 1 ? '' : 's'}` : 'Restore';
+    };
+    boxes.forEach((b) => b.addEventListener('change', count));
+    overlay.querySelector('[data-filter]')?.addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      overlay.querySelectorAll('[data-list] li').forEach((li) => { li.hidden = !!q && !li.dataset.name.includes(q); });
+    });
+    overlay.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => {
+      const keys = boxes.filter((x) => x.checked).map((x) => x.value);
+      overlay.remove();
+      resolve(b.dataset.v === 'restore' && keys.length ? new Set(keys) : null);
+    }));
+  });
 }
 
 // --- Import/Export: the Cloud destination of Backup & restore (plan §2.2, §2.4) --------
@@ -809,7 +899,7 @@ function renderPane(el, mode, rerender) {
   if (signedIn && !status.enabled && status.movedToEdition === 'pro') aside = 'Your records moved to KennelOS Pro.';
   else if (signedIn && status.enabled && !paused) {
     const line = statusLine(status);
-    if (/no internet/.test(line)) aside = line;
+    if (/no internet|in step/.test(line)) aside = line;
     else if (status.dirty) aside = 'Recent changes will back up shortly.';
   }
   const lastBackup = `<p class="muted">Last backup: <strong>${esc(backupStamp(status.lastPushedAt))}</strong>${aside ? ` <span class="faint">${esc(aside)}</span>` : ''}</p>`;

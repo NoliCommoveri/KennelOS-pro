@@ -10,8 +10,20 @@ import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
 import {
   getCloudSession, setCloudSession, clearCloudSession, getCloudDeviceId, setCloudDeviceId,
-  updateCloudBackupState
+  updateCloudBackupState, updateCloudSyncState
 } from '../settings.js';
+import { clearSyncMeta } from './syncState.js';
+import { clearLostVersions } from './syncLost.js';
+
+// This device's place in live sync (its cursor and sync_meta) belongs to one
+// program. Signing out, or into another account, forgets it, so a later sign-in
+// joins afresh instead of uploading nothing and pulling from the old account's
+// cursor (K03 review, 4). The device keeps every record, as turning sync off does.
+async function forgetSyncPosition() {
+  updateCloudSyncState({ enabled: false, joining: false, cursor: 0, rejected: {}, waiting: {}, lastError: null, activity: [] });
+  await clearSyncMeta();
+  await clearLostVersions();
+}
 
 function requireCloud() {
   if (!isCloudAvailable()) throw new api.CloudUnavailableError();
@@ -44,6 +56,7 @@ export async function verifySignIn(email, code, { deviceLabel = defaultDeviceLab
     // for the other program, so forget it.
     // (The vault key here is tagged with the other program, so it's never used.)
     updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null, vault: null });
+    await forgetSyncPosition();
   }
   return setCloudSession({
     token: res.token, email: cleanEmail, programId: res.programId, deviceId: res.deviceId, deviceLabel: deviceLabel || null,
@@ -152,8 +165,8 @@ export function markSessionExpired() {
 }
 
 // Sign out of this device. Revokes the token server-side when it can (best
-// effort: offline still signs out locally), turns backup off, and forgets the
-// backup position. The cloud copy stays.
+// effort: offline still signs out locally), turns backup and live sync off, and
+// forgets both positions. The cloud copy stays.
 export async function signOut() {
   const token = sessionToken();
   if (token && isCloudAvailable()) {
@@ -161,6 +174,7 @@ export async function signOut() {
   }
   clearCloudSession();
   updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null });
+  await forgetSyncPosition();
 }
 
 // "Sign out other devices". Returns how many sessions were revoked. Throws
