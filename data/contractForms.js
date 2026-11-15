@@ -213,7 +213,7 @@ export const PREFILL_FIELDS = {
     ['price', 'Price (the total purchase price, with any Full registration surcharge)'],
     ['depositAmount', 'Deposit'],
     ['balanceDue', 'Balance still due (everything on the sale: with transport, boarding and extras)'],
-    ['depositDue', 'Deposit still due (the deposit, less the application fee and credits counted toward it)'],
+    ['depositDue', 'Deposit still due (less the fee and credits counted toward it; 0 once received)'],
     ['otherPaymentsReceived', 'Credits and payments toward the balance, beyond what covered the deposit'],
     ['purchaseBalanceDue', 'Balance of the purchase price due at pickup (the price only)'],
     ['totalCharges', 'Everything on the sale (price, transport, boarding and extras)'],

@@ -525,8 +525,9 @@ function statementOpts(sale, { dog = null, litter = null, events = [], kennel = 
 // boarding or extras, which are agreed apart). Pure.
 //   depositDue  the deposit less the application fee credited toward it
 //               (feeCreditSplit) and the family's received funds counted toward it
-//               (familyCredit's allocation). The same before and after the deposit
-//               is marked paid.
+//               (familyCredit's allocation), while the deposit is still owed. Once
+//               it's marked received (a deposit date, or a status past it:
+//               depositPaid), the rest of it came in too, so 0.
 //   otherPaid   credits and payments toward the balance: the credited fee when it
 //               isn't taken off the deposit, the family's received funds (a lost pup's
 //               carry-over) not on the deposit, payments recorded on the sale (their
@@ -544,7 +545,7 @@ export function priceTable(sale, { feeCredit = NO_FEE_CREDIT, received = null } 
   const sum = (state) => round2(parts.filter((c) => c.state === state).reduce((t, c) => t + c.amount, 0));
   const split = feeCreditSplit(sale, feeCredit);
   const deposit = Math.max(round2(num(sale.deposit_amount) - split.deposit), 0);
-  const depositDue = round2(deposit - Math.min(num(received?.byKey?.deposit), deposit));
+  const depositDue = depositPaid(sale) ? 0 : round2(deposit - Math.min(num(received?.byKey?.deposit), deposit));
   const earned = sum('earned');
   const anticipated = sum('anticipated');
   // Payments recorded on the sale pay the rest of the price first (D16). Their share
