@@ -464,7 +464,10 @@ laterBtn.addEventListener('click', async () => {
   dropOpenQuestion();
   chat.you('Let\'s finish this later.');
   running(null);
-  await chat.say('Saved! I\'ll keep what we\'ve got until you\'re ready to continue. Just tap me any time.');
+  // The Demo keeps no drafts (K11-5), so it doesn't promise one.
+  await chat.say(editionFlags.demoMode
+    ? 'This is the demo, so I can\'t keep it for later. In your own KennelOS, I would.'
+    : 'Saved! I\'ll keep what we\'ve got until you\'re ready to continue. Just tap me any time.');
   await menu({ again: true });
 });
 
@@ -490,10 +493,14 @@ cancelBtn.addEventListener('click', async () => {
 
 async function main() {
   const asked = taskById(param('task'));
-  if (!asked) { await menu(); return; }
+  // A task this edition (or her records) doesn't offer opens the menu instead: a
+  // Lite link to a Pro task would load a module Lite doesn't ship, and the Demo
+  // would run a task it leaves out (K11-17).
+  const s = asked ? await state() : null;
+  if (!asked || !asked.available(s)) { await menu(); return; }
   // Sent straight to a task: she still greets and asks, and the task is the answer.
   await chat.say(kelsWelcome(), { typing: 900 });
-  chat.you(asked.label(await state()));
+  chat.you(asked.label(s));
   await startTask(asked, { litterId: param('litter') || null, kennelId: param('kennel') || null });
 }
 

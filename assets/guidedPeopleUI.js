@@ -22,6 +22,7 @@ import { editionFlags } from '../data/editionConfig.js';
 import { waitlistIsSetUp, waitlistConfig, feeForEntry, isFeeWaived, compareEntries, overallPositions, chosenOrderChanges } from '../data/waitlistRules.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { getGuidedPeopleDraft, setGuidedPeopleDraft, clearGuidedPeopleDraft } from '../data/settings.js';
+import { isDemo } from '../data/demoMode.js';
 import { CONTACT_TYPE, descriptor } from '../data/vocab.js';
 import * as G from '../data/guidedPeople.js';
 import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
@@ -295,8 +296,11 @@ class PeopleConversation extends StepConversation {
     const d = this.draft;
     d.updatedAt = new Date().toISOString();
     d.label = G.draftLabel(d);
-    if (!d.done) setGuidedPeopleDraft(d);
+    // The Demo keeps no draft (K11-5).
+    if (!d.done && !isDemo()) setGuidedPeopleDraft(d);
   }
+
+  dropDraft() { clearGuidedPeopleDraft(); }
 
   // An answer changed after a save that stopped partway: write each person again
   // on the retry (records already made are kept, by id).

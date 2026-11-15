@@ -19,6 +19,7 @@ import { portalOn } from '../data/portalFeed.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { getFureverSettings, setFureverSettings, getMyKennelId } from '../data/settings.js';
+import { isDemo } from '../data/demoMode.js';
 import { resolveMyContactId } from '../data/kennelSetup.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { buildSeedPacket, pickupEventFor, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
@@ -110,7 +111,10 @@ function identityCardHtml(s, vets, selectedVetId) {
       <div class="field"><label>Your vet's phone</label><input class="id-bv-phone" type="text" value="${esc(s.breederVet.phone)}"></div>
       <div class="field field-wide"><label>Your vet's address</label><input class="id-bv-address" type="text" value="${esc(s.breederVet.address)}"></div>
     </div>
-    <div style="margin-top:8px;"><button class="btn btn-primary btn-sm" id="id-save">Save kennel identity</button> <span class="muted" id="id-saved"></span></div>`;
+    <div style="margin-top:8px;">${isDemo()
+      // The Demo saves nothing (K13-6): the identity writes settings, outside the repos' guard.
+      ? '<span class="muted">This is a demo: the kennel identity isn\'t saved.</span>'
+      : '<button class="btn btn-primary btn-sm" id="id-save">Save kennel identity</button> <span class="muted" id="id-saved"></span>'}</div>`;
 }
 
 // Match a saved vet name back to a Contact so re-opening the console re-selects it
@@ -138,12 +142,19 @@ async function renderIdentity() {
   if (Object.keys(bc).length) prefill.breederContact = bc;
   if (!s.breederVet.name && vets.length === 1) prefill.breederVet = vetToFields(vets[0]);
   const didPrefill = Object.keys(prefill).length > 0;
-  if (didPrefill) s = setFureverSettings(prefill);
+  // The Demo shows the prefill without keeping it (K13-6).
+  if (didPrefill) {
+    s = isDemo()
+      ? { ...s, ...prefill,
+        breederContact: { ...s.breederContact, ...(prefill.breederContact || {}) },
+        breederVet: { ...s.breederVet, ...(prefill.breederVet || {}) } }
+      : setFureverSettings(prefill);
+  }
 
   const selectedVetId = matchVetId(vets, s.breederVet.name);
   els.identity.innerHTML = identityCardHtml(s, vets, selectedVetId);
   wireIdentity(vets);
-  if (didPrefill) {
+  if (didPrefill && !isDemo()) {
     const saved = document.getElementById('id-saved');
     saved.textContent = 'Prefilled from your kennel records — review and Save.';
   }
@@ -162,7 +173,7 @@ function wireIdentity(vets) {
       els.identity.querySelector('.id-bv-address').value = f.address;
     });
   }
-  document.getElementById('id-save').addEventListener('click', () => {
+  document.getElementById('id-save')?.addEventListener('click', () => {
     setFureverSettings({
       kennelName: els.identity.querySelector('.id-kennelName').value.trim(),
       tagline: els.identity.querySelector('.id-tagline').value.trim(),
@@ -912,6 +923,13 @@ function wireContentPackages(litterEntries) {
 }
 
 async function renderContentPackages() {
+  // The Demo never connects Google Drive or publishes (K13-6): publishing would
+  // upload the demo's records to the visitor's own Drive, shared by link.
+  if (isDemo()) {
+    els.contentPackages.innerHTML = `<p class="muted" style="margin:0;">In your own KennelOS, this publishes your
+      documents and photos to your Google Drive for each family's Furever app. The demo doesn't connect to Google Drive.</p>`;
+    return;
+  }
   const settings = getFureverSettings();
   const { litterEntries } = await loadContentPackagesData();
 

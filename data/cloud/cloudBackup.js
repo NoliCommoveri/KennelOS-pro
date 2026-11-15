@@ -532,6 +532,8 @@ export function getBackupStatus() {
     vaultPushedAt: state.vaultPushedAt || null,
     // A pending change of the account's email (plan §2.6), from the last check-in.
     emailChange: state.emailChange || null,
+    // One that couldn't happen (its address was taken while it waited).
+    emailChangeFailed: state.emailChangeFailed || null,
     paused: isBackupBlocked(state),
     dirty: !!getCloudDirtyAt(),
     // Live sync is on here but can't be in step (paused, or joining): backups

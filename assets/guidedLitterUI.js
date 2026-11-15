@@ -20,10 +20,11 @@ import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { ownKennels, resolveKennelIdForWrite } from '../data/kennelScope.js';
-import { editionFlags } from '../data/editionConfig.js';
+import { editionFlags, dogCapStatus, litterCapStatus } from '../data/editionConfig.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { getGuidedLitterDraft, setGuidedLitterDraft, clearGuidedLitterDraft } from '../data/settings.js';
+import { isDemo } from '../data/demoMode.js';
 import {
   DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_STATUS, PAIRING_STATUS, LITTER_DELIVERY_TYPE, descriptor
 } from '../data/vocab.js';
@@ -38,7 +39,7 @@ import { StepConversation, tile, field, input, options, stepper, val, plural, pa
 // --- The data the screens read --------------------------------------------------
 
 async function loadData() {
-  const [dogs, litters, pairings, kennels, contacts, breedPool] = await Promise.all([
+  const [dogs, litters, pairings, kennels, contacts, breedPool, capStatus, litterCap] = await Promise.all([
     // Pedigree-only dogs too: a mom or dad typed in may be one (brought into
     // use); they never show among the dogs to pick (damChoices / sireChoices).
     dogRepo.getAll({ includeArchived: false, includePedigreeOnly: true }),
@@ -46,10 +47,15 @@ async function loadData() {
     pairingRepo.getAll({ includeArchived: false }),
     kennelRepo.getAll({ includeArchived: false }),
     editionFlags.externalOwnership ? contactRepo.getAll({ includeArchived: false }) : Promise.resolve([]),
-    kennelRepo.getBreedVocabulary()
+    kennelRepo.getBreedVocabulary(),
+    dogCapStatus(),
+    litterCapStatus()
   ]);
   return {
     dogs,
+    // Lite's caps: { current, cap }, null where uncapped (K11-1).
+    capStatus,
+    litterCap,
     // Her breeds, as the Dog page offers them, for a new mom or dad's breed.
     breeds: breedChoices({ dogs, pool: breedPool }),
     litters,
@@ -123,8 +129,15 @@ function screens(draft, data, ctx) {
           ${tile(role, '__new', `➕ A dog that isn't in KennelOS yet`, { selected: Boolean(draft[r.newKey]), sub: `I'll ask for ${r.possessive} name` })}
         </div>
         <button type="button" class="btn gl-more" data-act="toggle">${draft[showKey] ? `Show only my ${word}` : `Show all ${word}, outside dogs too`}</button>`,
-      onTile: (value) => {
+      onTile: (value, root) => {
         if (value === '__new') {
+          // Lite with no room for another dog of hers: the usual notice, here,
+          // not after every question (K11-1). In Lite a new parent is always hers.
+          if (!draft[r.newKey] && !ctx.canOutsideDog && !G.roomForNewParent(data.capStatus, draft, role)) {
+            const slot = root.parentElement?.querySelector('.gl-error');
+            if (slot) renderUpgradeNudge(slot, new CapExceededError('dogs', data.capStatus.current, data.capStatus.cap));
+            return null;
+          }
           draft[r.idKey] = null;
           draft[r.newKey] = draft[r.newKey] || G.newDogSpec(role === 'sire' ? (ctx.dam?.breed || draft.newDam?.breed || '') : '');
         } else {
@@ -590,6 +603,13 @@ export async function runLitterTask(chat, { litterId = null, resume = false, onE
   const data = await loadData();
   let draft = resume ? pendingLitterDraft() : null;
   if (!draft) {
+    // Lite at its litter cap, for a new litter: the usual notice before any
+    // question, as Add dogs does at the dog cap (K11-1).
+    if (!litterId && data.litterCap && data.litterCap.current >= data.litterCap.cap) {
+      renderUpgradeNudge(await chat.say(''), new CapExceededError('litters', data.litterCap.current, data.litterCap.cap));
+      onExit('done');
+      return;
+    }
     draft = G.emptyDraft({ litterId });
     draft.history = [];
     if (litterId) {
@@ -621,8 +641,11 @@ class LitterConversation extends StepConversation {
     d.updatedAt = new Date().toISOString();
     const damName = d.newDam?.call_name || this.data.dogsById.get(d.damId)?.call_name;
     d.label = damName ? `${damName}'s litter` : '';
-    if (!d.done) setGuidedLitterDraft(d);
+    // The Demo keeps no draft (K11-5).
+    if (!d.done && !isDemo()) setGuidedLitterDraft(d);
   }
+
+  dropDraft() { clearGuidedLitterDraft(); }
 
   // An answer changed after a save that stopped partway: write the litter's and
   // pups' fields again on the retry (records already made are kept, by id).

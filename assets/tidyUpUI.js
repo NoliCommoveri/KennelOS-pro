@@ -808,6 +808,10 @@ class Tidy extends FindingsTask {
       const { moved } = await mergeRecords(kind, keep.id, drop.id, choices);
       return this.done(`Merged. ${this.b(nameOf(keep))} is the one record now${moved ? `, and the ${plural(moved, 'record')} that pointed at the other one ${moved === 1 ? 'points' : 'point'} at it` : ''}.`);
     } catch (e) {
+      if (e instanceof CapExceededError) {
+        renderUpgradeNudge(await this.chat.say(''), e);
+        return null;
+      }
       await this.chat.say(`I couldn't merge them: ${esc(e?.message || String(e))}`);
       return null;
     }

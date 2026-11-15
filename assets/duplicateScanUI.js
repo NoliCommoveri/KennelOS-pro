@@ -8,6 +8,7 @@
 // for dogs and contacts the tidy-up's key too). Nothing changes until she merges.
 // Two waitlist families open the waitlist's own merge (assets/applicationMergeUI.js).
 import { esc, fmtDate } from './ui.js';
+import { renderUpgradeNudge } from './upgradeNudge.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { scanTables, RECORD_WORDS, dismissKeys } from '../data/duplicateScan.js';
 import { scanForDuplicates, mergeDuplicate, duplicateConflicts, duplicateBlocker, suggestKeep } from '../data/recordMerge.js';
@@ -146,6 +147,13 @@ export function mountDuplicateScan(root, { flash = () => {} } = {}) {
       flash(`Merged into one ${word}${moved ? `. ${plural(moved, ['record that pointed', 'records that pointed'])} at the other one now ${moved === 1 ? 'points' : 'point'} at it` : ''}.`);
       await scan();
     } catch (err) {
+      // Lite's cap (a merge that makes a new adult at the limit): the usual notice.
+      if (err && err.name === 'CapExceededError') {
+        const slot = document.createElement('div');
+        out.prepend(slot);
+        renderUpgradeNudge(slot, err);
+        return;
+      }
       flash(`I couldn't merge them: ${err.message || String(err)}`, 'err');
     }
   });

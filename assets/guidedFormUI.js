@@ -21,6 +21,7 @@ import { waitlistConfig, kennelBreeds } from '../data/waitlistRules.js';
 import { isLocked, isChoice, formQuestions, LOCKED_TYPE_LABEL } from '../data/waitlistForm.js';
 import { WAITLIST_QUESTION_TYPE, descriptor } from '../data/vocab.js';
 import { getGuidedFormDraft, setGuidedFormDraft, clearGuidedFormDraft } from '../data/settings.js';
+import { isDemo } from '../data/demoMode.js';
 import * as G from '../data/guidedForm.js';
 import { applicationFields } from './waitlistApplicationForm.js';
 import { offerSensitiveRecords, offerCloudBackup, CLOUD_OFF_FORM } from './kelsBackupSteps.js';
@@ -249,8 +250,11 @@ class FormConversation extends StepConversation {
 
   persist() {
     this.draft.updatedAt = new Date().toISOString();
-    if (!this.draft.done) setGuidedFormDraft(this.draft);
+    // The Demo keeps no draft (K11-5).
+    if (!this.draft.done && !isDemo()) setGuidedFormDraft(this.draft);
   }
+
+  dropDraft() { clearGuidedFormDraft(); }
 
   async loadSteps() { return G.stepsFor(this.draft); }
   screenFor(stepId) { return screens(this.draft, this.data)[stepId](); }

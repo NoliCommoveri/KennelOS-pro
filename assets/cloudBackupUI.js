@@ -153,7 +153,8 @@ export function errorText(e) {
     }
   }
   if (e && e.name === 'CapExceededError') {
-    return `This backup has ${e.current} active dogs. KennelOS Lite keeps up to ${e.limit}, so nothing was restored. Upgrade to Pro to restore it.`;
+    const what = e.kind === 'litters' ? 'litters' : 'active dogs';
+    return `This backup has ${e.current} ${what}. KennelOS Lite keeps up to ${e.limit}, so nothing was restored. Upgrade to Pro to restore it.`;
   }
   return e?.message || String(e);
 }
@@ -1071,6 +1072,7 @@ function renderAccountCard(el) {
   act('devices', () => devicesModal());
   act('email', () => changeEmailModal());
   act('email-cancel', () => cancelEmailChangeFlow());
+  act('email-dismiss', async () => { await cancelAccountEmailChange(); notify(); });
   act('others', async () => {
     if (!(await confirmModal({ title: 'Sign out other devices?', message: 'Every other device signed in to this account is signed out. They keep their records but stop backing up until they sign in again.\n\nLost a device? Use Your devices → Erase instead, which also deletes the records on it.', confirmLabel: 'Sign them out' }))) return;
     const n = await withFreshSignIn((reauth) => signOutOtherDevices(reauth), { purpose: 'sign out your other devices', confirmLabel: 'Sign them out' });
@@ -1108,8 +1110,18 @@ function renderAccountCard(el) {
 const shortDate = (iso) => new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 // A pending change, as every signed-in device shows it. '' when there's none.
+// What a change that couldn't happen says (review K4-8).
+const FAILED_CHANGE_TEXT = 'That address was taken while the change was waiting, so nothing changed: your account still uses its current email.';
+
 function emailChangeNoticeHtml() {
-  const c = getBackupStatus().emailChange;
+  const status = getBackupStatus();
+  if (status.emailChangeFailed && !status.emailChange) {
+    return `<div class="inline-warn" style="margin-bottom:12px;">
+      <strong>Your email change didn't happen.</strong> ${esc(FAILED_CHANGE_TEXT)}
+      <button class="btn btn-sm" data-act="email-dismiss" style="margin-left:4px;">OK</button>
+    </div>`;
+  }
+  const c = status.emailChange;
   if (!c) return '';
   return `<div class="inline-warn" style="margin-bottom:12px;">
       <strong>Your account's email is changing.</strong> ${changeRequestedBy(c)};
@@ -1626,7 +1638,13 @@ export function renderTodayCloudNudge(el) {
 
     let html = '';
     const change = status.emailChange;
-    if (change && !expired) {
+    if (status.emailChangeFailed && !change && !expired) {
+      html = `<div class="row-between">
+          <div><strong>✉️ Your email change didn't happen.</strong>
+            <div class="muted" style="font-size:13px;">${esc(FAILED_CHANGE_TEXT)}</div></div>
+          <div class="pill-row"><button class="btn btn-sm" data-act="email-dismiss">OK</button></div>
+        </div>`;
+    } else if (change && !expired) {
       html = `<div class="row-between">
           <div><strong>✉️ Your account's email is changing.</strong>
             <div class="muted" style="font-size:13px;">${changeRequestedBy(change)}; it takes effect ${esc(shortDate(change.effectiveAt))}. Not you? Cancel it.</div></div>
@@ -1662,6 +1680,10 @@ export function renderTodayCloudNudge(el) {
     el.querySelector('[data-act="on"]')?.addEventListener('click', async () => { await turnOnFlow(); render(); });
     el.querySelector('[data-act="email-cancel"]')?.addEventListener('click', async () => {
       try { await cancelEmailChangeFlow(); } catch (e) { await alertModal({ title: "That didn't work", message: errorText(e) }); }
+      render();
+    });
+    el.querySelector('[data-act="email-dismiss"]')?.addEventListener('click', async () => {
+      try { await cancelAccountEmailChange(); } catch (e) { await alertModal({ title: "That didn't work", message: errorText(e) }); }
       render();
     });
     el.querySelector('[data-act="code"]')?.addEventListener('click', async () => {

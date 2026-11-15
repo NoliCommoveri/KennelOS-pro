@@ -115,7 +115,7 @@ export async function cancelAccountEmailChange() {
   const token = sessionToken();
   if (!token) throw new api.CloudAuthError({ status: 401, code: 'unauthorized' });
   await api.cancelEmailChange(token);
-  updateCloudBackupState({ emailChange: null });
+  updateCloudBackupState({ emailChange: null, emailChangeFailed: null });
 }
 
 // Records what the server said (check-in, or the Account card's read): the
@@ -125,7 +125,9 @@ export async function cancelAccountEmailChange() {
 // new email" until this device signs in with it.
 export function recordEmailChangeState(state) {
   if (!state || typeof state !== 'object') return;
-  updateCloudBackupState({ emailChange: state.pending || null });
+  // A change whose address was taken while it waited (review K4-8): shown until
+  // she dismisses it.
+  updateCloudBackupState({ emailChange: state.pending || null, emailChangeFailed: state.failed || null });
   const s = getCloudSession();
   if (s && state.changedAt && (!s.emailSince || state.changedAt > s.emailSince)) {
     setCloudSession({ ...s, email: null, emailSince: state.changedAt });

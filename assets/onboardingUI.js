@@ -16,6 +16,7 @@ import { showKennelSetupModal } from './kennelSetupUI.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { isMeetKelsPending, setMeetKelsPending } from '../data/settings.js';
 import { KELS, kelsPhotoUrl } from './kelsChat.js';
+import { editionFlags } from '../data/editionConfig.js';
 
 // A single onboarding card: a dimmed, non-dismissible overlay (no backdrop close,
 // no X — the only way onward is a button) with body HTML and one or more buttons.
@@ -46,16 +47,26 @@ const welcomeHtml = () => WELCOME_HTML.replace(
     : 'Everything lives securely on this device — no account, no cloud, nothing leaves your browser.'
 );
 
+// "a, b and c" — for the edition-aware lines below.
+const joinAnd = (items) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+// Only what this edition has is promised (review K13-11: Lite's first screen
+// listed contracts, stud services, puppy records and invoices, all Pro-only).
+const SALES_THINGS = joinAnd(['buyers', 'deposits',
+  ...(editionFlags.contracts ? ['contracts'] : []), ...(editionFlags.studServices ? ['stud services'] : [])]);
+const DOC_THINGS = joinAnd([...(editionFlags.puppyRecord ? ['puppy records'] : []),
+  ...(editionFlags.invoicing ? ['invoices', 'receipts'] : [])]);
+
 const WELCOME_HTML = `
   <h2 class="onboard-title">🐾 Welcome to KennelOS!</h2>
   <p>KennelOS is your whole breeding program in one private place. It helps you:</p>
   <ul class="onboard-list">
-    <li><strong>Manage your dogs</strong> — breeding stock, puppies and outside dogs, all on one roster.</li>
+    <li><strong>Manage your dogs</strong> — ${editionFlags.externalOwnership ? 'breeding stock, puppies and outside dogs' : 'breeding stock and puppies'}, all on one roster.</li>
     <li><strong>Keep health records</strong> — vaccines, tests, vet visits and a full timeline on every dog.</li>
     <li><strong>Plan breedings</strong> — pairings, heat cycles, litters and the puppies that result.</li>
-    <li><strong>Facilitate sales &amp; placements</strong> — buyers, deposits, contracts and stud services.</li>
+    <li><strong>Facilitate sales &amp; placements</strong> — ${SALES_THINGS}.</li>
     <li><strong>Track the money</strong> — income and expenses, with a running picture of your net.</li>
-    <li><strong>Generate documents</strong> — puppy records, invoices and receipts, ready to print.</li>
+    ${DOC_THINGS ? `<li><strong>Generate documents</strong> — ${DOC_THINGS}, ready to print.</li>` : ''}
   </ul>
   <p>Everything lives securely on this device — no account, no cloud, nothing leaves your browser.</p>
   <p class="muted">New here? The tour shows you around with sample records in a couple of minutes, and you can leave it at any time.</p>`;

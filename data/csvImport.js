@@ -31,6 +31,7 @@ import { normReg } from './pedigreeImport.js';
 import { normalizeTitles } from './dogTitles.js';
 import { dogRegKeys, dogRegisteredNames } from './dogSearch.js';
 import { getMyKennelId, getMileageDefaults } from './settings.js';
+import { editionFlags } from './editionConfig.js';
 import {
   SEX, OWNERSHIP_TYPE, DOG_STATUS, CONTACT_TYPE, PAIRING_TYPE, PAIRING_METHOD, PAIRING_STATUS,
   LITTER_STATUS, LITTER_DELIVERY_TYPE, REGISTRATION_TYPE, PLACEMENT_PURPOSE, cleanPurposes, SALE_STATUS, eventTypesFor, STUD_SERVICE_DIRECTION, FEE_STRUCTURE, STUD_SERVICE_STATUS,
@@ -223,6 +224,9 @@ function nk(name, dob) {
 // Natural key: registered_name + date_of_birth, falling back to
 // call_name + date_of_birth (Data Model §8). A row with no DOB, or with no
 // name at all, cannot form a key → needs review.
+// The ownerships every edition's dog form offers (Lite's form offers only these).
+const LOCAL_OWNERSHIP = new Set(['owned', 'co_owned']);
+
 // Mirrors dogRepo's OWNER_REQUIRED_TYPES: these ownerships need owner_contact_id.
 const DOG_OWNER_REQUIRED = ['external', 'leased_in'];
 
@@ -424,6 +428,18 @@ const DOG_MAPPING = {
     // as Pedigree Import saves ancestors): no owner or call name needed, off the
     // Dogs list, not counted against a dog cap. Only ever on a NEW dog: an update
     // never turns a dog already in the app into a pedigree-only one.
+    // An edition without other people's dogs (Lite: externalOwnership off) takes
+    // only the ownerships its dog form offers. A leased dog never counts toward
+    // Lite's cap, so taking one here would overfill the roster (K13-4), and an
+    // update to leased or external would free a slot the form can't. The one
+    // exception is a new external dog with no owner: it lands pedigree-only below,
+    // an ancestor kept for lineage, which Lite has too.
+    const ownershipRefused = Boolean(ownership && !editionFlags.externalOwnership && !LOCAL_OWNERSHIP.has(ownership)
+      && !(ownership === 'external' && !ownerName && !match));
+    if (ownershipRefused) {
+      delete record.ownership_type;
+      reasons.push(`Ownership "${col(row, 'ownership_type', 'ownership')}" isn't available in this edition: use owned or co_owned.`);
+    }
     const changes = buildDogChanges(record);
     // On an update, titles are add-only: the row never drops a title she has.
     if (match && changes.titles) changes.titles = normalizeTitles([...(match.titles || []), ...changes.titles]);
@@ -441,7 +457,7 @@ const DOG_MAPPING = {
     }
     // Unresolved parents push a create/update row to review (fixable, or apply anyway).
     if (unresolved.length) { if (status_ !== 'review') status_ = 'review'; reasons.push(unresolved.join('; ') + '.'); }
-    if (kennelUnresolved || ownerUnresolved || breederKennelUnresolved) status_ = 'review';
+    if (kennelUnresolved || ownerUnresolved || breederKennelUnresolved || ownershipRefused) status_ = 'review';
     // The dog as it would be saved (an update merges onto the match): an
     // external or leased-in dog with no owner would fail at commit, so say so now.
     const saved = { ...(match || {}), ...record };

@@ -15,6 +15,7 @@
 import { esc } from './ui.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { findContactMatches } from '../data/contactSearch.js';
+import { isDemo } from '../data/demoMode.js';
 
 // --- Little HTML helpers the screens share -------------------------------------
 
@@ -283,7 +284,22 @@ export class StepConversation {
     on('back', () => this.back());
     on('next', () => this.advance());
     on('to-review', () => this.advance({ toReview: true }));
-    on('save', () => this.save());
+    on('save', () => (isDemo() ? this.demoEnd() : this.save()));
+  }
+
+  // The Demo saves nothing, so a task ends at its review: she sees everything it
+  // would build, then Kels says so and nothing is kept (review K11-5). A
+  // subclass's dropDraft() forgets its draft, in case one was kept.
+  async demoEnd() {
+    if (this.busy) return;
+    this.busy = true;
+    this.draft.done = true;
+    this.dropDraft?.();
+    this.panel.closest('.kels-row')?.remove();
+    this.chat.you('Yes, build it');
+    await this.chat.say('This is where I\'d build it. In your own KennelOS, I would! This is the demo, so nothing is saved.', { typing: 900 });
+    this.busy = false;
+    this.onExit?.('done');
   }
 
   // Her answer to the current step goes into the chat as her reply.

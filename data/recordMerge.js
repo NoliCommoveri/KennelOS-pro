@@ -358,7 +358,9 @@ export async function mergeDuplicate(table, keepId, dropId, choices = {}) {
   if (blocker) throw new Error(blocker);
 
   const changes = duplicateChanges(table, keep, drop, choices);
-  if (Object.keys(changes).length) await repo.update(keepId, changes);
+  // The duplicate is deleted next, so a dog merge's cap check doesn't count it: a
+  // merge never adds a dog (K13-9).
+  if (Object.keys(changes).length) await repo.update(keepId, changes, table === 'dogs' ? { capExcludeIds: [dropId] } : undefined);
   const { moved } = await replaceAndDelete(table, keepId, drop);
   // The duplicate's Dog Card link survives the merge: the kept dog takes its id when
   // it has none (once the duplicate is deleted, so the id is free).

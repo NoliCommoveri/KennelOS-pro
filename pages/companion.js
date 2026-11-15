@@ -27,6 +27,7 @@ import {
 } from '../data/settings.js';
 import { MAX_SMS_HASH_LEN, buildLinkArtifacts, sendHrefs } from '../assets/companionLink.js';
 import { esc, param, todayYMD } from '../assets/ui.js';
+import { isDemo } from '../data/demoMode.js';
 
 // The link, its payload ceilings and the send anchors live in
 // assets/companionLink.js, shared with the guided litter flow's share step.
@@ -155,7 +156,10 @@ function templateCard(type) {
         <div class="field field-wide"><label>Closer</label><textarea class="t-closer">${esc(s.closer)}</textarea><span class="field-hint">A sign-off shown at the very bottom of the page, just above the snapshot date (e.g. "Thanks for being part of our program!").</span></div>
         ${includeChecklist(type, s.include || {})}
       </div>
-      <div style="margin-top:8px;"><button class="btn btn-primary btn-sm t-save">Save ${esc(companionTypeLabel(type))} template</button> <span class="t-saved muted"></span></div>
+      <div style="margin-top:8px;">${isDemo()
+        // The Demo saves nothing (K13-6): the template writes settings, outside the repos' guard.
+        ? '<span class="muted">This is a demo: template changes aren\'t saved.</span>'
+        : `<button class="btn btn-primary btn-sm t-save">Save ${esc(companionTypeLabel(type))} template</button> <span class="t-saved muted"></span>`}</div>
     </div>`;
 }
 
@@ -195,7 +199,7 @@ function renderTemplates() {
     incBoxes.forEach((b) => b.addEventListener('change', syncDisabled));
     syncDisabled();
 
-    card.querySelector('.t-save').addEventListener('click', () => {
+    card.querySelector('.t-save')?.addEventListener('click', () => {
       const include = {};
       companionIncludeKeys(type).forEach((key) => {
         const box = card.querySelector(`.t-inc[data-key="${key}"]`);

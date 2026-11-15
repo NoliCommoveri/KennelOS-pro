@@ -272,8 +272,9 @@ async function doRestore(mode) {
     // anything, so spell out what happened and what to do rather than showing the
     // terse repo message — nothing was changed, so the user can act and retry.
     if (e && e.name === 'CapExceededError') {
-      flash(`This backup would leave ${e.current} active dogs — KennelOS Lite keeps up to ${e.limit}. `
-        + `Nothing was changed. Trim the file to ${e.limit} or fewer active dogs, or upgrade to Pro, then import again.`, 'err');
+      const what = e.kind === 'litters' ? 'litters' : 'active dogs';
+      flash(`This backup would leave ${e.current} ${what} — KennelOS Lite keeps up to ${e.limit}. `
+        + `Nothing was changed. Trim the file to ${e.limit} or fewer ${what}, or upgrade to Pro, then import again.`, 'err');
     } else {
       flash(e.message || String(e), 'err');
     }

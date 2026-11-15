@@ -235,7 +235,9 @@ export const dogRepo = {
     return base.create(nullDispositionIfNotPuppy(data));
   },
 
-  async update(id, changes) {
+  // `opts.capExcludeIds`: dogs about to go that the cap shouldn't count (a merge's
+  // duplicate, deleted right after this write; review K13-9).
+  async update(id, changes, opts = {}) {
     const existing = await db.dogs.get(id);
     if (!existing) throw new Error(`dogs: no record with id ${id}`);
     changes = withRegistrations(changes);
@@ -256,7 +258,7 @@ export const dogRepo = {
     await validateDog(merged, id);
     // Edition cap hook. Default no-op; Lite blocks a ✗→✓ transition into the
     // counting set (e.g. a kept puppy maturing to an adult stage) while at cap.
-    await enforceDogCap({ candidate: merged, existing, id });
+    await enforceDogCap({ candidate: merged, existing, id, excludeIds: opts.capExcludeIds || [] });
     // Force disposition null in the write when the resulting status isn't puppy —
     // covers both an explicit status change and a stale value on an unrelated edit.
     if (merged.status !== 'puppy' && merged.disposition != null) {

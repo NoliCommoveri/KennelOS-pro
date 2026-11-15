@@ -31,7 +31,8 @@ import { contactRepo } from './contactRepo.js';
 import { kennelRepo, withSeededTests } from './kennelRepo.js';
 import { studServiceRepo } from './studServiceRepo.js';
 import { eventRepo } from './eventRepo.js';
-import { enforceLitterCap } from './editionConfig.js';
+import { enforceLitterCap, dogCapStatus } from './editionConfig.js';
+import { CapExceededError } from './repoBase.js';
 import { baseFromLitter } from './puppyDefaults.js';
 import { addDaysToYMD, todayYMD } from './dateUtils.js';
 import { similarNamed } from './dogSearch.js';
@@ -565,6 +566,27 @@ export const methodType = (method) => (blank(method) ? null : method === 'natura
 
 // Make a parent who isn't in KennelOS yet: her own dog (in the litter's kennel),
 // or somebody else's with the owner and their kennel. Ids land on `s` as made.
+// The new moms and dads of hers this draft would still make (each one an adult
+// on her roster, so each takes a slot under Lite's dog cap). Parents already made
+// by a save that stopped partway don't count again.
+export function newParentsToMake(draft) {
+  return ['dam', 'sire'].filter((role) => {
+    const spec = draft[ROLES[role].newKey];
+    return Boolean(spec && spec.mine && !draft.saved?.[role]?.dogId);
+  }).length;
+}
+
+// Room for one more new parent of hers, given Lite's { current, cap } (null where
+// dogs aren't capped) and the other parent already planned as new. `role` is the
+// one she's choosing now.
+export function roomForNewParent(capStatus, draft, role) {
+  if (!capStatus) return true;
+  const other = role === 'dam' ? 'sire' : 'dam';
+  const otherSpec = draft[ROLES[other].newKey];
+  const otherNeeds = otherSpec && otherSpec.mine && !draft.saved?.[other]?.dogId ? 1 : 0;
+  return capStatus.current + otherNeeds < capStatus.cap;
+}
+
 async function createParent(spec, role, s, ownKennelId, step) {
   const r = ROLES[role];
   const made = s[role] || (s[role] = {});
@@ -622,6 +644,13 @@ export async function saveGuidedLitter(draft, { onProgress = () => {} } = {}) {
   // 0. Lite's litter cap, asked before anything is made: a new litter it would
   // refuse must not leave a new parent behind (K13-14).
   if (!existingLitter && !s.litterId) await enforceLitterCap({ candidate: litterFieldsFromDraft(draft) });
+  // And room for every new parent of hers, so the cap can't take the mom and then
+  // refuse the dad (K11-1).
+  const needed = existingLitter ? 0 : newParentsToMake(draft);
+  if (needed) {
+    const cap = await dogCapStatus();
+    if (cap && cap.current + needed > cap.cap) throw new CapExceededError('dogs', cap.current, cap.cap);
+  }
 
   // 1. Parents who weren't in KennelOS yet.
   const damId = existingLitter?.dam_id || (draft.newDam ? await createParent(draft.newDam, 'dam', s, kennelId, step) : draft.damId);

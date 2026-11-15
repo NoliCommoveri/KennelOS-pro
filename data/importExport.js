@@ -9,7 +9,7 @@ import { db, dataTables } from './db.js';
 import { setLastBackupDate, markDataChanged, getMyKennelId, setMyKennelId, getCloudBackupState, getCloudSyncState, remapStoredIds } from './settings.js';
 import { planMatches, dogClashes, mergePair, rekey, clashKey, describeRecord } from './restoreMatch.js';
 import { assertWritable } from './demoMode.js';
-import { enforceImportDogCap } from './editionConfig.js';
+import { enforceImportDogCap, enforceImportLitterCap } from './editionConfig.js';
 import { SYNC_REGISTRY, overlayCloudFields, snapshotRowToLocal, isCloudField } from './syncRegistry.js';
 
 // Bumped only when the on-disk backup shape changes in a way that needs a
@@ -202,6 +202,10 @@ export async function restoreBackup(obj, mode, opts = {}) {
   // without decoding. `.filter(Boolean)` drops a null/hole from a hand-edited file.
   const incomingDogs = (entries.find(([name]) => name === 'dogs')?.[1] || []).filter(Boolean);
   await enforceImportDogCap({ incomingDogs, mode });
+  // The litter cap the same way (K13-5): Lite refuses a restore that would leave
+  // more litters than it allows, before anything is written.
+  const incomingLitters = (entries.find(([name]) => name === 'litters')?.[1] || []).filter(Boolean);
+  await enforceImportLitterCap({ incomingLitters, mode });
 
   const tables = dataTables();
   await db.transaction('rw', tables, async () => {
@@ -399,6 +403,7 @@ async function restoreFileMerge(obj, { keepNewer = false, answers = {}, clashCho
   const deletes = {};
   const counts = [];
   const finalDogs = new Map();
+  const finalLitters = new Map();
   for (const { name } of tables) {
     const out = new Map();
     const now = new Map();
@@ -428,11 +433,13 @@ async function restoreFileMerge(obj, { keepNewer = false, answers = {}, clashCho
     if (out.size) writes[name] = [...out.values()];
     if (name in incoming) counts.push({ name, count });
     if (name === 'dogs') for (const [id, d] of now) finalDogs.set(id, d);
+    if (name === 'litters') for (const [id, l] of now) finalLitters.set(id, l);
   }
 
   // Edition bulk-import cap (cap spec §9), on the dogs as they'll be after the
   // whole merge. No-op in Pro/Demo; Lite refuses before anything is written.
   await enforceImportDogCap({ incomingDogs: [...finalDogs.values()], mode: 'replace' });
+  await enforceImportLitterCap({ incomingLitters: [...finalLitters.values()], mode: 'replace' });
 
   const secrets = localRemap.size ? db.table('device_secrets') : null;
   await db.transaction('rw', secrets ? [...tables, secrets] : tables, async () => {
@@ -484,7 +491,8 @@ async function pointMyKennelAtRestoredKennel() {
 //     `opts.fetchFile(sha256, fileRow) → Blob` (the network lives in the cloud
 //     modules, not here). With no fetchFile, or a fetch that fails, the file
 //     row is skipped and listed in `missingFiles`.
-//   - Lite cap: enforceImportDogCap over the merged dogs, as for a file restore.
+//   - Lite cap: enforceImportDogCap over the merged dogs and enforceImportLitterCap
+//     over the merged litters, as for a file restore.
 // Reads and file fetches happen BEFORE the write transaction, which would
 // otherwise auto-commit across a network await.
 
@@ -581,6 +589,9 @@ export async function restoreCloudMerge(snapshot, { overwrite = false, fetchFile
   if (writes.dogs && writes.dogs.length) {
     await enforceImportDogCap({ incomingDogs: writes.dogs.map((w) => w.row), mode: 'merge' });
   }
+  if (writes.litters && writes.litters.length) {
+    await enforceImportLitterCap({ incomingLitters: writes.litters.map((w) => w.row), mode: 'merge' });
+  }
 
   const tables = Object.keys(writes).filter((n) => writes[n].length);
   if (tables.length) {
@@ -610,7 +621,8 @@ export async function restoreCloudMerge(snapshot, { overwrite = false, fetchFile
 //     `opts.fetchFile(vaultFile, row) → Blob` (decryption lives in the cloud
 //     modules); an existing local file is left alone; a failed fetch is listed
 //     in `missingFiles`, as for 'cloud-merge'.
-//   - Lite cap: enforceImportDogCap over the merged dogs.
+//   - Lite cap: enforceImportDogCap over the merged dogs, enforceImportLitterCap
+//     over the merged litters.
 // Reads and fetches happen before the write transaction.
 
 export const VAULT_PAYLOAD_FORMAT = 1;
@@ -713,6 +725,9 @@ export async function restoreVaultMerge(payload, { overwrite = false, fetchFile 
 
   if (writes.dogs && writes.dogs.length) {
     await enforceImportDogCap({ incomingDogs: writes.dogs.map((w) => w.row), mode: 'merge' });
+  }
+  if (writes.litters && writes.litters.length) {
+    await enforceImportLitterCap({ incomingLitters: writes.litters.map((w) => w.row), mode: 'merge' });
   }
 
   const tables = Object.keys(writes).filter((n) => writes[n].length);

@@ -62,7 +62,7 @@ export const EMAIL_TEMPLATE_KINDS = Object.freeze([
   { kind: 'status_link', label: 'Their status page link' },
   { kind: 'transport_options', label: 'Transport options (getting their pup home)' },
   { kind: 'offer_reminder', label: 'Reminder: their turn ends soon (sent by KennelOS)' },
-  { kind: 'fee_reminder', label: 'Reminder: the fee is due tomorrow (sent by KennelOS)' },
+  { kind: 'fee_reminder', label: 'Reminder: the fee is due soon (sent by KennelOS)' },
   { kind: 'ready_check', label: '"Ready now?" (sent by KennelOS)' }
 ]);
 
@@ -132,7 +132,7 @@ export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
     body: 'Hi [Family],\n\nA reminder that your turn to choose a puppy from [Litter] ends on [Respond by]. If you haven\'t yet, please choose your puppy and send your deposit, or let us know on your status page if you\'d like to pass.\n\n[Kennel Name]'
   },
   fee_reminder: {
-    subject: 'Your application fee for [Kennel Name] is due tomorrow',
+    subject: 'Your application fee for [Kennel Name] is due[Pay by]',
     body: 'Hi [Family],\n\nA reminder that your application fee is due[Pay by]. The amount and how to pay are on your status page. Your place in line is set by the day we receive it.\n\n[Kennel Name]'
   },
   ready_check: {

@@ -17,6 +17,7 @@ import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { getGuidedDogsDraft, setGuidedDogsDraft, clearGuidedDogsDraft } from '../data/settings.js';
+import { isDemo } from '../data/demoMode.js';
 import { DOG_STATUS, OWNERSHIP_TYPE, DISPOSITION, REGISTRATION_TYPE, DOC_TYPES, VACCINE_CHECKLIST, VACCINE_GOOD_FOR, documentFieldsFor, descriptor } from '../data/vocab.js';
 import { SCOPED_OWNERSHIP } from '../data/kennelScope.js';
 import * as G from '../data/guidedDogs.js';
@@ -514,8 +515,11 @@ class DogsConversation extends StepConversation {
     const d = this.draft;
     d.updatedAt = new Date().toISOString();
     d.label = draftLabel(d);
-    if (!d.done) setGuidedDogsDraft(d);
+    // The Demo keeps no draft (K11-5).
+    if (!d.done && !isDemo()) setGuidedDogsDraft(d);
   }
+
+  dropDraft() { clearGuidedDogsDraft(); }
 
   // An answer changed after a save that stopped partway: write each dog again on
   // the retry (records already made are kept, by id).
