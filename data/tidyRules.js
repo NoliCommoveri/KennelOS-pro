@@ -422,8 +422,9 @@ const orderPair = (a, b) => (String(a.created_at || '') <= String(b.created_at |
 // Two dog records for one dog. Missing details are unknown, never a difference:
 // an outside dog often has no birthday or registration number, so those can only
 // rule a pair OUT when both records have them and they differ.
-//   certain: a registration number in common, or a registered name in common
-//     (any of either's, additional registrations included: dogSearch);
+//   certain: a Dog Card id (public_id), a registration number in common, or a
+//     registered name in common (any of either's, additional registrations
+//     included: dogSearch), the name never for two of one litter (possible then);
 //   possible: the same call name, breed and sex, and nothing that contradicts it.
 // Registration numbers contradict only as `registrationsConflict` says (both have
 // numbers, none shared, and two could be the same registry's).
@@ -452,8 +453,11 @@ export function compareDogs(a, b) {
     ...DOG_CONTRADICTIONS.filter(([, f]) => f(a) && f(a) === f(b)).map(([label]) => label)];
   const unknown = [...(hasRegs ? [] : ['registration number']),
     ...DOG_CONTRADICTIONS.filter(([, f]) => !f(a) || !f(b)).map(([label]) => label)];
+  if (a.public_id && a.public_id === b.public_id) return { strength: 'certain', reasons: ['KennelOS ID'], matches, unknown: [] };
   if (sameReg) return { strength: 'certain', reasons: ['registration number'], matches, unknown: [] };
-  if (sameRegName && !differs.length) return { strength: 'certain', reasons: ['registered name'], matches, unknown };
+  // Littermates share a birthday, breed and dam: a name alone never makes them certain (K1-1).
+  const littermates = a.litter_id && a.litter_id === b.litter_id;
+  if (sameRegName && !differs.length) return { strength: littermates ? 'possible' : 'certain', reasons: ['registered name'], matches, unknown };
   if (sameCall && !differs.length && !(a.litter_id && a.litter_id === b.litter_id)) {
     return { strength: 'possible', reasons: ['call name', 'breed'], matches, unknown };
   }
@@ -469,6 +473,7 @@ export function duplicateDogFindings(dogs) {
     put(normName(d.call_name) && `c:${normName(d.call_name)}`, d);
     for (const k of dogNameKeys(d)) put(`r:${k}`, d);
     for (const k of dogRegKeys(d)) put(`n:${k}`, d);
+    put(d.public_id && `p:${d.public_id}`, d);
   }
   const seen = new Set();
   const out = [];

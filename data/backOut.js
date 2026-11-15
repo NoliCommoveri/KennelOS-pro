@@ -1,6 +1,8 @@
 // backOut.js — a family backing out of their pup (docs/KennelOS_Family_Requests_Plan.md
-// §7): her reasons, her deposit policy (reason × the pup's age → keep the deposit or
-// move it to another pup), and what she ticks to remove when she approves. Pure.
+// §7): her reasons, her policy (reason × the pup's age → keep what they paid, or put
+// them back in line with a credit for some of it), and what she ticks to remove when
+// she approves. Nothing is refunded on a back-out (Waitlist Fixes plan D9). Pure.
+import { cleanSteps } from './extraCharges.js';
 //
 // Kennel.waitlist_config:
 //   back_out_reasons      [{ id, label }] (blank = BACK_OUT_REASONS_DEFAULT; "Something
@@ -21,8 +23,8 @@ export const BACK_OUT_REASONS_DEFAULT = Object.freeze([
 ]);
 export const BACK_OUT_OTHER = Object.freeze({ id: 'other', label: 'Something else' });
 export const BACK_OUT_OUTCOMES = Object.freeze([
-  { value: 'keep', label: 'Keep the deposit' },
-  { value: 'move', label: 'Move the deposit to another pup' }
+  { value: 'keep', label: 'Keep what they paid' },
+  { value: 'move', label: 'Put them back in line' }
 ]);
 // The owner's wording (2026-11-01).
 export const BACK_OUT_POLICY_TEXT_DEFAULT = 'Please note that all paid deposits are non-refundable and by backing out, you are forfeiting your deposit. We do understand that sometimes, life happens; [Kennel Name] will review your reason for backing out and will reach out if we determine you are eligible to apply any portion of your paid deposit to a future litter. If not eligible, you will be required to re-apply and place a new deposit should you decide to purchase one of our pups in the future.';
@@ -69,7 +71,7 @@ export function suggestOutcome(config, reasonId, weeks) {
   return { outcome: 'keep', row: null };
 }
 
-// "We changed our mind, under 6 weeks → move the deposit".
+// "We changed our mind, under 6 weeks → put them back in line".
 export function policyRowText(row, reasons) {
   const reason = row.reason_id === 'any' ? 'Any reason' : (reasons.find((r) => r.id === row.reason_id)?.label || 'A reason');
   const age = row.from_weeks != null && row.until_weeks != null ? `, ${row.from_weeks} to ${row.until_weeks} weeks`
@@ -85,10 +87,15 @@ export function backOutItems({ sale, events, today }) {
   const out = [];
   for (const c of Array.isArray(sale?.extra_charges) ? sale.extra_charges : []) {
     if (!c || !c.id || c.fee_for) continue;
-    const paid = (c.payments || []).filter((st) => st.paid_date);
+    const amount = Number(c.amount) || 0;
+    const paid = (cleanSteps(c.payments, amount) || []).filter((st) => st.paid_date);
     const done = Boolean(c.completed_date);
-    const detail = done ? 'done' : paid.length ? `${paid.reduce((t, st) => t + st.percent, 0)}% paid` : 'nothing paid';
-    out.push({ kind: 'charge', id: c.id, label: c.label, detail, remove: !paid.length && !done });
+    const paidAmount = paid.reduce((t, st) => t + st.amount, 0);
+    const percent = amount > 0 ? Math.round((paidAmount / amount) * 100) : 0;
+    const full = paid.length > 0 && paidAmount >= amount - 0.005;
+    const detail = [done ? 'done' : '', paid.length ? (full ? 'paid' : `${percent}% paid`) : (done ? '' : 'nothing paid')].filter(Boolean).join(', ');
+    // `owed`: kept on the sale, some of it is still to pay (K8-13).
+    out.push({ kind: 'charge', id: c.id, label: c.label, detail, owed: !full, remove: !paid.length && !done });
   }
   for (const e of events.filter((x) => !x.is_archived && x.subject_id === sale?.dog_id)) {
     if (e.event_type === 'boarding' && e.details?.sale_id === sale.id) {
@@ -101,12 +108,22 @@ export function backOutItems({ sale, events, today }) {
   return out;
 }
 
-// The one line the confirm ends with.
-export function backOutSummary(outcome, { deposit = 0, items = [], money = (n) => `$${n}` }) {
-  const first = outcome === 'move' ? `Cancel the sale and move their ${deposit ? `${money(deposit)} ` : ''}deposit to another pup (they go to the end of the line)`
-    : outcome === 'refund' ? `Void the sale and record that you refunded their ${deposit ? `${money(deposit)} ` : ''}deposit`
-      : `Cancel the sale and keep their ${deposit ? `${money(deposit)} ` : ''}deposit`;
-  const kept = items.filter((i) => !i.remove && i.kind === 'charge').map((i) => `keep ${i.label} (still owed)`);
+// "They've paid $3,200 on this sale: deposit $500, balance $2,500, transport $200."
+// `parts` from incomeView.paidOnSaleByPart (K8-2).
+export function backOutPaidText(parts, money = (n) => `$${n}`) {
+  const total = Math.round((parts || []).reduce((t, p) => t + p.amount, 0) * 100) / 100;
+  if (!(total > 0)) return 'Nothing has been paid on this sale yet: no deposit was received.';
+  return `They've paid ${money(total)} on this sale: ${parts.map((p) => `${String(p.label).toLowerCase()} ${money(p.amount)}`).join(', ')}.`;
+}
+
+// The one line the confirm ends with. `paid`: what they paid beyond their credits;
+// `credit`: what she's crediting toward their next pup (move). Nothing is refunded.
+export function backOutSummary(outcome, { paid = 0, credit = 0, items = [], money = (n) => `$${n}` }) {
+  const rest = Math.round((paid - credit) * 100) / 100;
+  const first = outcome === 'move'
+    ? `Cancel the sale and put them back at the end of the line ${credit > 0 ? `with a ${money(credit)} credit toward their next pup` : 'with no credit'}${paid > 0 && rest > 0 ? `; the ${credit > 0 ? 'other ' : ''}${money(rest)} they paid is kept` : ''}`
+    : `Cancel the sale${paid > 0 ? ` and keep the ${money(paid)} they paid` : ''}`;
+  const extras = items.filter((i) => !i.remove && i.kind === 'charge').map((i) => `keep ${i.label} (${i.owed === false ? 'paid' : 'still owed'})`);
   const gone = items.filter((i) => i.remove).map((i) => `remove ${i.label}${i.kind === 'pickup' || i.kind === 'stay' ? ` on ${i.detail.split(' ')[0]}` : ''}`);
-  return [first, ...kept, ...gone].join(', ');
+  return [first, ...extras, ...gone].join(', ');
 }

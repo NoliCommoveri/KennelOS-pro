@@ -1372,7 +1372,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
       out.push({
         key: `waitlist-back-out:${e.id}:${r.requested_date}`,
         title: `${name(e)} asked to back out`,
-        detail: `Their reason: ${r.reason?.label || ''}${r.reason?.text ? `: "${r.reason.text}"` : ''}. Nothing changes until you decide on their page: keep the deposit or move it to another pup.${said(r.note)}`,
+        detail: `Their reason: ${r.reason?.label || ''}${r.reason?.text ? `: "${r.reason.text}"` : ''}. Nothing changes until you decide on their page: cancel the sale and keep what they paid, or put them back in line.${said(r.note)}`,
         subjectHref: href(e),
         actions: [{ label: 'Open', run: async () => { location.href = href(e); } }]
       });

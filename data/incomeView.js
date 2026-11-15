@@ -217,7 +217,7 @@ function feeComponents(s, components, gross) {
 //   of money still owed (Receivables ages it; '' = no due date known yet); `due_id` the
 //   due date it belongs to ('deposit', a schedule due date's id, an own-dated charge's key).
 // `carriedOut`: money moved off this sale to the family's next pup as a credit for funds
-// received (a back-out's Move the deposit, a lost pup's carry: carriedOutBySale). Credits
+// received (a back-out's credit toward their next pup, a lost pup's carry: carriedOutBySale). Credits
 // are held money, never income until the charge they pay is (D21), so on a released sale
 // that much of what was paid isn't earned here: the deposit first, then the rest in order.
 // It's earned on the sale the credit pays. (A lost sale already counts nothing.)
@@ -364,20 +364,35 @@ export function incomeLineItems(sourceType, record, { feeCredit = 0 } = {}) {
 // each line.
 export function paidOnSale(sale, { feeCredit = 0, asStatus = null, received = null } = {}) {
   if (!sale) return 0;
+  const { parts, left } = paidParts(sale, { feeCredit, asStatus });
+  let paid = parts.reduce((t, p) => t + p.amount, 0);
+  for (const [key, v] of Object.entries(received?.byKey || {})) paid += Math.min(num(v), left.get(key) || 0);
+  return round2(paid);
+}
+
+// The money paid on a sale, line by line (the deposit, the balance, transport, each
+// extra), read as paidOnSale reads it: never the credited application fee, never a
+// family's credits. → [{ key, label, amount }] in the statement's order, only lines
+// with something paid. What a back-out's confirm shows her (K8-2).
+export function paidOnSaleByPart(sale, { feeCredit = 0, asStatus = null } = {}) {
+  return sale ? paidParts(sale, { feeCredit, asStatus }).parts : [];
+}
+
+function paidParts(sale, { feeCredit, asStatus }) {
   const status = asStatus || (RELEASED_SALE_STATUSES.includes(sale.status) ? 'deposit_pending' : sale.status);
   const fc = feeCreditOf(feeCredit);
   const st = paymentStatement({ ...sale, status, end_reason: null }, { feeCredit: fc.amount > 0 ? fc : null });
   const left = new Map(st.charges.map((c) => [c.key, c.amount]));
-  let paid = 0;
+  const paid = new Map();
   for (const r of st.received) {
     for (const p of r.pays) {
       if (!left.has(p.key)) continue;
       left.set(p.key, round2(left.get(p.key) - p.amount));
-      if (r.kind !== 'fee') paid += p.amount; // the credited fee isn't money paid on the sale
+      if (r.kind !== 'fee') paid.set(p.key, round2((paid.get(p.key) || 0) + p.amount)); // the credited fee isn't money paid on the sale
     }
   }
-  for (const [key, v] of Object.entries(received?.byKey || {})) paid += Math.min(num(v), left.get(key) || 0);
-  return round2(paid);
+  const parts = st.charges.filter((c) => paid.get(c.key) > 0).map((c) => ({ key: c.key, label: c.label, amount: paid.get(c.key) }));
+  return { parts, left };
 }
 
 // --- Waitlist application fees (Waitlist Spec §5.3) ------------------------------

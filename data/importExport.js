@@ -73,7 +73,12 @@ function decodeRowBlobs(row) {
   return out;
 }
 
-// Build the full backup object: { schema_version, exported_at, collections }.
+// Which app made a backup file. Furever (furever/data/importExport.js) stamps its own,
+// and its files share three table names with this app's, so a restore checks it
+// (K2-1). Older KennelOS files carry none.
+export const BACKUP_APP = 'kennelos';
+
+// Build the full backup object: { app, schema_version, exported_at, collections }.
 // `encodeBlobs: false` leaves file blobs as real Blobs — for the cloud snapshot
 // builder (data/cloud/cloudBackup.js), which hashes and uploads them itself and
 // never puts them in JSON. The file backup always encodes.
@@ -93,6 +98,7 @@ export async function exportAll({ encodeBlobs = true } = {}) {
     collections[name] = encodeBlobs ? await Promise.all(rows.map(encodeRowBlobs)) : rows;
   }
   return {
+    app: BACKUP_APP,
     schema_version: db.verno,
     format_version: BACKUP_FORMAT_VERSION,
     exported_at: new Date().toISOString(),
@@ -119,9 +125,16 @@ export async function downloadBackup() {
 
 // Basic shape validation of a parsed backup object. Returns a summary of counts
 // so the UI can show what a restore would load before touching anything.
+// Refused (K2-1): another app's backup (its `app` stamp; Furever's names itself),
+// and a file with no KennelOS records at all, since Replace would empty her program
+// for nothing. `records` is how many rows the file holds in tables this app knows.
 export function inspectBackup(obj) {
   if (!obj || typeof obj !== 'object' || !obj.collections || typeof obj.collections !== 'object') {
     throw new Error('This does not look like a valid backup file (missing "collections").');
+  }
+  if (obj.app != null && obj.app !== BACKUP_APP) {
+    const name = obj.app === 'furever' ? 'KennelOS Furever' : `another app ("${String(obj.app).slice(0, 40)}")`;
+    throw new Error(`This backup was made by ${name}, not KennelOS. Nothing was changed. Choose a KennelOS backup (its name starts kennelos-backup-).`);
   }
   // Forward-compat guard: refuse a file whose on-disk format is NEWER than this
   // build understands — its blob encoding or shape may have changed (that's the
@@ -137,12 +150,27 @@ export function inspectBackup(obj) {
   const known = new Set(dataTables().map((t) => t.name));
   const counts = {};
   const unknownTables = [];
+  let records = 0;
   for (const [name, rows] of Object.entries(obj.collections)) {
     if (!Array.isArray(rows)) throw new Error(`Collection "${name}" is not an array.`);
     if (!known.has(name)) unknownTables.push(name);
+    else records += rows.filter(Boolean).length;
     counts[name] = rows.length;
   }
-  return { schema_version: obj.schema_version, exported_at: obj.exported_at, counts, unknownTables };
+  if (records === 0) {
+    throw new Error(unknownTables.length
+      ? 'This file has none of KennelOS\'s records (it may be from another app). Nothing was changed.'
+      : 'This backup holds no records. Nothing was changed.');
+  }
+  return { schema_version: obj.schema_version, exported_at: obj.exported_at, counts, unknownTables, records };
+}
+
+// How many records this device holds now, in the tables a backup carries: what a
+// Replace would wipe (the Replace confirm names it).
+export async function countRecords() {
+  let n = 0;
+  for (const table of dataTables()) n += await table.count();
+  return n;
 }
 
 // Restore a parsed backup.

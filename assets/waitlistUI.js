@@ -16,7 +16,12 @@ import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate,
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale } from '../data/waitlistActions.js';
+import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale,
+  approveBackOut, backOutMoney, backOutEntryFor, hasPendingRequest } from '../data/waitlistActions.js';
+import { backOutItems, backOutSummary, backOutPaidText } from '../data/backOut.js';
+import { eventRepo } from '../data/eventRepo.js';
+import { familySale } from '../data/familyExtras.js';
+import { isFamilyPageOnly } from '../data/waitlistRules.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { SALE_STATUS, saleEndReasonsFor } from '../data/vocab.js';
@@ -401,7 +406,7 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
   const carried = carriedCreditsOf(await waitlistEntryRepo.getById(offer.entry_id));
   const carriedAmount = carried.reduce((t, c) => t + c.amount, 0);
   const credit = (await getEntryCredit(offer.entry_id)).credit;
-  const carriedHint = carried.length ? `<p class="field-hint">${esc(fmtMoney(carriedAmount))} they paid on a pup they lost is a credit for funds received${credit?.remaining > carriedAmount ? ` (${esc(fmtMoney(credit.remaining))} credit in all)` : ''}. It comes off what they're asked to pay for this pup, starting with the deposit. If it covers the whole deposit, recording the pick marks the deposit received today, places ${esc(name)} and moves the turn on; if not, they're asked for the rest.</p>` : '';
+  const carriedHint = carried.length ? `<p class="field-hint">${esc(fmtMoney(carriedAmount))} they paid on an earlier sale is a credit for funds received${credit?.remaining > carriedAmount ? ` (${esc(fmtMoney(credit.remaining))} credit in all)` : ''}. It comes off what they're asked to pay for this pup, starting with the deposit. If it covers the whole deposit, recording the pick marks the deposit received today, places ${esc(name)} and moves the turn on; if not, they're asked for the rest.</p>` : '';
   const creditHint = !carried.length && credit?.remaining > 0 ? `<p class="field-hint">They have ${esc(fmtMoney(credit.remaining))} credit for funds already received. It comes off what they're asked to pay for this pup, starting with the deposit.</p>` : '';
   const ok = await formModal({
     title: `${name} picked a pup`,
@@ -602,6 +607,89 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
   return res;
 }
 
+// A family backing out (Family Requests plan §7; D9: nothing is refunded), the one
+// confirm for every way it's recorded: their request on their page (`outcome` from
+// the button she tapped), End the sale… → They backed out, and Cancelled on the Sale
+// page (no `outcome`: she chooses here, **They leave the list** first, the common case).
+// It says what they paid, line by line; putting them back in line asks whether to
+// credit it toward their next pup (all of it prefilled, hers to change); then what comes
+// off with the sale, the pup back to Available (Health hold for a health reason), and a
+// summary line. Approve → approveBackOut (their request, else `told`), then the
+// outcome's email where the list is online. → { outcome, res } or null when she cancels.
+const TOLD = Object.freeze({ id: 'told', label: 'They told you' });
+export async function backOutDialog({ entryId, outcome = null, note = '' }) {
+  const entry = await waitlistEntryRepo.getById(entryId);
+  if (!entry) throw new Error('That family wasn\'t found.');
+  const [sales, offers, entries] = await Promise.all([saleRepo.getAll(), waitlistOfferRepo.getByKennel(entry.kennel_id), waitlistEntryRepo.getByKennel(entry.kennel_id)]);
+  const sale = familySale(entry, sales, offers, entries);
+  if (!sale) throw new Error('They have no open sale to back out of any more.');
+  const contact = entry.contact_id ? await contactRepo.getById(entry.contact_id) : null;
+  const name = entryName(entry, contact);
+  const pupName = (await dogRepo.getById(sale.dog_id))?.call_name || 'the pup';
+  const request = hasPendingRequest(entry, 'back_out_request') ? entry.back_out_request : null;
+  const items = backOutItems({ sale, events: sale.dog_id ? await eventRepo.getForSubject('dog', sale.dog_id) : [], today: todayYMD() });
+  const { parts, paid, suggested } = await backOutMoney(entry, sale);
+  const canMove = !isFamilyPageOnly(entry);
+  const choose = !outcome;
+  const health = request?.reason?.id === 'pup';
+  const titles = { keep: 'Cancel the sale, keep what they paid', move: 'Cancel the sale, put them back in line' };
+  const current = (o) => (choose ? o.querySelector('input[name="bo-outcome"]:checked')?.value || 'keep' : outcome);
+  const readCredit = (o) => (current(o) === 'move' && paid > 0 && o.querySelector('input[name="bo-credit-yn"]:checked')?.value === 'yes'
+    ? Number(o.querySelector('#bo-credit').value || 0) : 0);
+  const moveHtml = `<div id="bo-move"${choose ? ' hidden' : ''}><p>They go back on your list at the end of the line, with their application, fee and history.</p>
+      ${paid > 0 ? `<p style="margin-bottom:4px;"><strong>Credit what they paid toward their next pup?</strong></p>
+        <label class="check-inline" style="display:block;"><input type="radio" name="bo-credit-yn" value="yes" checked> Yes</label>
+        <div class="field" id="bo-credit-field" style="margin:4px 0 8px 24px;"><label for="bo-credit">Amount to credit</label><input id="bo-credit" type="number" min="0" max="${esc(paid.toFixed(2))}" step="0.01" value="${esc(suggested.toFixed(2))}">
+          <p class="field-hint">Up to ${esc(fmtMoney(paid))}. It comes off what they owe for the pup they pick next, starting with that pup's deposit. Whatever you don't credit is kept.</p></div>
+        <label class="check-inline" style="display:block;"><input type="radio" name="bo-credit-yn" value="no"> No, keep what they paid</label>` : ''}</div>`;
+  let result = null;
+  const ok = await formModal({
+    title: choose ? `${name} backed out of ${pupName}` : titles[outcome], confirmLabel: 'Approve',
+    bodyHtml: `<p style="margin-top:0;">${esc(backOutPaidText(parts, fmtMoney))} Nothing is refunded when a family backs out.</p>
+      ${choose ? `<p style="margin-bottom:4px;"><strong>What happens to ${esc(name)}?</strong></p>
+        <label class="check-inline" style="display:block;"><input type="radio" name="bo-outcome" value="keep" checked> The sale is cancelled and they leave the list (keep what they paid)</label>
+        ${canMove ? '<label class="check-inline" style="display:block;"><input type="radio" name="bo-outcome" value="move"> Put them back in line</label>' : ''}` : ''}
+      ${!choose && outcome === 'keep' ? '' : canMove ? moveHtml : ''}
+      ${items.length ? `<p class="field-hint" style="margin:8px 0 4px;">Tick what comes off with the sale. Extras you leave unticked stay on it, still owed.</p>
+        ${items.map((it, i) => `<label class="check-inline" style="display:block; margin:4px 0;"><input type="checkbox" class="bo-item" data-i="${i}"${it.remove ? ' checked' : ''}> <strong>${esc(it.label)}</strong> <span class="faint">${esc(it.kind === 'charge' ? `extra, ${it.detail}` : it.detail)}</span></label>`).join('')}` : ''}
+      <label class="check-inline" style="display:block; margin:8px 0 4px;"><input type="checkbox" id="bo-pup" checked> Put ${esc(pupName)} back to
+        <select id="bo-pup-to" style="width:auto;"><option value="available"${health ? '' : ' selected'}>Available</option><option value="health_hold"${health ? ' selected' : ''}>Health hold</option></select></label>
+      <p class="field-hint" id="bo-summary" style="margin-top:8px;"></p>`,
+    onConfirm: async (o) => {
+      const chosen = current(o);
+      const credit = readCredit(o);
+      if (!Number.isFinite(credit) || credit < 0 || credit > paid) throw new Error(`Enter a credit from 0 to ${fmtMoney(paid)}.`);
+      const remove = [...o.querySelectorAll('.bo-item:checked')].map((c) => items[Number(c.dataset.i)].id);
+      const pup = o.querySelector('#bo-pup').checked ? o.querySelector('#bo-pup-to').value : null;
+      const res = await approveBackOut(entry.id, { outcome: chosen, credit, remove, pup,
+        ...(request ? {} : { told: { reason: note ? { ...TOLD, text: note } : TOLD } }) });
+      result = { outcome: chosen, res };
+    }
+  }, (o) => {
+    const summary = () => {
+      const picked = items.map((it, i) => ({ ...it, remove: o.querySelector(`.bo-item[data-i="${i}"]`).checked }));
+      const credit = readCredit(o);
+      o.querySelector('#bo-summary').textContent = `${backOutSummary(current(o), { paid, credit: Number.isFinite(credit) ? credit : 0, items: picked, money: fmtMoney })}.`;
+    };
+    const toggle = () => {
+      const move = o.querySelector('#bo-move');
+      if (move) move.hidden = current(o) !== 'move';
+      const field = o.querySelector('#bo-credit-field');
+      if (field) field.hidden = o.querySelector('input[name="bo-credit-yn"]:checked')?.value !== 'yes';
+      summary();
+    };
+    o.querySelectorAll('.bo-item').forEach((c) => c.addEventListener('change', summary));
+    o.querySelector('#bo-credit')?.addEventListener('input', summary);
+    o.querySelectorAll('input[name="bo-outcome"], input[name="bo-credit-yn"]').forEach((r) => r.addEventListener('change', toggle));
+    toggle();
+  });
+  if (!ok || !result) return null;
+  // Its own wording per outcome (where the list is online and they have an address).
+  const { offerEmails } = await import('./waitlistEmailUI.js');
+  await offerEmails([{ entryId: entry.id, kind: `backed_out_${result.outcome}`, extra: { request: { field: 'back_out_request', request: result.res.entry?.back_out_request || request } } }]);
+  return result;
+}
+
 // End a family's sale from their page (decided 2026-10-11): the shortcut for
 // editing the sale's status on the Sale page, and it does what that does next.
 // The sale becomes Voided (the pup died, failed a health check, or another reason
@@ -618,8 +706,9 @@ export async function endSaleDialog({ saleId, name, pupName, placed, onError = (
   if (status === 'voided' && placed) options.push({ value: 'cancelled:', label: 'They backed out (Cancelled)' });
   const hint = status === 'returned'
     ? `${pupName} has gone home, so the sale is marked Returned.`
-    : `A pup that died or can't be sold voids the sale: nothing on it counts as income, and ${name} can be put back in line. ${placed ? 'If they backed out, it\'s Cancelled: a deposit they paid stays earned.' : 'If they no longer want this pup, record a pass on their offer instead.'}`;
+    : `A pup that died or can't be sold voids the sale: nothing on it counts as income, and ${name} can be put back in line. ${placed ? 'If they backed out, it\'s Cancelled, and next you choose whether they leave the list (keeping what they paid) or go back in line.' : 'If they no longer want this pup, record a pass on their offer instead.'}`;
   let saved = null;
+  let backedOut = null;
   const ok = await formModal({
     title: `End ${pupName}'s sale?`,
     confirmLabel: 'End the sale',
@@ -631,11 +720,18 @@ export async function endSaleDialog({ saleId, name, pupName, placed, onError = (
     onConfirm: async (o) => {
       const [newStatus, reason] = o.querySelector('#es-why').value.split(':');
       const note = o.querySelector('#es-note').value.trim();
+      // They backed out: the back-out confirm records it (the family leaves the list or
+      // goes back in line), never a bare Cancelled that leaves them Placed.
+      if (newStatus === 'cancelled') {
+        const entry = await backOutEntryFor(sale.id);
+        if (entry) { backedOut = { entry, note }; return; }
+      }
       saved = await saleRepo.update(sale.id, { status: newStatus, end_reason: reason || null, end_note: reason ? (note || null) : null,
         ...(!reason && note ? { notes: sale.notes ? `${sale.notes}\n${note}` : note } : {}) });
     }
   });
   if (!ok) return false;
+  if (backedOut) return Boolean(await backOutDialog({ entryId: backedOut.entry.id, note: backedOut.note }));
   await promptReleasedPup(saved, { onError });
   if (restoresFamily(saved)) await restoreLostPupDialog({ saleId: saved.id, asStatus: sale.status });
   return true;

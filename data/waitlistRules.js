@@ -1531,8 +1531,9 @@ export function canUndoExpire(entry, today) {
   return today <= addDaysToYMD(entry.expired_date, REMOVAL_UNDO_DAYS);
 }
 
-// The 7-day undo on "Fee received" (feeReceived only, which sets
-// fee_received_manual; never an approval that put them straight on the list), from
+// The 7-day undo on "Fee received" (feeReceived marked by her, which sets
+// fee_received_manual; never a fee recorded from her payment service, and never an
+// approval that put them straight on the list), from
 // the day she recorded it (fee_received_at; the fee date itself may be earlier).
 // Not once they've been offered a turn or had a side sale: by then the list has
 // acted on their place. `sales` is required (a side sale has no offer row).

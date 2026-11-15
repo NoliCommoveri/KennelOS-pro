@@ -22,7 +22,7 @@ export const CREDIT_USE_VALUES = CREDIT_USES.map((u) => u.value);
 // reads as one such credit (`legacyCarried`) until a write moves it into
 // received_credits (`creditsWithCarried`). Only putting the family back on the list
 // carries money; a refund carries nothing.
-const LEGACY_NOTE = 'Carried over from a pup they lost';
+const LEGACY_NOTE = 'Carried over from an earlier sale';
 function legacyCarried(entry) {
   const c = entry?.carried_payment;
   if (!c || !(num(c.amount) > 0)) return null;

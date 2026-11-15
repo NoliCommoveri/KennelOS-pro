@@ -29,7 +29,7 @@
 // by the deadline = no response: the Sale is cancelled and the pup is free again.
 import { kennelRepo } from './kennelRepo.js';
 import { creditsOf, feeCharge, allocateCredits, creditsWithCarried, carriedCredit, carriedCreditsOf } from './receivedCredits.js';
-import { familyCredit, getSaleStatement } from './incomeView.js';
+import { getSaleStatement, paidBesidesCredits, paidOnSaleByPart, getSaleFeeCredit } from './incomeView.js';
 import { contactRepo } from './contactRepo.js';
 import { waitlistEntryRepo, syncContactWaitlistStatus } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
@@ -136,14 +136,18 @@ export async function approve(entryId, { date = todayYMD(), contactId = null, pr
   } else if (entry.fee_paid_online && entry.fee_paid_online.date) {
     // They paid the fee online with their application (Integrations plan §4):
     // approving puts them on the list from the day they paid.
-    const p = entry.fee_paid_online;
-    Object.assign(changes, {
-      status: 'active', fee_received_date: p.date, fee_received_at: nowISO(),
-      fee_payment_method: p.method || 'Credit/debit card', fee_payment_reference: p.reference || ''
-    });
+    Object.assign(changes, onlineFeeReceived(entry.fee_paid_online));
   }
   return waitlistEntryRepo.update(entryId, changes);
 }
+
+// A fee they paid online while not approved (fee_paid_online, waitlistFeePay's
+// `prepaid`), applied: on the list from the day they paid. Never `fee_received_manual`:
+// she didn't mark it, so there's no "marked by mistake" undo (K6b-5).
+const onlineFeeReceived = (p) => ({
+  status: 'active', fee_received_date: p.date, fee_received_at: nowISO(),
+  fee_payment_method: p.method || 'Credit/debit card', fee_payment_reference: p.reference || ''
+});
 
 // "Add to [program]?" answered Yes (programSuggest.js): while the application is
 // open it just takes the program; once approved and waiting for its fee, the fee
@@ -201,7 +205,10 @@ export async function undoDecline(entryId, { today = todayYMD() } = {}) {
 // (receivedCredits.feeCharge reads it back, so that share stays used). Left out,
 // it's what their credits cover of the fee (the fee is the first thing a credit
 // pays); 0 when they paid it all some other way (online).
-export async function feeReceived(entryId, { date = todayYMD(), amount, method = '', reference = '', creditAmount } = {}) {
+// `manual`: she marked it (the 7-day "marked by mistake?" undo). A fee recorded from
+// her payment service (waitlistFeeLinks.checkFeePayments) passes false: undoing it
+// wouldn't stick, since the next check finds the same payment (K6b-5).
+export async function feeReceived(entryId, { date = todayYMD(), amount, method = '', reference = '', creditAmount, manual = true } = {}) {
   const entry = await load(entryId);
   requireStatus(entry, ['approved'], 'mark the fee received for');
   if (creditAmount === undefined) {
@@ -214,7 +221,7 @@ export async function feeReceived(entryId, { date = todayYMD(), amount, method =
     fee_received_at: nowISO(),
     fee_payment_method: method,
     fee_payment_reference: reference,
-    fee_received_manual: true,
+    fee_received_manual: manual ? true : null,
     ...(Number(creditAmount) > 0 ? { fee_credit_amount: Number(creditAmount) } : {})
   };
   if (amount !== undefined) changes.fee_amount = amount === '' || amount == null ? null : Number(amount);
@@ -274,11 +281,14 @@ export async function markFeeExpired(entryId, { date = todayYMD() } = {}) {
 
 // The 7-day undo on "The fee wasn't received in time": approved again, with the
 // same pay-by date (past, so Today asks about it again unless she marks it received).
+// A fee they paid online after it closed (kept as fee_paid_online) is applied as
+// approving applies it: they're on the list from the day they paid (K6b-8).
 export async function undoExpire(entryId, { today = todayYMD() } = {}) {
   const entry = await load(entryId);
   if (!canUndoExpire(entry, today)) throw new Error('Closing this application can no longer be undone.');
   await assertNotReapplied(entry, 'closing');
-  return waitlistEntryRepo.update(entryId, { status: 'approved', expired_date: null });
+  const paid = entry.fee_paid_online?.date && !entry.fee_received_date ? onlineFeeReceived(entry.fee_paid_online) : {};
+  return waitlistEntryRepo.update(entryId, { status: 'approved', expired_date: null, ...paid });
 }
 
 // The family left the list themselves. Any open offer they held is voided and
@@ -1808,23 +1818,33 @@ export async function declinePickupRequest(entryId, requestId, { date = todayYMD
 // `told` ({ reason?: { id, label, text? } }): she heard some other way (a call, a
 // message) and no request is waiting: the same path, recorded as hers (Kels Roadmap
 // §3.16, decided 2026-11-01: a back-out is handled the same however she heard).
-export async function approveBackOut(entryId, { outcome, remove = [], pup = null, date = todayYMD(), told = null } = {}) {
-  if (!['keep', 'move', 'refund'].includes(outcome)) throw new Error('Choose what happens to their deposit.');
+// Approving a back-out (Family Requests plan §7; D9): nothing is refunded, since her
+// contracts make every payment non-refundable on a back-out. `keep`: the sale is
+// cancelled and what they paid is kept; they leave the list. `move`: the sale is
+// cancelled and they go back on the list at the end of the line, with `credit` of what
+// they paid (her choice, 0 up to what they paid beyond their credits) as a credit for
+// funds received toward their next pup. Without `credit`, all they paid.
+// A decided `refund` from before D9 still reads; a new one is refused.
+export async function approveBackOut(entryId, { outcome, credit = null, remove = [], pup = null, date = todayYMD(), told = null } = {}) {
+  if (outcome === 'refund') throw new Error('Nothing is refunded when a family backs out: keep what they paid, or put them back in line with a credit for some of it.');
+  if (!['keep', 'move'].includes(outcome)) throw new Error('Choose what happens to what they paid.');
   const entry = await load(entryId);
   const req = pending(entry.back_out_request) ? entry.back_out_request
     : told ? { requested_date: date, by: 'breeder', reason: told.reason || { id: 'told', label: 'They told you' } } : null;
   if (!pending(req)) throw new Error('There\'s no back-out request waiting for this family.');
   // A family page only (E3, D8): Keep or Refund, never back in line.
-  if (outcome === 'move' && isFamilyPageOnly(entry)) throw new Error('This family has a status page only, not a place on the list: keep or refund their deposit. To join the list they apply.');
+  if (outcome === 'move' && isFamilyPageOnly(entry)) throw new Error('This family has a status page only, not a place on the list, so what they paid is kept. To join the list they apply.');
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
   const sale = await ownSale(entry, sales);
   if (!sale) throw new Error('They have no open sale to back out of any more.');
   const why = `${req.reason?.label || 'backed out'}${req.reason?.text ? `: ${req.reason.text}` : ''}`;
   const removeSet = new Set(remove);
-  const depositIn = Boolean(sale.deposit_date) || ['deposit_paid', 'paid_in_full'].includes(sale.status);
-  // The deposit that moves to their next pup: what they paid beyond their credit
-  // for funds already received (that part stays on their entry as credit).
-  const movedDeposit = Math.max(0, Number(sale.deposit_amount || 0) - (familyCredit(entry, sale)?.byKey.deposit || 0));
+  const { paid, suggested } = await backOutMoney(entry, sale);
+  const carry = outcome !== 'move' ? 0
+    : credit == null || credit === '' ? suggested
+      : Math.round(Number(credit) * 100) / 100;
+  if (!Number.isFinite(carry) || carry < 0) throw new Error('Enter the credit as an amount (0 for none).');
+  if (carry > paid) throw new Error(`The credit can't be more than they paid on this sale (${money(paid)}).`);
 
   // What she ticked: extras off the sale (the rest kept, still owed); stays and pickups archived.
   const charges = (sale.extra_charges || []).filter((c) => !removeSet.has(c.id)).map((c) => (c.fee_for ? c : { ...c, kept_after_cancel: true }));
@@ -1839,10 +1859,7 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
     const dog = await dogRepo.getById(sale.dog_id);
     if (dog && dog.status !== 'deceased') await dogRepo.update(dog.id, { disposition: pup });
   }
-  await saleRepo.update(sale.id, {
-    extra_charges: charges,
-    ...(outcome === 'refund' ? { status: 'voided', end_reason: 'buyer_backed_out', end_note: note } : { status: 'cancelled' })
-  });
+  await saleRepo.update(sale.id, { extra_charges: charges, status: 'cancelled' });
 
   // The offer that gave them the pup.
   const offers = await waitlistOfferRepo.getByEntry(entry.id);
@@ -1859,7 +1876,7 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
     }
   }
 
-  const decided = { ...req, decided: 'approved', decided_date: date, outcome };
+  const decided = { ...req, decided: 'approved', decided_date: date, outcome, ...(outcome === 'move' ? { credit: carry } : {}) };
   // Their pickup and extras requests still waiting close with the sale (K8-8): never
   // a "we weren't able to approve" to a family who's gone, and a time they asked for
   // is free again.
@@ -1868,18 +1885,44 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
     result.entry = await waitlistEntryRepo.update(entry.id, {
       ...closed,
       status: 'active', placed_sale_id: null, position_anchor_date: date, back_out_request: decided,
-      ...(depositIn && movedDeposit > 0 ? withCarry(entry, carriedCredit({ amount: movedDeposit, date: sale.deposit_date || date, fromSaleId: sale.id, pupName: (await dogRepo.getById(sale.dog_id))?.call_name || '' })) : {}),
-      notes: appendNote(entry.notes, `${note} Their deposit moves to their next pup; back on the list at the end of the line.`)
+      ...(carry > 0 ? withCarry(entry, carriedCredit({ amount: carry, date: sale.deposit_date || date, fromSaleId: sale.id, pupName: (await dogRepo.getById(sale.dog_id))?.call_name || '' })) : {}),
+      notes: appendNote(entry.notes, `${note} ${carry > 0 ? `${money(carry)} of what they paid is a credit toward their next pup` : 'Nothing they paid carries to their next pup'}; back on the list at the end of the line.`)
     });
   } else {
     result.entry = await waitlistEntryRepo.update(entry.id, {
       ...closed,
       status: 'withdrawn', withdrawn_date: date, withdrawn_from: null, placed_sale_id: entry.placed_sale_id || null, back_out_request: decided,
-      notes: appendNote(entry.notes, `${note} ${outcome === 'refund' ? 'Deposit refunded.' : 'Deposit kept.'}`)
+      notes: appendNote(entry.notes, `${note} What they paid is kept.`)
     });
   }
   result.sale = await saleRepo.getById(sale.id);
   return openTurn ? finishTurn(result, entry.kennel_id, date, 'left') : result;
+}
+
+// The waitlist family an open sale belongs to (familySale: placed with it, or their
+// pick's), for a back-out she records herself (End the sale…, the Sale page's
+// Cancelled), or null: not a waitlist family's, or they've left the list.
+export async function backOutEntryFor(saleId) {
+  const sale = await saleRepo.getById(saleId);
+  if (!sale || !sale.buyer_contact_id || !saleRepo.isOpenSale(sale)) return null;
+  const sales = await saleRepo.getByBuyer(sale.buyer_contact_id);
+  const gone = ['withdrawn', 'removed', 'declined', 'expired'];
+  for (const e of (await waitlistEntryRepo.getAll()).filter((x) => x.contact_id === sale.buyer_contact_id && !gone.includes(x.status))) {
+    if ((await ownSale(e, sales))?.id === saleId) return e;
+  }
+  return null;
+}
+
+// The money on a sale a family is backing out of (K8-2, D9): `parts` what they paid,
+// line by line (incomeView.paidOnSaleByPart); `paid` what they paid beyond their credit
+// for funds already received (that part stays on their entry as credit), the most she
+// can credit toward their next pup; `suggested` the credit a "put them back in line"
+// is prefilled with: all of it (she can lower it, or answer no credit).
+export async function backOutMoney(entry, sale) {
+  const feeCredit = await getSaleFeeCredit(sale.id);
+  const parts = paidOnSaleByPart(sale, { feeCredit });
+  const paid = paidBesidesCredits(sale, entry, { feeCredit });
+  return { parts, paid, suggested: paid };
 }
 
 // The family's waiting pickup and extras requests, closed by a back-out (K8-8):

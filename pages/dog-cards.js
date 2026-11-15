@@ -227,9 +227,12 @@ async function preview(raw) {
       </div>
     </div>` : '';
 
+  // "Registered name: Ashvale Northern Starr → Ashvale Northern Star" (K2-6).
+  const show = (v) => (Array.isArray(v) ? (v.length ? v.map((x) => (typeof x === 'object' ? x.number || x.registry || '' : x)).filter(Boolean).join(', ') : 'none') : v === '' || v == null ? 'blank' : v === true ? 'yes' : v === false ? 'no' : String(v));
   const changeText = (d) => {
+    if (d.problem) return `${d.problem}. Ask them to fix it and send it again.`;
     if (d.action === 'update') {
-      const parts = d.changes.map((c) => c.label);
+      const parts = d.changes.map((c) => `${c.label}: ${show(c.from)} → ${show(c.to)}`);
       if (d.events.added) parts.push(d.events.added === 1 ? '1 new test or title' : `${d.events.added} new tests and titles`);
       if (d.events.changed) parts.push(`${d.events.changed} changed`);
       return parts.join(', ');
@@ -238,8 +241,16 @@ async function preview(raw) {
     return '';
   };
   const rowChoice = (d) => {
-    if (d.action !== 'create' && d.action !== 'adopt') return '';
+    if (d.problem) return '';
     const pid = esc(d.cardDog.publicId);
+    // An update she can decline; "Keep mine" first when she changed the dog after the card was made.
+    if (d.action === 'update') {
+      return `<select data-pick="${pid}">
+        <option value=""${d.mineNewer ? '' : ' selected'}>Update from the card</option>
+        <option value="skip"${d.mineNewer ? ' selected' : ''}>Keep mine</option>
+      </select>${d.mineNewer ? '<br><span class="faint">You changed this dog after the card was made.</span>' : ''}`;
+    }
+    if (d.action !== 'create' && d.action !== 'adopt') return '';
     return `<select data-pick="${pid}">
         <option value="">Add as new</option>
         ${d.candidates.map((c) => `<option value="link:${esc(c.id)}">Same as my ${esc(dogName(c))}</option>`).join('')}
@@ -255,10 +266,10 @@ async function preview(raw) {
       <thead><tr><th>Dog</th><th>What happens</th><th></th></tr></thead>
       <tbody>${p.dogs.map((d) => `<tr>
         <td><strong>${esc(d.cardDog.callName || d.cardDog.registeredName)}</strong>${d.cardDog.registeredName && d.cardDog.callName ? `<br><span class="faint">${esc(d.cardDog.registeredName)}</span>` : ''}<br><span class="faint">${esc([label(SEX, d.cardDog.sex), d.cardDog.breed].filter(Boolean).join(' · '))}</span></td>
-        <td>${esc(ACTION_TEXT[d.action])}${changeText(d) ? `<br><span class="faint">${esc(changeText(d))}</span>` : ''}${d.candidates.length ? '<br><span class="faint">You may already have this dog: pick it to link them.</span>' : ''}</td>
+        <td>${esc(d.problem ? 'Left out' : ACTION_TEXT[d.action])}${changeText(d) ? `<br><span class="faint">${esc(changeText(d))}</span>` : ''}${d.candidates.length ? '<br><span class="faint">You may already have this dog: pick it to link them.</span>' : ''}</td>
         <td>${rowChoice(d)}</td>
       </tr>`).join('')}</tbody></table></div>
-    <p class="field-hint">${p.ancestors.total ? `${p.ancestors.total} ancestor${p.ancestors.total === 1 ? '' : 's'}: ${p.ancestors.added} added for pedigrees, ${p.ancestors.matched} you already have.` : 'No ancestors on this card.'} Your own notes, plans and ownership of dogs you already have are never changed.</p>
+    <p class="field-hint">${p.ancestors.total ? `${p.ancestors.total} ancestor${p.ancestors.total === 1 ? '' : 's'}: ${p.ancestors.added} added for pedigrees, ${p.ancestors.matched} you already have.` : 'No ancestors on this card.'} An update sets only what the card carries: names, sex, breed, dates, colour, registrations, microchip, photos link, COI, titles, country, and tests and titles. Your notes, plans, ownership, kennel, co-owners and who a dog lives with are never changed.</p>
     <div id="r-error"></div>
     <div class="form-actions">
       <button class="btn btn-primary" type="button" id="r-apply">${anyNew ? 'Add the dogs' : 'Update the dogs'}</button>
@@ -302,11 +313,12 @@ async function preview(raw) {
         dogs
       });
       const parts = [
-        r.created && `${r.created} added`, r.linked && `${r.linked} linked to yours`, r.updated && `${r.updated} updated`,
+        r.created && `${r.created} added`, r.linked && `${r.linked} linked to yours`, r.updated && `${r.updated} updated`, r.kept && `${r.kept} kept as yours`,
         r.unchanged && `${r.unchanged} already up to date`, r.ancestorsAdded && `${r.ancestorsAdded} ancestor${r.ancestorsAdded === 1 ? '' : 's'} added`,
         (r.eventsAdded || r.eventsUpdated) && `${r.eventsAdded + r.eventsUpdated} tests and titles`
       ].filter(Boolean);
       receiveEl.innerHTML = `<div class="card"><p style="margin-top:0;"><strong>Done.</strong> From ${esc(r.kennel.kennel_name)}: ${esc(parts.join(', ') || 'nothing to change')}.</p>
+        ${r.leftOut.length ? `<p class="field-hint">Left out: ${esc(r.leftOut.join('; '))}.</p>` : ''}
         <p class="field-hint">When ${esc(r.kennel.kennel_name)} sends a card again, open it here the same way: the same dogs update.</p></div>
         <div class="form-actions"><a class="btn btn-primary btn-sm" href="dogs.html">Open Dogs</a><button class="btn btn-sm" type="button" id="r-again">Add another card</button></div>`;
       receiveEl.querySelector('#r-again').addEventListener('click', () => renderPaste());

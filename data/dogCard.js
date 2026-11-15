@@ -32,6 +32,8 @@ import { applyKennelCard, previewKennelCard } from './kennelCard.js';
 import { cloudDetailKeys } from './syncRegistry.js';
 import { normalizeTitles } from './dogTitles.js';
 import { descriptor, EVENT_TYPES } from './vocab.js';
+import { db, dataTables } from './db.js';
+import { todayYMD } from './dateUtils.js';
 
 export const DOG_CARD_VERSION = 1;
 export const DOG_CARD_PARAM = 'dogcard';
@@ -288,6 +290,20 @@ const lower = (v) => text(v).toLowerCase();
 const fromKennelOf = (card) => card.kennels.find((k) => k.ref === card.from);
 const asKennelCard = (k) => ({ cardVersion: 1, publicId: k.publicId, kennelName: k.kennelName, prefix: k.prefix, location: k.location, website: k.website, issuedAt: '' });
 
+// What the dog repo would refuse in a card dog (its date rules), in her words, or ''.
+// Such a dog is left out, named, and the rest of the card goes in (K2-5).
+export function cardDogProblem(cardDog, today = todayYMD()) {
+  const name = cardDog.callName || cardDog.registeredName || 'A dog';
+  if (cardDog.dateOfBirth && cardDog.dateOfBirth > today) return `${name}'s date of birth (${cardDog.dateOfBirth}) is in the future`;
+  if (cardDog.dateOfDeath && cardDog.dateOfBirth && cardDog.dateOfDeath < cardDog.dateOfBirth) return `${name}'s date of death is before their date of birth`;
+  return '';
+}
+
+// Her copy was changed after the card was made (K2-6): a card resent unchanged would
+// put back what she corrected, so that row starts on "Keep mine". No date on either
+// side can't be compared: the card's update is offered as before.
+export const mineIsNewer = (existing, card) => Boolean(existing?.updated_at && card?.issuedAt && existing.updated_at > card.issuedAt);
+
 // The card fields that would change on `existing` (blank on the card = not supplied).
 export function dogChanges(cardDog, existing) {
   const out = [];
@@ -354,7 +370,8 @@ function eventPatch(e, have) {
 //
 // → { from, dogs, ancestors }
 //   from: previewKennelCard's answer for the sending kennel ('own' refuses the card).
-//   dogs: one per dog sent: { cardDog, action, existing, changes, candidates, events }
+//   dogs: one per dog sent: { cardDog, action, existing, changes, candidates, events,
+//     problem (cardDogProblem: left out), mineNewer (update rows: start on Keep mine) }
 //     action 'create' | 'update' | 'unchanged' | 'adopt' (she has it as a pedigree-only
 //     ancestor, from an earlier card; it becomes one of her dogs).
 //   ancestors: { total, added, matched }.
@@ -362,18 +379,27 @@ export async function previewDogCard(card) {
   const from = await previewKennelCard(asKennelCard(fromKennelOf(card)));
   const all = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
   const byPublicId = new Map(all.filter((d) => d.public_id).map((d) => [d.public_id, d]));
+  // Two of her dogs holding one of this card's ids (two devices' copies kept apart):
+  // the card would update one at random, so she merges them first (K1-6).
+  for (const cardDog of card.dogs) {
+    const twins = all.filter((d) => cardDog.publicId && d.public_id === cardDog.publicId);
+    if (twins.length > 1) {
+      throw new DogCardError(`Two of your dogs (${twins.map((d) => `"${d.call_name || d.registered_name || 'a dog'}"`).join(' and ')}) are linked to the same Dog Card. Merge them first (Import/Export, Scan for duplicates), then open this card again.`);
+    }
+  }
 
   const dogs = [];
   for (const cardDog of card.dogs.filter((d) => d.sent)) {
     const existing = byPublicId.get(cardDog.publicId) || null;
     const events = await eventPlan(cardDog, existing);
+    const problem = cardDogProblem(cardDog);
     if (!existing) {
-      dogs.push({ cardDog, action: 'create', existing: null, changes: [], candidates: lookalikes(cardDog, all), events });
+      dogs.push({ cardDog, action: 'create', existing: null, changes: [], candidates: lookalikes(cardDog, all), events, problem, mineNewer: false });
       continue;
     }
     const changes = dogChanges(cardDog, existing);
     const action = existing.pedigree_only ? 'adopt' : changes.length || events.added || events.changed ? 'update' : 'unchanged';
-    dogs.push({ cardDog, action, existing, changes, candidates: [], events });
+    dogs.push({ cardDog, action, existing, changes, candidates: [], events, problem, mineNewer: action === 'update' && mineIsNewer(existing, card) });
   }
 
   const ancestors = { total: 0, added: 0, matched: 0 };
@@ -394,16 +420,27 @@ export async function previewDogCard(card) {
 //   contactId     — the contact, or newContactName to add one (affiliated with the
 //                   sending kennel)
 //   kennelId      — her own kennel the co-owned dogs go in
-//   dogs          — { [publicId]: { linkToId, livesWith: 'them' | 'me', skip } }
-// → { kennel, contact, created, updated, linked, unchanged, ancestorsAdded, eventsAdded, eventsUpdated }
+//   dogs          — { [publicId]: { linkToId, livesWith: 'them' | 'me', skip } }; `skip`
+//                   leaves a dog out, a new one or an update ("Keep mine", K2-6)
+// → { kennel, contact, created, updated, linked, unchanged, kept, ancestorsAdded,
+//     eventsAdded, eventsUpdated, leftOut: [problem] }
+// Every write is in one transaction (K2-5): a failure part-way leaves nothing, so a
+// retry never adds a second contact or half the dogs. A dog the repo would refuse
+// (cardDogProblem) is left out and named, and the rest goes in.
 export async function applyDogCard(card, choices = {}) {
   const preview = await previewDogCard(card);
+  // An async callback that awaits: handing Dexie the bare promise of a function
+  // declared outside the transaction ends it early in a real browser (PrematureCommitError).
+  return db.transaction('rw', dataTables(), async () => await applyPreview(card, preview, choices));
+}
+
+async function applyPreview(card, preview, choices) {
   if (preview.from.action === 'own') {
     throw new DogCardError('This card was sent from one of your own kennels, so there is nothing to add.');
   }
   // Every choice is checked before anything is written.
   const holding = choices.holding === 'external' ? 'external' : 'co_owned';
-  const newDogs = preview.dogs.filter((p) => (p.action === 'create' || p.action === 'adopt') && !choices.dogs?.[p.cardDog.publicId]?.skip && !choices.dogs?.[p.cardDog.publicId]?.linkToId);
+  const newDogs = preview.dogs.filter((p) => (p.action === 'create' || p.action === 'adopt') && !p.problem && !choices.dogs?.[p.cardDog.publicId]?.skip && !choices.dogs?.[p.cardDog.publicId]?.linkToId);
   let contact = null;
   if (newDogs.length) {
     if (choices.contactId) contact = await contactRepo.getById(choices.contactId);
@@ -414,7 +451,12 @@ export async function applyDogCard(card, choices = {}) {
     }
   }
   const { kennel: fromKennel } = await applyKennelCard(asKennelCard(fromKennelOf(card)), { linkToId: choices.fromLinkToId || null });
-  if (newDogs.length && !contact) contact = await contactRepo.create({ name: text(choices.newContactName), kennel_id: fromKennel.id });
+  // A contact of that name already (an earlier card from them): the same one, never a second.
+  if (newDogs.length && !contact) {
+    const wanted = lower(choices.newContactName);
+    contact = (await contactRepo.getAll()).find((c) => lower(c.name) === wanted && (!c.kennel_id || c.kennel_id === fromKennel.id))
+      || await contactRepo.create({ name: text(choices.newContactName), kennel_id: fromKennel.id });
+  }
 
   // Kennels the dogs name as their breeder: by public id (Kennel Card rules), else by name.
   const kennelIds = new Map([[card.from, fromKennel.id]]);
@@ -431,7 +473,7 @@ export async function applyDogCard(card, choices = {}) {
   const all = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
   const local = new Map(); // public id → local dog id
   for (const d of all) if (d.public_id) local.set(d.public_id, d.id);
-  const result = { kennel: fromKennel, contact, created: 0, updated: 0, linked: 0, unchanged: 0, ancestorsAdded: 0, eventsAdded: 0, eventsUpdated: 0 };
+  const result = { kennel: fromKennel, contact, created: 0, updated: 0, linked: 0, unchanged: 0, kept: 0, ancestorsAdded: 0, eventsAdded: 0, eventsUpdated: 0, leftOut: [] };
 
   const cardFields = (cardDog) => {
     const out = {};
@@ -461,6 +503,9 @@ export async function applyDogCard(card, choices = {}) {
     if (existing) {
       await updateFrom(cardDog, existing, { onlyBlank: !byId });
       local.set(cardDog.publicId, existing.id);
+    } else if (cardDogProblem(cardDog)) {
+      // An ancestor the repo would refuse: not added (its pup just has no parent here).
+      continue;
     } else {
       const made = await dogRepo.createPedigreeOnly({ ...cardFields(cardDog), public_id: cardDog.publicId, sex: cardDog.sex || 'unknown', breed: cardDog.breed || 'Unknown' });
       local.set(cardDog.publicId, made.id);
@@ -471,7 +516,8 @@ export async function applyDogCard(card, choices = {}) {
   for (const p of preview.dogs) {
     const { cardDog } = p;
     const pick = choices.dogs?.[cardDog.publicId] || {};
-    if (pick.skip && (p.action === 'create' || p.action === 'adopt')) continue;
+    if (p.problem) { result.leftOut.push(p.problem); continue; }
+    if (pick.skip) { if (p.action === 'update') result.kept++; continue; }
     let dog;
     if (p.action === 'update' || p.action === 'unchanged') {
       dog = await updateFrom(cardDog, p.existing);

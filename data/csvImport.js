@@ -87,15 +87,46 @@ const PURPOSE_ALIASES = {
   conformation: 'show', breeding_rights: 'breeding', 'co-own': 'co_own', coown: 'co_own', co_ownership: 'co_own'
 };
 
-// Normalize a date to YYYY-MM-DD. Accepts ISO and US M/D/YYYY. Returns ''
-// (blank), a valid YYYY-MM-DD string, or null (present but unrecognized).
+// The order a file writes slashed dates in (K2-3): 'mdy' (US, the default), 'dmy'
+// (UK, Australia, most of the world), or 'mixed' (both seen: a date that could be
+// either is left unread). Set by buildPlan for its classify pass only.
+let DATE_ORDER = 'mdy';
+const SLASHED_DATE = /^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/;
+
+// What a file's slashed dates say about their order: one with a first number over 12
+// ("25/01/2021") is day-first, one with a second over 12 ("1/25/2021") month-first.
+// `ambiguous`: how many could be read either way ("05/01/2021"). `order` null = no
+// date tells (she's asked when any is ambiguous).
+export function detectDateOrder(rows) {
+  let dmy = false, mdy = false, ambiguous = 0;
+  for (const row of rows || []) {
+    for (const v of Object.values(row || {})) {
+      const hit = SLASHED_DATE.exec(String(v ?? '').trim());
+      if (!hit) continue;
+      const a = Number(hit[1]), b = Number(hit[2]);
+      if (a > 12 && b <= 12) dmy = true;
+      else if (b > 12 && a <= 12) mdy = true;
+      else if (a !== b && a >= 1 && b >= 1) ambiguous++;
+    }
+  }
+  return { order: dmy && mdy ? 'mixed' : dmy ? 'dmy' : mdy ? 'mdy' : null, ambiguous };
+}
+
+// Normalize a date to YYYY-MM-DD. Accepts ISO and D/M/YYYY or M/D/YYYY in the
+// file's order (DATE_ORDER). Returns '' (blank), a valid YYYY-MM-DD string, or null
+// (present but unrecognized, or either way round in a file that uses both).
 function normDate(raw) {
   if (!raw) return '';
   const s = raw.trim();
   let y, m, d;
   let hit = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (hit) { [, y, m, d] = hit; }
-  else if ((hit = s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/))) { [, m, d, y] = hit; } // US M/D/Y
+  else if ((hit = s.match(SLASHED_DATE))) {
+    const [a, b] = [Number(hit[1]), Number(hit[2])];
+    const order = DATE_ORDER === 'mixed' ? (a > 12 ? 'dmy' : b > 12 ? 'mdy' : a === b ? 'mdy' : null) : DATE_ORDER;
+    if (!order) return null;
+    [m, d, y] = order === 'dmy' ? [hit[2], hit[1], hit[3]] : [hit[1], hit[2], hit[3]];
+  }
   else return null;
   const mm = Number(m), dd = Number(d);
   if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
@@ -432,6 +463,19 @@ const DOG_MAPPING = {
     };
   },
 
+  // The keys classify matches on (name + date of birth, the registration number), or
+  // the dog it matched: two rows with one of them are one dog (markRepeatedRows).
+  batchKeys(r) {
+    const rec = r.record || {};
+    const dob = rec.date_of_birth;
+    return [
+      r.match && `id:${r.match.id}`,
+      rec.registered_name && dob && `r:${nk(rec.registered_name, dob)}`,
+      rec.call_name && dob && `c:${nk(rec.call_name, dob)}`,
+      rec.registration_number && `n:${normReg(rec.registration_number)}`
+    ];
+  },
+
   // Names of the dogs in this file, for sire/dam names that aren't in the app yet.
   // Same precedence as buildIndex's byName: a registered name wins, a call name
   // is used only when no row has that registered name.
@@ -505,6 +549,11 @@ const CONTACT_MAPPING = {
     const kennelByName = new Map();
     for (const k of this._kennels || []) if (k.kennel_name) kennelByName.set(k.kennel_name.trim().toLowerCase(), k);
     return { byName, kennelByName };
+  },
+
+  // Its natural key (the name), or the contact it matched (markRepeatedRows).
+  batchKeys(r) {
+    return [r.match && `id:${r.match.id}`, r.record?.name && `n:${r.record.name.trim().toLowerCase()}`];
   },
 
   classify(row, index, i) {
@@ -1836,16 +1885,50 @@ export function getMapping(entity) {
 }
 
 // --- Dry-run plan ---------------------------------------------------------
-// Classify every row against current records. Returns { rows, summary }.
-export async function buildPlan(entity, rows) {
+// Classify every row against current records. Returns { rows, summary, existing,
+// dates }. `dateOrder` ('mdy' | 'dmy'): her answer when the file's dates could be
+// either way round; otherwise the file's own dates decide (detectDateOrder), and
+// month-first is the default. `dates`: { order, detected, ambiguous, ask } for the
+// preview (ask: no date told, and some could be read either way).
+export async function buildPlan(entity, rows, { dateOrder = null } = {}) {
   const mapping = getMapping(entity);
   const existing = await mapping.loadExisting();
   const index = mapping.buildIndex(existing);
   if (mapping.indexBatch) mapping.indexBatch(rows, index);
-  const plan = rows.map((row, i) => mapping.classify(row, index, i));
+  const detected = detectDateOrder(rows);
+  const order = dateOrder === 'dmy' || dateOrder === 'mdy' ? dateOrder : detected.order || 'mdy';
+  DATE_ORDER = order;
+  let plan;
+  try {
+    plan = rows.map((row, i) => mapping.classify(row, index, i));
+  } finally {
+    DATE_ORDER = 'mdy';
+  }
   if (mapping.finishPlan) mapping.finishPlan(plan);
+  if (mapping.batchKeys) markRepeatedRows(plan, mapping);
   if (needsKennelScope(entity)) flagMissingKennel(entity, plan, await resolveKennelIdForWrite());
-  return { rows: plan, summary: summarize(plan), existing };
+  return { rows: plan, summary: summarize(plan), existing,
+    dates: { order, detected: detected.order, ambiguous: detected.ambiguous, ask: !detected.order && detected.ambiguous > 0 } };
+}
+
+// The same record on two rows of one file (K2-2): sorted and re-pasted, or two
+// exports joined. The first row is imported; a later one with the same natural key
+// waits for review, saying which row it repeats, rather than making a second record.
+export function markRepeatedRows(plan, mapping) {
+  const seen = new Map(); // key → first row's index
+  for (const r of plan) {
+    if (r.status !== 'create' && r.status !== 'update') continue;
+    const keys = mapping.batchKeys(r).filter(Boolean);
+    const first = keys.map((k) => seen.get(k)).find((n) => n != null);
+    if (first != null) {
+      r.status = 'review';
+      r.decision = 'skip';
+      r.reasons.push(`The same ${mapping.entity} as row ${first + 2}: only that row is imported. Choose an action to import this one too.`);
+      continue;
+    }
+    for (const k of keys) seen.set(k, r.index);
+  }
+  return plan;
 }
 
 export function summarize(plan) {

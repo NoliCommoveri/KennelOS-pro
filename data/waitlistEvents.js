@@ -112,7 +112,7 @@ export function planFamilyEvent(event, ctx) {
       // Money carried over from a pup they lost is a credit: when it covers the deposit,
       // the pick places them (recordPick); otherwise the rest of the deposit is pending.
       const held = carriedCreditsOf(entry).length
-        ? 'Their pick is held. The money they carried over from a pup they lost goes toward it: if it covers the deposit, they\'re placed; if not, the rest of the deposit is pending.'
+        ? 'Their pick is held. The money they carried over from an earlier sale goes toward it: if it covers the deposit, they\'re placed; if not, the rest of the deposit is pending.'
         : 'Their pick is held by a sale with the deposit pending.';
       return { op: 'pick', offerId: offer.id, dogId: dog.id, date, activity: line(`${what}. ${held}`) };
     }

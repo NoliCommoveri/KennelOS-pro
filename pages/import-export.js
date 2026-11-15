@@ -1,7 +1,7 @@
 // import-export.js — wires the Import/Export page to the backup engine: Backup &
 // restore, Duplicates (assets/duplicateScanUI.js), CSV import, and the Danger zone. Account, kennel setup, the guided tour
 // and this device's license are on the Settings page (pages/settings.js).
-import { downloadBackup, readBackupFile, inspectBackup, restoreBackup, planFileMerge } from '../data/importExport.js';
+import { downloadBackup, readBackupFile, inspectBackup, restoreBackup, planFileMerge, countRecords } from '../data/importExport.js';
 import { getLastBackupDate } from '../data/settings.js';
 import { getResetCounts, resetApp } from '../data/appReset.js';
 import { esc, confirmModal, selectModal } from '../assets/ui.js';
@@ -122,8 +122,9 @@ function showRestorePreview(obj) {
   pendingBackup = obj;
   const rows = Object.entries(info.counts)
     .map(([name, n]) => `<tr><td>${esc(name)}</td><td>${n}</td></tr>`).join('');
+  // A newer KennelOS may add tables; they're skipped here, never mistaken for hers.
   const warnUnknown = info.unknownTables.length
-    ? `<div class="inline-warn">Ignoring unknown tables not in this app version: ${esc(info.unknownTables.join(', '))}.</div>`
+    ? `<div class="inline-warn">Skipping ${info.unknownTables.length === 1 ? 'a table' : 'tables'} this version of KennelOS doesn't have: ${esc(info.unknownTables.join(', '))}. If you didn't make this backup with KennelOS, don't restore it.</div>`
     : '';
   preview.innerHTML = `
     <p class="muted">Exported ${info.exported_at ? esc(new Date(info.exported_at).toLocaleString()) : 'unknown date'} (schema v${esc(info.schema_version ?? '?')}).</p>
@@ -251,12 +252,16 @@ async function doRestore(mode) {
   if (mode === 'merge') {
     opts = await askMerge();
     if (!opts) return;
-  } else if (!(await confirmModal({
-    title: 'Replace all data?',
-    message: 'Replace ALL current records with the file’s contents? This cannot be undone.',
-    confirmLabel: 'Replace',
-    danger: true
-  }))) return;
+  } else {
+    // The numbers, so a wrong or tiny file is plain before she taps (K2-1).
+    const [mine, theirs] = [await countRecords(), inspectBackup(pendingBackup).records];
+    if (!(await confirmModal({
+      title: 'Replace all data?',
+      message: `Replace the ${mine} record${mine === 1 ? '' : 's'} on this device with the file's ${theirs}? Everything here now is deleted first. This cannot be undone.`,
+      confirmLabel: 'Replace',
+      danger: true
+    }))) return;
+  }
   try {
     const result = await restoreBackup(pendingBackup, mode, opts);
     const total = result.reduce((n, r) => n + r.count, 0);

@@ -57,9 +57,8 @@ export const EMAIL_TEMPLATE_KINDS = Object.freeze([
   { kind: 'litter_born', label: 'A litter you match was born' },
   { kind: 'request_approved', label: 'Their request approved' },
   { kind: 'request_declined', label: 'Their request declined' },
-  { kind: 'backed_out_keep', label: 'Backing out approved: deposit kept' },
-  { kind: 'backed_out_move', label: 'Backing out approved: deposit moves to their next pup' },
-  { kind: 'backed_out_refund', label: 'Backing out approved: deposit refunded' },
+  { kind: 'backed_out_keep', label: 'Backing out approved: what they paid is kept' },
+  { kind: 'backed_out_move', label: 'Backing out approved: back in line, with any credit' },
   { kind: 'status_link', label: 'Their status page link' },
   { kind: 'transport_options', label: 'Transport options (getting their pup home)' },
   { kind: 'offer_reminder', label: 'Reminder: their turn ends soon (sent by KennelOS)' },
@@ -110,11 +109,11 @@ export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
   },
   backed_out_keep: {
     subject: 'Your puppy sale with [Kennel Name] is cancelled',
-    body: 'Hi [Family],\n\nAs you asked, we\'ve cancelled your puppy\'s sale. Your deposit is kept and isn\'t refunded. Your status page shows the change. If you\'d like to talk it over, send us a message from your status page.\n\n[Kennel Name]'
+    body: 'Hi [Family],\n\nAs you asked, we\'ve cancelled your puppy\'s sale. Per your contract terms, all monies paid related to this sale are non-refundable and are forfeit upon sale cancellation. Your status page shows the change.\n\n[Kennel Name]'
   },
   backed_out_move: {
     subject: 'Your puppy sale with [Kennel Name] is cancelled',
-    body: 'Hi [Family],\n\nAs you asked, we\'ve cancelled your puppy\'s sale. Your deposit moves to your next puppy, and you\'re back on our waitlist. Your status page shows your place.\n\n[Kennel Name]'
+    body: 'Hi [Family],\n\nAs you asked, we\'ve cancelled your puppy\'s sale, and you\'re back on our waitlist. Your status page shows your place and any credit we\'ve applied toward your next puppy. Per your contract terms, any monies paid related to this sale that aren\'t credited are non-refundable and are forfeit upon sale cancellation.\n\n[Kennel Name]'
   },
   backed_out_refund: {
     subject: 'Your puppy sale with [Kennel Name] is cancelled',
@@ -227,7 +226,7 @@ export function requestPhrase(field, request) {
   if (field === 'listen_change_request') return 'to change which litters you wait for';
   if (field === 'pref_change_request') return 'to change your preferences';
   // One of their extras requests (Family Requests plan §3): { kind, name }.
-  if (field === 'back_out_request') return 'to back out of your puppy';
+  if (field === 'back_out_request') return 'to back out of your puppy\'s sale';
   // A pickup request (Family Requests plan §4): { kind, date, address }.
   if (field === 'pickup_request') {
     if (request?.kind === 'cancel') return 'to cancel your pickup time';

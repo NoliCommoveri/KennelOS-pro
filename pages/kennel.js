@@ -579,7 +579,7 @@ function extrasSettings(c) {
 
 // Backing out (Family Requests plan §7): her reasons (one per line; "Something else"
 // is always offered), her deposit policy (rows: a reason or any, an optional age,
-// keep or move), and what families read before they send.
+// keep what they paid or put them back in line), and what families read first.
 function policyRowHtml(row, reasons) {
   const r = row || { reason_id: 'any', from_weeks: null, until_weeks: null, outcome: 'keep' };
   return `<div class="bo-row" style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px;">
@@ -600,7 +600,7 @@ function backOutSettings(c) {
       <label style="margin-top:8px;">Your deposit policy</label>
       <div id="bo-rows">${backOutPolicy(c).map((row) => policyRowHtml(row, reasons)).join('')}</div>
       <button type="button" class="btn btn-sm" data-act="bo-add">+ Add a rule</button>
-      <span class="field-hint">When a family asks to back out, the first rule that fits their reason and the puppy's age (leave the weeks blank for any age) is suggested; you always choose. With none, keeping the deposit is suggested. A refund is never suggested.</span>
+      <span class="field-hint">When a family asks to back out, the first rule that fits their reason and the puppy's age (leave the weeks blank for any age) is suggested; you always choose. Putting them back in line asks whether to credit what they paid toward their next pup, all of it filled in for you to change. With none, keeping what they paid is suggested. Nothing is refunded on a back-out.</span>
       <label for="wl-bo-text" style="margin-top:8px;">What every family reads before they send</label>
       <textarea id="wl-bo-text" rows="6">${esc(c.back_out_policy_text || BACK_OUT_POLICY_TEXT_DEFAULT)}</textarea>
       <span class="field-hint">[Kennel Name] is filled in. Your deposit policy above is never shown to families; it only suggests an outcome to you.</span>

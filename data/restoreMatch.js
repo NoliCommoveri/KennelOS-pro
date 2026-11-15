@@ -75,8 +75,11 @@ const RULES = {
   // Dogs go twice: strong identifiers first (dogs), then, once litters are paired,
   // pups and the call-name question (dogs_late).
   dogs(l, f, ctx) {
+    // One Dog Card id is one dog (K1-6), as a kennel's public id is one kennel.
+    if (eqSet(l.public_id, f.public_id)) return 'same';
     if (dogNever(l, f, ctx)) return null;
-    if (sameRegisteredName(l, f)) return 'same';
+    // Two of one litter by name alone: she's asked, never paired by itself (K1-1).
+    if (sameRegisteredName(l, f)) return set(l.litter_id) && l.litter_id === ctx.fk(f.litter_id) ? 'ask' : 'same';
     if (sameRegistration(l, f)) return 'same';
     if (eqSet(chip(l.microchip_id), chip(f.microchip_id))) return 'same';
     return null;

@@ -46,7 +46,7 @@ import {
 } from '../data/waitlistRules.js';
 import { hasOwnForm } from '../data/guidedForm.js';
 import { entryQuestions, formQuestions, answerText } from '../data/waitlistForm.js';
-import { backOutItems, backOutSummary, suggestOutcome } from '../data/backOut.js';
+import { backOutItems, backOutSummary, backOutPaidText, suggestOutcome } from '../data/backOut.js';
 import { transportQuote, mapsLink } from '../data/transportFee.js';
 import { familySale, pendingExtraRequests } from '../data/familyExtras.js';
 import { pendingPickupRequests } from '../data/familyPickup.js';
@@ -541,7 +541,7 @@ class Review {
             root.querySelector('#wr-miles').value = (await drivingMiles(from, r.address)).miles;
             refresh();
           } catch (err) {
-            root.querySelector('#wr-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'miles aren\'t switched on yet' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
+            root.querySelector('#wr-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'driving miles aren\'t available right now' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
           }
           ev.target.disabled = false;
         });
@@ -572,12 +572,12 @@ class Review {
       const pup = sale?.dog_id ? this.dogsById.get(sale.dog_id) : null;
       const litter = pup?.litter_id ? this.litters.find((l) => l.id === pup.litter_id) : null;
       const weeks = litter?.whelp_date ? Math.floor((Date.parse(this.today) - Date.parse(litter.whelp_date)) / (7 * 86400000)) : null;
-      const suggested = suggestOutcome(this.config, req.reason?.id, weeks) || 'keep';
-      await this.chat.say(`<strong>${esc(this.name(e))} asked to back out${pup ? ` of ${esc(pup.call_name || 'their pup')}` : ''}</strong> (${esc(fmtDate(req.requested_date))}).<br>Their reason: ${esc(req.reason?.label || 'not given')}${req.reason?.text ? `: "${esc(req.reason.text)}"` : ''}.<br>Your policy suggests ${suggested === 'move' ? 'moving the deposit to their next pup' : 'keeping the deposit'}${weeks != null ? ` (${pup?.sex === 'female' ? 'she\'s' : 'he\'s'} ${weeks} weeks)` : ''}.`);
+      const pageOnly = isFamilyPageOnly(e);
+      const suggested = pageOnly ? 'keep' : (suggestOutcome(this.config, req.reason?.id, weeks)?.outcome || 'keep');
+      await this.chat.say(`<strong>${esc(this.name(e))} asked to back out${pup ? ` of ${esc(pup.call_name || 'their pup')}` : ''}</strong> (${esc(fmtDate(req.requested_date))}).<br>Their reason: ${esc(req.reason?.label || 'not given')}${req.reason?.text ? `: "${esc(req.reason.text)}"` : ''}.<br>${pageOnly ? 'They have a status page only, not a place on the list, so what they paid is kept' : `Your policy suggests ${suggested === 'move' ? 'putting them back in line' : 'keeping what they paid'}`}${weeks != null ? ` (${pup?.sex === 'female' ? 'she\'s' : 'he\'s'} ${weeks} weeks)` : ''}. Nothing is refunded when a family backs out.`);
       const pick = await this.chat.choose([
-        { label: 'Keep the deposit', value: 'keep', primary: suggested === 'keep' },
-        { label: 'Move the deposit', value: 'move', primary: suggested === 'move' },
-        { label: 'More options…', value: 'more' },
+        { label: 'Keep what they paid', value: 'keep', primary: suggested === 'keep' },
+        ...(pageOnly ? [] : [{ label: 'Put them back in line', value: 'move', primary: suggested === 'move' }]),
         { label: 'Decline', value: 'decline' },
         SKIP
       ]);
@@ -588,13 +588,7 @@ class Review {
         await this.emails([{ entryId: e.id, kind: 'request_declined', extra: { request: { field: 'back_out_request', request: req } } }]);
         continue;
       }
-      let outcome = pick;
-      if (pick === 'more') {
-        await this.chat.say('Refunding voids the sale, so their deposit won\'t count as income.');
-        if ((await this.chat.choose([{ label: 'Refund their deposit', value: 'refund' }, { label: 'Back', value: '__back' }])) === '__back') { this.skipped++; continue; }
-        outcome = 'refund';
-      }
-      await this.backOutForm(e, outcome, { request: req });
+      await this.backOutForm(e, pick, { request: req });
     }
     await this.otherSales();
   }
@@ -605,40 +599,52 @@ class Review {
     const sale = familySale(e, this.sales, this.offers, this.entries);
     if (!sale) { await this.chat.say('They have no open sale to back out of any more.'); return null; }
     const items = backOutItems({ sale, events: sale.dog_id ? await eventRepo.getForSubject('dog', sale.dog_id) : [], today: this.today });
-    const deposit = Number(sale.deposit_amount) || 0;
+    const { parts, paid, suggested } = await actions.backOutMoney(e, sale);
+    const asksCredit = outcome === 'move' && paid > 0;
+    const readCredit = (root) => (asksCredit && root.querySelector('input[name="wr-credit-yn"]:checked')?.value === 'yes' ? Number(root.querySelector('#wr-credit').value || 0) : 0);
     const pupName = this.pupName(sale.dog_id);
     const healthReason = request?.reason?.id === 'pup';
     let res = null;
     const done = await this.chat.form({
-      title: `<strong>${esc({ keep: 'Cancel the sale, keep the deposit', move: 'Cancel the sale, move the deposit', refund: 'Refund their deposit' }[outcome])}</strong>${outcome === 'move' ? '<span class="kels-lead">They go back on your list at the end of the line, with their application, fee and history. Their deposit goes toward their next pup.</span>' : ''}`,
-      html: `${items.length ? `<p class="gl-q">What comes off with the sale? Extras you leave unticked stay on it, still owed.</p>
+      title: `<strong>${esc({ keep: 'Cancel the sale, keep what they paid', move: 'Cancel the sale, put them back in line' }[outcome])}</strong><span class="kels-lead">${esc(backOutPaidText(parts, fmtMoney))} Nothing is refunded.${outcome === 'move' ? ' They go back on your list at the end of the line, with their application, fee and history.' : ''}</span>`,
+      html: `${asksCredit ? `<p class="gl-q">Credit what they paid toward their next pup?</p>
+          <div class="ck-checks"><label class="ck-check"><input type="radio" name="wr-credit-yn" value="yes" checked> Yes</label>
+          <div id="wr-credit-field">${field('Amount to credit', `<input id="wr-credit" type="number" min="0" max="${esc(paid.toFixed(2))}" step="0.01" value="${esc(suggested.toFixed(2))}">`, `Up to ${fmtMoney(paid)}. It comes off what they owe for the pup they pick next. Whatever you don't credit is kept.`)}</div>
+          <label class="ck-check"><input type="radio" name="wr-credit-yn" value="no"> No, keep what they paid</label></div>` : ''}
+        ${items.length ? `<p class="gl-q">What comes off with the sale? Extras you leave unticked stay on it, still owed.</p>
           <div class="ck-checks">${items.map((it, i) => `<label class="ck-check"><input type="checkbox" class="wr-bo" data-i="${i}"${it.remove ? ' checked' : ''}> <strong>${esc(it.label)}</strong> <span class="faint">${esc(it.kind === 'charge' ? `extra, ${it.detail}` : it.detail)}</span></label>`).join('')}</div>` : ''}
         <label class="ck-check"><input type="checkbox" id="wr-pup" checked> Put ${esc(pupName)} back to <select id="wr-pup-to"><option value="available"${healthReason ? '' : ' selected'}>Available</option><option value="health_hold"${healthReason ? ' selected' : ''}>Health hold</option></select></label>
-        <p class="field-hint" id="wr-bo-sum"></p>
-        ${outcome === 'refund' ? field('Type REFUND to confirm', '<input id="wr-refund" type="text" autocomplete="off">') : ''}`,
+        <p class="field-hint" id="wr-bo-sum"></p>`,
       wire: (root) => {
         const sum = () => {
           const picked = items.map((it, i) => ({ ...it, remove: root.querySelector(`.wr-bo[data-i="${i}"]`).checked }));
-          root.querySelector('#wr-bo-sum').textContent = `${backOutSummary(outcome, { deposit, items: picked, money: fmtMoney })}.`;
+          const credit = readCredit(root);
+          root.querySelector('#wr-bo-sum').textContent = `${backOutSummary(outcome, { paid, credit: Number.isFinite(credit) ? credit : 0, items: picked, money: fmtMoney })}.`;
         };
         root.querySelectorAll('.wr-bo').forEach((c) => c.addEventListener('change', sum));
+        root.querySelector('#wr-credit')?.addEventListener('input', sum);
+        root.querySelectorAll('input[name="wr-credit-yn"]').forEach((r) => r.addEventListener('change', () => {
+          root.querySelector('#wr-credit-field').hidden = root.querySelector('input[name="wr-credit-yn"]:checked')?.value !== 'yes';
+          sum();
+        }));
         sum();
       },
       submitLabel: 'Do it',
       cancelLabel: 'Back',
       submit: async (root) => {
-        if (outcome === 'refund' && root.querySelector('#wr-refund').value.trim() !== 'REFUND') return 'Type REFUND to confirm.';
+        const credit = readCredit(root);
+        if (!Number.isFinite(credit) || credit < 0 || credit > paid) return `Enter a credit from 0 to ${fmtMoney(paid)}.`;
         const remove = [...root.querySelectorAll('.wr-bo:checked')].map((c) => items[Number(c.dataset.i)].id);
         const pup = root.querySelector('#wr-pup').checked ? root.querySelector('#wr-pup-to').value : null;
-        res = await actions.approveBackOut(e.id, { outcome, remove, pup, date: this.today, ...(told ? { told } : {}) });
-        return { pup };
+        res = await actions.approveBackOut(e.id, { outcome, credit, remove, pup, date: this.today, ...(told ? { told } : {}) });
+        return { pup, credit };
       },
-      reply: () => ({ keep: 'Keep the deposit', move: 'Move the deposit', refund: 'Refund it' }[outcome])
+      reply: (r) => (outcome === 'move' ? (r?.credit > 0 ? `Back in line, ${fmtMoney(r.credit)} credit` : 'Back in line, no credit') : 'Keep what they paid')
     });
     if (!done.done) { this.skipped++; return null; }
     await this.load();
     const changes = this.changeLines(res);
-    await this.chat.say(lines([`Done. ${outcome === 'move' ? `${this.name(e)} is back on the list at the end of the line.` : `${this.name(e)}'s sale is ${outcome === 'refund' ? 'voided and refunded' : 'cancelled'}.`}`, ...changes]));
+    await this.chat.say(lines([`Done. ${outcome === 'move' ? `${this.name(e)} is back on the list at the end of the line${done.result.credit > 0 ? `, with a ${fmtMoney(done.result.credit)} credit toward their next pup` : ''}.` : `${this.name(e)}'s sale is cancelled, and what they paid is kept.`}`, ...changes]));
     await this.emails([
       ...(request ? [{ entryId: e.id, kind: `backed_out_${outcome}`, extra: { request: { field: 'back_out_request', request } } }] : []),
       ...offerSpecs(res)
@@ -693,8 +699,9 @@ class Review {
     if (what === 'backed_out') {
       const entry = this.entries.find((e) => e.contact_id && e.contact_id === sale.buyer_contact_id && familySale(e, this.sales, this.offers, this.entries)?.id === sale.id);
       if (entry) {
-        await this.chat.say(`${esc(this.name(entry))} is on your waitlist, so let's handle it the same way as a back-out request. What happens to their deposit?`);
-        const outcome = await this.chat.choose([{ label: 'Keep the deposit', value: 'keep', primary: true }, { label: 'Move the deposit', value: 'move' }, { label: 'Refund their deposit', value: 'refund' }, { label: 'Never mind', value: '' }]);
+        await this.chat.say(`${esc(this.name(entry))} is on your waitlist, so let's handle it the same way as a back-out request. Nothing is refunded: what happens to what they paid?`);
+        const outcome = await this.chat.choose([{ label: 'Keep what they paid', value: 'keep', primary: true },
+          ...(isFamilyPageOnly(entry) ? [] : [{ label: 'Put them back in line', value: 'move' }]), { label: 'Never mind', value: '' }]);
         if (outcome) await this.backOutForm(entry, outcome, { told: { reason: { id: 'told', label: 'They told you' } } });
         return;
       }

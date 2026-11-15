@@ -18,7 +18,7 @@ import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TER
 import { restoresFamily, businessDays, waitlistConfig } from '../data/waitlistRules.js';
 import { litterCloseDue, litterLabel } from '../data/litterCheckin.js';
 import { promptDisposition, promptReleasedPup, askRegistrationPrice } from '../assets/salePrompts.js';
-import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, alertModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -351,7 +351,7 @@ function extraChargesField(s) {
         }).join('')}
         <option value="custom">Something else…</option>
       </select>
-      <span class="field-hint">Each prints as its own line on the invoice, paid with the balance unless it has a payment plan (set on the Kennel page's Extra charges price list, where you keep your usual ones). Changing an amount rescales its payments.</span>
+      <span class="field-hint">Each prints as its own line on the invoice, paid with the balance unless it has a payment plan (set on the Kennel page's Extra charges price list, where you keep your usual ones). Changing an amount changes its payments still to come; a payment already made keeps its amount.</span>
     </div>`;
 }
 
@@ -933,6 +933,15 @@ async function doSave() {
     if (error) { showError(error); return; }
     candidate.extra_charges = list;
   }
+  // Cancelled on a waitlist family's open sale is their back-out: the rest of the form
+  // saves now, and the back-out confirm (after the save) cancels the sale and decides
+  // their place, so they're never left Placed on a cancelled sale.
+  let backOut = null;
+  if (!isNew && editionFlags.waitlist && candidate.status === 'cancelled' && prevStatus !== 'cancelled' && saleRepo.isOpenSale(ctx.original)) {
+    const { backOutEntryFor } = await import('../data/waitlistActions.js');
+    backOut = await backOutEntryFor(ctx.original.id);
+    if (backOut) candidate.status = prevStatus;
+  }
   try {
     if (isNew) {
       // Kennel scope (Multi-Kennel Scope Spec §6): the sale files under the kennel
@@ -993,7 +1002,12 @@ async function doSave() {
     // health reason), then, for a waitlist family's lost pup, offer to put them back
     // in line (Waitlist Spec §16.11). The pup goes first so a dead or held pup is
     // never offered to anyone.
-    if (!isNew && RELEASED_SALE_STATUSES.includes(saved.status) && prevStatus !== saved.status) {
+    if (backOut) {
+      const { backOutDialog } = await import('../assets/waitlistUI.js');
+      const done = await backOutDialog({ entryId: backOut.id });
+      saved = await saleRepo.getById(saved.id);
+      if (!done) await alertModal({ title: 'Not cancelled', message: 'The sale wasn\'t cancelled: they\'re a waitlist family, so a back-out is recorded through that confirm. Your other changes are saved.' });
+    } else if (!isNew && RELEASED_SALE_STATUSES.includes(saved.status) && prevStatus !== saved.status) {
       await promptReleasedPup(saved, { onError: showError });
       if (editionFlags.waitlist && restoresFamily(saved)) {
         const { restoreLostPupDialog } = await import('../assets/waitlistUI.js');

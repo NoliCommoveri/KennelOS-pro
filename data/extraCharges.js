@@ -69,7 +69,10 @@ const ymd = (v) => (typeof v === 'string' && YMD.test(v) ? v : null);
 
 // A charge's payment steps as stored, each amount worked out from its percent of
 // the charge (the last step takes the rounding), so changing the charge's amount
-// on the Sale page rescales them. null = no steps (paid with the balance).
+// on the Sale page changes them. A step already paid (its paid date set, with an
+// amount stored) keeps that amount: money received doesn't change (K8-3). What's left
+// of the charge is spread over the unpaid steps by their percents. null = no steps
+// (paid with the balance).
 export function cleanSteps(payments, amount) {
   if (!Array.isArray(payments)) return null;
   const steps = [];
@@ -82,16 +85,25 @@ export function cleanSteps(payments, amount) {
     if (n != null && st.due !== 'with_balance') row.n = n;
     if (ymd(st.due_date)) row.due_date = st.due_date;
     if (ymd(st.paid_date)) row.paid_date = st.paid_date;
-    steps.push(row);
+    const stored = cents(num(st.amount));
+    steps.push({ row, frozen: row.paid_date && stored > 0 ? stored : null });
   }
   if (!steps.length) return null;
-  const total = steps.reduce((t, st) => t + st.percent, 0);
-  let left = cents(amount);
-  steps.forEach((st, i) => {
-    st.amount = i === steps.length - 1 ? cents(left) : cents(amount * st.percent / total);
-    left -= st.amount;
+  const open = steps.filter((x) => x.frozen == null);
+  for (const x of steps) if (x.frozen != null) x.row.amount = x.frozen;
+  const rest = Math.max(0, cents(amount - steps.reduce((t, x) => t + (x.frozen || 0), 0)));
+  const total = open.reduce((t, x) => t + x.row.percent, 0);
+  let left = rest;
+  open.forEach((x, i) => {
+    x.row.amount = i === open.length - 1 ? cents(left) : cents(rest * x.row.percent / total);
+    left -= x.row.amount;
   });
-  return steps;
+  return steps.map((x) => x.row);
+}
+
+// What's been paid of a charge with steps (the paid steps' amounts), or 0.
+export function chargePaid(charge) {
+  return cents((cleanSteps(charge?.payments, num(charge?.amount)) || []).reduce((t, st) => t + (st.paid_date ? st.amount : 0), 0));
 }
 
 // A payment plan copied onto a sale as dated steps, when she approves the extra.
@@ -147,11 +159,21 @@ export function extraChargesTotal(sale) {
 // only an amount is a mistake she should fix; a fully blank row is dropped.
 // → { list, error } (error is a message, or '').
 export function readExtraCharges(rows = []) {
+  const usd = (n) => `$${cents(n).toFixed(2)}`;
   for (const r of rows) {
     const hasLabel = !!text(r.label);
     const hasAmount = text(r.amount) !== '';
     if (hasLabel && !(num(r.amount) > 0)) return { list: [], error: `Give "${text(r.label)}" an amount above $0.` };
     if (!hasLabel && hasAmount) return { list: [], error: 'Give each extra charge a name.' };
+    // A paid step keeps its amount (K8-3), so the charge can't go below what's paid,
+    // and one paid in full can't change.
+    const steps = hasLabel ? cleanSteps(r.payments, num(r.amount)) : null;
+    if (steps) {
+      const paid = cents(steps.reduce((t, st) => t + (st.paid_date ? st.amount : 0), 0));
+      const amount = cents(num(r.amount));
+      if (steps.every((st) => st.paid_date) && amount !== paid) return { list: [], error: `"${text(r.label)}" is paid in full (${usd(paid)}), so its amount stays ${usd(paid)}. Add another extra for the difference.` };
+      if (amount < paid) return { list: [], error: `${usd(paid)} of "${text(r.label)}" is already paid, so its amount can't be less than that.` };
+    }
   }
   return { list: cleanList(rows, { mintIds: true }), error: '' };
 }

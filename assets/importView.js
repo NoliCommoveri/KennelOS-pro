@@ -7,7 +7,7 @@
 // §8) default to Skip; the user may explicitly create a new record or point the
 // row at an existing one, exactly as the spec requires.
 import { parseCsv, buildPlan, commitPlan, getMapping } from '../data/csvImport.js';
-import { esc } from './ui.js';
+import { esc, fmtDate } from './ui.js';
 import { importHelpHtml, wireImportHelp } from './importHelp.js';
 
 const STATUS_BADGE = {
@@ -72,11 +72,15 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
   }
   function clearFlash() { msg.innerHTML = ''; }
 
-  async function loadRows(dataRows) {
+  let lastRows = null;
+  let dates = null;
+  async function loadRows(dataRows, { dateOrder = null } = {}) {
     if (!dataRows.length) { flash('That file has no data rows.', 'err'); return; }
-    const built = await buildPlan(entity, dataRows);
+    lastRows = dataRows;
+    const built = await buildPlan(entity, dataRows, { dateOrder });
     plan = built.rows;
     existing = built.existing;
+    dates = { ...built.dates, chosen: dateOrder };
     renderPreview(built.summary);
   }
 
@@ -143,9 +147,33 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
       <select data-role="target" data-idx="${r.index}" style="margin-top:6px;${matching ? '' : 'display:none;'}">${existingOptions(r.decisionTarget)}</select>`;
   }
 
+  // What an update changes, field by field (K2-4): "Status: Active breeding → Retired".
+  // More than three fold behind a count. Ids read as "changed", never as an id.
+  const shown = (v) => (v == null || v === '' || (Array.isArray(v) && !v.length) ? 'blank'
+    : Array.isArray(v) ? v.map((x) => (x && typeof x === 'object' ? x.number || x.abbreviation || x.title || JSON.stringify(x) : x)).join(', ')
+      : typeof v === 'object' ? JSON.stringify(v) : /^[a-z]+(_[a-z]+)+$/.test(String(v)) ? String(v).replace(/_/g, ' ') : String(v));
+  function changeLines(r) {
+    const before = r.match || {};
+    const out = [];
+    for (const [k, v] of Object.entries(r.changes || {})) {
+      if (JSON.stringify(before[k] ?? null) === JSON.stringify(v ?? null)) continue;
+      const label = k.replace(/_ids?$/, '').replace(/_/g, ' ');
+      out.push(/_ids?$/.test(k) ? `${label}: changed` : `${label}: ${shown(before[k])} → ${shown(v)}`);
+    }
+    return out;
+  }
+  // The dates as read (K2-3), so a day/month mix-up shows before anything is saved.
+  const datesRead = (r) => Object.entries(r.record || {})
+    .filter(([k, v]) => /date|_on$/.test(k) && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v))
+    .map(([k, v]) => `${k.replace(/_/g, ' ')} ${fmtDate(v)}`).join(' · ');
+
   function noteCell(r) {
     if (r.status === 'update' && r.matchLabel) {
-      return `<span class="muted">Matches existing: <strong>${esc(r.matchLabel)}</strong></span>`;
+      const lines = changeLines(r);
+      const what = !lines.length ? ' · nothing changes'
+        : lines.length <= 3 ? `<br>${lines.map(esc).join('<br>')}`
+          : `<details><summary>${lines.length} changes</summary>${lines.map(esc).join('<br>')}</details>`;
+      return `<span class="muted">Matches existing: <strong>${esc(r.matchLabel)}</strong>${what}</span>`;
     }
     if (r.reasons.length) {
       return `<span class="muted">${r.reasons.map(esc).join('<br>')}</span>`;
@@ -157,13 +185,21 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
     const body = plan.map((r) => `
       <tr class="${r.status === 'review' ? 'row-review' : ''}">
         <td class="faint">${r.index + 2}</td>
-        <td><strong>${esc(r.display)}</strong></td>
+        <td><strong>${esc(r.display)}</strong>${datesRead(r) ? `<br><span class="faint">${esc(datesRead(r))}</span>` : ''}</td>
         <td><span class="badge ${STATUS_BADGE[r.status]}">${r.status === 'review' ? 'needs review' : r.status}</span></td>
         <td>${actionCell(r)}</td>
         <td>${noteCell(r)}</td>
       </tr>`).join('');
 
-    tableEl.innerHTML = `
+    // Dates that could be either way round: say how they're read, and let her flip it.
+    const datesNote = dates && (dates.ask || dates.chosen) ? `
+      <div class="inline-warn" style="margin-bottom:10px;">Some dates in this file could be read either way round (like 05/01/2021).
+        <label style="display:inline-flex; gap:6px; align-items:center; margin-left:4px;">They're
+          <select id="imp-date-order"><option value="mdy"${dates.order === 'mdy' ? ' selected' : ''}>month first (May 1)</option><option value="dmy"${dates.order === 'dmy' ? ' selected' : ''}>day first (5 January)</option></select></label>
+        Check a row's dates below before you commit.</div>`
+      : dates?.detected === 'dmy' ? '<p class="field-hint" style="margin-top:0;">Dates are read day first, as this file writes them (it has a date like 25/01/2021).</p>'
+        : dates?.detected === 'mixed' ? '<div class="inline-warn" style="margin-bottom:10px;">This file writes dates both ways round (25/01/2021 and 01/25/2021), so a date that could be either is left for review.</div>' : '';
+    tableEl.innerHTML = `${datesNote}
       <table class="data">
         <thead><tr><th>Row</th><th>${esc(mapping.entity.charAt(0).toUpperCase() + mapping.entity.slice(1))}</th><th>Classified</th><th>Action</th><th>Notes</th></tr></thead>
         <tbody>${body}</tbody>
@@ -189,6 +225,10 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
         const r = plan.find((p) => p.index === Number(sel.dataset.idx));
         r.decisionTarget = sel.value || null;
       });
+    });
+
+    tableEl.querySelector('#imp-date-order')?.addEventListener('change', (e) => {
+      loadRows(lastRows, { dateOrder: e.target.value }).catch((err) => flash(err.message || String(err), 'err'));
     });
 
     previewCard.style.display = '';

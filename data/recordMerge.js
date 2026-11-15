@@ -93,7 +93,9 @@ export const MERGE_SPEC = {
 
 // Never copied from the other record: identity, timestamps, and fields kept by
 // their own repos (waitlist_status is recomputed from the entries afterwards).
-const NEVER_COPY = new Set(['id', 'created_at', 'updated_at', 'is_archived', 'waitlist_status', 'notes']);
+// public_id (a Dog Card id) is write-once and unique: copied while the duplicate
+// still holds it, the update is refused, so mergeDuplicate moves it after (K1-3).
+const NEVER_COPY = new Set(['id', 'created_at', 'updated_at', 'is_archived', 'waitlist_status', 'notes', 'public_id']);
 
 // Which of two records to keep by default: one that's in use (not
 // pedigree-only), then the fuller one, then the older one.
@@ -358,6 +360,9 @@ export async function mergeDuplicate(table, keepId, dropId, choices = {}) {
   const changes = duplicateChanges(table, keep, drop, choices);
   if (Object.keys(changes).length) await repo.update(keepId, changes);
   const { moved } = await replaceAndDelete(table, keepId, drop);
+  // The duplicate's Dog Card link survives the merge: the kept dog takes its id when
+  // it has none (once the duplicate is deleted, so the id is free).
+  if (table === 'dogs' && drop.public_id && !keep.public_id) await repo.update(keepId, { public_id: drop.public_id });
   if (table === 'contacts') await syncContactWaitlistStatus(keepId);
   if (table === 'waitlist_entries' && drop.contact_id && drop.contact_id !== keep.contact_id) await syncContactWaitlistStatus(drop.contact_id);
   return { moved };

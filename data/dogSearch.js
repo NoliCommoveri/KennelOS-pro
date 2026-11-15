@@ -96,12 +96,15 @@ const STRENGTH_ORDER = { certain: 0, likely: 1, possible: 2 };
 const isNumberish = (t) => /^[a-z0-9]{5,}$/i.test(t) && (t.match(/\d/g) || []).length >= 4;
 
 // A name's words, lowercase, without titles, punctuation or number-like bits.
-// "GCH CH Thornfield Zoey-Mae SR123456" → "thornfield zoey mae".
+// "GCH CH Thornfield Zoey-Mae SR123456" → "thornfield zoey mae". A short bare number
+// stays: breeders number littermates ("Thornfield Blue 1", "Thornfield Blue 2"), and
+// the number is what tells them apart (K1-1). Only a registration-like run of digits
+// (isNumberish: 5+ characters, 4+ digits) is dropped.
 export function nameKey(name) {
   const raw = String(name || '');
   const plain = splitTitles(raw).name || raw;
   return plain.toLowerCase().replace(/[’‘`´']/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
-    .split(' ').filter((w) => w && !isNumberish(w) && !/^\d+$/.test(w)).join(' ');
+    .split(' ').filter((w) => w && !isNumberish(w)).join(' ');
 }
 
 // The number-like bits of any text: "SR 123456/01" and "AKC sr12345601" both
