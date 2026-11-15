@@ -31,6 +31,35 @@ export const NOT_CARE_STATUSES = Object.freeze(['external_reference', 'deceased'
 export const isCareDog = (d) => Boolean(d) && !d.is_archived && !d.pedigree_only
   && CARE_OWNERSHIP.includes(d.ownership_type) && !NOT_CARE_STATUSES.includes(d.status);
 
+// Living with her: not leased out, and not a co-owned dog that lives with its
+// co-owner (lives_with_contact_id). Routine care she gives with her own hands
+// (this month's preventatives, the heat watch) asks only about these: she can't
+// dose a dog that lives elsewhere, and a nudge she can't honestly clear comes back
+// every month (review K09-6).
+export const livesHere = (d) => Boolean(d) && d.ownership_type !== 'leased_out'
+  && !(d.ownership_type === 'co_owned' && d.lives_with_contact_id);
+
+// A dam whose next heat isn't worth watching for yet: bred or confirmed pregnant
+// (a pairing still before its due date, or within BUSY_AFTER_DUE_DAYS of it), an
+// Expected litter of hers not yet past its date, or a litter born in the last
+// NURSING_DAYS (review K09-5). A pairing left Bred for months doesn't count.
+export const NURSING_DAYS = 56;
+const BUSY_AFTER_DUE_DAYS = 14;
+const PREGNANT_STATUSES = ['bred', 'confirmed_pregnant'];
+export function damIsBusy(dogId, { pairings = [], litters = [] } = {}, today) {
+  const recent = addDaysToYMD(today, -BUSY_AFTER_DUE_DAYS);
+  for (const p of pairings || []) {
+    if (!p || p.is_archived || p.dam_id !== dogId || !PREGNANT_STATUSES.includes(p.status)) continue;
+    const due = p.expected_due_date || (p.planned_date ? addDaysToYMD(p.planned_date, 63) : null);
+    if (due && due >= recent) return true;
+  }
+  for (const l of litters || []) {
+    if (!l || l.is_archived || l.dam_id !== dogId || !l.whelp_date) continue;
+    if (l.status === 'expected' ? l.whelp_date >= recent : (l.whelp_date <= today && l.whelp_date >= addDaysToYMD(today, -NURSING_DAYS))) return true;
+  }
+  return false;
+}
+
 // The grown dogs living with her (isCareDog): active breeding, retired, and
 // for sale. The multi-dog forms list these; only active breeding dogs start ticked.
 export const HOME_DOG_STATUSES = ['active_breeding', 'retired_breeding', 'for_sale'];
@@ -60,12 +89,16 @@ export function predictNextHeat(starts) {
   return { next: addDaysToYMD(last, avgDays), last, heats: starts.length, basis: 'average', avgDays };
 }
 
-// Each active breeding female with a prediction: { dog, ...predictNextHeat,
-// until (days from today), state: 'soon' (within HEAT_NOTICE_DAYS, or today),
-// 'overdue' (the date passed with no newer heat logged), or 'later' }. Soonest first.
-export function heatForecast(dogs, events, today) {
+// Each active breeding female living here (livesHere) with a prediction: { dog,
+// ...predictNextHeat, until (days from today), state: 'soon' (within
+// HEAT_NOTICE_DAYS, or today), 'overdue' (the date passed with no newer heat
+// logged), or 'later' }. Soonest first. With `breeding` ({ pairings, litters }),
+// a dam who is bred or nursing (damIsBusy) is left out.
+export function heatForecast(dogs, events, today, breeding = null) {
   const out = [];
   for (const dog of breedingDogs(dogs, 'female')) {
+    if (!livesHere(dog)) continue;
+    if (breeding && damIsBusy(dog.id, breeding, today)) continue;
     const p = predictNextHeat(heatStarts(dog.id, events));
     if (!p) continue;
     const until = daysBetween(today, p.next);
@@ -91,10 +124,11 @@ export function hasPreventativeIn(dogId, events, month) {
     && e.event_type === 'preventative' && monthOf(e.event_date) === month);
 }
 
-// The active breeding dogs (both sexes) with no preventative logged in today's month.
+// The active breeding dogs (both sexes) living here (livesHere) with no
+// preventative logged in today's month.
 export function preventativeGaps(dogs, events, today) {
   const month = monthOf(today);
-  return breedingDogs(dogs).filter((d) => !hasPreventativeIn(d.id, events, month))
+  return breedingDogs(dogs).filter((d) => livesHere(d) && !hasPreventativeIn(d.id, events, month))
     .sort((a, b) => (a.call_name || '').localeCompare(b.call_name || ''));
 }
 

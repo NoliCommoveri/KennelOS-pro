@@ -24,7 +24,7 @@ import { getSaleStatement } from '../data/incomeView.js';
 import { saleFeeEstimate } from '../data/processingFees.js';
 import { splitName } from '../data/contractForms.js';
 import { paymentAccounts, salePaidVia, paidViaField, paymentOptions, paymentLink, paymentRequestMessage } from '../data/paymentLinks.js';
-import { esc, fmtDate, fmtMoney, confirmModal } from './ui.js';
+import { esc, fmtDate, fmtMoney, confirmModal, alertModal } from './ui.js';
 import { openComposer } from './messageComposer.js';
 import { stripeConnection, makeSaleLink } from '../data/stripeLinks.js';
 
@@ -179,7 +179,16 @@ export async function openPaymentRequest({ saleId }) {
       const linkPart = part === 'deposit' ? 'deposit' : 'payment';
       // The open link for this same payment is sent again, not replaced.
       const reuse = sale.payment_link_ref && sale.payment_link_component === linkPart && Number(sale.payment_link_amount) === option.amount;
-      if (!reuse) sale = await makeSaleLink({ sale, account, component: linkPart, amount: option.amount, pupName, label: option.key === 'deposit' ? '' : option.label.replace(/ \(.*\)$/, '') });
+      if (!reuse) {
+        try {
+          sale = await makeSaleLink({ sale, account, component: linkPart, amount: option.amount, pupName, label: option.key === 'deposit' ? '' : option.label.replace(/ \(.*\)$/, '') });
+        } catch (err) {
+          // The earlier link was paid (review K12-1): recorded now; nothing is sent.
+          if (err?.name !== 'LinkAlreadyPaidError') throw err;
+          await alertModal({ title: 'That link was already paid', message: err.message });
+          return true;
+        }
+      }
       account = { ...account, payment_link: sale.payment_link_url };
       changed = true;
       hint = part === 'deposit'

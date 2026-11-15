@@ -403,13 +403,69 @@ export function chargeFromPriceList(item, { groups = [], approvalDate, birthDate
   };
 }
 
+// --- Fees charged back ---------------------------------------------------------------
+// A charge with `fee_for` is a payment service's fee billed back to the family: the
+// deposit's ('deposit') or one recorded payment's ('payment:<id>'). It's always
+// collected with the sale's LAST payment (paymentSchedule.saleCharges: never on an
+// earlier due date, never on its own dates), so a family paying in steps through
+// such an account pays every earlier step's fee at the end.
+export const isFeeChargeBack = (x) => Boolean(x?.fee_for);
+export const paymentFeeFor = (paymentId) => `payment:${paymentId}`;
+
+// The fee to charge back for one payment ({ id, amount, date, account_id }) made
+// through an account set to charge its fee back, or null: no such account, no usable
+// rate, or nothing to charge. → null | { fee_for, label, amount }
+export function paymentFeeChargeBack(payment, account) {
+  if (!payment?.id || !account?.fee_charge_back) return null;
+  const rate = feeRate(account);
+  if (!isUsableRate(rate)) return null;
+  const amount = processingFee(payment.amount, rate);
+  if (!(amount > 0)) return null;
+  return { fee_for: paymentFeeFor(payment.id), label: `${text(account.name) || 'Payment'} fee${payment.date ? ` (payment of ${payment.date})` : ''}`, amount };
+}
+
+// Every fee the sale could charge back and doesn't carry yet: the deposit's, then
+// each recorded payment's. `remaining`: what the sale still owes once these are
+// paid (the statement's), since a payment that paid the last of it has no later
+// payment for its fee to ride on. → [{ fee_for, label, amount }]
+export function feeChargeBackOffers(sale, accountsById, { depositPaid = false, remaining = 0 } = {}) {
+  if (!sale || sale.fee_passed_to_buyer) return []; // the fee is already in the price
+  const get = (id) => (id ? accountsById?.get?.(id) || null : null);
+  const out = [];
+  const dep = depositFeeChargeBack(sale, get(sale.deposit_paid_via_account_id), depositPaid);
+  if (dep) out.push(dep);
+  if (!(remaining > 0)) return out;
+  const have = new Set(saleExtraCharges(sale).map((x) => x.fee_for).filter(Boolean));
+  for (const p of Array.isArray(sale.payments) ? sale.payments : []) {
+    if (have.has(paymentFeeFor(p.id))) continue;
+    const offer = paymentFeeChargeBack(p, get(p.account_id));
+    if (offer) out.push(offer);
+  }
+  return out;
+}
+
+// One payment edited: its fee charged back follows it (the new amount or account),
+// and goes when the payment no longer qualifies or is removed (`payment` null).
+// → the sale's charges, changed or the same array.
+export function chargesWithPaymentFee(sale, paymentId, payment, account) {
+  const had = Array.isArray(sale?.extra_charges) ? sale.extra_charges : [];
+  const key = paymentFeeFor(paymentId);
+  const i = had.findIndex((x) => x?.fee_for === key);
+  if (i < 0) return had;
+  const offer = payment ? paymentFeeChargeBack(payment, account) : null;
+  if (!offer) return had.filter((_, n) => n !== i);
+  if (had[i].amount === offer.amount && had[i].label === offer.label) return had;
+  return had.map((x, n) => (n === i ? { ...x, amount: offer.amount, label: offer.label } : x));
+}
+
 // The fee to charge back for a deposit paid through an account set to charge its
 // fee back, or null when there's nothing to offer: no such account, no usable
 // rate, no deposit, the deposit not paid yet, or the sale already carries it.
 // `depositPaid` is the caller's read of the sale (incomeView's rule).
 // → null | { fee_for: 'deposit', label, amount }
 export function depositFeeChargeBack(sale, account, depositPaid) {
-  if (!sale || !account?.fee_charge_back || !depositPaid) return null;
+  // Not when the fee is already passed to the buyer in the price: that would charge it twice.
+  if (!sale || sale.fee_passed_to_buyer || !account?.fee_charge_back || !depositPaid) return null;
   const rate = feeRate(account);
   if (!isUsableRate(rate)) return null;
   if (saleExtraCharges(sale).some((x) => x.fee_for === 'deposit')) return null;

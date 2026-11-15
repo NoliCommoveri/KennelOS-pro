@@ -905,6 +905,23 @@ export function clearPendingEraseAck() {
   localStorage.removeItem(ERASE_ACK_KEY);
 }
 
+// Support's helper device handed back while it couldn't reach the server: its copy is
+// wiped at once, and this one token (it opens nothing else: help is ending) is kept
+// until the server has heard End help (cloudDevices.finishAssistEnd, review K05-8).
+const ASSIST_END_KEY = 'kennelOS.assistEnd';
+
+export function getPendingAssistEnd() {
+  return localStorage.getItem(ASSIST_END_KEY);
+}
+
+export function setPendingAssistEnd(token) {
+  localStorage.setItem(ASSIST_END_KEY, token);
+}
+
+export function clearPendingAssistEnd() {
+  localStorage.removeItem(ASSIST_END_KEY);
+}
+
 export function clearAllAppStorage() {
   for (const store of [globalThis.localStorage, globalThis.sessionStorage]) {
     if (!store) continue;

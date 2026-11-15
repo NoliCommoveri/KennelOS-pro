@@ -18,7 +18,8 @@ import { isCloudAvailable } from './cloudConfig.js';
 import { sessionToken, currentAccount, markSessionExpired, recordEmailChangeState } from './cloudAuth.js';
 import {
   getCloudBackupState, updateCloudBackupState, getProLicense,
-  getPendingEraseAck, setPendingEraseAck, clearPendingEraseAck
+  getPendingEraseAck, setPendingEraseAck, clearPendingEraseAck,
+  getPendingAssistEnd, setPendingAssistEnd, clearPendingAssistEnd
 } from '../settings.js';
 import { isLicenseGated, deactivate } from '../license.js';
 import { eraseThisDevice as wipeThisDevice } from '../appReset.js';
@@ -111,10 +112,11 @@ export function bootDeviceCheck({ win = globalThis } = {}) {
     win.sessionStorage?.setItem(SESSION_MARK, '1');
   } catch { /* no sessionStorage: treat as a later page */ }
   finishEraseAck();
+  finishAssistEnd();
   checkIn({ minGapMs: coldStart ? CHECK_IN_MIN_GAP_MS : CHECK_IN_EVERY_MS });
   if (booted) return;
   booted = true;
-  const again = () => { finishEraseAck(); checkIn({ minGapMs: CHECK_IN_MIN_GAP_MS }); };
+  const again = () => { finishEraseAck(); finishAssistEnd(); checkIn({ minGapMs: CHECK_IN_MIN_GAP_MS }); };
   win.addEventListener?.('online', again);
   win.document?.addEventListener?.('visibilitychange', () => { if (win.document.visibilityState === 'visible') again(); });
 }
@@ -126,19 +128,39 @@ export function bootDeviceCheck({ win = globalThis } = {}) {
 // reloads onto first run.
 let erasing = null;
 
-export function eraseThisDevice(token = sessionToken()) {
-  if (!erasing) erasing = doErase(token).finally(() => { erasing = null; });
+// `endHelpToken`: support's helper device handing back without reaching the server
+// (review K05-8). The wipe doesn't wait for it; the token is kept past the wipe and
+// End help is sent when the device is next online (finishAssistEnd).
+export function eraseThisDevice(token = sessionToken(), { endHelpToken = null } = {}) {
+  if (!erasing) erasing = doErase(token, endHelpToken).finally(() => { erasing = null; });
   return erasing;
 }
 
-async function doErase(token) {
+async function doErase(token, endHelpToken = null) {
   const license = getProLicense();
   await wipeThisDevice();
   if (token) setPendingEraseAck(token);
+  if (endHelpToken) setPendingAssistEnd(endHelpToken);
   try { globalThis.dispatchEvent?.(new CustomEvent(DEVICE_ERASED_EVENT)); } catch { /* no window */ }
   const licenseReleased = license ? await deactivate(license) : false;
   await finishEraseAck({ licenseReleased });
+  await finishAssistEnd();
   try { globalThis.location?.reload?.(); } catch { /* not a browser */ }
+}
+
+// An End help a helper device couldn't send when it handed back: sent now. Kept
+// through offline failures; any answer at all (ended, or the session already gone)
+// clears it.
+export async function finishAssistEnd() {
+  const token = getPendingAssistEnd();
+  if (!token || !isCloudAvailable()) return false;
+  try {
+    await api.endAssistHelp(token);
+  } catch (err) {
+    if (err instanceof api.CloudOfflineError) return false;
+  }
+  clearPendingAssistEnd();
+  return true;
 }
 
 api.setErasedHandler((token) => eraseThisDevice(token));

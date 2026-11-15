@@ -192,11 +192,16 @@ function renderEdit() {
     });
     document.getElementById('f-show_on_website')?.addEventListener('change', (e) => { e.target.dataset.touched = '1'; });
   }
-  // Planned first date prefills expected due date (63 days later) — only while
-  // that field is still empty, so it never clobbers a deliberate edit.
+  // Planned first date prefills expected due date (63 days later) — while that
+  // field is empty, or still exactly 63 days after the old first date (the
+  // prefill), so a corrected first date moves the due date with it but a
+  // deliberate edit is never clobbered (review K09-2).
   document.getElementById('f-planned_date').addEventListener('change', (e) => {
+    const prevPlanned = ctx.draft.planned_date;
     ctx.draft = readForm();
-    if (e.target.value && !ctx.draft.expected_due_date) {
+    const dueWasPrefill = !ctx.draft.expected_due_date
+      || (prevPlanned && ctx.draft.expected_due_date === addDaysToYMD(prevPlanned, DUE_DAYS_AFTER_PLANNED));
+    if (e.target.value && dueWasPrefill) {
       ctx.draft.expected_due_date = addDaysToYMD(e.target.value, DUE_DAYS_AFTER_PLANNED);
     }
     renderEdit();

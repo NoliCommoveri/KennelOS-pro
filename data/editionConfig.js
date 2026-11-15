@@ -59,11 +59,13 @@ export const licenseConfig = {
   // Lemon Squeezy returns the variant NAME, not a clean interval, so we match it
   // against this pattern (case-insensitive) → yearly; anything else → monthly (the
   // shorter, stricter window). Tune to the store's variant names.
-  yearlyVariantPattern: 'year|annual',
+  yearlyVariantPattern: 'year|annual|12\\s*-?\\s*months?|\\byrs?\\b',
   // A one-time Lifetime purchase is PERPETUAL — matched by name against this
-  // pattern → a license that never expires and never needs online re-validation
-  // (no subscription to lapse). Tune to the store's variant name for that tier.
-  lifetimeVariantPattern: 'lifetime|perpetual',
+  // pattern → a license that never expires, but still confirms itself online every
+  // 90 days, then has a month's grace before the reconnect wall (data/license.js,
+  // the lifetime check-in). A lifetime name this misses is read as monthly: walled
+  // after 3 days offline, on the renewal wall. Tune to the store's variant name.
+  lifetimeVariantPattern: 'lifetime|perpetual|forever|one[\\s-]?time',
 };
 
 export async function enforceDogCap(/* { candidate, existing, id } */) {

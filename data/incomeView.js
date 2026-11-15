@@ -36,6 +36,8 @@ import { editionFlags } from './editionConfig.js';
 import { saleExtraCharges, stepLabel } from './extraCharges.js';
 import { litterRepo } from './litterRepo.js';
 import { eventRepo } from './eventRepo.js';
+import { accountRepo } from './accountRepo.js';
+import { saleFeeEstimate } from './processingFees.js';
 import { paymentStatement, chargePieces } from './paymentSchedule.js';
 import { expectedPickupDate } from './goHome.js';
 import { businessDays, waitlistConfig } from './waitlistRules.js';
@@ -165,30 +167,63 @@ function extraParts(s, x) {
 
 // The sales channel's processing fee (Sale.processing_fee_amount, Integrations
 // plan §5) as NEGATIVE `processing_fee` lines, so earned income is what she
-// actually received. The fee was taken from the buyer's payments, so it is split
-// across the sale's cash components in proportion to their size and follows each
-// one: earned with a paid deposit, anticipated with an owed balance, filed under
-// the same `when`, and dropped with whatever a released sale drops (a lost sale
-// has no components, so no fee either). Kept OUT of saleComponents on purpose:
-// that feeds the invoice and paidOnSale, which show the buyer's own amounts.
-// `components` are the sale's dated components; `gross` is the full sale value
-// they'd sum to while open, so a cancelled sale keeps only the paid share's fee.
-function feeComponents(s, components, gross) {
+// actually received. Each payment's fee is on the payment that paid it (review
+// K10-4): the deposit's part (`depositFeePart`: Stripe's reported fee for the
+// deposit, else the estimate from the account it was paid via, else its share by
+// size) goes with the deposit, and the rest with the other parts, by size. Each
+// line follows its part: earned with money received, anticipated with money owed,
+// filed under the same `when`. When a sale ends, the fee of money actually taken
+// stays a cost: the processor keeps it, even on a refund (a lost sale too).
+// Kept OUT of saleComponents on purpose: that feeds the invoice and paidOnSale,
+// which show the buyer's own amounts.
+//   cash       the sale's dated components (ledgerComponents)
+//   open       the components it would have while open (the same, unless released)
+//   paid       { deposit, rest, restWhen }: money received on a released sale, for
+//              its kept fee (from the statement of the sale as if open)
+export function feeComponents(s, cash, { open = cash, depositPart = null, paid = null } = {}) {
   const fee = num(s.processing_fee_amount);
-  if (!(fee > 0) || !(gross > 0) || !components.length) return [];
+  if (!(fee > 0)) return [];
+  const isDep = (c) => c.component === 'deposit';
+  const depGross = open.filter(isDep).reduce((t, c) => t + c.amount, 0);
+  const restGross = open.filter((c) => !isDep(c)).reduce((t, c) => t + c.amount, 0);
+  const gross = depGross + restGross;
+  if (!(gross > 0)) return [];
+  const depFee = round2(Math.min(fee, Math.max(0, depositPart ?? (fee * depGross / gross))));
+  const restFee = round2(fee - depFee);
   const out = [];
-  for (const c of components) {
-    const share = Math.round((fee * c.amount / gross) * 100) / 100;
-    if (share) out.push({ component: 'processing_fee', amount: -share, state: c.state, when: c.when, due: '' });
+  const spread = (lines, total, base) => {
+    if (!(total > 0) || !(base > 0)) return;
+    const start = out.length;
+    for (const c of lines) {
+      const share = round2(total * c.amount / base);
+      if (share) out.push({ component: 'processing_fee', amount: -share, state: c.state, when: c.when, due: '' });
+    }
+    // Cents lost to rounding go on the last line when every part is here.
+    const kept = lines.reduce((t, c) => t + c.amount, 0);
+    if (out.length > start && Math.abs(kept - base) < 0.005) {
+      const sum = out.slice(start).reduce((t, c) => t + c.amount, 0);
+      out[out.length - 1].amount = round2(out[out.length - 1].amount - (total + sum));
+    }
+  };
+  if (cash.length) {
+    spread(cash.filter(isDep), depFee, depGross);
+    spread(cash.filter((c) => !isDep(c)), restFee, restGross);
+  } else if (paid) {
+    // A lost sale counts no income, but what the processor kept on money taken is a cost.
+    if (paid.deposit > 0 && depGross > 0) out.push({ component: 'processing_fee', amount: -round2(depFee * Math.min(paid.deposit / depGross, 1)), state: 'earned', when: s.deposit_date || s.sale_date || String(s.created_at || '').slice(0, 10), due: '' });
+    if (paid.rest > 0 && restGross > 0) out.push({ component: 'processing_fee', amount: -round2(restFee * Math.min(paid.rest / restGross, 1)), state: 'earned', when: paid.restWhen || s.balance_paid_date || s.sale_date || String(s.created_at || '').slice(0, 10), due: '' });
   }
-  // Cents lost to rounding go on the last line, so a fully earned sale's fee
-  // lines add up to exactly the stored fee.
-  const kept = components.reduce((t, c) => t + c.amount, 0);
-  if (out.length && Math.abs(kept - gross) < 0.005) {
-    const sum = out.reduce((t, c) => t + c.amount, 0);
-    out[out.length - 1].amount = Math.round((out[out.length - 1].amount - (fee + sum)) * 100) / 100;
-  }
-  return out;
+  return out.filter((c) => c.amount);
+}
+
+// How much of the sale's processing fee is the deposit's: Stripe's reported fee for
+// it (processing_fee_reports), else the estimate from the account it was paid via
+// (processingFees.saleFeeEstimate), else null (shared by size).
+export function depositFeePart(s, accountsById = new Map()) {
+  const reports = Array.isArray(s.processing_fee_reports) ? s.processing_fee_reports.filter((r) => r && r.component === 'deposit') : [];
+  if (reports.length) return round2(reports.reduce((t, r) => t + (Number(r.fee) || 0), 0));
+  const est = saleFeeEstimate(s, accountsById);
+  return est?.parts?.deposit ?? null;
 }
 
 // --- The ledger: a sale's income from its payment statement (Payment Schedule plan §4) ---
@@ -222,7 +257,9 @@ function feeComponents(s, components, gross) {
 // that much of what was paid isn't earned here: the deposit first, then the rest in order.
 // It's earned on the sale the credit pays. (A lost sale already counts nothing.)
 export function ledgerComponents(s, st, { today = todayYMD(), carriedOut = 0 } = {}) {
-  const fallback = s.sale_date || s.deposit_date || s.balance_paid_date || '';
+  // With no date at all, the day the sale was entered, so its money is in a month
+  // (every report files by month) and not only in the Overview (review K10-5).
+  const fallback = s.sale_date || s.deposit_date || s.balance_paid_date || String(s.created_at || '').slice(0, 10);
   const keptIds = new Set(saleExtraCharges(s).filter((x) => x.kept_after_cancel).map((x) => x.id));
   const isKept = (key) => key.startsWith('extra:') && keptIds.has(key.split(':')[1]);
   const lost = isLostSale(s);
@@ -458,7 +495,10 @@ export function familyCredit(entry, sale, feeCredit = 0) {
   const credits = creditsOf(entry);
   if (!credits.length) return null;
   const alloc = allocateCredits(credits, [...feeCharge(entry), ...saleCreditCharges(sale, feeCredit)]);
-  const date = credits[0].date || null;
+  // When the credits it used had all come in: the latest of the credits that paid
+  // something (review K10-7: it was the oldest, filing June's money in January).
+  const used = credits.filter((cr) => alloc.perCredit[cr.id] > 0 && cr.date).map((cr) => cr.date).sort();
+  const date = used[used.length - 1] || credits[0].date || null;
   const byKey = Object.fromEntries(Object.entries(alloc.byKey).filter(([k]) => k !== 'fee'));
   return { ...alloc, date, received: { byKey, date } };
 }
@@ -660,7 +700,7 @@ export async function getCreditedByLine(source, id) {
 // else and the active scope applies (Multi-Kennel Scope Spec §7/§8).
 export async function getIncomeRows({ includeArchived = false, kennelId = null, today = todayYMD() } = {}) {
   const scopeTo = (list) => (kennelId ? list.filter((r) => r.kennel_id === kennelId) : inScopeOnly(list));
-  const [sales, studs, dogs, contacts, entries, offers, kennels, litters, placements] = await Promise.all([
+  const [sales, studs, dogs, contacts, entries, offers, kennels, litters, placements, accounts] = await Promise.all([
     saleRepo.getAll({ includeArchived }),
     studServiceRepo.getAll({ includeArchived }),
     dogRepo.getAll({ includeArchived: true }),
@@ -671,8 +711,10 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
     editionFlags.waitlist ? waitlistOfferRepo.getAll() : [],
     kennelRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: true }),
-    eventRepo.getByType('placement')
+    eventRepo.getByType('placement'),
+    accountRepo.getAll({ includeArchived: true })
   ]);
+  const accountsById = new Map(accounts.map((a) => [a.id, a]));
   const creditCtx = { entries: entries.filter((e) => !e.is_archived), offers, sales, kennels };
   // Credits come from ALL entries (not just in-scope ones): a sale's credit is a
   // fact about that sale, whichever kennel the app is scoped to.
@@ -706,13 +748,22 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
       kennel: kennelById.get(s.kennel_id) || null, ctx: creditCtx, feeBySale: creditBySale, today
     });
     const cash = ledgerComponents(s, paymentStatement(s, opts), { today, carriedOut: carriedOut.get(s.id) || 0 });
-    if (!cash.length) continue; // no money on this sale — nothing to show
-    // The processing fee is shared over the sale's full value while open, so a released
-    // sale keeps only the paid share's fee.
+    // The processing fee follows each part over the sale's full value while open, so a
+    // released sale keeps the fee of what was paid (a lost sale too: a cost, K10-4).
     const released = RELEASED_SALE_STATUSES.includes(s.status);
-    const reopened = released ? { ...s, status: 'deposit_pending', end_reason: null } : null;
-    const gross = released ? ledgerComponents(reopened, paymentStatement(reopened, opts), { today }).reduce((t, c) => t + c.amount, 0) : cash.reduce((t, c) => t + c.amount, 0);
-    const components = [...cash, ...feeComponents(s, cash, gross)];
+    let open = cash;
+    let paid = null;
+    if (released) {
+      const reopened = { ...s, status: 'deposit_pending', end_reason: null };
+      const rst = paymentStatement(reopened, opts);
+      open = ledgerComponents(reopened, rst, { today });
+      const depPaid = rst.deposit?.paid || 0;
+      const lastPay = rst.received.filter((m) => m.kind !== 'deposit' && m.kind !== 'fee' && m.kind !== 'credit' && m.date).map((m) => m.date).sort().pop() || '';
+      paid = { deposit: depPaid, rest: Math.max(0, round2(rst.paid - depPaid - rst.received.filter((m) => m.kind === 'credit' || m.kind === 'fee').reduce((t, m) => t + m.amount, 0))), restWhen: lastPay };
+    }
+    const fees = feeComponents(s, cash, { open, paid, depositPart: depositFeePart(s, accountsById) });
+    if (!cash.length && !fees.length) continue; // no money on this sale — nothing to show
+    const components = [...cash, ...fees];
     rows.push({
       source_type: 'sale',
       source_id: s.id,
@@ -738,7 +789,8 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
 
   for (const s of scopeTo(studs)) {
     if (ourRole(s, dogById) !== 'stud') continue; // our dam's service = we pay = an expense
-    const components = studComponents(s).map((c) => ({ ...c, when: s.returned_date || s.sent_date || '' }));
+    // No dates: the day it was entered (review K10-5).
+    const components = studComponents(s).map((c) => ({ ...c, when: s.returned_date || s.sent_date || String(s.created_at || '').slice(0, 10) }));
     if (!components.length) continue;
     rows.push({
       source_type: 'stud',
@@ -769,11 +821,14 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
     if (num(e.fee_processing_amount) > 0) {
       components.push({ component: 'processing_fee', amount: -num(e.fee_processing_amount), state: 'earned', when: e.fee_received_date, due: '' });
     }
-    // A credited fee on a placed family is part of THAT pup's price, so it rolls up
-    // to the pup's litter (the Sale's balance was netted by it above — without
-    // this the litter P&L would lose the credit). Any other fee isn't litter money.
-    const creditedSale = e.placed_sale_id && e.fee_credit_policy === 'credited_to_purchase'
-      ? sales.find((x) => x.id === e.placed_sale_id) : null;
+    // A credited fee is part of THAT pup's price, so it rolls up to the pup's litter
+    // (the Sale was netted by it above — without this the litter P&L would lose the
+    // credit). The same sale feeCreditsBySale credits: the placed family's, or a pick's
+    // or side sale's still waiting on its deposit (review K10-8). Any other fee
+    // isn't litter money.
+    const creditedId = e.fee_credit_policy === 'credited_to_purchase'
+      ? e.placed_sale_id || creditSale(e, sales, offers, entries)?.id : null;
+    const creditedSale = creditedId ? sales.find((x) => x.id === creditedId) : null;
     const pup = creditedSale ? dogById.get(creditedSale.dog_id) : null;
     rows.push({
       source_type: 'waitlist',

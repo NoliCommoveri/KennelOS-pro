@@ -425,7 +425,7 @@ async function offerDepositFeeChargeBack(saved, before) {
   if (!offer || offerFor(before)) return saved;
   const ok = await confirmModal({
     title: `Add the ${offer.label.replace(/ fee$/, '')} fee to the balance?`,
-    message: `The deposit was paid through ${ctx.accountsById.get(saved.deposit_paid_via_account_id)?.name || 'an account'}, which took about ${fmtMoney(offer.amount)}. Add "${offer.label}" (${fmtMoney(offer.amount)}) as an extra charge, so it's on the balance invoice? You can change or remove it on the sale.`,
+    message: `The deposit was paid through ${ctx.accountsById.get(saved.deposit_paid_via_account_id)?.name || 'an account'}, which took about ${fmtMoney(offer.amount)}. Add "${offer.label}" (${fmtMoney(offer.amount)}) as an extra charge? Fees charged back are collected with the final payment. You can change or remove it on the sale.`,
     confirmLabel: 'Add it', cancelLabel: 'Skip'
   });
   if (!ok) return saved;

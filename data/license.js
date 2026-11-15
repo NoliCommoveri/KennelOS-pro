@@ -64,9 +64,14 @@ export const isLicenseGated = () => Boolean(editionFlags.licenseGate);
 //                 shorter/stricter grace window, per the plan's "unknown → shorter" rule.
 // Lifetime is checked first so a hypothetical "lifetime annual"-style name can't be
 // misread as a renewing yearly sub.
+// The defaults read the ways a store names these tiers ("Forever", "One-time
+// purchase", "12 months", "1 yr"), since a misread lifetime key walls after three
+// days offline on the renewal wall (review K05-9).
+export const DEFAULT_LIFETIME_PATTERN = 'lifetime|perpetual|forever|one[\\s-]?time';
+export const DEFAULT_YEARLY_PATTERN = 'year|annual|12\\s*-?\\s*months?|\\byrs?\\b';
 export function detectInterval(variantName) {
-  const lifetimePattern = licenseConfig?.lifetimeVariantPattern || 'lifetime|perpetual';
-  const yearlyPattern = licenseConfig?.yearlyVariantPattern || 'year|annual';
+  const lifetimePattern = licenseConfig?.lifetimeVariantPattern || DEFAULT_LIFETIME_PATTERN;
+  const yearlyPattern = licenseConfig?.yearlyVariantPattern || DEFAULT_YEARLY_PATTERN;
   try {
     if (variantName && new RegExp(lifetimePattern, 'i').test(variantName)) return 'lifetime';
   } catch { /* a bad custom pattern just means "not lifetime" */ }

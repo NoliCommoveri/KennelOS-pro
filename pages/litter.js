@@ -11,7 +11,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { extraChargesTotal } from '../data/extraCharges.js';
-import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, descriptor } from '../data/vocab.js';
+import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, RELEASED_SALE_STATUSES, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { litterMarked, LIVE_LITTER_STATUSES } from '../data/siteExport.js';
@@ -950,7 +950,11 @@ async function renderIncomeSection() {
   const puppyById = new Map(puppies.map((d) => [d.id, d]));
   const contacts = await contactRepo.getAll({ includeArchived: true });
   const contactById = new Map(contacts.map((c) => [c.id, c]));
-  const total = sales.reduce((t, s) => t + saleValue(s), 0);
+  // Sales that fell through (cancelled, voided, returned) stay listed but aren't in
+  // the total: the pup may be sold again (review K10-3). What she kept of one is on
+  // the Litter P&L.
+  const ended = (s) => RELEASED_SALE_STATUSES.includes(s.status);
+  const total = sales.filter((s) => !ended(s)).reduce((t, s) => t + saleValue(s), 0);
 
   const rowsHtml = sales.length
     ? `<ul class="linked-list" style="margin:14px 0 0; padding:0; list-style:none;">` + sales.map((s) => {
@@ -962,7 +966,7 @@ async function renderIncomeSection() {
         const extras = [t ? `transport ${fmtMoney(t)}` : '', b ? `boarding ${fmtMoney(b)}` : '', x ? `extra charges ${fmtMoney(x)}` : ''].filter(Boolean).join(', ');
         return `<li class="row-between" style="padding:8px 0; border-top:1px solid var(--border); gap:12px;">
           <span><a href="sale.html?id=${encodeURIComponent(s.id)}">${esc(puppy?.call_name || 'Puppy')}</a> <span class="faint">→ ${esc(buyer)}</span> ${badge(SALE_STATUS, s.status)}</span>
-          <span style="text-align:right;"><strong>${esc(fmtMoney(saleValue(s)))}</strong>${extras ? `<br><span class="faint" style="font-size:12px;">${esc('incl. ' + extras)}</span>` : ''}</span>
+          <span style="text-align:right;">${ended(s) ? `<span class="faint" style="text-decoration:line-through;">${esc(fmtMoney(saleValue(s)))}</span><br><span class="faint" style="font-size:12px;">not in the total</span>` : `<strong>${esc(fmtMoney(saleValue(s)))}</strong>`}${!ended(s) && extras ? `<br><span class="faint" style="font-size:12px;">${esc('incl. ' + extras)}</span>` : ''}</span>
         </li>`;
       }).join('') + `</ul>`
     : `<p class="muted" style="margin:14px 0 0;">No sales recorded for this litter's puppies yet.</p>`;
@@ -977,7 +981,7 @@ async function renderIncomeSection() {
         ${sales.length ? `<strong style="font-size:18px;">${esc(fmtMoney(total))}</strong>` : ''}
       </div>
       <div class="collapsible-content" id="inc-content" style="display:block; margin-top:12px;">
-        <p class="muted" style="margin:0; font-size:13px;">Total sale value (price + transport + boarding). Earned-vs-anticipated and net live on the litter P&amp;L report.</p>
+        <p class="muted" style="margin:0; font-size:13px;">Total sale value of the sales still going (price, transport, boarding and extras); one that fell through isn't in it. Earned-vs-anticipated and net live on the litter P&amp;L report.</p>
         ${rowsHtml}
       </div>
     </section>`;
@@ -1053,6 +1057,10 @@ async function main() {
       ctx.draft.sire_id = p.sire_id || '';
       // Sensible default status: a just-created pairing→litter is usually expected.
       ctx.draft.status = 'expected';
+      // Its date is the pairing's due date (else 63 days after the first date),
+      // never the day it was typed in, and the ready date follows (review K09-3).
+      ctx.draft.whelp_date = p.expected_due_date || (p.planned_date ? addDaysToYMD(p.planned_date, 63) : '');
+      ctx.draft.estimated_ready_date = ctx.draft.whelp_date ? addDaysToYMD(ctx.draft.whelp_date, READY_DAYS_AFTER_WHELP) : '';
     }
     // "Show this on the website?" pre-ticked from its pairing, else when the dam is
     // on the website (KennelPort plan 5.3).

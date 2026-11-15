@@ -5,6 +5,8 @@
 //   • renewal wall — subscription lapsed past its grace window: renew / re-enter.
 //   • grace banner — validated but past the printed expiry (or offline within
 //     grace): a dismissible strip; the app stays usable.
+// Every wall also offers "Download a backup of this device" once the device holds
+// records: the license gates the app, never her records.
 //
 // The walls are a full-screen, non-dismissible overlay reusing the .modal look.
 // This is a GATE, not a vault (see the honest caveat in license.js) — a blocking
@@ -49,6 +51,65 @@ function mountWall(innerHtml) {
   return overlay.querySelector('.license-wall');
 }
 
+// --- Her records, from behind any wall ---------------------------------------
+// The editions plan: whatever the license does, the records stay exportable. Each
+// wall offers the same download as Import/Export, shown once this device holds any
+// records (a first-run device has nothing to save). Loaded only when a wall shows
+// (review K05-3).
+const BACKUP_HTML = `<div class="license-backup" id="license-backup" hidden>
+    <p class="license-note"><span id="license-backup-count"></span> They stay here whatever happens to the license, and you can take a copy any time:
+      <button type="button" class="license-link" id="license-download">Download a backup of this device</button></p>
+    <p class="license-note" id="license-backup-status" role="status"></p>
+  </div>`;
+
+async function wireBackup(card) {
+  const block = card.querySelector('#license-backup');
+  if (!block) return;
+  let mod;
+  try {
+    mod = await import('../data/importExport.js');
+    const n = await mod.countRecords();
+    if (!n) return;
+    card.querySelector('#license-backup-count').textContent = `This device holds ${n} record${n === 1 ? '' : 's'}.`;
+    block.hidden = false;
+  } catch (err) {
+    console.warn('KennelOS: license wall backup', err);
+    return;
+  }
+  const button = card.querySelector('#license-download');
+  const status = card.querySelector('#license-backup-status');
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    status.textContent = 'Preparing the backup…';
+    try {
+      const data = await mod.downloadBackup();
+      status.textContent = `Saved to your downloads (the backup of ${data.exported_at.slice(0, 10)}). Keep it somewhere safe: Import brings it back on any device.`;
+    } catch (err) {
+      status.textContent = `The backup didn't download (${err?.message || err}). Try again.`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+// "Free a lost device's slot", through the cloud backup account (Cloud Phase 1
+// plan §2.5): the wall can't reach Import/Export, so it's opened from here.
+const lostDeviceHtml = () => (isCloudAvailable()
+  ? `<p class="license-note">Lost a device, and every slot is used? <a href="#" class="license-link" id="license-lost-device">Free a lost device's slot</a> through your cloud backup account (for devices that had cloud backup on).</p>`
+  : '');
+
+function wireLostDevice(card, keyOf) {
+  card.querySelector('#license-lost-device')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      const { openDevicesFromLicenseWall } = await import('./cloudBackupUI.js');
+      await openDevicesFromLicenseWall({ key: keyOf() });
+    } catch (err) {
+      console.warn('KennelOS: lost device', err);
+    }
+  });
+}
+
 // --- Activation wall (first run) -------------------------------------------
 function renderActivationWall() {
   const card = mountWall(`
@@ -72,26 +133,18 @@ function renderActivationWall() {
       </div>
     </form>
     <p class="license-note">Your key covers a set number of devices. Naming this one makes it easy to tell your devices apart later — you can release a device from <strong>Settings</strong> when you stop using it, which frees its slot.</p>
-    ${isCloudAvailable() ? `<p class="license-note">Lost a device, and every slot is used? <a href="#" class="license-link" id="license-lost-device">Free a lost device's slot</a> through your cloud backup account (for devices that had cloud backup on).</p>` : ''}
+    ${lostDeviceHtml()}
     <p class="license-note">Just upgrading from Lite? After activating, use <strong>Import</strong> to bring in the backup you exported.</p>
+    ${BACKUP_HTML}
   `);
   wireActivationForm(card);
+  wireBackup(card);
 }
 
 function wireActivationForm(card) {
   const form = card.querySelector('#license-form');
   const input = card.querySelector('#license-key-input');
-  // Cloud Phase 1 plan §2.5: the wall can't reach Import/Export, so the lost
-  // device's slot is freed from here. Loaded only when clicked.
-  card.querySelector('#license-lost-device')?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    try {
-      const { openDevicesFromLicenseWall } = await import('./cloudBackupUI.js');
-      await openDevicesFromLicenseWall({ key: input.value.trim() });
-    } catch (err) {
-      console.warn('KennelOS: lost device', err);
-    }
-  });
+  wireLostDevice(card, () => input.value.trim());
   const deviceInput = card.querySelector('#license-device-input');
   const errorSlot = card.querySelector('#license-error');
   const button = card.querySelector('#license-activate');
@@ -136,6 +189,7 @@ function renderReconnectWall() {
       ${portalLinkHtml('Manage my license')}
       <button type="button" class="license-link" id="license-reset">Use a different key</button>
     </div>
+    ${BACKUP_HTML}
   `);
   wireRenewalWall(card);
 }
@@ -154,11 +208,15 @@ function renderRenewalWall() {
       ${portalLinkHtml('Manage subscription')}
       <button type="button" class="license-link" id="license-reset">Use a different key</button>
     </div>
+    ${lostDeviceHtml()}
+    ${BACKUP_HTML}
   `);
   wireRenewalWall(card);
 }
 
 function wireRenewalWall(card) {
+  wireBackup(card);
+  wireLostDevice(card, () => getProLicense()?.key || '');
   const errorSlot = card.querySelector('#license-error');
   const recheck = card.querySelector('#license-recheck');
   recheck.addEventListener('click', async () => {

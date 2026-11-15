@@ -124,6 +124,12 @@ export function errorText(e) {
   if (e instanceof CloudConflictError && e.code === 'email_taken') {
     return 'That email already has its own KennelOS account. Use another address, or delete that account first.';
   }
+  // Sync, alerts and integrations need a Pro purchase on record for the account's email.
+  if (e?.code === 'pro_required') {
+    return e.extra?.lapsed
+      ? 'The Pro purchase on record for this account’s email has ended. Renew it, or link the email you bought Pro with (Settings → Account).'
+      : 'There’s no Pro purchase on record for this account’s email yet. Link the email you bought Pro with (Settings → Account), or get in touch.';
+  }
   if (e instanceof CloudRequestError) {
     switch (e.code) {
       case 'bad_email': return "That doesn't look like an email address.";
@@ -142,6 +148,7 @@ export function errorText(e) {
       case 'helper_not_allowed': return 'Only the account’s owner can do that, on her own device.';
       case 'link_expired': return 'That assist link has expired or was already used. Make a new one in KennelOS Assist.';
       case 'still_in_setup': return 'KennelOS support is still setting up this account.';
+      case 'too_many_pairings': return 'This account is still waiting on earlier unlock requests. Give it a few minutes, then try again.';
       default: return `Cloud backup refused that (${e.code || e.status}).`;
     }
   }
@@ -418,9 +425,12 @@ function recoverAccountScreens(body, { email = '', onBack, onDone }) {
 
 function recoveryErrorText(e) {
   if (e?.name === 'RecoveryError') {
+    // not_ready: the code opened her real vault, but the server has no recovery check
+    // for it yet (a vault from before the check existed). no_match: the code opened
+    // nothing, which is also what an account with no vault answers (review K05-6).
     return e.code === 'not_ready'
-      ? "This account can't be recovered with a recovery code. Recovery codes come with Sensitive records, and none has been set up here. If any device can still get into your old email, sign in there instead."
-      : "That recovery code doesn't match this account. Check it and try again.";
+      ? "That recovery code is right, but this account hasn't been set up for recovery yet. Open KennelOS on a device that's still signed in to it (it finishes the setup by itself), then try again here."
+      : "We couldn't match that code to this account. Check it and try again. Recovery codes come with Sensitive records: if you never turned those on, a code can't get you back in. Sign in on a device that still has your account, or get in touch.";
   }
   return errorText(e);
 }

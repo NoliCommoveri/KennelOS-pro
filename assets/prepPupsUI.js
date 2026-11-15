@@ -32,7 +32,7 @@ import { breedFeedingScheduleRepo } from '../data/breedFeedingScheduleRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { portalOn } from '../data/portalFeed.js';
-import { saleExtraCharges, kennelChargeList, kennelChargeGroups, chargeFromPriceList, depositFeeChargeBack } from '../data/extraCharges.js';
+import { saleExtraCharges, kennelChargeList, kennelChargeGroups, chargeFromPriceList, feeChargeBackOffers } from '../data/extraCharges.js';
 import { businessDays, waitlistConfig } from '../data/waitlistRules.js';
 import { depositPaid, getSaleStatement, getSaleStatements } from '../data/incomeView.js';
 import { newPayment, paymentsWith, paidInFullOffer, paidInFullChanges, nextPaymentText, owedBy } from '../data/paymentSchedule.js';
@@ -735,12 +735,17 @@ class Prep {
     let sale = await saleRepo.getById(r.sale.id);
     let changed = false;
     const who = esc(r.buyer?.name || 'the family');
-    const account = sale.deposit_paid_via_account_id ? await accountRepo.getById(sale.deposit_paid_via_account_id) : null;
-    const offer = depositFeeChargeBack(sale, account, depositPaid(sale));
-    if (offer) {
-      await this.chat.say(`${who}'s deposit came through ${esc(account.name)}, which took about ${esc(fmtMoney(offer.amount))}. Add "${esc(offer.label)}" to their sale?`, { typing: 400 });
-      if ((await this.chat.choose([{ label: 'Add it', value: 'go', primary: true }, { label: 'Skip', value: '' }])) === 'go') {
-        sale = await saleRepo.update(sale.id, { extra_charges: [...saleExtraCharges(sale), { id: crypto.randomUUID(), ...offer }] });
+    // Every fee charged back the sale doesn't carry yet: the deposit's and each
+    // payment's through an account set to charge it back. They ride on the last payment.
+    const accountsById = new Map((await accountRepo.getAll()).map((a) => [a.id, a]));
+    const remaining = (await getSaleStatement(sale))?.statement?.remaining ?? 0;
+    const offers = feeChargeBackOffers(sale, accountsById, { depositPaid: depositPaid(sale), remaining });
+    if (offers.length) {
+      const total = offers.reduce((t, o) => t + o.amount, 0);
+      const list = offers.map((o) => `${esc(o.label)} ${esc(fmtMoney(o.amount))}`).join(', ');
+      await this.chat.say(`${offers.length === 1 ? `One of ${who}'s payments` : `${offers.length} of ${who}'s payments`} came through an account you charge the fee back for: ${list}. Add ${offers.length === 1 ? 'it' : `them (${esc(fmtMoney(total))})`} to what they pay last?`, { typing: 400 });
+      if ((await this.chat.choose([{ label: offers.length === 1 ? 'Add it' : 'Add them', value: 'go', primary: true }, { label: 'Skip', value: '' }])) === 'go') {
+        sale = await saleRepo.update(sale.id, { extra_charges: [...saleExtraCharges(sale), ...offers.map((o) => ({ id: crypto.randomUUID(), ...o }))] });
         changed = true;
       }
     }

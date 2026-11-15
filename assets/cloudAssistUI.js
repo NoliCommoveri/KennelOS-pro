@@ -18,7 +18,8 @@ import {
   assistTokenInUrl, stripAssistToken, redeemAssistLink, isHelperDevice, assistState, requestHelp, endHelp,
   markClaimed, shouldAutoApprove, autoApproveOnce, unlockAutomatically
 } from '../data/cloud/cloudAssist.js';
-import { currentAccount } from '../data/cloud/cloudAuth.js';
+import { currentAccount, sessionToken } from '../data/cloud/cloudAuth.js';
+import { entitlement } from '../data/cloud/cloudEntitlement.js';
 import { vaultStatus, startVaultSetup, finishVaultSetup } from '../data/cloud/cloudVault.js';
 import { prepareDirectJoin, adoptOwnKennel } from '../data/cloud/cloudBackup.js';
 import { enableSync, syncStatus } from '../data/cloud/cloudSync.js';
@@ -43,13 +44,21 @@ export async function openAssistLink() {
     return !!r;
   } catch (e) {
     await alertModal({
-      title: 'That link didn’t work',
+      title: e?.code === 'device_holds_records' ? 'This browser holds another account’s records' : 'That link didn’t work',
       message: e?.code === 'link_expired'
         ? 'Assist links work once, for 15 minutes. Make a new one in KennelOS Assist.'
-        : e?.code === 'help_not_requested' ? 'She hasn’t asked for help. She presses Get help in Settings first.' : errorText(e)
+        : e?.code === 'help_not_requested' ? 'She hasn’t asked for help. She presses Get help in Settings first.'
+          : e?.code === 'device_holds_records' ? deviceInUseText(e) : errorText(e)
     });
     return false;
   }
+}
+
+// Opening it here would have synced those records into her account as hers, so
+// nothing was signed in or copied (review K05-1).
+function deviceInUseText(e) {
+  return `${e.heldFor ? `This browser still holds ${e.heldFor}’s records: press Hand back there first.` : 'This browser holds records from another account.'} `
+    + 'Open assist links only in a browser profile kept for this user alone (or an empty one). Nothing was signed in or copied. The link is used up: make a new one in KennelOS Assist.';
 }
 
 // Support's device, once per program: in setup, the vault (a recovery code nobody needs
@@ -72,6 +81,17 @@ async function setUpForHer(programId) {
     if (v.enabled && !v.unlocked) {
       pg.close();
       await alertModal({ title: 'Her private records are locked here', message: 'This account already has private records turned on, from another device. Use the device you started the setup on, or delete the account in KennelOS Assist and start again.' });
+      return;
+    }
+    // Keeping devices in step needs her Pro purchase on record: check before anything
+    // is turned on, so a missing one doesn't leave the program half built (review K05-7).
+    const e = await entitlement({ fresh: true });
+    if (!e?.pro) {
+      pg.close();
+      await alertModal({
+        title: 'No Pro purchase on record for her yet',
+        message: `KennelOS has no Pro purchase for ${herName()}’s account email${e?.lapsed ? ' that is still active' : ''}, so her devices can’t be kept in step yet. Nothing was turned on.\n\nCheck /ops → Pro purchases (an older purchase may need the backfill there), or wait until she has bought Pro with this email. Then open this page again.`
+      });
       return;
     }
     prepareDirectJoin(); // backup on, first-run's sample data question skipped
@@ -112,7 +132,7 @@ async function joinHer(programId) {
     if (joined) { await adoptOwnKennel(); setAssistReady(programId); globalThis.location?.reload?.(); }
   } catch (e) {
     overlay.remove();
-    await alertModal({ title: 'Couldn’t connect', message: errorText(e) });
+    await alertModal({ title: 'Couldn’t connect', message: pairingErrorText(e) });
   }
 }
 
@@ -138,15 +158,19 @@ export function renderHelperBar() {
   if (typeof ResizeObserver === 'function') new ResizeObserver(setHeight).observe(bar);
 }
 
+// The wipe never waits on the server (review K05-8): offline, her records go from
+// this device now and End help is sent when it's next online.
 async function handBack() {
   const ok = await confirmModal({
     title: 'Hand back?',
-    message: `Your access to ${herName()}’s account ends now, and her records are wiped from this device. Everything you set up stays in her account.`,
+    message: `Your access to ${herName()}’s account ends now, and her records are wiped from this device. Everything you set up stays in her account. If this device is offline, the wipe happens now and your access ends as soon as it’s back online.`,
     confirmLabel: 'Hand back'
   });
   if (!ok) return;
-  try { await endHelp(); } catch (e) { if (e?.name !== 'CloudErasedError') { await alertModal({ title: 'That didn’t work', message: errorText(e) }); return; } }
-  await eraseThisDevice();
+  const token = sessionToken();
+  let ended = false;
+  try { await endHelp(); ended = true; } catch (e) { if (e?.name === 'CloudErasedError') ended = true; }
+  await eraseThisDevice(token, { endHelpToken: ended ? null : token });
 }
 
 // --- The automatic vault hand-over, on whichever side gives the key ---------------------
@@ -198,7 +222,7 @@ export async function claimAssistedAccount() {
     overlay.querySelector('[data-cancel]').addEventListener('click', () => controller.abort());
     const r = await unlockAutomatically({ label: account.deviceLabel, signal: controller.signal }).catch((e) => ({ status: 'error', e }));
     overlay.remove();
-    if (r.status === 'error') { await alertModal({ title: 'That didn’t work', message: errorText(r.e) }); return false; }
+    if (r.status === 'error') { await alertModal({ title: 'That didn’t work', message: pairingErrorText(r.e) }); return false; }
     if (r.status !== 'unlocked') return false;
   }
   if (!syncStatus().enabled) {
@@ -212,7 +236,7 @@ export async function claimAssistedAccount() {
   for (;;) {
     await alertModal({ title: 'One last step: your recovery code', message: 'Support made a temporary one while setting up. Make your own now and keep it somewhere safe: with it, you can always get your private records back. Support never sees it.' });
     if (await (await vaultUI()).newRecoveryCodeFlow()) break;
-    if (!(await confirmModal({ title: 'Finish setting up?', message: 'Your kennel is ready, but until you make your own recovery code, support’s temporary one still works.', confirmLabel: 'Make my code', cancelLabel: 'Later' }))) return false;
+    if (!(await confirmModal({ title: 'Finish setting up?', message: 'Your kennel is ready, but until you make your own recovery code, support’s temporary one still works, and support stays signed in to your account. You can end their access any time: Settings → Account → End support’s access.', confirmLabel: 'Make my code', cancelLabel: 'Later' }))) return false;
   }
   try { await markClaimed(); } catch (e) { await alertModal({ title: 'Almost done', message: `${errorText(e)} It will finish next time you open KennelOS.` }); return false; }
   st = null;
@@ -220,30 +244,48 @@ export async function claimAssistedAccount() {
   return true;
 }
 
+// The vault hand-over's errors, in words for that flow: its server caps count
+// requests for her private records, not sign-in codes (review K05-5).
+function pairingErrorText(e) {
+  if (e?.code === 'too_many_pairings' || e?.code === 'rate_limited') {
+    return 'KennelOS is still waiting on earlier requests for your private records. Give it a few minutes, then open KennelOS again: it picks up where it left off.';
+  }
+  return errorText(e);
+}
+
 // --- Settings → Account: help from KennelOS support ----------------------------------------
 
 const STATE_LINE = {
   requested: 'You asked for help. Support will connect soon: keep KennelOS open on this device so it can hand over your private records.',
   helping: 'KennelOS support is helping you now. They can see and change your records until you end it.',
-  setup: 'KennelOS support is setting up your account.',
+  setup: 'KennelOS support is setting up your account. They can see and change your records until the setup is finished or you end their access.',
 };
 
-export function helpSectionHtml(state) {
+// `canEndSetup`: in setup, End is offered once this device holds her private records'
+// key (or there is none), so ending support's access can't strand them on support's
+// device (review K05-4).
+export function helpSectionHtml(state, { canEndSetup = false } = {}) {
   const s = state?.state;
   const helping = s === 'requested' || s === 'helping';
+  const button = helping ? '<button class="btn btn-sm btn-danger" data-assist="end">End help</button>'
+    : s === 'setup' ? (canEndSetup ? '<button class="btn btn-sm btn-danger" data-assist="end">End support’s access</button>' : '')
+      : '<button class="btn btn-sm" data-assist="help">Get help</button>';
   return `<h3 style="margin:16px 0 4px;font-size:15px;">Help from KennelOS support</h3>
     <p class="muted" style="font-size:13px;">${esc(STATE_LINE[s] || 'Stuck? Support can come into your account, set things up or fix them, and leave when you say.')}</p>
-    <div class="form-actions">${helping
-      ? '<button class="btn btn-sm btn-danger" data-assist="end">End help</button>'
-      : s === 'setup' ? '' : '<button class="btn btn-sm" data-assist="help">Get help</button>'}</div>`;
+    <div class="form-actions">${button}</div>`;
 }
 
 export async function mountHelpSection(slot) {
   if (!slot || isHelperDevice()) return;
   const render = async () => {
     const state = await assistState();
+    let canEndSetup = false;
+    if (state?.state === 'setup') {
+      const v = await vaultStatus().catch(() => null);
+      canEndSetup = !!v && (!v.enabled || v.unlocked);
+    }
     if (!slot.isConnected) return;
-    slot.innerHTML = helpSectionHtml(state);
+    slot.innerHTML = helpSectionHtml(state, { canEndSetup });
     slot.querySelector('[data-assist="help"]')?.addEventListener('click', async () => {
       const ok = await confirmModal({
         title: 'Ask KennelOS support for help?',
@@ -255,7 +297,12 @@ export async function mountHelpSection(slot) {
       render();
     });
     slot.querySelector('[data-assist="end"]')?.addEventListener('click', async () => {
-      if (!(await confirmModal({ title: 'End help?', message: 'Support’s access ends now, and their copy of your records is wiped. Anything they changed stays.', confirmLabel: 'End help' }))) return;
+      const inSetup = state?.state === 'setup';
+      if (!(await confirmModal({
+        title: inSetup ? 'End support’s access?' : 'End help?',
+        message: `Support’s access ends now. Their copy of your records is wiped the next time their device opens KennelOS. ${inSetup ? 'Everything they set up stays, and they can’t come back in unless you press Get help.' : 'Anything they changed stays.'}`,
+        confirmLabel: inSetup ? 'End access' : 'End help'
+      }))) return;
       try { await endHelp(); } catch (e) { await alertModal({ title: 'That didn’t work', message: errorText(e) }); }
       render();
     });

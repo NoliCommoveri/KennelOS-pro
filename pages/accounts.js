@@ -35,7 +35,7 @@ import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { websiteProducts } from '../data/siteExport.js';
 import { STRIPE_CURRENCIES, STRIPE_KEY_PERMISSIONS, stripeConnection, connectStripe, disconnectStripe } from '../data/stripeLinks.js';
-import { esc, badge, fmtMoney, confirmModal, alertModal } from '../assets/ui.js';
+import { esc, badge, fmtMoney, fmtDate, confirmModal, alertModal } from '../assets/ui.js';
 
 const els = {
   msg: document.getElementById('page-msg'),
@@ -423,6 +423,7 @@ function openForm(existing = null) {
     const st = await stripeConnection(accountId);
     stBox.innerHTML = st
       ? `<div class="jf-box"><span>Stripe one-time links are on for this device${st.testMode ? ' (<strong>test mode</strong>)' : ''}, in ${esc(st.currency.toUpperCase())}.</span>
+          ${st.lastError ? `<p class="inline-error" style="margin:6px 0;">The last check for paid links on this account failed (${esc(fmtDate(st.lastError.at.slice(0, 10)))}): ${esc(st.lastError.message)} Payments on its links aren't being recorded. Disconnect and connect a new restricted key with the permissions listed.</p>` : ''}
           <button type="button" class="btn btn-sm" id="af-st-off">Disconnect</button>
           <div id="af-st-msg" class="field-hint" role="status"></div></div>`
       : `<details class="jf-box"><summary><strong>Connect Stripe</strong> (optional): one-time links for the exact amount, marked paid by themselves</summary>

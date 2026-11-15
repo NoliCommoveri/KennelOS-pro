@@ -9,6 +9,7 @@
 // deliberately shows neither the earned/anticipated split nor this rolled-up
 // cost — that simplicity is intentional; the whole P&L lives here.)
 import { getIncomeRows } from './incomeView.js';
+import { RELEASED_SALE_STATUSES } from './vocab.js';
 import { expenseRepo } from './expenseRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { dogRepo } from './dogRepo.js';
@@ -43,7 +44,9 @@ export async function getLitterFinances() {
     const a = get(r.litter_id);
     a.earned += r.earned;
     a.anticipated += r.anticipated;
-    if (r.source_type === 'sale') a.puppiesSold += 1;
+    // A sale that fell through (cancelled, voided, returned) keeps whatever money it
+    // kept, but isn't a puppy sold: the pup may be sold again (review K10-3).
+    if (r.source_type === 'sale' && !RELEASED_SALE_STATUSES.includes(r.status)) a.puppiesSold += 1;
   }
 
   // Cost (option b): litter-subject expenses + each puppy's dog-subject expenses.

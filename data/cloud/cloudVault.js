@@ -290,7 +290,7 @@ export async function requestDeviceUnlock({ label = null, auto = false } = {}) {
   const pair = await generatePairingKeyPair();
   const code = newPairingCode();
   const { pairingId, expiresAt } = await api.createPairing(token, { publicKey: await exportPublicKey(pair.publicKey), label, autoCode: auto ? code : undefined });
-  await setPendingPairing(programId, { pairingId, privateKey: pair.privateKey, code, expiresAt });
+  await setPendingPairing(programId, { pairingId, privateKey: pair.privateKey, code, expiresAt, auto });
   return { pairingId, code: formatCode(code), expiresAt };
 }
 
@@ -301,7 +301,7 @@ export async function pendingDeviceUnlock({ now = Date.now() } = {}) {
   const p = await getPendingPairing(programId);
   if (!p) return null;
   if (Date.parse(p.expiresAt) <= now) { await clearPendingPairing(); return null; }
-  return { pairingId: p.pairingId, code: formatCode(p.code), expiresAt: p.expiresAt };
+  return { pairingId: p.pairingId, code: formatCode(p.code), expiresAt: p.expiresAt, auto: p.auto };
 }
 
 // New device, part 2: one poll. → { status: 'waiting', expiresAt } or

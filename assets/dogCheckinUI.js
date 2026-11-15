@@ -22,6 +22,8 @@
 // no draft.
 import { dogRepo } from '../data/dogRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
+import { pairingRepo } from '../data/pairingRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
 import { dogsInScope } from '../data/kennelScope.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -48,9 +50,11 @@ async function load() {
 export async function dogCheckinState() {
   const today = todayYMD();
   const { dogs, events } = await load();
+  // A dam bred or nursing isn't counted as a heat to watch for (as on Today).
+  const [pairings, litters] = await Promise.all([pairingRepo.getAll(), litterRepo.getAll()]);
   return {
     breeding: breedingDogs(dogs).length,
-    heatsDue: heatForecast(dogs, events, today).filter((h) => h.state !== 'later').length,
+    heatsDue: heatForecast(dogs, events, today, { pairings, litters }).filter((h) => h.state !== 'later').length,
     missing: preventativeGaps(dogs, events, today).length
   };
 }

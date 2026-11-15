@@ -2,7 +2,8 @@
 // month: money in (earned income, filed under the date it moved), money out
 // (expenses by expense_date), net, and anticipated income falling due that month.
 // Built from data/moneyReport.js over the same scoped sources as the Financials
-// Overview, so the two always agree. The date range filters whole months.
+// Overview, so the two always agree. A date range counts the money dated inside it,
+// month by month (reportSources.loadProfitLoss rowsIn).
 import { moneyBreakdown } from '../data/moneyReport.js';
 import { loadProfitLoss } from '../data/reportSources.js';
 import { profitLossFigures } from '../data/reportFigures.js';
@@ -16,8 +17,8 @@ const money = (v) => fmtMoney(Math.round((Number(v) || 0) * 100) / 100);
 
 async function init() {
   const today = todayYMD();
-  // Every month newest first, like every other ledger; a month is in the range
-  // when its 1st is (reportSources.loadProfitLoss).
+  // Every month newest first, like every other ledger; a range keeps the months it
+  // touches, each with only the money dated inside it (reportSources.loadProfitLoss).
   const src = await loadProfitLoss(today);
   const { entries, expenses } = src;
 
@@ -26,7 +27,7 @@ async function init() {
     // Scope is applied at load (moneyReport.loadMoney), so every month already
     // holds only the active kennel's money.
     csvFilename: `profit-loss-${today}.csv`,
-    dateRange: { label: 'Months', date: src.date, initial: 'this_year' },
+    dateRange: { label: 'Months', date: src.date, rowsIn: src.rowsIn, initial: 'this_year' },
     kpis: (rows) => {
       const f = profitLossFigures(rows);
       return [

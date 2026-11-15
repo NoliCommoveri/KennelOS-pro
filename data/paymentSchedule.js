@@ -156,6 +156,9 @@ function boardingTotal(sale) {
 // a schedule stored, every other extra is on the schedule, its own steps not used for
 // dates (`steps` keeps them, so a step marked paid still counts). With no schedule,
 // an extra with its own steps keeps them, as before schedules (D2).
+// A fee charged back (`fee_for`, extraCharges.isFeeChargeBack) is always on the
+// schedule and owed only on the LAST due date (`finalOnly`; coveredTotal), after the
+// other extras and before transport: every payment's fee is collected at the end.
 export function saleCharges(sale, schedule = scheduleOf(sale)) {
   const scheduled = hasSchedule(sale);
   const price = num(sale?.price);
@@ -167,7 +170,12 @@ export function saleCharges(sale, schedule = scheduleOf(sale)) {
   const boarding = boardingTotal(sale || {});
   if (boarding > 0) out.push({ key: 'boarding', component: 'boarding', label: INVOICE_LINE_LABELS.boarding, amount: boarding, part: 'schedule', use: 'extras', covers: 'boarding' });
   const own = [];
+  const feesBack = [];
   for (const x of saleExtraCharges(sale)) {
+    if (x.fee_for) {
+      feesBack.push({ key: `extra:${x.id}`, component: 'extra', label: x.label, amount: x.amount, part: 'schedule', use: 'extras', covers: 'fees', extraId: x.id, finalOnly: true, feeFor: x.fee_for });
+      continue;
+    }
     const ownDates = x.own_due_dates === true || (Array.isArray(x.payments) && !scheduled);
     if (!ownDates) {
       out.push({ key: `extra:${x.id}`, component: 'extra', label: x.label, amount: x.amount, part: 'schedule', use: 'extras', covers: 'extras', extraId: x.id, ...(Array.isArray(x.payments) ? { steps: x.payments } : {}) });
@@ -177,16 +185,17 @@ export function saleCharges(sale, schedule = scheduleOf(sale)) {
       own.push({ key: `extra:${x.id}`, component: 'extra', label: x.label, amount: x.amount, part: 'own', use: 'extras', extraId: x.id });
     }
   }
-  out.push(...own);
+  out.push(...feesBack, ...own);
   const transport = cents(num(sale?.transport_fee));
   if (transport > 0) out.push({ key: 'transport', component: 'transport', label: INVOICE_LINE_LABELS.transport, amount: transport, part: 'schedule', use: 'extras', covers: 'transport' });
   return out;
 }
 
 // What a due date's covers add up to, from the sale's deposit and schedule charges.
-// `price` is the whole price: deposit + balance.
-export function coveredTotal(covers, charges) {
-  const sched = charges.filter((c) => c.part !== 'own');
+// `price` is the whole price: deposit + balance. A fee charged back counts only on
+// the last due date (`final`).
+export function coveredTotal(covers, charges, { final = false } = {}) {
+  const sched = charges.filter((c) => c.part !== 'own' && (final || !c.finalOnly));
   const pick = covers.includes('all') ? sched
     : sched.filter((c) => covers.includes(c.covers) || (c.extraId && covers.includes(`extra:${c.extraId}`)));
   return cents(pick.reduce((t, c) => t + c.amount, 0));
@@ -327,10 +336,10 @@ export function paymentStatement(sale, opts = {}) {
 
   // 2nd pass: the due dates' slices of the schedule's money (deposit asked first).
   const dated = { birthDate, pickupDate, openDays };
-  const finalTotal = coveredTotal(['all'], charges);
+  const finalTotal = coveredTotal(['all'], charges, { final: true });
   let prev = depCharge ? depCharge.amount : 0;
   const dueDates = schedule.map((st, i) => {
-    const covered = coveredTotal(st.covers, charges);
+    const covered = coveredTotal(st.covers, charges, { final: i === schedule.length - 1 });
     let threshold;
     let fresh = false;
     if (st.percent != null && st.basis === 'remaining') {
@@ -602,7 +611,8 @@ export function addedFees(before, after) {
   if (boardingTotal(after || {}) > boardingTotal(b)) out.push({ kind: 'boarding', label: 'Boarding' });
   const had = new Set(saleExtraCharges(b).map((x) => x.id));
   const scheduled = hasSchedule(after);
-  for (const x of saleExtraCharges(after)) if (!had.has(x.id)) out.push({ kind: 'extra', label: x.label, ...(x.own_due_dates || (Array.isArray(x.payments) && !scheduled) ? { own: true } : {}) });
+  // A fee charged back isn't asked about: it always rides on the last payment.
+  for (const x of saleExtraCharges(after)) if (!had.has(x.id) && !x.fee_for) out.push({ kind: 'extra', label: x.label, ...(x.own_due_dates || (Array.isArray(x.payments) && !scheduled) ? { own: true } : {}) });
   return out;
 }
 

@@ -48,12 +48,14 @@ export async function getPendingPairing(programId) {
   if (!programId) return null;
   const row = await db.device_secrets.get(PAIRING_ROW_ID);
   if (!row || row.program_id !== programId) return null;
-  return { pairingId: row.pairing_id, privateKey: row.private_key, code: row.code, expiresAt: row.expires_at };
+  return { pairingId: row.pairing_id, privateKey: row.private_key, code: row.code, expiresAt: row.expires_at, auto: row.auto === true };
 }
 
-export async function setPendingPairing(programId, { pairingId, privateKey, code, expiresAt }) {
+// `auto`: the request was sent with its code, for assisted setup's automatic pairing
+// (cloudAssist.unlockAutomatically reuses only such a request).
+export async function setPendingPairing(programId, { pairingId, privateKey, code, expiresAt, auto = false }) {
   await db.device_secrets.put({
-    id: PAIRING_ROW_ID, program_id: programId, pairing_id: pairingId, private_key: privateKey, code, expires_at: expiresAt
+    id: PAIRING_ROW_ID, program_id: programId, pairing_id: pairingId, private_key: privateKey, code, expires_at: expiresAt, auto
   });
 }
 

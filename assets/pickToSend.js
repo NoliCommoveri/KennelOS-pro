@@ -305,6 +305,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           stripeNote = 'The deposit link is a one-time Stripe link for exactly the deposit owed. When they pay, Today tells you; then tap Deposit received on this page.';
           return { ...via, payment_link: sale.payment_link_url };
         } catch (err) {
+          if (err?.name === 'LinkAlreadyPaidError') { sale = err.sale || sale; changed = true; }
           stripeNote = `No Stripe link: ${err.message}`;
         }
       }

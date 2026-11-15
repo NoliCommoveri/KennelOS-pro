@@ -25,6 +25,9 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { getIncomeRows, summarize } from '../data/incomeView.js';
+import { accountRepo } from '../data/accountRepo.js';
+import { saleFeeEstimate } from '../data/processingFees.js';
+import { askAboutNewFees } from '../assets/paymentScheduleUI.js';
 import { subjectInScope, dogInScope, inScope, isScoped, getActiveKennelId } from '../data/kennelScope.js';
 import { createReportView } from '../assets/reportView.js';
 import { buildMileageFields, wireMileageMode, loadAccountChoices, buildAccountField, wireAccountField } from '../assets/expensePanel.js';
@@ -374,8 +377,10 @@ function openAdjust(row, onSaved) {
       // straight from the hub.
       const freqOptions = `<option value="">— per —</option>` + BOARDING_FREQUENCY_OPTIONS
         .map((o) => `<option value="${esc(o)}"${o === rec.deferred_boarding_frequency ? ' selected' : ''}>${esc(o)}</option>`).join('');
+      // A sale's status is changed on the Sale page only: voiding or returning asks why
+      // and follows up (the pup, the family's place in line), which this can't (review K10-14).
       form.innerHTML = `
-        <div class="field"><label>Status</label><select id="adj-status">${statusOptions(rec.status)}</select></div>
+        <div class="field"><label>Status</label><div>${badge(SALE_STATUS, rec.status)} <a href="${esc(row.href)}" style="font-size:13px;">Change it on the sale →</a></div></div>
         <div class="field"><label>Price</label><input id="adj-price" type="number" min="0" step="0.01" value="${esc(moneyVal(rec.price))}"></div>
         <div class="field"><label>Deposit amount</label><input id="adj-deposit_amount" type="number" min="0" step="0.01" value="${esc(moneyVal(rec.deposit_amount))}"></div>
         <div class="field"><label>Deposit date</label><input id="adj-deposit_date" type="date" value="${esc(rec.deposit_date || '')}"></div>
@@ -411,8 +416,8 @@ function openAdjust(row, onSaved) {
   async function save() {
     try {
       if (isSale) {
-        await saleRepo.update(row.source_id, {
-          status: modal.querySelector('#adj-status').value,
+        const before = await saleRepo.getById(row.source_id);
+        const changes = {
           price: numOrNull('#adj-price'),
           deposit_amount: numOrNull('#adj-deposit_amount'),
           deposit_date: strOrNull('#adj-deposit_date'),
@@ -421,7 +426,21 @@ function openAdjust(row, onSaved) {
           deferred_boarding_amount: numOrNull('#adj-deferred_boarding_amount'),
           deferred_boarding_frequency: modal.querySelector('#adj-deferred_boarding_frequency')?.value || '',
           deferred_boarding_duration_days: (modal.querySelector('#adj-deferred_boarding_duration_days')?.value || '').trim() || null
-        });
+        };
+        // A fee still at its estimate follows a price or deposit change, as on the Sale page.
+        const accountsById = new Map((await accountRepo.getAll({ includeArchived: true })).map((a) => [a.id, a]));
+        const was = saleFeeEstimate(before, accountsById)?.total ?? null;
+        const fee = before.processing_fee_amount;
+        if (fee == null || fee === '' || (was != null && Number(fee) === was)) {
+          const next = saleFeeEstimate({ ...before, ...changes }, accountsById)?.total ?? null;
+          if (next !== was) changes.processing_fee_amount = next;
+        }
+        const saved = await saleRepo.update(row.source_id, changes);
+        close();
+        // A transport fee or boarding added: what the schedule is now, and whether to adjust it (D17).
+        await askAboutNewFees({ before, after: saved });
+        onSaved?.();
+        return;
       } else {
         await studServiceRepo.update(row.source_id, {
           status: modal.querySelector('#adj-status').value,

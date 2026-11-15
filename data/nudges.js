@@ -13,7 +13,9 @@
 //
 // Fourteen rules (End-State guide §19), each producing zero or more nudges:
 // stud-service status (§4.2), promote-lifecycle (§4.3), heat→pairing (§4.5),
-// stud→pairing (§4.7), due-soon and overdue pairing rules, four linked-status rules
+// stud→pairing (§4.7), due-soon and overdue pairing rules (an Expected litter
+// on file turns them into "record the birth"), an Expected litter past its date
+// that no pairing covers (litteroverdue), four linked-status rules
 // (litter whelped → pairing, pairing ended → expected litter, pairing whelped →
 // no litter, a Deceased dog's open sales and pairings), three litter-lifecycle
 // rules (litter→sold / reopen / close) grouped over each litter's roster below,
@@ -285,7 +287,13 @@ export async function computeNudges() {
   // Pairings that already have a litter recorded against them — precomputed once
   // so the overdue-pairing rule below is a Set lookup, not a per-pairing query
   // (getForPairing counts archived litters too, matching includeArchived above).
-  const pairingIdsWithLitter = new Set(litters.map((l) => l.pairing_id).filter(Boolean));
+  // A live litter still Expected doesn't count: the pups haven't come, so the
+  // due-date nudges keep running and ask her to record the birth (review K09-1).
+  const liveExpectedLitter = (l) => l.status === 'expected' && !l.is_archived;
+  const pairingIdsWithLitter = new Set(litters.filter((l) => !liveExpectedLitter(l)).map((l) => l.pairing_id).filter(Boolean));
+  const expectedLitterByPairing = new Map(litters.filter((l) => liveExpectedLitter(l) && l.pairing_id).map((l) => [l.pairing_id, l]));
+  const recordBirth = (l) => ({ label: 'Record the birth', run: async () => { location.href = `kels.html?task=record-litter&litter=${encodeURIComponent(l.id)}`; } });
+  const littersByIdAll = new Map(litters.map((l) => [l.id, l]));
   // Breedings of our stud to somebody else's dam (linked to an outgoing stud
   // service): the litter is the dam's owner's, so no rule asks her to record it.
   const outgoingPairings = ourStudPairingIds(studServices, dogsById);
@@ -330,13 +338,15 @@ export async function computeNudges() {
 
   // §4.3 — promote-lifecycle nudge: opt-in per kennel, decide-not-auto-promote.
   for (const d of scopedDogs) {
-    if (d.status !== 'puppy' || d.disposition !== 'keeping' || !d.date_of_birth) continue;
+    // Born: her date of birth, else her litter's whelp date (review K09-10).
+    const born = d.date_of_birth || (d.litter_id ? littersByIdAll.get(d.litter_id)?.whelp_date : null);
+    if (d.status !== 'puppy' || d.disposition !== 'keeping' || !born) continue;
     const kennel = d.kennel_id ? kennelsById.get(d.kennel_id) : null;
     if (!kennel || kennel.promote_nudge_enabled !== true) continue;
     const threshold = d.sex === 'male' ? kennel.promote_age_male_months
       : d.sex === 'female' ? kennel.promote_age_female_months : null;
     if (threshold == null) continue;
-    const ageMonths = monthsBetween(d.date_of_birth, today);
+    const ageMonths = monthsBetween(born, today);
     if (ageMonths < threshold) continue;
     const key = `promote:${d.id}`;
     nudges.push({
@@ -403,7 +413,7 @@ export async function computeNudges() {
   // happened. Logging a heat (a future date too) moves the prediction, so the key
   // changes and this one goes; each wording has its own key, so dismissing "soon"
   // still asks later.
-  for (const h of heatForecast(scopedDogs, events, today)) {
+  for (const h of heatForecast(scopedDogs, events, today, { pairings, litters })) {
     if (h.state === 'later') continue;
     const name = h.dog.call_name || 'She';
     const overdue = h.state === 'overdue';
@@ -446,6 +456,18 @@ export async function computeNudges() {
     if (p.expected_due_date < today || p.expected_due_date > addDaysToYMD(today, DUE_SOON_DAYS)) continue;
     if (pairingIdsWithLitter.has(p.id)) continue;
     const days = daysBetween(today, p.expected_due_date);
+    const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+    const expected = expectedLitterByPairing.get(p.id);
+    if (expected) {
+      nudges.push({
+        key: `pairingduesoon:${p.id}`,
+        title: `${pairingLabel(p, dogsById)} is due ${when} — get ready for the pups`,
+        detail: `Expected ${p.expected_due_date}. Her litter is on file as Expected: when they arrive, record the birth.`,
+        subjectHref: `litter.html?id=${encodeURIComponent(expected.id)}`,
+        actions: [recordBirth(expected)]
+      });
+      continue;
+    }
     nudges.push({
       key: `pairingduesoon:${p.id}`,
       title: `${pairingLabel(p, dogsById)} is due ${days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`} — create the litter?`,
@@ -466,6 +488,17 @@ export async function computeNudges() {
     if (!PRE_WHELP_STATUSES.includes(p.status) || !p.expected_due_date || p.expected_due_date >= today) continue;
     if (outgoingPairings.has(p.id)) continue;
     if (pairingIdsWithLitter.has(p.id)) continue;
+    const expected = expectedLitterByPairing.get(p.id);
+    if (expected) {
+      nudges.push({
+        key: `pairingoverdue:${p.id}`,
+        title: `${pairingLabel(p, dogsById)} is past its expected due date — has she whelped?`,
+        detail: `Expected ${p.expected_due_date}. Her litter is still marked Expected.`,
+        subjectHref: `litter.html?id=${encodeURIComponent(expected.id)}`,
+        actions: [recordBirth(expected)]
+      });
+      continue;
+    }
     nudges.push({
       key: `pairingoverdue:${p.id}`,
       title: `${pairingLabel(p, dogsById)} is past its expected due date`,
@@ -487,6 +520,27 @@ export async function computeNudges() {
     if (!l.pairing_id || l.is_archived) continue;
     const arr = liveLittersByPairing.get(l.pairing_id);
     if (arr) arr.push(l); else liveLittersByPairing.set(l.pairing_id, [l]);
+  }
+
+  // An Expected litter past its date that no pairing rule above covers (no pairing,
+  // a pairing with no due date, or one already marked whelped or ended): its own
+  // date is the pairing's due date when there is one, else its whelp date (review
+  // K09-1). A pairing that didn't take has its own rule below (archive the litter).
+  for (const l of scopedLitters) {
+    if (!liveExpectedLitter(l)) continue;
+    const p = l.pairing_id ? pairingsById.get(l.pairing_id) : null;
+    if (p && outgoingPairings.has(p.id)) continue;
+    if (p && PAIRING_ENDED_STATUSES.includes(p.status)) continue;
+    if (p && PRE_WHELP_STATUSES.includes(p.status) && p.expected_due_date) continue; // the pairing's nudges speak for it
+    const due = p?.expected_due_date || l.whelp_date;
+    if (!due || due >= today) continue;
+    nudges.push({
+      key: `litteroverdue:${l.id}:${due}`,
+      title: `${litterLabel(l, dogsById)} was expected ${due} — has she whelped?`,
+      detail: 'The litter is still marked Expected. Record the birth, or update its expected date on the litter.',
+      subjectHref: `litter.html?id=${encodeURIComponent(l.id)}`,
+      actions: [recordBirth(l)]
+    });
   }
 
   // A litter that's whelped (or later) whose linked pairing still says otherwise

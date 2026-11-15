@@ -16,7 +16,8 @@ import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
 import { currentAccount, sessionToken, setHelperSession, clearAssisted, defaultDeviceLabel } from './cloudAuth.js';
 import { getCloudDeviceId } from '../settings.js';
-import { requestDeviceUnlock, waitForDeviceUnlock, listUnlockRequests, approveDeviceUnlock, cancelDeviceUnlock } from './cloudVault.js';
+import { dataTables } from '../db.js';
+import { requestDeviceUnlock, pendingDeviceUnlock, waitForDeviceUnlock, listUnlockRequests, approveDeviceUnlock, cancelDeviceUnlock } from './cloudVault.js';
 
 export const ASSIST_PARAM = 'assist';
 const LINK = /^[0-9a-f]{64}$/;
@@ -40,11 +41,38 @@ export function stripAssistToken(loc = globalThis.location, hist = globalThis.hi
   } catch { /* not a browser */ }
 }
 
+// The link was for another program than the records this device holds (review K05-1):
+// nothing was signed in or copied. `heldFor` is the label of the user they belong to,
+// when this device was helping her.
+export class AssistDeviceInUseError extends Error {
+  constructor(heldFor = null) {
+    super('This device holds another account’s records.');
+    this.name = 'AssistDeviceInUseError';
+    this.code = 'device_holds_records';
+    this.heldFor = heldFor;
+  }
+}
+
+// Any record at all on this device (device-only tables aren't records).
+export async function deviceHoldsRecords() {
+  for (const t of dataTables()) if (await t.count() > 0) return true;
+  return false;
+}
+
 // Support's device opens an assist link: it becomes a helper on her account.
-// → { programId, state, label }. Throws CloudRequestError 'link_expired'.
+// → { programId, state, label }. Throws CloudRequestError 'link_expired', and
+// AssistDeviceInUseError when this device holds records of another program: those
+// would sync up into her account as hers, so the new session is signed out again
+// before anything is stored (the link is spent; support hands back there, then
+// makes a new one).
 export async function redeemAssistLink(token, { deviceLabel = defaultDeviceLabel() } = {}) {
   if (!isCloudAvailable()) throw new api.CloudUnavailableError();
+  const previous = currentAccount();
   const res = await api.redeemAssist({ token, deviceId: getCloudDeviceId(), deviceLabel });
+  if (previous?.programId !== res.programId && await deviceHoldsRecords()) {
+    try { await api.signOut(res.token); } catch { /* it expires unused; help ending revokes it */ }
+    throw new AssistDeviceInUseError(previous?.role === 'helper' ? previous.helperLabel || null : null);
+  }
   setHelperSession(res, { deviceLabel: `KennelOS support${deviceLabel ? ` (${deviceLabel})` : ''}` });
   return { programId: res.programId, state: res.state, label: res.label };
 }
@@ -99,12 +127,15 @@ export async function autoApproveOnce() {
 }
 
 // Gets the vault key from the other side by an automatic pairing, asking again
-// whenever a request expires, until it arrives or `signal` aborts.
+// whenever a request expires, until it arrives or `signal` aborts. A request this
+// device already has open is waited on rather than asked again, so moving between
+// pages doesn't pile up requests into the server's caps (review K05-5).
 // → { status: 'unlocked' } | { status: 'cancelled' }
 export async function unlockAutomatically({ label = null, signal = null, onWaiting = null, intervalMs } = {}) {
   for (;;) {
     if (signal?.aborted) { await cancelDeviceUnlock(); return { status: 'cancelled' }; }
-    await requestDeviceUnlock({ label, auto: true });
+    const open = await pendingDeviceUnlock();
+    if (!open?.auto) await requestDeviceUnlock({ label, auto: true });
     try {
       const r = await waitForDeviceUnlock({ signal, merge: false, onWaiting, ...(intervalMs ? { intervalMs } : {}) });
       if (r.status === 'unlocked') return { status: 'unlocked' };

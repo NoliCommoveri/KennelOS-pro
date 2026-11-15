@@ -11,7 +11,7 @@
 // Reads go only where those features already go (the cloud, Lemon Squeezy,
 // Stripe), each wrapped so an offline one is skipped, never guessed.
 import * as A from '../data/accountHealth.js';
-import { getLastBackupDate } from '../data/settings.js';
+import { getLastBackupDate, getIntegrationsState } from '../data/settings.js';
 import { requestPersistentStorage } from '../data/db.js';
 import { downloadBackup } from '../data/importExport.js';
 import { editionFlags, licenseConfig } from '../data/editionConfig.js';
@@ -96,9 +96,13 @@ async function vendorKeys() {
     const vendor = 'stripe';
     account.currency = stripe.currency || 'usd';
     if (navigator.onLine === false) { out.push({ account, vendor, ok: null }); continue; }
+    // The last real paid-link check is what counts: a key can pass this call and
+    // still lack a permission the check needs (review K12-3).
+    const lastError = (getIntegrationsState().stripeErrors || {})[a.id] || null;
     try {
       await (await import('../data/stripeApi.js')).stripeCheckKey(stripe);
-      out.push({ account, vendor, ok: true });
+      if (lastError) out.push({ account, vendor, ok: false, message: lastError.message || '' });
+      else out.push({ account, vendor, ok: true });
     } catch (e) {
       out.push({ account, vendor, ok: e?.kind === 'auth' ? false : null, message: e?.message || '' });
     }

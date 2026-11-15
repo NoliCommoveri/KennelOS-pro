@@ -30,7 +30,7 @@ import { offerAndExitRows, demandSupply, listedSince } from './waitlistReports.j
 import { inScope, inScopeOnly, dogInScope, subjectInScope, ownKennels, isScoped, getActiveKennelId } from './kennelScope.js';
 import { ourRole } from './studRules.js';
 import { daysBetween } from './breedingReports.js';
-import { periodsBetween } from './reportMath.js';
+import { periodsBetween, inRange } from './reportMath.js';
 import { RELEASED_SALE_STATUSES } from './vocab.js';
 
 export const isPlacedSale = (s) => !RELEASED_SALE_STATUSES.includes(s.status);
@@ -112,7 +112,10 @@ export async function loadPuppyGrowth() {
 // --- Money -------------------------------------------------------------------------
 
 // Profit & Loss by Month: every month from the first money in or out to today (or
-// the last dated entry), newest first. A month is in a range when its 1st is.
+// the last dated entry), newest first. `rowsIn(range)`: the months a range touches,
+// each holding only the money dated inside the range, so a custom range (Mar 15 –
+// Apr 10) counts exactly those days and agrees with Expenses by Category (review
+// K10-6). A whole-month or whole-year range gives the same rows as before.
 export async function loadProfitLoss(today) {
   const { incomeRows, expenses } = await loadMoney();
   const entries = incomeEntries(incomeRows);
@@ -120,7 +123,15 @@ export async function loadProfitLoss(today) {
   const first = dates[0] || today;
   const last = dates[dates.length - 1] > today ? dates[dates.length - 1] : today;
   const rows = plByPeriod(entries, expenses, periodsBetween(first, last, 'month'), 'month').reverse();
-  return { href: 'pl-report.html', rows, date: (m) => `${m.period}-01`, entries, expenses };
+  const rowsIn = (range = {}) => {
+    if (!range.from && !range.to) return rows;
+    const from = range.from && range.from > first ? range.from : first;
+    const to = range.to && range.to.slice(0, 10) < last ? range.to.slice(0, 10) : last;
+    if (from > to) return [];
+    const inside = (d) => inRange(d, range);
+    return plByPeriod(entries.filter((e) => inside(e.date)), expenses.filter((x) => inside(x.expense_date)), periodsBetween(from, to, 'month'), 'month').reverse();
+  };
+  return { href: 'pl-report.html', rows, rowsIn, date: (m) => `${m.period}-01`, entries, expenses };
 }
 
 // Expenses by Category: the in-scope expenses, newest first.

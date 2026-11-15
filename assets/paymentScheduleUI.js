@@ -19,6 +19,8 @@ import {
   addedFees, paidInFullOffer, paidInFullChanges, finalDueDate, scheduleSummary, coversText
 } from '../data/paymentSchedule.js';
 import { SCHEDULE_DUE, SCHEDULE_COVERS, PAYMENT_METHODS, RELEASED_SALE_STATUSES } from '../data/vocab.js';
+import { saleExtraCharges, paymentFeeChargeBack, chargesWithPaymentFee, paymentFeeFor } from '../data/extraCharges.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { esc, fmtDate, fmtMoney, todayYMD, confirmModal } from './ui.js';
 
 const STATUS_BADGE = {
@@ -191,7 +193,8 @@ const kindOf = (st) => (st.amount != null && st.percent == null
 function coverChoices(charges, saved) {
   const has = (c) => saved || charges.some((x) => x.part === 'schedule' && x.covers === c);
   const base = SCHEDULE_COVERS.filter((c) => c.value === 'price' || has(c.value)).map((c) => ({ value: c.value, label: c.label }));
-  const extras = saved ? [] : charges.filter((x) => x.part === 'schedule' && x.extraId).map((x) => ({ value: `extra:${x.extraId}`, label: x.label }));
+  // A fee charged back isn't a choice: it's always on the last payment.
+  const extras = saved ? [] : charges.filter((x) => x.part === 'schedule' && x.extraId && !x.finalOnly).map((x) => ({ value: `extra:${x.extraId}`, label: x.label }));
   return [...base, ...extras];
 }
 
@@ -363,6 +366,7 @@ export function openPaymentDialog({ loaded, accounts = [], payment = null }) {
   const methods = [...new Set([...PAYMENT_METHODS, ...(p.method ? [p.method] : [])])];
   const live = accounts.filter((a) => !a.is_archived || a.id === p.account_id);
   let saved = null;
+  let added = null;
   return formDialog({
     title: payment ? 'Edit the payment' : 'Record a payment',
     confirmLabel: payment ? 'Save' : 'Record it',
@@ -379,22 +383,47 @@ export function openPaymentDialog({ loaded, accounts = [], payment = null }) {
     onConfirm: async (o) => {
       const v = (id) => o.querySelector(id)?.value ?? '';
       const rec = newPayment({ id: payment?.id || null, amount: v('#pp-amount'), date: v('#pp-date'), method: v('#pp-method'), account_id: v('#pp-account'), reference: v('#pp-reference'), note: v('#pp-note'), toward: v('#pp-toward') });
-      saved = await savePayment(loaded, rec, payment);
+      const account = accounts.find((a) => a.id === rec.account_id) || null;
+      saved = await savePayment(loaded, rec, payment, account);
+      added = payment ? null : rec;
     }
   }).then(async (ok) => {
-    // Asked once the dialog has closed: everything paid → mark it paid in full?
+    // Asked once the dialog has closed: this payment's fee charged back onto the last
+    // payment, then, everything paid → mark it paid in full?
+    if (ok && saved && added) saved = await offerPaymentFeeChargeBack(saved, added, accounts.find((a) => a.id === added.account_id));
     if (ok && saved) await offerPaidInFull(saved);
     return ok;
   });
 }
 
+// A payment made through an account set to charge its fee back (Account.fee_charge_back):
+// offer to add its fee as a charge, collected with the last payment (extraCharges
+// feeChargeBackOffers). Not when this payment paid the last of it: there's no later
+// payment for the fee to ride on.
+async function offerPaymentFeeChargeBack(sale, payment, account) {
+  if (!editionFlags.extraCharges || sale.fee_passed_to_buyer) return sale; // already in the price
+  const offer = paymentFeeChargeBack(payment, account);
+  if (!offer || saleExtraCharges(sale).some((x) => x.fee_for === offer.fee_for)) return sale;
+  const fresh = await getSaleStatement(sale);
+  if (!fresh || fresh.statement.ended || !(fresh.statement.remaining > 0)) return sale;
+  const ok = await confirmModal({
+    title: `Charge the ${account.name} fee back?`,
+    message: `This payment came through ${account.name}, which took about ${fmtMoney(offer.amount)}. Add "${offer.label}" (${fmtMoney(offer.amount)}) to the final payment, with any other fees charged back? You can change or remove it on the sale.`,
+    confirmLabel: 'Add it', cancelLabel: 'Skip'
+  });
+  if (!ok) return sale;
+  return saleRepo.update(sale.id, { extra_charges: [...(Array.isArray(sale.extra_charges) ? sale.extra_charges : []), { id: crypto.randomUUID(), ...offer }] });
+}
+
 // Save one payment. A payment toward one step of an extra that covers what's owed on
 // it also marks that step paid on its date (older screens read the step's paid date);
 // the payment remembers it did, so removing it unmarks the step.
-async function savePayment(loaded, rec, before) {
+// An edited payment's fee charged back follows its new amount or account.
+async function savePayment(loaded, rec, before, account = null) {
   const sale = loaded.sale;
   const had = Array.isArray(sale.extra_charges) ? sale.extra_charges : [];
   let extra = unmarkStep(had, before);
+  if (before) extra = chargesWithPaymentFee({ ...sale, extra_charges: extra }, before.id, rec, account);
   const [, chargeId, stepId] = (rec.toward || '').split(':');
   if (stepId) {
     const owed = loaded.statement.ownDated.find((o) => o.key === rec.toward)?.owed ?? 0;
@@ -421,9 +450,10 @@ async function removePayment(loaded, id) {
   const sale = loaded.sale;
   const payment = (sale.payments || []).find((p) => p.id === id);
   if (!payment) return false;
-  if (!(await confirmModal({ title: `Remove the ${fmtMoney(payment.amount)} payment?`, message: `Received ${fmtDate(payment.date)}. It no longer counts toward what they owe.`, confirmLabel: 'Remove', danger: true }))) return false;
+  const fee = (Array.isArray(sale.extra_charges) ? sale.extra_charges : []).find((x) => x?.fee_for === paymentFeeFor(id));
+  if (!(await confirmModal({ title: `Remove the ${fmtMoney(payment.amount)} payment?`, message: `Received ${fmtDate(payment.date)}. It no longer counts toward what they owe.${fee ? ` Its fee charged back (${fmtMoney(fee.amount)}) comes off too.` : ''}`, confirmLabel: 'Remove', danger: true }))) return false;
   const had = Array.isArray(sale.extra_charges) ? sale.extra_charges : [];
-  const extra = unmarkStep(had, payment);
+  const extra = chargesWithPaymentFee({ ...sale, extra_charges: unmarkStep(had, payment) }, id, null);
   await saleRepo.update(sale.id, { payments: paymentsWith(sale, { id }, { remove: true }), ...(extra !== had ? { extra_charges: extra } : {}) });
   return true;
 }
