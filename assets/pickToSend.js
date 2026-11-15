@@ -4,8 +4,8 @@
 //   1. Sale: registration, price, deposit, transport, sold through (Good Dog…)
 //      with its processing fee (plan §5), balance due date, notes;
 //   2. Contract: one of her contract forms (§2.1a), its link prefilled;
-//   3. Send: one message with the deposit (or, when it's already in — a carried-over
-//      deposit is recorded as received at the pick — a thank-you for it and no
+//   3. Send: one message with the deposit (or, when it's already in — a deposit their
+//      carried-over credit covers is recorded as received at the pick — a thank-you for it and no
 //      payment part), how to pay (the payment link and
 //      instructions of the account step 1 says it's paid through, plan §4, then
 //      her waitlist payment instructions), the contract link and the

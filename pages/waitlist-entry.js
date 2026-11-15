@@ -68,7 +68,7 @@ import { loadFamilyAccount, familyDocs } from '../data/familyMoney.js';
 import { savedSchedules } from '../data/paymentSchedule.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { paymentsCardHtml, wirePaymentsCard, askAboutNewFees } from '../assets/paymentScheduleUI.js';
-import { creditsOf } from '../data/receivedCredits.js';
+import { creditsOf, carriedCreditsOf } from '../data/receivedCredits.js';
 import { CREDIT_USES } from '../data/vocab.js';
 import { applicationFields, answerField, prefField as prefFieldHtml, privateField, readAnswers, readPrefs } from '../assets/waitlistApplicationForm.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -229,8 +229,11 @@ function statusLines(e) {
   const lines = [];
   const lost = lostLine(e);
   if (lost) lines.push(lost);
-  if (e.carried_payment) {
-    lines.push(`Carrying <strong>${esc(fmtMoney(e.carried_payment.amount))}</strong> they paid on a pup they lost (${esc(fmtDate(e.carried_payment.date))}); it becomes the deposit on their next pick.`);
+  // Money carried from a pup they lost: a credit for funds received (plan §3.2a), shown
+  // with their credits; this says what it's for while they're waiting for a pup.
+  const carried = e.status === 'active' ? carriedCreditsOf(e) : [];
+  if (carried.length) {
+    lines.push(`Carrying <strong>${esc(fmtMoney(carried.reduce((t, c) => t + c.amount, 0)))}</strong> they paid on a pup they lost, as a credit for funds received: it comes off their next pup, starting with the deposit.`);
   }
   // Paid online (Integrations plan §4): before approval it waits on the entry;
   // after, what they paid and what the payment service kept.
@@ -1563,8 +1566,8 @@ async function onOfferOutcome(offer, outcome) {
   if (outcome === 'pick') {
     const live = litter ? eligiblePupsFor(e, litter, pups, ctx.sales, { today: todayYMD(), config: ctx.config }) : [];
     if (!live.length) { await alertModal({ title: 'No pups available', message: 'None of the pups offered to them is still available.' }); return; }
-    const carriedAtPick = e.carried_payment || null;
-    const out = await pickDialog({ offer, name, pups: live, pupLabel, carried: carriedAtPick });
+    const carriedAtPick = carriedCreditsOf(e).length > 0;
+    const out = await pickDialog({ offer, name, pups: live, pupLabel });
     if (!out) return;
     await afterAction();
     if (out.depositDone) await emailFamilies(offerSpecs(out.res));
@@ -1575,7 +1578,7 @@ async function onOfferOutcome(offer, outcome) {
     // A carried-over deposit placed them at the pick: what's left to send them is
     // the contract and the invoice (showing the deposit paid).
     if (out.depositDone && carriedAtPick && canPickToSend()) {
-      if (await confirmModal({ title: `${name} is placed`, message: `${message}\n\nTheir deposit carried over from the pup they lost is recorded as paid. Send them the contract and invoice now?`, confirmLabel: 'Send contract & invoice', cancelLabel: 'Later' })) {
+      if (await confirmModal({ title: `${name} is placed`, message: `${message}\n\nThe money they carried over from the pup they lost covers their deposit, so it's recorded as received. Send them the contract and invoice now?`, confirmLabel: 'Send contract & invoice', cancelLabel: 'Later' })) {
         await onOfferOutcome(out.res.offer, 'send');
       }
       return;
@@ -1594,16 +1597,18 @@ async function onOfferOutcome(offer, outcome) {
   if (outcome === 'send') {
     const { openPickToSend } = await import('../assets/pickToSend.js');
     let fresh = (await waitlistOfferRepo.getById(offer.id)) || offer;
-    // A pick still waiting on a deposit they'd already paid on a pup they lost
-    // (picked before a carried deposit placed them at the pick): record it first,
-    // so the message and invoice don't ask for it again.
-    const carried = e.carried_payment;
-    if (carried && isAwaitingDeposit(fresh) && await confirmModal({
+    // A pick still waiting on a deposit that money they carried from a pup they lost
+    // already covers (their credit leaves nothing of it to send): record it first, so
+    // the message and invoice don't ask for it again. Received today, never on the
+    // credit's date (plan §3.2a).
+    const carried = carriedCreditsOf(e);
+    const owed = carried.length && isAwaitingDeposit(fresh) && fresh.sale_id ? (await getSaleStatement(fresh.sale_id))?.statement?.deposit : null;
+    if (owed && owed.amount > 0 && owed.owed <= 0 && await confirmModal({
       title: 'Their deposit is already in',
-      message: `${name} is carrying ${fmtMoney(carried.amount)} they paid on a pup they lost (${fmtDate(carried.date)}). Mark it received as their deposit on ${dogName(fresh.chosen_dog_id)} now?\n\nThat places them and moves the turn on. The message then thanks them for the deposit instead of asking for it.`,
+      message: `${name} is carrying ${fmtMoney(carried.reduce((t, c) => t + c.amount, 0))} they paid on a pup they lost, which covers the deposit on ${dogName(fresh.chosen_dog_id)}. Mark the deposit received now?\n\nThat places them and moves the turn on. The message then thanks them for the deposit instead of asking for it.`,
       confirmLabel: 'Mark deposit received', cancelLabel: 'Not now'
     })) {
-      const res = await actions.confirmDeposit(fresh.id, { amount: carried.amount, paidDate: carried.date || null });
+      const res = await actions.confirmDeposit(fresh.id, {});
       await afterAction();
       await emailFamilies(offerSpecs(res));
       fresh = res.offer;
@@ -1618,7 +1623,7 @@ async function onOfferOutcome(offer, outcome) {
     return;
   }
   if (outcome === 'deposit') {
-    const res = await depositDialog({ offer, name, pupName: dogName(offer.chosen_dog_id), sale: ctx.sales.find((x) => x.id === offer.sale_id) || null, carried: e.carried_payment || null });
+    const res = await depositDialog({ offer, name, pupName: dogName(offer.chosen_dog_id), sale: ctx.sales.find((x) => x.id === offer.sale_id) || null });
     if (!res) return;
     await afterAction();
     await alertModal({ title: `${name} is placed`, message: [`Deposit recorded for ${dogName(offer.chosen_dog_id)}.`, ...offerChangeLines(res)].join('\n\n') });

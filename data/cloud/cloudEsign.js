@@ -293,8 +293,12 @@ function whereToFill(name) {
   return 'the sale';
 }
 
-// A preview's prefilled fields Firma left empty, each with why (pure):
-// → { total, filled, empty: [{ label, why }] }, or null when there's no list.
+// What a preview found in the template's prefilled fields (pure):
+// → { total, filled, rows, empty: [{ label, why }] }, or null when there's no list.
+// `rows`: every prefilled field on the template, in Firma's order, by its label, with
+// the value KennelOS sent it (this device's, never from the Worker; null when none)
+// and whether Firma filled it: [{ label, value, filled }].
+// `empty`: each one Firma left empty, with why:
 //   - a fact this contract's kind fills but has no value here: "blank: add it on <where>"
 //   - a fact this kind doesn't fill: KennelOS doesn't fill it on a template of that kind
 //   - a field that isn't one of KennelOS's: "not a KennelOS detail"
@@ -306,15 +310,22 @@ export function previewNotes(form, facts, fields) {
   // names are compared lower-cased.
   const lc = (n) => String(n).toLowerCase();
   const ofKind = new Set([...(PREFILL_FIELDS.every || []), ...fieldGroupsFor(form?.form_type).flatMap((g) => PREFILL_FIELDS[g] || [])].map(([n]) => lc(n)));
-  const have = new Set(prefillValues(form, facts).map(([n]) => lc(n)));
+  const values = new Map(prefillValues(form, facts).map(([n, v]) => [lc(n), v]));
+  const have = new Set(values.keys());
   const canonical = new Map([...labels.keys()].map((n) => [lc(n), n]));
+  const factOf = (f) => (f.fact ? canonical.get(lc(f.fact)) || f.fact : null);
+  const labelOf = (f, fact) => String(f.label || (fact && labels.get(fact)) || 'A field');
+  const rows = fields.filter(Boolean).map((f) => {
+    const fact = factOf(f);
+    return { label: labelOf(f, fact), value: fact && values.has(lc(fact)) ? values.get(lc(fact)) : null, filled: !!f.filled };
+  });
   const empty = fields.filter((f) => f && !f.filled).map((f) => {
-    const fact = f.fact ? canonical.get(lc(f.fact)) || f.fact : null;
-    const label = String(f.label || (fact && labels.get(fact)) || 'A field');
+    const fact = factOf(f);
+    const label = labelOf(f, fact);
     if (!fact) return { label, why: 'Not one of KennelOS\'s details, so KennelOS can\'t fill it. Remove it in Place fields, or set its prefilled data to a KennelOS detail.' };
     if (f.sent || have.has(lc(fact))) return { label, why: 'KennelOS sent a value, but Firma left it empty. Check the field in Place fields.' };
     if (!ofKind.has(lc(fact))) return { label, why: `KennelOS doesn't fill this detail on a template marked "${descriptor(CONTRACT_FORM_TYPE, form?.form_type).label}", so it stays blank. Remove it in Place fields, or mark the template as a kind that fills it.` };
     return { label, why: `Blank on this contract: add it on ${whereToFill(fact)}, then preview again.` };
   });
-  return { total: fields.length, filled: fields.filter((f) => f && f.filled).length, empty };
+  return { total: fields.length, filled: fields.filter((f) => f && f.filled).length, rows, empty };
 }

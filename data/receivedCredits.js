@@ -16,9 +16,39 @@ const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
 const cents = (n) => Math.round(n * 100) / 100;
 export const CREDIT_USE_VALUES = CREDIT_USES.map((u) => u.value);
 
+// Money carried from a pup they lost (Payment Schedule plan §3.2a, D20) is a credit
+// like any other, with `from_sale_id` (the lost pup's sale) and a note naming it.
+// Older entries hold it as `carried_payment` ({ amount, date, from_sale_id }), which
+// reads as one such credit (`legacyCarried`) until a write moves it into
+// received_credits (`creditsWithCarried`). Only putting the family back on the list
+// carries money; a refund carries nothing.
+const LEGACY_NOTE = 'Carried over from a pup they lost';
+function legacyCarried(entry) {
+  const c = entry?.carried_payment;
+  if (!c || !(num(c.amount) > 0)) return null;
+  return { id: `carried-${c.from_sale_id || 'legacy'}`, amount: cents(num(c.amount)), date: c.date || '', note: LEGACY_NOTE,
+    ...(c.from_sale_id ? { from_sale_id: c.from_sale_id } : {}), applies_to: [...CREDIT_USE_VALUES] };
+}
+
+// The entry's stored credits plus an older carried_payment as one: what to write back
+// as received_credits (with carried_payment: null) whenever the entry's credits change.
+export function creditsWithCarried(entry) {
+  const list = Array.isArray(entry?.received_credits) ? entry.received_credits : [];
+  const old = legacyCarried(entry);
+  return old && !list.some((c) => c && c.id === old.id) ? [...list, old] : list;
+}
+
+// The credit for money carried from a lost pup's sale. `pupName` names it.
+export function carriedCredit({ amount, date, fromSaleId, pupName = '' }) {
+  return { ...newCredit({ amount, date, note: pupName ? `Carried over from ${pupName}'s sale` : LEGACY_NOTE }), from_sale_id: fromSaleId };
+}
+
+// The entry's credits carried from a pup they lost (oldest first).
+export const carriedCreditsOf = (entry) => creditsOf(entry).filter((c) => c.from_sale_id);
+
 // The entry's valid credits, oldest first.
 export function creditsOf(entry) {
-  return (Array.isArray(entry?.received_credits) ? entry.received_credits : [])
+  return creditsWithCarried(entry)
     .filter((c) => c && c.id && num(c.amount) > 0)
     .map((c) => ({ ...c, amount: num(c.amount), applies_to: Array.isArray(c.applies_to) ? c.applies_to.filter((u) => CREDIT_USE_VALUES.includes(u)) : [...CREDIT_USE_VALUES] }))
     .sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.id.localeCompare(b.id));

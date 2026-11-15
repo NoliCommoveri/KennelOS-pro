@@ -163,7 +163,7 @@ export function openContractTemplates() {
       ${rows.length ? rows.map(row).join('') : '<p class="muted">No templates yet. Upload your first contract below.</p>'}
       ${signers.length ? `<div class="form-grid" style="margin-top:12px;">${signers.map(signerRow).join('')}</div>` : ''}
       <h3 style="font-size:15px; margin:16px 0 4px;">Add a template</h3>
-      <p class="field-hint" style="margin-top:0;">Upload your contract as a PDF (up to ${Math.round(TEMPLATE_MAX_BYTES / 100_000) / 10} MB). Then <strong>Place fields</strong> opens Firma's editor in a new tab, where you put the buyer's signature, and the details KennelOS fills in (buyer, pup, price…), where they go on the page.</p>
+      <p class="field-hint" style="margin-top:0;">Upload your contract as a PDF (up to ${Math.round(TEMPLATE_MAX_BYTES / 100_000) / 10} MB). Then, on a computer, <strong>Place fields</strong> opens Firma's editor in a new tab, where you put the buyer's signature, and the details KennelOS fills in (buyer, pup, price…), where they go on the page.</p>
       <p class="field-hint">If you sign your contracts too, pick <strong>I sign last</strong> or <strong>I sign first</strong>, and in Firma's editor add a second signer with your signature field, in that place: second when you sign last, first when you sign first. With <strong>I sign last</strong> the buyer signs, then you sign from the contract's <strong>Countersign</strong> button. With <strong>I sign first</strong> you sign from its <strong>Sign first</strong> button as soon as it's sent, and the buyer signs after you. It's still one e-sign contract. A new template starts with your last choice.</p>
       <p class="field-hint">Tick <strong>Email the buyer the signed copy</strong> and, once everyone has signed, KennelOS saves the signed PDF and emails the buyer a link to it. The contract's <strong>Signed copy</strong> opens the same copy.</p>
       <div class="form-grid">
@@ -231,6 +231,7 @@ export function openContractTemplates() {
       } catch (err) { problem(err); }
     }));
     box.querySelectorAll('[data-edit]').forEach((btn) => btn.addEventListener('click', async () => {
+      if (!hasMouse()) { say(`<p class="field-hint">${PLACE_ON_COMPUTER}</p>`); return; }
       say('<p class="field-hint">Opening Firma\'s editor in a new tab…</p>');
       try {
         const opened = await openInNewTab(editorLink(btn.dataset.edit));
@@ -259,14 +260,28 @@ export function openContractTemplates() {
   draw().catch((err) => { frame(''); problem(err); });
 }
 
+// Firma's template editor places a field only with a mouse (a drag from its field
+// list, or a right-click on the page) and opens zoomed in on a narrow screen, so
+// Place fields is for a computer (Payment Schedule plan §8.2 step 5). No mouse at
+// all (a phone, a tablet without one) → it says so instead of opening the editor.
+const hasMouse = () => { try { return window.matchMedia('(any-pointer: fine)').matches; } catch { return true; } };
+const PLACE_ON_COMPUTER = 'Placing fields needs a computer: Firma\'s editor places them with a mouse (drag a field from its list, or right-click on the page), which a phone or tablet can\'t do. Open Contracts → Contract templates on a computer, then Place fields. Sending a contract works from your phone.';
+
 // --- Send with Firma ------------------------------------------------------------------
 
 // What a preview found in the template's prefilled fields (cloudEsign.previewNotes).
+// Every field on the template, by its label in Firma's editor, with what KennelOS sent
+// it: Firma's read-only preview shows each field's box, not its value.
 function previewNotesHtml(notes) {
   if (!notes || !notes.total) return '';
-  if (!notes.empty.length) return `<p class="field-hint">All ${notes.total} of the template's detail fields are filled in.</p>`;
+  const list = `<details class="esign-details" open><summary>On your template (${notes.total})</summary>
+    <p class="field-hint">Each detail field you placed, and what KennelOS sent to fill it.</p>
+    <dl class="esign-detail-list">${notes.rows.map((r) => `<dt>${esc(r.label)}</dt><dd>${r.value != null && r.filled ? esc(r.value)
+      : r.value != null ? `${esc(r.value)} <span class="muted">(Firma left it blank)</span>` : '<span class="muted">Nothing sent: left blank</span>'}</dd>`).join('')}</dl>
+  </details>`;
+  if (!notes.empty.length) return `<p class="field-hint">All ${notes.total} of the template's detail fields are filled in.</p>${list}`;
   return `<div class="inline-warn"><strong>${notes.filled} of ${notes.total} detail fields filled in.</strong> Left blank:
-    <ul style="margin:6px 0 0; padding-left:18px;">${notes.empty.map((e) => `<li><strong>${esc(e.label)}</strong>: ${esc(e.why)}</li>`).join('')}</ul></div>`;
+    <ul style="margin:6px 0 0; padding-left:18px;">${notes.empty.map((e) => `<li><strong>${esc(e.label)}</strong>: ${esc(e.why)}</li>`).join('')}</ul></div>${list}`;
 }
 
 // One contract out through one of her Firma templates. `signer` is the contact

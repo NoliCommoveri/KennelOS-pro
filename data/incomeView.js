@@ -216,7 +216,12 @@ function feeComponents(s, components, gross) {
 //      credited? }]: `when` is the date a monthly P&L files it under; `due` the due date
 //   of money still owed (Receivables ages it; '' = no due date known yet); `due_id` the
 //   due date it belongs to ('deposit', a schedule due date's id, an own-dated charge's key).
-export function ledgerComponents(s, st, { today = todayYMD() } = {}) {
+// `carriedOut`: money moved off this sale to the family's next pup as a credit for funds
+// received (a back-out's Move the deposit, a lost pup's carry: carriedOutBySale). Credits
+// are held money, never income until the charge they pay is (D21), so on a released sale
+// that much of what was paid isn't earned here: the deposit first, then the rest in order.
+// It's earned on the sale the credit pays. (A lost sale already counts nothing.)
+export function ledgerComponents(s, st, { today = todayYMD(), carriedOut = 0 } = {}) {
   const fallback = s.sale_date || s.deposit_date || s.balance_paid_date || '';
   const keptIds = new Set(saleExtraCharges(s).filter((x) => x.kept_after_cancel).map((x) => x.id));
   const isKept = (key) => key.startsWith('extra:') && keptIds.has(key.split(':')[1]);
@@ -261,6 +266,41 @@ export function ledgerComponents(s, st, { today = todayYMD() } = {}) {
       else push(pc, m.amount, 'anticipated', date, { credited: true });
     }
     if (!released) push(pc, pc.owed, 'anticipated', pc.dueDate);
+  }
+  if (released && !lost && carriedOut > 0) return withoutCarried(out, carriedOut);
+  return out;
+}
+
+// A released sale's earned lines less `amount` carried off it as a credit: the deposit's
+// first, then the others in order. A line it uses up goes; one it part-uses keeps the rest.
+function withoutCarried(lines, amount) {
+  let left = round2(amount);
+  const take = new Map();
+  const order = [...lines.keys()].filter((i) => lines[i].state === 'earned')
+    .sort((a, b) => (lines[b].component === 'deposit') - (lines[a].component === 'deposit') || a - b);
+  for (const i of order) {
+    if (!(left > 0)) break;
+    const t = Math.min(left, lines[i].amount);
+    take.set(i, t);
+    left = round2(left - t);
+  }
+  return lines.flatMap((c, i) => {
+    const t = take.get(i) || 0;
+    if (!t) return [c];
+    const rest = round2(c.amount - t);
+    return rest > 0 ? [{ ...c, amount: rest }] : [];
+  });
+}
+
+// saleId → the money carried off that sale to the family's next pup, as credits for funds
+// received naming it (`from_sale_id`; an older entry's carried_payment too), from every
+// entry, archived included: a fact about that sale, whatever became of the entry.
+export function carriedOutBySale(entries) {
+  const out = new Map();
+  for (const e of entries || []) {
+    for (const c of creditsOf(e)) {
+      if (c.from_sale_id) out.set(c.from_sale_id, round2((out.get(c.from_sale_id) || 0) + c.amount));
+    }
   }
   return out;
 }
@@ -610,7 +650,9 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
     studServiceRepo.getAll({ includeArchived }),
     dogRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
-    loadWaitlistEntries(includeArchived),
+    // Archived entries too, for money carried off a sale (carriedOutBySale); the fee
+    // credits and the families' credits leave them out (feeReceived, creditCtx).
+    loadWaitlistEntries(true),
     editionFlags.waitlist ? waitlistOfferRepo.getAll() : [],
     kennelRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: true }),
@@ -620,6 +662,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
   // Credits come from ALL entries (not just in-scope ones): a sale's credit is a
   // fact about that sale, whichever kennel the app is scoped to.
   const creditBySale = feeCreditsBySale(entries, { sales, offers, kennels });
+  const carriedOut = carriedOutBySale(entries);
   const litterById = new Map(litters.map((l) => [l.id, l]));
   const kennelById = new Map(kennels.map((k) => [k.id, k]));
   const pickupsByDog = new Map();
@@ -647,7 +690,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
       dog, litter: dog?.litter_id ? litterById.get(dog.litter_id) || null : null, events: dog ? pickupsByDog.get(dog.id) || [] : [],
       kennel: kennelById.get(s.kennel_id) || null, ctx: creditCtx, feeBySale: creditBySale, today
     });
-    const cash = ledgerComponents(s, paymentStatement(s, opts), { today });
+    const cash = ledgerComponents(s, paymentStatement(s, opts), { today, carriedOut: carriedOut.get(s.id) || 0 });
     if (!cash.length) continue; // no money on this sale — nothing to show
     // The processing fee is shared over the sale's full value while open, so a released
     // sale keeps only the paid share's fee.

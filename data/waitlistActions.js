@@ -28,8 +28,8 @@
 // makes the offer `accepted`, places the family, and moves the turn on. No deposit
 // by the deadline = no response: the Sale is cancelled and the pup is free again.
 import { kennelRepo } from './kennelRepo.js';
-import { creditsOf, feeCharge, allocateCredits } from './receivedCredits.js';
-import { familyCredit } from './incomeView.js';
+import { creditsOf, feeCharge, allocateCredits, creditsWithCarried, carriedCredit, carriedCreditsOf } from './receivedCredits.js';
+import { familyCredit, getSaleStatement } from './incomeView.js';
 import { contactRepo } from './contactRepo.js';
 import { waitlistEntryRepo, syncContactWaitlistStatus } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
@@ -239,14 +239,31 @@ export async function undoFeeReceived(entryId, { today = todayYMD() } = {}) {
 // or one of theirs replaced by id. `credit` comes from receivedCredits.newCredit.
 export async function saveCredit(entryId, credit) {
   const entry = await load(entryId);
-  const list = Array.isArray(entry.received_credits) ? entry.received_credits : [];
+  const list = creditsWithCarried(entry);
   const next = list.some((c) => c.id === credit.id) ? list.map((c) => (c.id === credit.id ? credit : c)) : [...list, credit];
-  return waitlistEntryRepo.update(entryId, { received_credits: next });
+  return waitlistEntryRepo.update(entryId, { received_credits: next, ...movedCarried(entry) });
 }
 
 export async function removeCredit(entryId, creditId) {
   const entry = await load(entryId);
-  return waitlistEntryRepo.update(entryId, { received_credits: (entry.received_credits || []).filter((c) => c.id !== creditId) });
+  return waitlistEntryRepo.update(entryId, { received_credits: creditsWithCarried(entry).filter((c) => c.id !== creditId), ...movedCarried(entry) });
+}
+
+// An older entry's carried_payment, once its credits are written (creditsWithCarried
+// moved it into received_credits): cleared, so it isn't read twice.
+const movedCarried = (entry) => (entry?.carried_payment ? { carried_payment: null } : {});
+
+// The entry's credits with one more: money carried from a lost pup's sale.
+const withCarry = (entry, credit) => ({ received_credits: [...creditsWithCarried(entry), credit], ...movedCarried(entry) });
+
+// A pick or side sale for a family carrying money from a pup they lost: when their
+// credits (with the credited fee) leave nothing of the deposit to send, the deposit
+// is received now, on the pick's date (never the credit's: plan §3.2a), and they're
+// placed. Anything short of that, the rest of the deposit is asked for as usual.
+async function carriedCoversDeposit(entry, saleId) {
+  if (!carriedCreditsOf(entry).length) return false;
+  const deposit = (await getSaleStatement(saleId))?.statement?.deposit;
+  return !!deposit && deposit.amount > 0 && deposit.owed <= 0;
 }
 
 export async function markFeeExpired(entryId, { date = todayYMD() } = {}) {
@@ -811,11 +828,12 @@ async function openTurnRows(offer) {
 // respond-by date is still their deadline, now for the deposit. One pick per turn:
 // a pick from another litter of the same turn is let go first (they switched
 // litters). Returns { offer, sale, depositDone: false }.
-// A family carrying money from a pup they lost (entry.carried_payment, §16.11)
-// has their deposit in already: the Sale takes it as its deposit and the pick goes
-// straight on to confirmDeposit (deposit paid on the date they paid it, the pup
-// placed, the family placed, the turn moves on). Returns confirmDeposit's result
-// plus depositDone: true.
+// A family carrying money from a pup they lost (a credit for funds received with
+// from_sale_id, §16.11, Payment Schedule plan §3.2a): the Sale keeps its normal
+// price and deposit, and the credit pays toward them like any credit. When it leaves
+// nothing of the deposit to send, the pick goes straight on to confirmDeposit (the
+// deposit received on the pick's date, the pup and family placed, the turn moves
+// on): confirmDeposit's result plus depositDone: true.
 export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {}) {
   const offer = await loadOpenOffer(offerId);
   if (offer.chosen_dog_id) throw new Error('They\'ve already picked a pup. Use "Change pup" to switch.');
@@ -843,18 +861,11 @@ export async function recordPick(offerId, { chosenDogId, date = todayYMD() } = {
     kennel_id: dog.kennel_id || c.litter.kennel_id,
     sale_date: date,
     lead_source: 'Waitlist',
-    ...expectedPricing(dog, c.litter, registration),
-    // What they'd paid on a pup they lost (§16.11) is their deposit on this one,
-    // received (confirmDeposit below).
-    ...(entry.carried_payment ? {
-      deposit_amount: Number(entry.carried_payment.amount),
-      notes: `Deposit: ${money(entry.carried_payment.amount)} carried over from a pup they lost (paid ${entry.carried_payment.date}).`
-    } : {})
+    ...expectedPricing(dog, c.litter, registration)
   });
   const saved = await waitlistOfferRepo.update(offerId, { chosen_dog_id: dog.id, picked_date: date, sale_id: sale.id });
-  if (entry.carried_payment) {
-    const carried = entry.carried_payment;
-    const placed = await confirmDeposit(offerId, { date, amount: carried.amount, paidDate: carried.date || date });
+  if (await carriedCoversDeposit(entry, sale.id)) {
+    const placed = await confirmDeposit(offerId, { date });
     return { ...placed, depositDone: true };
   }
   return { offer: saved, sale, depositDone: false };
@@ -904,8 +915,8 @@ export async function changePick(offerId, { chosenDogId, date = todayYMD() } = {
 // placed, the offer is accepted, the family is placed and leaves the list (the
 // other litters of their turn, and any other open offer, are voided — never a
 // pass), and the next turn comes up. Returns the same shape as recordOutcome.
-// `paidDate` (default `date`): when the money came in, for the sale's
-// deposit_date — earlier than `date` for a deposit carried over from a pup they lost.
+// `paidDate` (default `date`): when the money came in, for the sale's deposit_date
+// (she enters it; never a credit's date, plan §3.2a).
 export async function confirmDeposit(offerId, { date = todayYMD(), amount, paidDate = null } = {}) {
   const offer = await loadOpenOffer(offerId);
   if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
@@ -923,7 +934,7 @@ export async function confirmDeposit(offerId, { date = todayYMD(), amount, paidD
   result.offer = await waitlistOfferRepo.update(offerId, { outcome: 'accepted', outcome_date: date, counts_as_pass: false });
   // Another family's side sale on the same pup ends: they keep their place (Side Sale Spec §5).
   result.resolved = await resolveOtherClaims(offer.chosen_dog_id, { keepSaleId: sale.id, date, who: 'another family\'s deposit arrived first' });
-  await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, carried_payment: null });
+  await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, ...(entry.carried_payment ? { received_credits: creditsWithCarried(entry), carried_payment: null } : {}) });
   const released = await releaseOpenOffers(entry.id, { date, why: 'the family accepted a pup', exceptOfferId: offerId, moveOn: false });
   // The other litters of this same turn closing is just the turn ending: not news.
   result.voided = released.voided.filter((o) => turnIdOf(o) !== turnIdOf(offer));
@@ -988,19 +999,16 @@ export async function recordSideSale(entryId, { dogId, registration, depositDue 
     side_entry_id: entry.id,
     side_deposit_due: due,
     side_holds_pup: holds,
-    side_prior_disposition: prior,
-    ...(entry.carried_payment ? {
-      deposit_amount: Number(entry.carried_payment.amount),
-      notes: `Deposit: ${money(entry.carried_payment.amount)} carried over from a pup they lost (paid ${entry.carried_payment.date}).`
-    } : {})
+    side_prior_disposition: prior
   });
   await addFamilyActivity(entry.id, [{
     id: `side-sale-${sale.id}`, kind: 'action',
     body: `You recorded a side sale of ${dog.call_name} to them, deposit due ${due}.${holds ? ` ${dog.call_name} was ${prior.replace('_', ' ')}: now Available and held for them until the deposit.` : ''}`
   }]);
-  if (entry.carried_payment) {
-    const carried = entry.carried_payment;
-    const placed = await confirmSideDeposit(sale.id, { date, amount: carried.amount, paidDate: carried.date || date });
+  // Money carried from a pup they lost that covers the deposit: received on the side
+  // sale's date (plan §3.2a), as recordPick does.
+  if (await carriedCoversDeposit(entry, sale.id)) {
+    const placed = await confirmSideDeposit(sale.id, { date });
     return { ...placed, issues, depositDone: true };
   }
   return { sale, issues, depositDone: false };
@@ -1027,7 +1035,7 @@ export async function confirmSideDeposit(saleId, { date = todayYMD(), amount, pa
   if (amount !== undefined && amount !== null && amount !== '') changes.deposit_amount = Number(amount);
   const saved = await saleRepo.update(sale.id, changes);
   await dogRepo.update(sale.dog_id, { disposition: 'placed' });
-  const placed = await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, carried_payment: null });
+  const placed = await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, ...(entry.carried_payment ? { received_credits: creditsWithCarried(entry), carried_payment: null } : {}) });
   const released = await releaseOpenOffers(entry.id, { date, why: 'the family bought a pup', moveOn: false });
   const resolved = await resolveOtherClaims(sale.dog_id, { keepSaleId: sale.id, date, who: 'another family\'s deposit arrived first' });
   const { ended } = await endEmptiedTurns({ kennelId: entry.kennel_id, date, why: 'another family\'s deposit arrived first', moveOn: false });
@@ -1336,9 +1344,11 @@ export async function lostSaleFamilyFor(saleId) {
 //  - picked (their turn was still open): the pick is cleared and the turn gets a
 //    fresh respond-by date to pick another pup; a litter of it with no pup left for
 //    them closes (voided, never a pass), and if none is left the turn ends.
-// `carry` ({ amount, date }) keeps what they'd paid for their next pup
-// (entry.carried_payment: their next pick's sale takes it as its deposit); none =
-// she's refunding it. Then the turn moves on like any other moment, `restored`:
+// `carry` ({ amount, date? }) keeps what they'd paid for their next pup, as a credit
+// for funds received on their entry (Payment Schedule plan §3.2a, D20: dated when it
+// was paid, the lost sale's deposit date, else today; `from_sale_id` the lost sale);
+// their next sale keeps its normal price and deposit, and the credit pays toward
+// them. None = she's refunding it: no credit. Then the turn moves on like any other moment, `restored`:
 // automatic offers on for it and nobody holding a turn → the next turn is offered
 // now (to them, when they're next); otherwise who's next is returned.
 // Returns { kind, entry, offers, voided, next, waiting }.
@@ -1349,7 +1359,7 @@ export async function restoreAfterLostSale(saleId, { date = todayYMD(), carry = 
   const pupName = (await dogRepo.getById(sale.dog_id))?.call_name || 'their pup';
   const why = `${pupName}'s sale was ${sale.status}${sale.end_reason ? ` (${descriptor(SALE_END_REASON, sale.end_reason).label.toLowerCase()})` : ''}`;
   const carried = carry && Number(carry.amount) > 0
-    ? { amount: Number(carry.amount), date: carry.date || date, from_sale_id: sale.id } : null;
+    ? carriedCredit({ amount: carry.amount, date: carry.date || sale.deposit_date || date, fromSaleId: sale.id, pupName: pupName === 'their pup' ? '' : pupName }) : null;
   const entryNote = (what) => appendNote(entry.notes, `${what} on ${date}: ${why}.${carried ? ` ${money(carried.amount)} they'd paid is carried to their next pup.` : ''}`);
   const result = { kind, entry: null, offers: [], voided: [], next: null, waiting: [] };
 
@@ -1365,7 +1375,7 @@ export async function restoreAfterLostSale(saleId, { date = todayYMD(), carry = 
       });
     }
     result.entry = await waitlistEntryRepo.update(entry.id, {
-      status: 'active', placed_sale_id: null, ...(carried ? { carried_payment: carried } : {}),
+      status: 'active', placed_sale_id: null, ...(carried ? withCarry(entry, carried) : {}),
       notes: entryNote('Back on the list in their original place')
     });
     return finishTurn(result, entry.kennel_id, date, 'restored');
@@ -1393,7 +1403,7 @@ export async function restoreAfterLostSale(saleId, { date = todayYMD(), carry = 
     }
   }
   result.entry = await waitlistEntryRepo.update(entry.id, {
-    ...(carried ? { carried_payment: carried } : {}),
+    ...(carried ? withCarry(entry, carried) : {}),
     notes: entryNote(result.offers.length ? 'Their turn was given back' : 'Their turn ended with no other pup for them')
   });
   return result.offers.length ? result : finishTurn(result, entry.kennel_id, date, 'restored');
@@ -1784,7 +1794,8 @@ export async function declinePickupRequest(entryId, requestId, { date = todayYMD
 //  - keep:   the sale is cancelled (a paid deposit stays earned); they leave the list
 //            (withdrawn), and can reapply later as a new application.
 //  - move:   the sale is cancelled; what they'd paid as a deposit is carried to their
-//            next pick (`carried_payment`), and their entry is reopened at the END of
+//            next pick (a credit for funds received, `from_sale_id` this sale: plan
+//            §3.2a), and their entry is reopened at the END of
 //            the line (`position_anchor_date` = today), application, fee and history
 //            kept (plan §7.1).
 //  - refund: the sale is voided ("Buyer backed out, refunded"), so the deposit isn't
@@ -1857,7 +1868,7 @@ export async function approveBackOut(entryId, { outcome, remove = [], pup = null
     result.entry = await waitlistEntryRepo.update(entry.id, {
       ...closed,
       status: 'active', placed_sale_id: null, position_anchor_date: date, back_out_request: decided,
-      ...(depositIn && movedDeposit > 0 ? { carried_payment: { amount: movedDeposit, date, from_sale_id: sale.id } } : {}),
+      ...(depositIn && movedDeposit > 0 ? withCarry(entry, carriedCredit({ amount: movedDeposit, date: sale.deposit_date || date, fromSaleId: sale.id, pupName: (await dogRepo.getById(sale.dog_id))?.call_name || '' })) : {}),
       notes: appendNote(entry.notes, `${note} Their deposit moves to their next pup; back on the list at the end of the line.`)
     });
   } else {

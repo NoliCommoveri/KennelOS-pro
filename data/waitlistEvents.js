@@ -34,6 +34,7 @@
 // close, the plan for that event carries `moveOn: false` (cloudWaitlist sets it),
 // so her device doesn't offer a second family.
 import { familySale } from './familyExtras.js';
+import { carriedCreditsOf } from './receivedCredits.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf, sideSaleOf } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
@@ -108,9 +109,10 @@ export function planFamilyEvent(event, ctx) {
       if (!(offer.eligible_dog_ids || []).includes(p.dog_id)) return note(`${what}, but that pup wasn't one offered to them, so nothing was recorded.`);
       const dog = pups.find((d) => d.id === p.dog_id);
       if (!dog || !isPupAvailable(dog, sales)) return note(`${what}, but that pup is no longer available, so nothing was recorded. Let them know.`);
-      // Money carried over from a pup they lost is their deposit: the pick places them.
-      const held = entry?.carried_payment
-        ? 'Their pick is held: the deposit they carried over from a pup they lost is in, so they\'re placed.'
+      // Money carried over from a pup they lost is a credit: when it covers the deposit,
+      // the pick places them (recordPick); otherwise the rest of the deposit is pending.
+      const held = carriedCreditsOf(entry).length
+        ? 'Their pick is held. The money they carried over from a pup they lost goes toward it: if it covers the deposit, they\'re placed; if not, the rest of the deposit is pending.'
         : 'Their pick is held by a sale with the deposit pending.';
       return { op: 'pick', offerId: offer.id, dogId: dog.id, date, activity: line(`${what}. ${held}`) };
     }

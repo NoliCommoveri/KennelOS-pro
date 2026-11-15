@@ -797,7 +797,7 @@ class Review {
     const sexWord = (d) => descriptor(SEX, d.sex)?.label || '';
     const pupLabel = (d) => `${d.call_name || 'Pup'}${sexWord(d) ? ` (${sexWord(d)})` : ''}`;
     if (picked) {
-      const res = await depositDialog({ offer: picked, name: this.name(e), pupName: this.pupName(picked.chosen_dog_id), sale: this.sales.find((s) => s.id === picked.sale_id) || null, carried: e.carried_payment || null });
+      const res = await depositDialog({ offer: picked, name: this.name(e), pupName: this.pupName(picked.chosen_dog_id), sale: this.sales.find((s) => s.id === picked.sale_id) || null });
       if (!res) { this.skipped++; return; }
       await this.load();
       await this.chat.say(lines([`${this.name(e)} is placed with ${this.pupName(picked.chosen_dog_id)}.`, ...this.changeLines(res)]));
@@ -812,7 +812,7 @@ class Review {
     const litter = this.litters.find((l) => l.id === offer.litter_id);
     const pups = litter ? eligiblePupsFor(e, litter, this.dogs.filter((d) => d.litter_id === litter.id), this.sales, { today: this.today, config: this.config }) : [];
     if (!pups.length) { await this.chat.say('None of the pups offered to them is still available.'); return; }
-    const out = await pickDialog({ offer, name: this.name(e), pups, pupLabel, carried: e.carried_payment || null });
+    const out = await pickDialog({ offer, name: this.name(e), pups, pupLabel });
     if (!out) { this.skipped++; return; }
     await this.load();
     await this.chat.say(out.depositDone

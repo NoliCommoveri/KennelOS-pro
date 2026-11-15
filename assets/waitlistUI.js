@@ -26,7 +26,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { paidBesidesCredits, getSaleFeeCredit, getSaleCredits, getEntryCredit, feeCreditAmount, feeCreditSplit } from '../data/incomeView.js';
-import { newCredit, CREDIT_USE_VALUES } from '../data/receivedCredits.js';
+import { newCredit, CREDIT_USE_VALUES, carriedCreditsOf } from '../data/receivedCredits.js';
 import { CREDIT_USES, PAYMENT_METHODS } from '../data/vocab.js';
 import { saveCredit } from '../data/waitlistActions.js';
 import { DemoModeError } from '../data/demoMode.js';
@@ -368,9 +368,10 @@ const pupOptions = (pups, pupLabel) => pups.map((p) => `<option value="${esc(p.i
 // Sale holds the pup and the offer stays open until the deposit arrives (their
 // respond-by date is the deadline). Ticking "deposit received" does both at once.
 // Resolves { res, depositDone } or null.
-// `carried` (the entry's carried_payment, Spec §16.11): what they'd paid on a pup
-// they lost. It's already in hand, so there's no deposit box: recording the pick
-// marks the deposit paid and places them (recordPick).
+// Money they carried from a pup they lost (a credit with from_sale_id, Spec §16.11,
+// Payment Schedule plan §3.2a) pays toward this pup like any credit: when it covers
+// the deposit, recording the pick marks the deposit received today and places them
+// (recordPick); otherwise the rest of the deposit is asked for.
 // Before a turn pick (or a switch, or a side sale) onto a pup that already has a
 // claim (Side Sale Spec §5): "Record a second sale anyway?". Resolves true to go ahead.
 // Family names by entry id, for a warning that names who else claims a pup.
@@ -395,24 +396,26 @@ export async function confirmSecondClaim(dogId, { exceptSaleId = null, pupName =
   });
 }
 
-export async function pickDialog({ offer, name, pups, pupLabel, carried = null }) {
+export async function pickDialog({ offer, name, pups, pupLabel }) {
   let out = null;
-  const carriedHint = carried ? `<p class="field-hint">${esc(fmtMoney(carried.amount))} they paid on a pup they lost (${esc(fmtDate(carried.date))}) is their deposit on this one. Recording the pick marks it paid, places ${esc(name)} and moves the turn on.</p>` : '';
+  const carried = carriedCreditsOf(await waitlistEntryRepo.getById(offer.entry_id));
+  const carriedAmount = carried.reduce((t, c) => t + c.amount, 0);
   const credit = (await getEntryCredit(offer.entry_id)).credit;
-  const creditHint = credit?.remaining > 0 ? `<p class="field-hint">They have ${esc(fmtMoney(credit.remaining))} credit for funds already received. It comes off what they're asked to pay for this pup, starting with the deposit.</p>` : '';
+  const carriedHint = carried.length ? `<p class="field-hint">${esc(fmtMoney(carriedAmount))} they paid on a pup they lost is a credit for funds received${credit?.remaining > carriedAmount ? ` (${esc(fmtMoney(credit.remaining))} credit in all)` : ''}. It comes off what they're asked to pay for this pup, starting with the deposit. If it covers the whole deposit, recording the pick marks the deposit received today, places ${esc(name)} and moves the turn on; if not, they're asked for the rest.</p>` : '';
+  const creditHint = !carried.length && credit?.remaining > 0 ? `<p class="field-hint">They have ${esc(fmtMoney(credit.remaining))} credit for funds already received. It comes off what they're asked to pay for this pup, starting with the deposit.</p>` : '';
   const ok = await formModal({
     title: `${name} picked a pup`,
     confirmLabel: 'Record their pick',
     bodyHtml: `<div class="field"><label>Which pup?</label><select id="pk-dog">${pupOptions(pups, pupLabel)}</select></div>
       <div class="field"><label>Date</label><input id="pk-date" type="date" value="${esc(todayYMD())}"></div>
-      ${carried ? '' : `<label class="check-inline" style="display:block;margin:8px 0;"><input id="pk-paid" type="checkbox"> Their deposit is already in</label>
+      ${carried.length ? '' : `<label class="check-inline" style="display:block;margin:8px 0;"><input id="pk-paid" type="checkbox"> Their deposit is already in</label>
       <div id="pk-paid-fields" class="form-grid" hidden>
         <div class="field"><label>Deposit received</label><input id="pk-dep-date" type="date" value="${esc(todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="pk-dep-amount" type="number" min="0" step="0.01" placeholder="The litter's expected deposit"></div>
       </div>`}
       ${carriedHint}${creditHint}
-      ${carried
-        ? '<p class="field-hint">Creates the Sale (deposit paid, price from the litter\'s expected amounts). You can still switch the pup until the next family is offered a turn.</p>'
+      ${carried.length
+        ? '<p class="field-hint">Creates the Sale (price and deposit from the litter\'s expected amounts). You can still switch the pup until the next family is offered a turn.</p>'
         : `<p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(fmtDate(offer.respond_by_date))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`}`,
     onConfirm: async (o) => {
       const chosenDogId = o.querySelector('#pk-dog').value;
@@ -426,7 +429,7 @@ export async function pickDialog({ offer, name, pups, pupLabel, carried = null }
           depositAmount: o.querySelector('#pk-dep-amount').value
         }) };
       } else {
-        // A carried-over deposit makes the pick place them (recordPick).
+        // Carried money that covers the deposit makes the pick place them (recordPick).
         const res = await recordPick(offer.id, { chosenDogId, date });
         out = { depositDone: !!res.depositDone, res };
       }
@@ -439,10 +442,10 @@ export async function pickDialog({ offer, name, pups, pupLabel, carried = null }
 }
 
 // The deposit for their pick arrived: they're placed and the turn moves on.
-// `sale` (the held Sale, may be null) prefills the amount.
-// `carried` (the entry's carried_payment): money they'd already paid on a pup they
-// lost, which the held Sale took as its deposit — prefills the date it was paid.
-export async function depositDialog({ offer, name, pupName, sale, carried = null }) {
+// `sale` (the held Sale, may be null) prefills the amount. "Date received" is the
+// sale's deposit date, else today: never a credit's date (Payment Schedule plan
+// §3.2a). Credits, money carried from a lost pup included, only lower what they send.
+export async function depositDialog({ offer, name, pupName, sale }) {
   let res = null;
   // Their credit for funds already received pays part (or all) of the deposit.
   const sc = sale ? await getSaleCredits(sale.id) : null;
@@ -456,10 +459,6 @@ export async function depositDialog({ offer, name, pupName, sale, carried = null
         const send = left == null ? '' : left > 0 ? `, so ${esc(fmtMoney(left))} is what they send` : ', so there\'s nothing more for them to send';
         return ` Of it, ${esc(parts.join(' and '))}${send}. Enter the whole deposit.`;
       })() : '';
-  // A credit that covers the whole deposit (an early deposit taken before the pup
-  // was born) means the deposit came in on the credit's date, not today.
-  const creditDate = credited > 0 && sale?.deposit_amount != null
-    && Number(sale.deposit_amount) - feePart - credited <= 0 ? (sc.credit.received.date || null) : null;
   // A second claim on the pup (Side Sale Spec §5) ends when this deposit is recorded.
   const otherClaims = offer.chosen_dog_id
     ? pupClaims(offer.chosen_dog_id, { sales: await saleRepo.getByDog(offer.chosen_dog_id), offers: await waitlistOfferRepo.getAll() }).filter((c) => c.sale_id !== offer.sale_id && c.offer_id !== offer.id).length
@@ -469,16 +468,13 @@ export async function depositDialog({ offer, name, pupName, sale, carried = null
     confirmLabel: 'Deposit received',
     bodyHtml: `<p style="margin-top:0;">For <strong>${esc(pupName)}</strong>.</p>${otherClaims ? `<div class="inline-warn">Another family also has a claim on ${esc(pupName)}. Recording this deposit ends it: a side sale is cancelled (they keep their place), another pick is let go.</div>` : ''}
       <div class="form-grid">
-        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || carried?.date || creditDate || todayYMD())}"></div>
+        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
       </div>
-      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${carried ? ` ${esc(fmtMoney(carried.amount))} of it is what they paid on a pup they lost (${esc(fmtDate(carried.date))}).` : ''}${creditHint}</p>`,
+      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${creditHint}</p>`,
     onConfirm: async (o) => {
       const when = o.querySelector('#dp-date').value || todayYMD();
-      // Credit-covered: the sale's deposit date is the credit's, but she's placing
-      // them today, so the next family's turn starts today, not on that old date.
-      const dates = creditDate ? { date: todayYMD(), paidDate: when } : { date: when };
-      res = await confirmDeposit(offer.id, { ...dates, amount: o.querySelector('#dp-amount').value });
+      res = await confirmDeposit(offer.id, { date: when, amount: o.querySelector('#dp-amount').value });
     }
   });
   return ok ? res : null;
@@ -569,7 +565,7 @@ export async function restoreLostPupDialog({ saleId, asStatus = null }) {
       <label class="check-inline" style="display:block;"><input type="radio" name="lp-money" value="carry" checked> Carry it to their next pup</label>
       <div class="field" id="lp-amount-field" style="margin:4px 0 8px 24px;"><label>Amount to carry</label><input id="lp-amount" type="number" min="0" step="0.01" value="${esc(paid.toFixed(2))}"></div>
       <label class="check-inline" style="display:block;"><input type="radio" name="lp-money" value="refund"> I'm refunding it</label>
-      <p class="field-hint">Carried, it becomes the deposit on the pup they pick next. Refunded, nothing more is recorded; note the refund on the sale if you like. Either way it isn't counted as income on this sale.</p>` : '';
+      <p class="field-hint">Carried, it becomes a credit for funds received on their entry: it comes off what they owe for the pup they pick next, starting with that pup's own deposit. Refunded, nothing more is recorded; note the refund on the sale if you like. Either way it isn't counted as income on this sale.</p>` : '';
   let res = null;
   const ok = await formModal({
     title: kind === 'placed' ? `Put ${name} back in line?` : `Give ${name} their turn back?`,

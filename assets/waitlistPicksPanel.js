@@ -289,7 +289,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     if (!res) return;
     const name = familyName(res.entry);
     await alertModal({ title: res.depositDone ? `${name} is placed` : 'Side sale recorded', message: res.depositDone
-      ? `Their deposit carried over from the pup they lost is recorded as paid for ${res.dog.call_name}.`
+      ? `The money they carried over from the pup they lost covers the deposit for ${res.dog.call_name}, so it's recorded as received today.`
       : `${res.dog.call_name} is ${res.sale.side_holds_pup ? 'held for' : 'set aside for'} ${name} until ${fmtDate(res.sale.side_deposit_due)}${res.sale.side_holds_pup ? '' : ' (still offered to other families until the deposit)'}. Their page shows it like a pick on their turn. Send them the deposit details from their page (Review sale & send).` });
   });
   on('sold-before', async () => { await soldBeforeDialog(litter); });
@@ -325,7 +325,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     mount.querySelector('[data-pk="copy-link"]')?.addEventListener('click', (ev) => { if (link) copyLink(link, ev.currentTarget, { title: `${name}'s status page` }); });
     on('accept', async () => {
       const live = eligiblePupsFor(entry, litter, d.pups, d.sales, opts);
-      const out = await pickDialog({ offer: open, name, pups: live, pupLabel, carried: entry?.carried_payment || null });
+      const out = await pickDialog({ offer: open, name, pups: live, pupLabel });
       if (!out) return;
       await onChange();
       const saleId = out.res.sale.id;
@@ -338,7 +338,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       }
     });
     on('deposit', async () => {
-      const res = await depositDialog({ offer: open, name, pupName: pickedName, sale: open.sale_id ? await saleRepo.getById(open.sale_id) : null, carried: entry?.carried_payment || null });
+      const res = await depositDialog({ offer: open, name, pupName: pickedName, sale: open.sale_id ? await saleRepo.getById(open.sale_id) : null });
       if (!res) return;
       await alertModal({ title: `${name} is placed`, message: [`Deposit recorded for ${pickedName}.`, ...(await changeLines(res, await freshEntries(litter), familyName)), ...(res.next || res.waiting.length ? [] : ['Nobody else on the list is eligible for this litter right now.'])].join('\n\n') });
       await offerEmails(offerSpecs(res));

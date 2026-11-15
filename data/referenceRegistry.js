@@ -135,7 +135,11 @@ export const SALE_REFERENCES = [
   { table: 'waitlist_offers', field: 'sale_id', label: 'a waitlist family\'s pick' },
   // A training stay booked with its extra (Family Requests plan §6): the link lives
   // in the boarding event's details, which isn't indexed, so it's a scan.
-  { table: 'events', field: 'details.sale_id', label: 'a training stay booked with one of its extras', scan: true }
+  { table: 'events', field: 'details.sale_id', label: 'a training stay booked with one of its extras', scan: true },
+  // Money a family carried from a lost pup's sale (Payment Schedule plan §3.2a): a
+  // credit for funds received naming that sale; older entries hold it as carried_payment.
+  { table: 'waitlist_entries', field: 'received_credits[].from_sale_id', label: 'money a family carried from this sale, as a credit', scan: true },
+  { table: 'waitlist_entries', field: 'carried_payment.from_sale_id', label: 'money a family carried from this sale', scan: true }
 ];
 
 // --- StudService: what can point at a StudService (Stage 4) ----------------
