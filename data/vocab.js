@@ -442,6 +442,10 @@ export const isOpenSale = (s) => !!s && !s.is_archived && !!s.status && !TERMINA
 
 export const CONTRACT_TYPE = [
   { value: 'sale',         label: 'Sale',         badge: 'badge-blue' },
+  // A reservation agreement sent before there's a sale (a pup isn't picked yet): its
+  // buyer, litter, preferred sex and color and deposit are on the contract itself
+  // (contractRepo RESERVATION_FIELDS), so it works with or without the waitlist.
+  { value: 'reservation',  label: 'Reservation',  badge: 'badge-neutral' },
   { value: 'stud_service', label: 'Stud service', badge: 'badge-purple' },
   { value: 'co_own',       label: 'Co-own',       badge: 'badge-green' },
   { value: 'lease',        label: 'Lease',        badge: 'badge-amber' },
@@ -458,7 +462,7 @@ export const CONTRACT_TYPE = [
 export const CONTRACT_FORM_TYPE = [
   { value: 'pet_home',        label: 'Pet home contract',               badge: 'badge-blue',    contractTypes: ['sale'], registrations: ['limited', 'none', ''] },
   { value: 'breeding_rights', label: 'Breeding rights contract',        badge: 'badge-purple',  contractTypes: ['sale'], registrations: ['full'] },
-  { value: 'deposit',         label: 'Deposit / reservation agreement', badge: 'badge-neutral', contractTypes: ['sale'], saleStatuses: ['deposit_pending'] },
+  { value: 'deposit',         label: 'Deposit / reservation agreement', badge: 'badge-neutral', contractTypes: ['sale', 'reservation'], saleStatuses: ['deposit_pending'] },
   { value: 'co_own',          label: 'Co-ownership contract',           badge: 'badge-green',   contractTypes: ['co_own', 'sale'], registrations: ['co_own'] },
   { value: 'stud_service',    label: 'Stud service contract',           badge: 'badge-purple',  contractTypes: ['stud_service'] },
   { value: 'lease',           label: 'Lease agreement',                 badge: 'badge-amber',   contractTypes: ['lease'] },

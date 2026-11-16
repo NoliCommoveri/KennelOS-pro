@@ -10,6 +10,8 @@
 // (assets/esignUI.js): Firma emails the signer, or she sends the link herself, and
 // the contract comes back Signed by itself; its signed copy opens from here.
 import { contractRepo, DOG_LINK_TYPES, CONTACT_LINK_TYPES, ReferenceBlockedError } from '../data/contractRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { reservationDeposit } from '../data/saleDefaults.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { studServiceRepo } from '../data/studServiceRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
@@ -17,11 +19,11 @@ import { contactRepo } from '../data/contactRepo.js';
 import { documentRepo } from '../data/documentRepo.js';
 import { rankForms, splitName, signatureMessage, isFirmaForm, prefillValues } from '../data/contractForms.js';
 import { esignOffered, esignSignedIn } from '../data/cloud/cloudEsign.js';
-import { SENDABLE_STATUSES, loadContractForms, gatherContractFacts, buildSignatureLink, markContractSent, contractForForm, logPickup } from '../data/contractSend.js';
+import { SENDABLE_STATUSES, NEXT_AVAILABLE_LITTER, reservationLitterName, loadContractForms, gatherContractFacts, buildSignatureLink, markContractSent, contractForForm, logPickup } from '../data/contractSend.js';
 import { pickupToSet } from '../data/contractAddOns.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { CONTRACT_TYPE, CONTRACT_STATUS, CONTRACT_FORM_TYPE, SEX, descriptor } from '../data/vocab.js';
-import { esc, badge, fmtDate, param, confirmModal, alertModal, promptModal, dogOptgroups } from '../assets/ui.js';
+import { CONTRACT_TYPE, CONTRACT_STATUS, CONTRACT_FORM_TYPE, SEX, WAITLIST_PREF_SEX, LITTER_STATUS, descriptor } from '../data/vocab.js';
+import { esc, badge, fmtDate, fmtMoney, param, confirmModal, alertModal, promptModal, dogOptgroups } from '../assets/ui.js';
 import { openComposer } from '../assets/messageComposer.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 import { resolveKennelIdForWrite } from '../data/kennelScope.js';
@@ -39,21 +41,30 @@ const els = {
 const blankContract = () => ({
   contract_type: '', status: 'draft', related_sale_id: '', related_stud_service_id: '', related_dog_id: '',
   related_contact_id: '', document_url: '',
-  title: '', signed_date: '', lease_start_date: '', lease_end_date: '', terms_summary: '', notes: ''
+  title: '', signed_date: '', lease_start_date: '', lease_end_date: '', terms_summary: '', notes: '',
+  // A reservation's details (contractRepo RESERVATION_FIELDS).
+  reservation_litter_id: '', reservation_pref_sex: 'any', reservation_pref_color: '', reservation_deposit_amount: ''
 });
 
 const ctx = {
   mode: 'view', original: null, draft: null,
-  allSales: [], allStudServices: [], allDogs: [], dogsById: new Map(), contactsById: new Map()
+  allSales: [], allStudServices: [], allDogs: [], dogsById: new Map(), contactsById: new Map(),
+  allLitters: [], littersById: new Map(),
+  // The deposit the reservation form last filled in from its litter: while the box
+  // still holds it, a new litter or sex fills in that one's instead.
+  autoDeposit: null
 };
 
 async function loadRefs() {
-  const [sales, studServices, dogs, contacts] = await Promise.all([
+  const [sales, studServices, dogs, contacts, litters] = await Promise.all([
     saleRepo.getAll({ includeArchived: true }),
     studServiceRepo.getAll({ includeArchived: true }),
     dogRepo.getAll({ includeArchived: true }),
-    contactRepo.getAll({ includeArchived: true })
+    contactRepo.getAll({ includeArchived: true }),
+    litterRepo.getAll({ includeArchived: true })
   ]);
+  ctx.allLitters = litters;
+  ctx.littersById = new Map(litters.map((l) => [l.id, l]));
   ctx.allSales = sales;
   ctx.allStudServices = studServices;
   ctx.allDogs = dogs;
@@ -111,6 +122,41 @@ function contactOptions(current) {
   return `<option value="">— none —</option>` + opts;
 }
 
+// A reservation's litter, by name: "Next available litter" when none is picked.
+function litterName(id) {
+  const l = ctx.littersById.get(id);
+  return reservationLitterName(l, l && ctx.dogsById.get(l.sire_id), l && ctx.dogsById.get(l.dam_id));
+}
+
+// Litters a family can reserve from: not archived, not closed or sold out (the one
+// already picked stays offered). Expected first, then the youngest born.
+function litterOptions(current) {
+  const open = ctx.allLitters
+    .filter((l) => l.id === current || (!l.is_archived && !['closed', 'sold'].includes(l.status)))
+    .sort((a, b) => Number(a.status !== 'expected') - Number(b.status !== 'expected') || (b.whelp_date || '').localeCompare(a.whelp_date || ''));
+  const opt = (l) => {
+    const when = l.whelp_date ? ` · ${l.status === 'expected' ? 'due' : 'born'} ${fmtDate(l.whelp_date)}` : '';
+    return `<option value="${esc(l.id)}"${l.id === current ? ' selected' : ''}>${esc(litterName(l.id))} (${esc(descriptor(LITTER_STATUS, l.status).label)}${esc(when)})</option>`;
+  };
+  return `<option value=""${current ? '' : ' selected'}>${esc(NEXT_AVAILABLE_LITTER)}</option>` + open.map(opt).join('');
+}
+
+// Colors she's used on her dogs, for the Preferred color suggestions.
+function colorList() {
+  const seen = new Map();
+  for (const d of ctx.allDogs) {
+    const c = String(d.color_markings || '').trim();
+    if (c && !seen.has(c.toLowerCase())) seen.set(c.toLowerCase(), c);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b)).map((c) => `<option value="${esc(c)}">`).join('');
+}
+
+// The deposit to fill in for a litter and sex (saleDefaults.reservationDeposit), as the box shows it.
+const depositDefault = (litterId, sex) => {
+  const v = reservationDeposit(ctx.littersById.get(litterId), sex);
+  return v == null ? '' : String(v);
+};
+
 // --- Read-only view --------------------------------------------------------
 function row(label, valueHtml) {
   return `<dt>${esc(label)}</dt><dd>${valueHtml || '<span class="faint">—</span>'}</dd>`;
@@ -131,9 +177,14 @@ function renderView() {
       ${c.contract_type === 'lease' ? row('Lease start', c.lease_start_date ? esc(fmtDate(c.lease_start_date)) : '') : ''}
       ${c.contract_type === 'lease' ? row('Lease end', c.lease_end_date ? esc(fmtDate(c.lease_end_date)) : '') : ''}
       ${DOG_LINK_TYPES.includes(c.contract_type) ? row('Related dog', dog ? `<a href="dog.html?id=${encodeURIComponent(dog.id)}">${esc(dogName(dog.id))}</a>` : '') : ''}
+      ${c.contract_type === 'reservation' ? row('Buyer', contact ? `<a href="contact.html?id=${encodeURIComponent(contact.id)}">${esc(contactName(contact.id))}</a>` : '') : ''}
+      ${c.contract_type === 'reservation' ? row('Litter', c.reservation_litter_id && ctx.littersById.has(c.reservation_litter_id) ? `<a href="litter.html?id=${encodeURIComponent(c.reservation_litter_id)}">${esc(litterName(c.reservation_litter_id))}</a>` : esc(NEXT_AVAILABLE_LITTER)) : ''}
+      ${c.contract_type === 'reservation' ? row('Preferred sex', esc(descriptor(WAITLIST_PREF_SEX, c.reservation_pref_sex || 'any').label)) : ''}
+      ${c.contract_type === 'reservation' ? row('Preferred color', esc(c.reservation_pref_color || '')) : ''}
+      ${c.contract_type === 'reservation' ? row('Deposit', c.reservation_deposit_amount != null ? esc(fmtMoney(c.reservation_deposit_amount)) : '') : ''}
       ${CONTACT_LINK_TYPES.includes(c.contract_type) ? row('Counterparty', contact ? `<a href="contact.html?id=${encodeURIComponent(contact.id)}">${esc(contactName(contact.id))}</a>` : '') : ''}
-      ${c.contract_type !== 'lease' ? row('Related sale', sale ? `<a href="sale.html?id=${encodeURIComponent(sale.id)}">${esc(saleLabel(sale))}</a>` : '') : ''}
-      ${c.contract_type !== 'lease' ? row('Related stud service', ss ? `<a href="stud-service.html?id=${encodeURIComponent(ss.id)}">${esc(studServiceLabel(ss))}</a>` : '') : ''}
+      ${!['lease', 'reservation'].includes(c.contract_type) ? row('Related sale', sale ? `<a href="sale.html?id=${encodeURIComponent(sale.id)}">${esc(saleLabel(sale))}</a>` : '') : ''}
+      ${!['lease', 'reservation'].includes(c.contract_type) ? row('Related stud service', ss ? `<a href="stud-service.html?id=${encodeURIComponent(ss.id)}">${esc(studServiceLabel(ss))}</a>` : '') : ''}
       ${row('Document link', c.document_url ? `<a href="${esc(c.document_url)}" target="_blank" rel="noopener noreferrer">${esc(c.document_url)}</a>` : '')}
       ${c.esign_url || (c.esign_provider === 'firma' && c.esign_ref) ? row('Sent for signature', `${esc(c.esign_form_label || 'Contract form')}${c.esign_provider === 'firma' ? ' <span class="muted">· e-sign</span>' : ''}${c.esign_sent_date ? ` · ${esc(fmtDate(c.esign_sent_date))}` : ''}
         ${c.esign_url && c.status !== 'signed' ? '<button class="btn btn-sm" id="btn-copy-esign" style="margin-left:6px;">Copy link again</button>' : ''}
@@ -266,9 +317,10 @@ function renderEdit() {
       ${c.contract_type === 'lease' ? field('Lease start', `<input id="f-lease_start_date" type="date" value="${esc(c.lease_start_date)}">`) : ''}
       ${c.contract_type === 'lease' ? field('Lease end', `<input id="f-lease_end_date" type="date" value="${esc(c.lease_end_date)}">`) : ''}
       ${DOG_LINK_TYPES.includes(c.contract_type) ? field('Related dog', `<select id="f-related_dog_id">${dogOptions(c.related_dog_id)}</select>`, { hint: 'The dog this contract is about.' }) : ''}
+      ${c.contract_type === 'reservation' ? reservationFields(c) : ''}
       ${CONTACT_LINK_TYPES.includes(c.contract_type) ? field('Counterparty', `<select id="f-related_contact_id">${contactOptions(c.related_contact_id)}</select>`, { hint: 'The other party (lessee, co-owner, partner). Scopes this contract into their companion bundle.' }) : ''}
-      ${c.contract_type !== 'lease' ? field('Related sale', `<select id="f-related_sale_id">${saleOptions(c.related_sale_id)}</select>`) : ''}
-      ${c.contract_type !== 'lease' ? field('Related stud service', `<select id="f-related_stud_service_id">${studServiceOptions(c.related_stud_service_id)}</select>`) : ''}
+      ${!['lease', 'reservation'].includes(c.contract_type) ? field('Related sale', `<select id="f-related_sale_id">${saleOptions(c.related_sale_id)}</select>`) : ''}
+      ${!['lease', 'reservation'].includes(c.contract_type) ? field('Related stud service', `<select id="f-related_stud_service_id">${studServiceOptions(c.related_stud_service_id)}</select>`) : ''}
       ${field('Document link', `<input id="f-document_url" type="url" value="${esc(c.document_url || '')}" placeholder="https://…">`, { hint: 'Share link to the signed document (e.g. a Google Drive "anyone with the link" URL). Carried as a pointer into the buyer bundle.' })}
       ${field('Terms summary', `<textarea id="f-terms_summary">${esc(c.terms_summary)}</textarea>`, { wide: true })}
       ${field('Notes', `<textarea id="f-notes">${esc(c.notes)}</textarea>`, { wide: true })}
@@ -280,9 +332,49 @@ function renderEdit() {
   form.addEventListener('change', updateWarnings);
   document.getElementById('f-contract_type').addEventListener('change', () => {
     ctx.draft = readForm();
+    if (ctx.draft.contract_type === 'reservation' && (ctx.draft.reservation_deposit_amount === '' || ctx.draft.reservation_deposit_amount == null)) {
+      ctx.autoDeposit = depositDefault(ctx.draft.reservation_litter_id, ctx.draft.reservation_pref_sex);
+      ctx.draft.reservation_deposit_amount = ctx.autoDeposit;
+    }
     renderEdit();
   });
+  // A new litter or sex fills in its expected deposit, unless she typed her own.
+  for (const id of ['f-reservation_litter_id', 'f-reservation_pref_sex']) {
+    document.getElementById(id)?.addEventListener('change', () => {
+      const d = readForm();
+      const box = document.getElementById('f-reservation_deposit_amount');
+      if (box && (box.value === '' || box.value === ctx.autoDeposit)) {
+        ctx.autoDeposit = depositDefault(d.reservation_litter_id, d.reservation_pref_sex);
+        box.value = ctx.autoDeposit;
+      }
+      const hint = document.getElementById('res-deposit-hint');
+      if (hint) hint.textContent = depositHint(d.reservation_litter_id, d.reservation_pref_sex);
+    });
+  }
   updateWarnings();
+}
+
+// Where the reservation's deposit comes from, under its box.
+function depositHint(litterId, sex) {
+  if (!litterId) return 'Type the deposit. Pick a litter to fill in its expected deposit.';
+  return depositDefault(litterId, sex) === ''
+    ? 'This litter has no expected deposit for this sex. Type it, or set it on the Litter page.'
+    : 'Filled in from the litter\'s expected deposit. Change it if this family\'s is different.';
+}
+
+// The reservation's details, picked from lists so nothing has to be typed on the signing form.
+function reservationFields(c) {
+  const sexOpts = WAITLIST_PREF_SEX.map((v) => `<option value="${esc(v.value)}"${v.value === (c.reservation_pref_sex || 'any') ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
+  return `
+    ${field('Buyer', `<select id="f-related_contact_id">${contactOptions(c.related_contact_id)}</select>`, { required: true, hint: 'The family reserving. Their name, email, phone and address fill in from their contact.' })}
+    ${field('Litter', `<select id="f-reservation_litter_id">${litterOptions(c.reservation_litter_id)}</select>`, { hint: 'Next available litter: they reserve from whichever litter comes next.' })}
+    ${field('Preferred sex', `<select id="f-reservation_pref_sex">${sexOpts}</select>`)}
+    ${field('Preferred color', `<input id="f-reservation_pref_color" type="text" list="res-color-list" value="${esc(c.reservation_pref_color || '')}" placeholder="Any"><datalist id="res-color-list">${colorList()}</datalist>`, { hint: 'Leave blank for any color.' })}
+    <div class="field">
+      <label>Deposit</label>
+      <input id="f-reservation_deposit_amount" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(c.reservation_deposit_amount ?? '')}">
+      <span class="field-hint" id="res-deposit-hint">${esc(depositHint(c.reservation_litter_id, c.reservation_pref_sex))}</span>
+    </div>`;
 }
 
 function updateWarnings() {
@@ -316,6 +408,13 @@ function readForm() {
     // Related sale and stud service fields are hidden for lease contracts
     related_sale_id: document.getElementById('f-related_sale_id') ? (val('f-related_sale_id') || null) : (ctx.draft.related_sale_id || null),
     related_stud_service_id: document.getElementById('f-related_stud_service_id') ? (val('f-related_stud_service_id') || null) : (ctx.draft.related_stud_service_id || null),
+    // A reservation's fields only exist in the DOM while its type is Reservation.
+    ...(document.getElementById('f-reservation_litter_id') ? {
+      reservation_litter_id: val('f-reservation_litter_id') || null,
+      reservation_pref_sex: val('f-reservation_pref_sex') || 'any',
+      reservation_pref_color: val('f-reservation_pref_color').trim(),
+      reservation_deposit_amount: val('f-reservation_deposit_amount')
+    } : {}),
     document_url: val('f-document_url').trim(),
     terms_summary: val('f-terms_summary'),
     notes: val('f-notes')
@@ -400,6 +499,10 @@ async function save({ thenSend = false } = {}) {
 async function doSave({ thenSend = false } = {}) {
   clearError();
   const candidate = readForm();
+  if (candidate.contract_type === 'reservation') {
+    if (!candidate.related_contact_id) { showError('Pick the buyer for this reservation.'); return; }
+    if (!candidate.title) candidate.title = `Reservation: ${contactName(candidate.related_contact_id)}`;
+  }
   try {
     if (ctx.mode === 'new') {
       // Kennel scope (Multi-Kennel Scope Spec §6): a contract files under whatever
@@ -410,7 +513,8 @@ async function doSave({ thenSend = false } = {}) {
         inheritFrom: [
           ctx.allSales.find((x) => x.id === candidate.related_sale_id),
           ctx.allStudServices.find((x) => x.id === candidate.related_stud_service_id),
-          ctx.dogsById.get(candidate.related_dog_id)
+          ctx.dogsById.get(candidate.related_dog_id),
+          ctx.littersById.get(candidate.reservation_litter_id)
         ]
       });
       const saved = await contractRepo.create(candidate);
@@ -537,7 +641,7 @@ async function sendForSignature(c) {
       if (!sent.emailed && sent.signingLink) {
         const m = signatureMessage({
           who: signer ? splitName(signer.name)[0] : '', kennelName: facts.kennel?.kennel_name || '',
-          formLabel: choice.form.label, subject: facts.puppy?.call_name || facts.dog?.call_name || '', link: sent.signingLink
+          formLabel: choice.form.label, subject: facts.puppy?.call_name || facts.dog?.call_name || facts.reservation?.litterName || '', link: sent.signingLink
         });
         await openComposer({
           title: `Send ${choice.form.label}`,
@@ -558,7 +662,7 @@ async function sendForSignature(c) {
       if (contract.id !== c.id) show(sent.contract);
       return;
     }
-    const subject = facts.puppy?.call_name || facts.dog?.call_name
+    const subject = facts.puppy?.call_name || facts.dog?.call_name || facts.reservation?.litterName
       || (facts.studDog && facts.studDam ? `${facts.studDog.call_name} × ${facts.studDam.call_name}` : '');
     const msg = signatureMessage({
       who: signer ? splitName(signer.name)[0] : '',
@@ -622,6 +726,21 @@ async function main() {
     // qualify) — prefill the dog and let the user pick the type.
     const dogId = param('dog');
     if (dogId && ctx.dogsById.has(dogId)) ctx.draft.related_dog_id = dogId;
+    // A reservation agreement, from a contact or a waitlist family (?type=reservation
+    // &contact=…&sex=…&color=…&litter=…): the details come picked, she checks them.
+    if (param('type') === 'reservation') {
+      const d = ctx.draft;
+      d.contract_type = 'reservation';
+      const contactId = param('contact');
+      if (contactId && ctx.contactsById.has(contactId)) d.related_contact_id = contactId;
+      const sex = param('sex');
+      if (['any', 'male', 'female'].includes(sex)) d.reservation_pref_sex = sex;
+      d.reservation_pref_color = param('color') || '';
+      const litterId = param('litter');
+      if (litterId && ctx.littersById.has(litterId)) d.reservation_litter_id = litterId;
+      ctx.autoDeposit = depositDefault(d.reservation_litter_id, d.reservation_pref_sex);
+      d.reservation_deposit_amount = ctx.autoDeposit;
+    }
     renderTitle();
     renderEdit();
     renderProfileActions();

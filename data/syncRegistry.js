@@ -282,7 +282,10 @@ export const SYNC_REGISTRY = Object.freeze({
     private: ['document_url', 'terms_summary', 'notes', 'esign_url',
       // What a connected e-sign service reported that wasn't applied (plan §0).
       'integration_reviews'],
-    pending: []
+    // A reservation agreement's details (contractRepo RESERVATION_FIELDS): which
+    // litter, the buyer's preferred sex and color, the deposit. Not yet decided:
+    // device-only until the owner says (the deposit is private like a sale's).
+    pending: ['reservation_litter_id', 'reservation_pref_sex', 'reservation_pref_color', 'reservation_deposit_amount']
   },
 
   documents: {

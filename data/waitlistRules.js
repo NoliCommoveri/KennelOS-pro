@@ -331,6 +331,13 @@ export function respondByDate(offeredDate, config, program) {
   return addOpenDays(offeredDate, days, businessDays(config));
 }
 
+// The first day on or after `ymd` that she's open (her open days and closed
+// dates): a deadline set by hand lands there, as respondByDate's do.
+export function onOpenDay(ymd, config) {
+  if (!ymd) return ymd;
+  return addOpenDays(addDaysToYMD(ymd, -1), 1, businessDays(config));
+}
+
 // --- Position (Spec §6.1) -------------------------------------------------------
 
 // The date an entry is ordered by: her manual override, else the fee date. A
@@ -359,9 +366,12 @@ function priorityGroup(entry, programsById) {
 // two identical rows can never swap places between renders. An entry with no
 // fee_received_at (imported, or recorded before it existed) sorts first among its
 // same-day peers.
+const NO_ANCHOR = '9999-12-31';
 export function compareEntries(a, b, programsById) {
   return (priorityGroup(a, programsById) - priorityGroup(b, programsById))
-    || anchorDate(a).localeCompare(anchorDate(b))
+    // A record with no date at all (only a restore or a sync of a row written
+    // elsewhere makes one) goes to the end of its group, never to #1.
+    || (anchorDate(a) || NO_ANCHOR).localeCompare(anchorDate(b) || NO_ANCHOR)
     || (a.fee_received_at || '').localeCompare(b.fee_received_at || '')
     || (a.approved_date || '').localeCompare(b.approved_date || '')
     || (a.created_at || '').localeCompare(b.created_at || '')
@@ -1228,6 +1238,12 @@ export function prepassFor(entry, litter) {
     || (p.pairing_id && litter.pairing_id && p.pairing_id === litter.pairing_id)) || null;
 }
 
+// A row written when a family's "Not this litter" was used up by their turn (the
+// actions' recordPrepassed): closed by their own instruction, not by a pass she
+// recorded. Read from its note, the only mark it has.
+export const PREPASSED_NOTE = 'Passed ahead of time on ';
+export const isPrepassedRow = (o) => Boolean(o) && o.outcome === 'passed' && String(o.notes || '').startsWith(PREPASSED_NOTE);
+
 // Split a turn's litters ([{ litter, eligibleDogs }]) into the ones to offer and
 // the ones the family already passed on ahead of time (each with its prepass).
 // Nothing counts until the turn comes (§16.2): the caller records the prepassed
@@ -1273,8 +1289,32 @@ export function openTurns(offers, kennelId) {
   return [...groups.entries()].map(([id, rows]) => ({
     id, entry_id: rows[0].entry_id, offers: rows,
     offered_date: rows.map((o) => o.offered_date || '').sort()[0] || null,
-    respond_by_date: rows.map((o) => o.respond_by_date || '').sort().reverse()[0] || null
+    respond_by_date: turnRespondBy(rows)
   })).sort((a, b) => String(a.offered_date).localeCompare(String(b.offered_date)));
+}
+
+// A turn's deadline: the latest respond-by date among its rows. Every writer keeps
+// the open rows of a turn on one date; this is the one place that reads it.
+export function turnRespondBy(rows) {
+  return (rows || []).map((o) => o.respond_by_date || '').sort().reverse()[0] || null;
+}
+
+// Is this open turn (openTurns' shape, or anything with respond_by_date) past its
+// deadline on `today`?
+export const isTurnOverdue = (turn, today) => Boolean(turn && turn.respond_by_date) && turn.respond_by_date < today;
+
+// Does this family hold an open turn? `offers` may be the kennel's or the family's.
+export function holdsTurn(offers, entryId) {
+  return openTurns(offers || [], null).some((t) => t.entry_id === entryId);
+}
+
+// The deadline when a litter joins an open turn (§16.1 rule 5): it restarts from
+// today for the whole turn, but never earlier than the turn's own date, so time
+// she gave them by hand is kept (K6-2).
+export function joinRespondBy(turn, today, config, program) {
+  const restart = respondByDate(today, config, program);
+  const was = (turn && turn.respond_by_date) || '';
+  return was > restart ? was : restart;
 }
 
 // The litters a family could be offered in a turn now: each open-picks litter (not
@@ -1306,6 +1346,46 @@ export function nextTurn(entries, offers, litters, pups, sales, { today, config 
   return null;
 }
 
+// Who'd really be offered the next turn if picks were open on `opening` (a litter
+// a turn offered from a family's page opens, offerTo): nextTurn's rule, skipping a
+// family whose whole turn they'd passed on ahead of time (they'd be passed, not
+// offered). The out-of-turn guard asks this (K6-6), never the per-litter queue.
+// → { entry, litters } or null (a turn is open, or nobody fits).
+export function nextOfferedTurn(entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null, opening = null } = {}) {
+  const kid = kennelId || opening?.kennel_id || litters.find(isPicksOpen)?.kennel_id || null;
+  if (!kid || openTurns(offers, kid).length) return null;
+  const ls = litters
+    .filter((l) => l.kennel_id === kid)
+    .map((l) => (opening && l.id === opening.id && !l.picks_opened_date ? { ...l, picks_opened_date: today } : l));
+  for (const entry of rankedList(entries, kid, programsById)) {
+    const mine = turnLittersFor(entry, offers, ls, pups, sales, { today, config });
+    if (mine.length && splitPrepassed(entry, mine).offer.length) return { entry, litters: mine };
+  }
+  return null;
+}
+
+// Can this family be offered a turn starting from `litter` now? '' when they can,
+// else the reason, in her words. The offer dialog and offerTo both ask it, so the
+// list she picks from and the action never disagree (K6-7). `nameOf(entryId)`
+// names the family holding a turn; `readyText(entry)` words a ready-check hold.
+export function offerBlocker(entry, litter, { offers = [], pups = [], sales = [], today, config = WAITLIST_CONFIG_DEFAULTS, nameOf = () => 'Another family', readyText = null } = {}) {
+  if (!isOnList(entry) || isFamilyPageOnly(entry)) return 'Only families on the list can be offered a turn.';
+  if (!litter || litter.is_archived) return 'That litter is archived.';
+  if (litter.waitlist_off) return `${litter.nickname || 'This litter'} is kept off the waitlist (Non-Waitlist Sales). Put it back on the waitlist from its page first.`;
+  const [held] = openTurns(offers, litter.kennel_id);
+  if (held) return held.entry_id === entry.id ? 'They hold the turn now.' : `${nameOf(held.entry_id)} holds the turn now; one family at a time.`;
+  if (turnSpent(offers, litter.id, entry.id)) return 'They\'ve already had their turn on this litter.';
+  if (sideSaleOf(entry, sales)) return 'They\'re buying a pup from you already (a side sale). Settle or cancel it first.';
+  if (isReadyHeld(entry, today, config)) return readyText ? readyText(entry) : 'They\'re not ready for a pup yet.';
+  if (isManuallyPaused(entry, today)) return 'They\'re paused.';
+  if (!isListeningFor(entry, litter)) return entry.listen_mode === 'except' ? 'They asked to skip litters from this sire or dam.' : 'They\'re only listening for litters from other sires/dams.';
+  if (prepassFor(entry, litter)) return `They said "Not this litter" to ${litter.nickname || 'this litter'} on their status page. Undo that on their page first if they've changed their mind.`;
+  const litterPups = pups.filter((d) => d.litter_id === litter.id);
+  if (!litterPups.some((d) => isPupAvailable(d, sales))) return 'No pups available yet.';
+  if (!eligiblePupsFor(entry, litter, litterPups, sales, { today, config }).length) return 'No available pup matches what they want.';
+  return '';
+}
+
 // A litter whose picks open while a turn is open (§16.1 rule 5) joins that turn
 // only when its holder is eligible for it and nobody ranked above them is (and
 // hasn't spent a turn on it). Otherwise it waits for the next turn.
@@ -1321,9 +1401,11 @@ export function joinsOpenTurn(turn, litter, entries, offers, pups, sales, { toda
   return [];
 }
 
-// Open turns whose respond-by date has passed: one per turn.
+// Open turns whose respond-by date has passed: one per turn. `today` is a date, or
+// (kennelId) => that kennel's date (each kennel's deadlines on its own clock, D11).
+const dayFor = (today, kennelId) => (typeof today === 'function' ? today(kennelId) : today);
 export function overdueTurns(offers, today) {
-  return openTurns(offers, null).filter((t) => t.respond_by_date && t.respond_by_date < today);
+  return openTurns(offers, null).filter((t) => isTurnOverdue(t, dayFor(today, t.offers[0]?.kennel_id)));
 }
 
 // --- "Pups available soon" (Spec §15.5) -----------------------------------------
@@ -1581,14 +1663,9 @@ export function passToForgive(entry, offers) {
 
 // --- Deadlines needing her confirmation (Spec §6.5, W1) -------------------------
 
-// Open offers whose respond-by date has passed — Today suggests "record no response".
-export function overdueOffers(offers, today) {
-  return offers.filter((o) => !o.is_archived && o.outcome === 'open' && o.respond_by_date && o.respond_by_date < today);
-}
-
 // Approved entries whose pay-by date has passed — Today suggests "mark expired".
 export function overdueFees(entries, today) {
-  return entries.filter((e) => !e.is_archived && e.status === 'approved' && e.fee_due_date && e.fee_due_date < today);
+  return entries.filter((e) => !e.is_archived && e.status === 'approved' && e.fee_due_date && e.fee_due_date < dayFor(today, e.kennel_id));
 }
 
 // --- Contact.waitlist_status, kept in step (Spec §0, §4.1) ---------------------

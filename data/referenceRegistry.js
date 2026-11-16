@@ -65,7 +65,9 @@ export const LITTER_REFERENCES = [
     table: 'expenses', field: 'subject_id', label: 'subject of an expense',
     compoundIndex: '[subject_type+subject_id]', discriminatorValue: 'litter'
   },
-  { table: 'waitlist_offers',  field: 'litter_id',        label: 'litter on a waitlist offer' }
+  { table: 'waitlist_offers',  field: 'litter_id',        label: 'litter on a waitlist offer' },
+  // Not indexed (only a delete asks), so it's a scan.
+  { table: 'contracts', field: 'reservation_litter_id', label: 'litter on a reservation agreement', scan: true }
 ];
 
 // --- Pairing: what can point at a Pairing -----------------------------------

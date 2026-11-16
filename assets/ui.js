@@ -1,14 +1,14 @@
 // ui.js — small shared rendering helpers used across pages. No framework;
 // just functions that return safe HTML strings or build DOM.
 import { descriptor } from '../data/vocab.js';
-import { todayYMD } from '../data/dateUtils.js';
+import { todayYMD, kennelToday } from '../data/dateUtils.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { pickerGroups, dogName } from '../data/dogRepo.js';
 
 // Re-exported so pages keep importing todayYMD from here alongside the rest
 // of the shared rendering helpers — the one implementation lives in
 // data/dateUtils.js so repos and assets never drift apart on "what is today."
-export { todayYMD };
+export { todayYMD, kennelToday };
 
 // safeHref (K14-17) lives in data/safeHref.js so Node can test it; re-exported here.
 export { safeHref } from '../data/safeHref.js';

@@ -42,7 +42,7 @@ import { readNudgeKey, STEP_OF, REVIEW_STEPS, reviewSummary, readinessProblems, 
 import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, waitlistIsSetUp, entryName, describeOfferChanges, contactMatches, contactMatchReason, privateName, publicName, publicSourceName, listedName,
-  isPupAvailable, eligiblePupsFor, rankedList, turnIdOf, restoresFamily, overallPositions, isFamilyPageOnly
+  isPupAvailable, eligiblePupsFor, turnIdOf, restoresFamily, overallPositions, isFamilyPageOnly, litterQueue, respondByDate
 } from '../data/waitlistRules.js';
 import { hasOwnForm } from '../data/guidedForm.js';
 import { entryQuestions, formQuestions, answerText } from '../data/waitlistForm.js';
@@ -59,7 +59,7 @@ import { PAYMENT_METHODS, PLACEMENT_METHODS, SEX, isOpenSale, descriptor } from 
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { field } from './litterCheckinUI.js';
 import { prefsSummary } from './waitlistUI.js';
-import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
+import { esc, fmtDate, fmtMoney, todayYMD, kennelToday } from './ui.js';
 
 const HOW = 'I\'ll go through what\'s waiting on you, most urgent first: family requests and messages, anyone backing out, offers and picks, new applications, fees, and the list\'s upkeep. Skip anything you want to leave for later. Sound good?';
 const SKIP = { label: 'Skip for now', value: '__skip' };
@@ -105,6 +105,7 @@ class Review {
       kennel = setUp.find((k) => k.id === id);
     }
     this.kennel = kennel;
+    this.today = kennelToday(kennel);
     const ready = await this.readiness();
     if (ready === 'left') return null;
     return this.overview(true);
@@ -146,6 +147,8 @@ class Review {
 
   async load() {
     const k = this.kennel = await kennelRepo.getById(this.kennel.id);
+    // Her waitlist runs on the kennel's own date (D11).
+    this.today = kennelToday(k);
     const [entries, offers, contacts, litters, dogs, sales, programs, items] = await Promise.all([
       waitlistEntryRepo.getByKennel(k.id),
       waitlistOfferRepo.getByKennel(k.id),
@@ -784,17 +787,22 @@ class Review {
   async moreTime(turnId, was, e) {
     const res = await this.chat.form({
       title: `<strong>More time for ${esc(this.name(e))}</strong><span class="kels-lead">They had until ${esc(fmtDate(was))}.</span>`,
-      html: field('New deadline', `<input id="wr-until" type="date" value="${esc(addDaysToYMD(this.today, Number(this.config.respond_days) || 3))}">`),
+      // The date the engine would give a turn offered today, on one of her open days (K6-8).
+      html: field('New deadline', `<input id="wr-until" type="date" value="${esc(respondByDate(this.today, this.config, this.programMap.get(e.waitlist_program_id) || null))}">`),
       submitLabel: 'Give them more time',
       cancelLabel: 'Never mind',
       submit: async (root) => {
         // A string from submit is shown as the form's error, so the date goes back in an object.
-        try { return { until: (await actions.extendTurn(turnId, { until: root.querySelector('#wr-until').value, date: this.today })).respond_by_date }; } catch (err) { return err.message; }
+        try {
+          const t = await actions.extendTurn(turnId, { until: root.querySelector('#wr-until').value, date: this.today });
+          return { until: t.respond_by_date, movedFrom: t.moved_from };
+        } catch (err) { return err.message; }
       },
       reply: (r) => `Until ${fmtDate(r.until)}`
     });
     if (!res.done) { this.skipped++; return; }
-    await this.chat.say(`${esc(this.name(e))} has until ${esc(fmtDate(res.result.until))} now. Let them know.`);
+    const moved = res.result.movedFrom ? ` You're closed on ${esc(fmtDate(res.result.movedFrom))}, so it's your next open day.` : '';
+    await this.chat.say(`${esc(this.name(e))} has until ${esc(fmtDate(res.result.until))} now.${moved} Let them know.`);
     await this.emails([{ entryId: e.id, kind: 'offer', extra: { litterIds: this.offers.filter((o) => turnIdOf(o) === turnId).map((o) => o.litter_id), respondBy: res.result.until } }]);
   }
 
@@ -899,14 +907,15 @@ class Review {
     }
     const pups = this.dogs.filter((d) => d.litter_id === litter.id);
     const progs = this.programMap;
-    const fits = rankedList(this.entries, this.kennel.id, progs).filter((x) => eligiblePupsFor(x, litter, pups, this.sales, { today: this.today, config: this.config }).length);
+    const fits = litterQueue(this.entries, litter, pups, this.sales, { today: this.today, config: this.config, programsById: progs }).map((q) => q.entry);
     if (!fits.length) { await this.chat.say('Nobody on the list has a pup in that litter they could take right now.'); return; }
     const pos = overallPositions(this.entries, this.kennel.id, progs, { sales: this.sales, dogs: this.dogsById });
     await this.chat.say('<strong>Who should have it?</strong>');
     const id = await this.chat.choose([...fits.map((x) => ({ label: this.name(x), note: pos.get(x.id) ? `#${pos.get(x.id)}` : '', value: x.id })), { label: 'Never mind', value: '' }],
       { search: fits.length > 8 ? { placeholder: 'Find a family' } : null });
     if (!id) { this.skipped++; return; }
-    const turn = await actions.offerTo(litter.id, id, { today: this.today, note: `Offered out of order; next in line was ${this.name(e)}.` });
+    // She chose them over the family named above: offerTo notes who was really next.
+    const turn = await actions.offerTo(litter.id, id, { today: this.today, outOfOrder: true });
     return this.reportTurn(turn);
   }
 

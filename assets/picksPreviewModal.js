@@ -259,10 +259,12 @@ function actionHtml(p, n) {
     lines.push(`<span class="badge badge-amber">Not this litter</span> ${n.familyLink(x.entry_id)} said "Not this litter" to ${esc(x.litter_ids.map(n.litterName).join(', '))}, so ${counted}${x.removed ? ' and they\'re removed from the list (you can undo it for 7 days)' : ''}, and the list moves on.`);
   }
   const littersWithPups = (ls) => ls.map((x) => `${esc(n.litterName(x.litter_id))} (${esc(n.pups(x.dog_ids))})`).join(' and ');
+  // Who's next once the holder's turn ends: worked out with what will happen (as
+  // they said, every open litter), never from the view or the Either switch (K6b-6).
   const nextAfterHolder = () => {
-    const next = p.turnOrder.filter((t) => !t.holds_turn).slice(0, 3);
+    const next = a.next_after || [];
     if (!next.length) return ' When it ends, nobody else is in line.';
-    return ` When it ends, next in line: ${next.map((t) => `#${esc(t.position)} ${n.familyLink(t.entry_id)} (${esc(t.litters.map((x) => n.litterName(x.litter_id)).join(', '))}${t.litters.length === 1 && p.shown_litter_ids.length > 1 ? ' only' : ''})`).join(', then ')}.`;
+    return ` When it ends, next in line: ${next.map((t) => `${p.positions[t.entry_id] ? `#${esc(p.positions[t.entry_id])} ` : ''}${n.familyLink(t.entry_id)} (${esc(t.litter_ids.map(n.litterName).join(', '))})`).join(', then ')}.`;
   };
   switch (a.kind) {
     case 'offer':

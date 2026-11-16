@@ -13,7 +13,7 @@ import {
   waitlistConfig, rankedList, overallPositions, isPupAvailable, pupMatchesPrefs,
   eligiblePupsFor, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, isListeningFor,
   turnSpent, turnLittersFor, openTurns, joinsOpenTurn, splitPrepassed, prepassFor,
-  respondByDate, countsAsPass, passesUsed, shouldRemoveForPasses, kennelBreeds, resolveBreed,
+  respondByDate, joinRespondBy, countsAsPass, passesUsed, shouldRemoveForPasses, kennelBreeds, resolveBreed,
   WHELP_NOTE_FIELDS, isSideSalePending, sideSaleOf, pupClaims
 } from './waitlistRules.js';
 import { RELEASED_SALE_STATUSES, cleanPurposes } from './vocab.js';
@@ -113,8 +113,11 @@ export function withEitherAs(entries, eitherAs) {
 // → { kind: 'offer', entry_id, litters: [{ litter_id, dog_ids }], prepassed: [litter_id],
 //      respond_by, auto_passed }
 //   | { kind: 'join', entry_id, turn_id, dog_ids, respond_by, was_respond_by }
-//   | { kind: 'wait', holder_id, turn_id, holder_litter_ids, respond_by, prepass_blocked? }
-//   | { kind: 'held', holder_id, turn_id, holder_litter_ids, respond_by }   (picks already open)
+//   | { kind: 'wait', holder_id, turn_id, holder_litter_ids, respond_by, next_after, prepass_blocked? }
+//   | { kind: 'held', holder_id, turn_id, holder_litter_ids, respond_by, next_after }   (picks already open)
+// next_after: who's in line once the holder's turn ends, as they said and on every
+// open litter, leaving out a family whose turn would be "Not this litter" in full
+// (K6b-6): [{ entry_id, litter_ids }], at most NEXT_AFTER_SHOWN.
 //   | { kind: 'none', auto_passed }
 // auto_passed: [{ entry_id, litter_ids, counted, used, max, removed }]
 function simulateOpen({ entries, offers, litters, pups, sales, programsById, config, today, kennelId, litterId, alreadyOpen }) {
@@ -122,14 +125,17 @@ function simulateOpen({ entries, offers, litters, pups, sales, programsById, con
   const target = litters.find((l) => l.id === litterId);
   const [open] = openTurns(offers, kennelId);
   if (open) {
-    const base = { holder_id: open.entry_id, turn_id: open.id, holder_litter_ids: open.offers.map((o) => o.litter_id), respond_by: open.respond_by_date };
+    const base = {
+      holder_id: open.entry_id, turn_id: open.id, holder_litter_ids: open.offers.map((o) => o.litter_id), respond_by: open.respond_by_date,
+      next_after: nextAfterHolder(open.entry_id, { entries, offers, litters, pups, sales, opts })
+    };
     if (alreadyOpen) return { kind: 'held', ...base };
     const eligible = joinsOpenTurn(open, target, entries, offers, pups, sales, opts);
     const holder = entries.find((e) => e.id === open.entry_id);
     if (eligible.length && holder && prepassFor(holder, target)) return { kind: 'wait', ...base, prepass_blocked: true };
     if (!eligible.length) return { kind: 'wait', ...base };
     const program = holder ? programsById.get(holder.waitlist_program_id) || null : null;
-    return { kind: 'join', entry_id: open.entry_id, turn_id: open.id, dog_ids: eligible.map((d) => d.id), respond_by: respondByDate(today, config, program), was_respond_by: open.respond_by_date };
+    return { kind: 'join', entry_id: open.entry_id, turn_id: open.id, dog_ids: eligible.map((d) => d.id), respond_by: joinRespondBy(open, today, config, program), was_respond_by: open.respond_by_date };
   }
   // offerNextTurn's loop: a family whose whole turn is "Not this litter" is passed
   // at once (counting once), removed at the pass limit, and the list goes on.
@@ -159,6 +165,18 @@ function simulateOpen({ entries, offers, litters, pups, sales, programsById, con
     autoPassed.push({ entry_id: next.entry.id, litter_ids: prepassed.map((x) => x.litter.id), counted: counts, used: passesUsed(next.entry, simOffers), max: Number(config.max_passes), removed });
   }
   return { kind: 'none', auto_passed: autoPassed };
+}
+
+const NEXT_AFTER_SHOWN = 3;
+function nextAfterHolder(holderId, { entries, offers, litters, pups, sales, opts }) {
+  const out = [];
+  for (const entry of rankedList(entries, opts.kennelId, opts.programsById)) {
+    if (entry.id === holderId) continue;
+    const { offer } = splitPrepassed(entry, turnLittersFor(entry, offers, litters, pups, sales, opts));
+    if (offer.length) out.push({ entry_id: entry.id, litter_ids: offer.map((x) => x.litter.id) });
+    if (out.length >= NEXT_AFTER_SHOWN) break;
+  }
+  return out;
 }
 
 // nextTurn without the open-turn check (simulateOpen only calls it with none open).
@@ -303,6 +321,8 @@ export function previewPicks(data, { litterId, today, view = 'combined', eitherA
     shown_litter_ids: shown.map((l) => l.id),
     other_open_litter_ids: otherOpen.map((l) => l.id),
     action, turnOrder, pupsByLitter, excluded, notOnList, checks,
+    // Each family's number on the list, for the action's sentences.
+    positions: Object.fromEntries(positions),
     config,
     respond_by_today: respondByDate(today, config, null)
   };

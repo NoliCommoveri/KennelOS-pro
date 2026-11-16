@@ -37,6 +37,18 @@ const REQUIRED_FIELDS = ['contract_type'];
 // and appears in the partner companion bundle like a lease.
 export const DOG_LINK_TYPES = ['lease', 'co_own', 'foster', 'other'];
 export const CONTACT_LINK_TYPES = ['lease', 'co_own', 'foster', 'other'];
+// A reservation (vocab CONTRACT_TYPE) has no sale yet, so its buyer is its
+// related_contact_id too. Kept out of CONTACT_LINK_TYPES: a buyer holding a
+// reservation is not a partner (isLivePartnerContract) and gets no partner bundle.
+export const BUYER_LINK_TYPES = ['reservation'];
+// What a reservation agreement says, set on the Contract page from dropdowns and
+// sent to her form as prefilled facts (contractForms 'reservation' group):
+//   reservation_litter_id       FK → Litter; null = the next available litter
+//   reservation_pref_sex        WAITLIST_PREF_SEX: 'any' (Either) | 'male' | 'female'
+//   reservation_pref_color      text, as she types it
+//   reservation_deposit_amount  number; prefilled from the litter's expected deposit
+// Null on every other type.
+export const RESERVATION_FIELDS = ['reservation_litter_id', 'reservation_pref_sex', 'reservation_pref_color', 'reservation_deposit_amount'];
 
 // Statuses that take a contract out of play. A partner never sees a contract in
 // one of these states, and such a contract never confers partner membership —
@@ -59,7 +71,20 @@ function validateContract(candidate) {
 // contact's derived Contracts panel / companion bundle.
 function normalizeLinks(candidate) {
   if (!DOG_LINK_TYPES.includes(candidate.contract_type)) candidate.related_dog_id = null;
-  if (!CONTACT_LINK_TYPES.includes(candidate.contract_type)) candidate.related_contact_id = null;
+  if (![...CONTACT_LINK_TYPES, ...BUYER_LINK_TYPES].includes(candidate.contract_type)) candidate.related_contact_id = null;
+  if (candidate.contract_type === 'reservation') {
+    // A reservation has no sale or stud service: it is its own record.
+    candidate.related_sale_id = null;
+    candidate.related_stud_service_id = null;
+    const sex = candidate.reservation_pref_sex;
+    candidate.reservation_pref_sex = ['any', 'male', 'female'].includes(sex) ? sex : 'any';
+    candidate.reservation_litter_id = candidate.reservation_litter_id || null;
+    candidate.reservation_pref_color = String(candidate.reservation_pref_color ?? '').trim();
+    const amt = candidate.reservation_deposit_amount;
+    candidate.reservation_deposit_amount = amt === '' || amt == null || !Number.isFinite(Number(amt)) || Number(amt) < 0 ? null : Number(amt);
+  } else {
+    for (const f of RESERVATION_FIELDS) if (f in candidate) candidate[f] = null;
+  }
   return candidate;
 }
 
@@ -80,10 +105,14 @@ export const contractRepo = {
     if (!existing) throw new Error(`contracts: no record with id ${id}`);
     const merged = normalizeLinks({ ...existing, ...changes });
     validateContract(merged);
+    const normalized = Object.fromEntries(RESERVATION_FIELDS.filter((f) => f in merged).map((f) => [f, merged[f]]));
     return base.update(id, {
       ...changes,
       related_dog_id: merged.related_dog_id,
-      related_contact_id: merged.related_contact_id
+      related_contact_id: merged.related_contact_id,
+      related_sale_id: merged.related_sale_id ?? null,
+      related_stud_service_id: merged.related_stud_service_id ?? null,
+      ...normalized
     });
   },
 
@@ -114,8 +143,8 @@ export const contractRepo = {
     return db.contracts.where('related_dog_id').equals(dogId).toArray();
   },
 
-  // Contracts whose counterparty is this contact — lease/co_own/other only (the
-  // types related_contact_id is set for). Powers the partner companion bundle's
+  // Contracts whose counterparty is this contact — lease/co_own/foster/other, and a
+  // reservation's buyer (the types related_contact_id is set for). Powers the partner companion bundle's
   // "their lease/other contracts" scope; the reverse of related_contact_id.
   getByContact(contactId) {
     return db.contracts.where('related_contact_id').equals(contactId).toArray();

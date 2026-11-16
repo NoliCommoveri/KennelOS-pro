@@ -10,7 +10,7 @@ import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
 import { getMyKennelId } from '../data/settings.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
-import { esc, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal, promptModal } from './ui.js';
+import { esc, fmtDate, fmtMoney, todayYMD, kennelToday, confirmModal, alertModal, promptModal } from './ui.js';
 import { PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
 import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges, restoresFamily, pupClaims } from '../data/waitlistRules.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
@@ -403,6 +403,8 @@ export async function confirmSecondClaim(dogId, { exceptSaleId = null, pupName =
 
 export async function pickDialog({ offer, name, pups, pupLabel }) {
   let out = null;
+  // The waitlist's dates are the kennel's (D11): the next turn's deadline counts from it.
+  const day = kennelToday(offer.kennel_id ? await kennelRepo.getById(offer.kennel_id) : null);
   const carried = carriedCreditsOf(await waitlistEntryRepo.getById(offer.entry_id));
   const carriedAmount = carried.reduce((t, c) => t + c.amount, 0);
   const credit = (await getEntryCredit(offer.entry_id)).credit;
@@ -412,10 +414,10 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
     title: `${name} picked a pup`,
     confirmLabel: 'Record their pick',
     bodyHtml: `<div class="field"><label>Which pup?</label><select id="pk-dog">${pupOptions(pups, pupLabel)}</select></div>
-      <div class="field"><label>Date</label><input id="pk-date" type="date" value="${esc(todayYMD())}"></div>
+      <div class="field"><label>Date</label><input id="pk-date" type="date" value="${esc(day)}"></div>
       ${carried.length ? '' : `<label class="check-inline" style="display:block;margin:8px 0;"><input id="pk-paid" type="checkbox"> Their deposit is already in</label>
       <div id="pk-paid-fields" class="form-grid" hidden>
-        <div class="field"><label>Deposit received</label><input id="pk-dep-date" type="date" value="${esc(todayYMD())}"></div>
+        <div class="field"><label>Deposit received</label><input id="pk-dep-date" type="date" value="${esc(day)}"></div>
         <div class="field"><label>Amount</label><input id="pk-dep-amount" type="number" min="0" step="0.01" placeholder="The litter's expected deposit"></div>
       </div>`}
       ${carriedHint}${creditHint}
@@ -424,7 +426,7 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
         : `<p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(fmtDate(offer.respond_by_date))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`}`,
     onConfirm: async (o) => {
       const chosenDogId = o.querySelector('#pk-dog').value;
-      const date = o.querySelector('#pk-date').value || todayYMD();
+      const date = o.querySelector('#pk-date').value || day;
       const pupName = pups.find((p) => p.id === chosenDogId)?.call_name || 'This pup';
       if (!(await confirmSecondClaim(chosenDogId, { pupName, nameOf: await familyNamer() }))) throw new Error('Not recorded. Pick another pup, or cancel.');
       if (o.querySelector('#pk-paid')?.checked) {
@@ -452,6 +454,7 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
 // §3.2a). Credits, money carried from a lost pup included, only lower what they send.
 export async function depositDialog({ offer, name, pupName, sale }) {
   let res = null;
+  const day = kennelToday(offer.kennel_id ? await kennelRepo.getById(offer.kennel_id) : null);
   // Their credit for funds already received pays part (or all) of the deposit.
   const sc = sale ? await getSaleCredits(sale.id) : null;
   const credited = sc?.credit?.byKey.deposit || 0;
@@ -473,12 +476,12 @@ export async function depositDialog({ offer, name, pupName, sale }) {
     confirmLabel: 'Deposit received',
     bodyHtml: `<p style="margin-top:0;">For <strong>${esc(pupName)}</strong>.</p>${otherClaims ? `<div class="inline-warn">Another family also has a claim on ${esc(pupName)}. Recording this deposit ends it: a side sale is cancelled (they keep their place), another pick is let go.</div>` : ''}
       <div class="form-grid">
-        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || todayYMD())}"></div>
+        <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || day)}"></div>
         <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
       </div>
       <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${creditHint}</p>`,
     onConfirm: async (o) => {
-      const when = o.querySelector('#dp-date').value || todayYMD();
+      const when = o.querySelector('#dp-date').value || day;
       res = await confirmDeposit(offer.id, { date: when, amount: o.querySelector('#dp-amount').value });
     }
   });

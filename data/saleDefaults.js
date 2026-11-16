@@ -21,6 +21,20 @@ export function expectedPricing(dog, litter, registration = dog?.intended_regist
   };
 }
 
+// A reservation agreement's deposit, from its litter's expected deposits
+// (contract.html, Reservation): the one for the preferred sex; for Either, the
+// two when they agree, else the one that's set, else null (she types it). → number | null.
+export function reservationDeposit(litter, prefSex) {
+  if (!litter) return null;
+  const clean = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const m = clean(litter.expected_deposit_male);
+  const f = clean(litter.expected_deposit_female);
+  if (prefSex === 'male') return m;
+  if (prefSex === 'female') return f;
+  if (m != null && f != null) return m === f ? m : null;
+  return m ?? f;
+}
+
 // The price a sale moves to when its registration changes (decided 2026-10-11):
 // the difference between the litter's expected prices for the two registrations
 // (the Full surcharge coming or going), applied to the sale's current price so any

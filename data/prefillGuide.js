@@ -21,6 +21,7 @@ export const GUIDE_GROUPS = Object.freeze([
   { key: 'transport', title: 'Transport', fills: 'Contracts on a sale with a transport fee' },
   { key: 'boarding', title: 'Boarding', fills: 'Contracts on a sale with deferred pickup boarding' },
   { key: 'extra', title: 'Extra', fills: 'Extra agreements (the extra the template is for)' },
+  { key: 'reservation', title: 'Reservation', fills: 'Reservation agreements sent before a sale (any template on one; a Deposit template on a sale leaves them blank)' },
   { key: 'stud_service', title: 'Stud service', fills: 'Stud service contracts' },
   { key: 'dog', title: 'Dog', fills: 'Co-own, lease, foster and Other contracts about a dog' }
 ]);
@@ -41,12 +42,12 @@ const HOW = {
   breederEmail: 'From the contact linked to your kennel.',
   breederPhone: 'From the contact linked to your kennel.',
   breederAddress: 'From the contact linked to your kennel.',
-  buyerName: 'From the buyer\'s contact on the sale.',
+  buyerName: 'From the buyer\'s contact: on the sale, or on the reservation.',
   buyerFirstName: 'The buyer\'s name before its last space.',
   buyerLastName: 'The last word of the buyer\'s name.',
-  buyerEmail: 'From the buyer\'s contact on the sale.',
-  buyerPhone: 'From the buyer\'s contact on the sale.',
-  buyerAddress: 'From the buyer\'s contact on the sale.',
+  buyerEmail: 'From the buyer\'s contact: on the sale, or on the reservation.',
+  buyerPhone: 'From the buyer\'s contact: on the sale, or on the reservation.',
+  buyerAddress: 'From the buyer\'s contact: on the sale, or on the reservation.',
   puppyName: 'From the pup\'s record.',
   puppyRegisteredName: 'From the pup\'s record.',
   puppySex: 'From the pup\'s record: Male or Female.',
@@ -54,7 +55,7 @@ const HOW = {
   puppyDob: 'From the pup\'s record.',
   puppyMicrochip: 'From the pup\'s record.',
   breed: 'From the pup\'s record (on a dog contract, the dog\'s).',
-  sireName: 'The sire\'s registered name, else its call name.',
+  sireName: 'The sire\'s registered name, else its call name (on a reservation, the litter\'s sire).',
   damName: 'On a sale, the dam\'s registered name, else its call name. On a stud service, the dam\'s call name.',
   registrationType: 'The sale\'s Registration: Limited, Full, Co-own or None.',
   pickupDate: 'The pup\'s next pickup for this family on your calendar, else its latest, else the litter\'s estimated ready date (8 weeks after whelping when none is set).',
@@ -107,7 +108,11 @@ const HOW = {
   dogDob: 'From the dog\'s record.',
   dogMicrochip: 'From the dog\'s record.',
   leaseStart: 'The contract\'s lease start (lease contracts only).',
-  leaseEnd: 'The contract\'s lease end (lease contracts only).'
+  leaseEnd: 'The contract\'s lease end (lease contracts only).',
+  litterName: 'The litter picked on the reservation: its name, else Dam × Sire. Next available litter when none is picked.',
+  preferredSex: 'Picked on the reservation: Male, Female or Either.',
+  preferredColor: 'Typed on the reservation.',
+  reservationDeposit: 'The reservation\'s Deposit: starts as the litter\'s expected deposit for the preferred sex, and she can change it.'
 };
 for (let i = 1; i <= 4; i++) {
   HOW[`extraPayment${i}Amount`] = `The extra's ${nth[i - 1]} payment: its amount.`;
@@ -138,7 +143,7 @@ const pickup = { subject_type: 'dog', subject_id: 'pup', event_type: 'placement'
 export const EXAMPLE_STORY = 'Examples come from a made-up sale: Bella, a female Boston Terrier born 2026-09-01, sold to Jordan Lee for $3,000 on Limited registration. '
   + 'The $500 deposit is paid and a $400 payment came in. The sale has $450 transport, boarding at $25 a day for 5 days and a $600 2-week training package. '
   + 'Its schedule asks for 50% of the price and extras by 8 weeks, and the rest at pickup on 2026-11-24. '
-  + 'Stud service examples are a $1,500 in-person breeding; dog examples, a lease of Rosie.';
+  + 'Stud service examples are a $1,500 in-person breeding; dog examples, a lease of Rosie; reservation examples, Jordan Lee reserving from Rosie × Duke with a $400 deposit.';
 
 function saleFacts() {
   const s = exampleSale;
@@ -161,6 +166,16 @@ function saleFacts() {
   };
 }
 
+const reservationFacts = () => ({
+  contract: { id: '2c4e6a8b-0d1f-4a3c-9e5b-7d9f1b3d5e66', title: 'Reservation agreement', contract_type: 'reservation',
+    reservation_pref_sex: 'any', reservation_pref_color: 'Brindle', reservation_deposit_amount: 400 },
+  kennel, breeder, today: TODAY,
+  buyer: { name: 'Jordan Lee', email: 'jordan@example.com', phone: '555-0142', address: '48 Oak St, Raleigh, NC' },
+  sire: { call_name: 'Duke', registered_name: 'Maple Ridge\'s Iron Duke' },
+  dam: { call_name: 'Rosie', registered_name: 'Maple Ridge\'s Rosie Belle' },
+  reservation: { litterName: 'Rosie × Duke' }
+});
+
 const studFacts = () => ({
   contract: { id: '5b7e9c1d-2f4a-4d6b-8e0c-3a1f5d7b9e22', contract_type: 'stud_service' }, kennel, breeder, today: TODAY,
   studService: { id: 'c1e3a5b7-9d2f-4b6a-8c0e-1f3d5b7a9c44', fee_amount: 1500, type: 'in_person' },
@@ -182,6 +197,7 @@ function examples() {
   const sale = Object.fromEntries(prefillValues({ form_type: 'extra', extra_list_id: 'training' }, saleFacts()));
   return {
     every: sale, sale, transport: sale, boarding: sale, extra: sale,
+    reservation: Object.fromEntries(prefillValues('deposit', reservationFacts())),
     stud_service: Object.fromEntries(prefillValues('stud_service', studFacts())),
     dog: Object.fromEntries(prefillValues('lease', dogFacts()))
   };

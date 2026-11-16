@@ -15,6 +15,25 @@ export function todayYMD() {
   return formatYMD(new Date());
 }
 
+// Today in an IANA time zone ('America/Chicago'), as YYYY-MM-DD. No zone, or one
+// this browser doesn't know: the device's own date (todayYMD).
+export function dayInZone(timeZone, now = new Date()) {
+  if (!timeZone) return formatYMD(now);
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(now).map((x) => [x.type, x.value]));
+    return `${p.year}-${p.month}-${p.day}`;
+  } catch {
+    return formatYMD(now);
+  }
+}
+
+// The kennel's own today (Kennel.time_zone, set when its waitlist goes online),
+// else the device's. The waitlist's deadlines (turns, fees, "Ready now?") are set
+// and read on it, as the Worker and the family's page read them (decision D11);
+// everything else in the app keeps the device's date.
+export const kennelToday = (kennel, now = new Date()) => dayInZone(kennel?.time_zone || null, now);
+
 // n days from today (negative = past) — sample-data dates that should stay
 // "still relevant" regardless of when the packet is seeded.
 export function daysFromToday(n) {

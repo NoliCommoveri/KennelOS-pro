@@ -13,7 +13,7 @@
 // A prefilled link carries its values in the URL, so only short facts go in it,
 // never private notes, terms or end reasons (§2.1). This list IS that allow-list.
 // Pure: no db, no DOM. The callers read the records.
-import { CONTRACT_FORM_TYPE, CONTRACT_TYPE, REGISTRATION_TYPE, SEX, STUD_SERVICE_TYPE, descriptor } from './vocab.js';
+import { CONTRACT_FORM_TYPE, CONTRACT_TYPE, REGISTRATION_TYPE, SEX, STUD_SERVICE_TYPE, WAITLIST_PREF_SEX, descriptor } from './vocab.js';
 import { extraFor, extraPayments } from './contractAddOns.js';
 import { finalDueDate } from './paymentSchedule.js';
 
@@ -225,6 +225,22 @@ export const PREFILL_FIELDS = {
     ['finalPaymentAmount', 'Final payment: what\'s still owed by it'],
     ['finalPaymentDue', 'Final payment\'s due date']
   ],
+  // A reservation agreement (contract type Reservation): sent before a sale, from what
+  // she picked on the Contract page. On a sale's Deposit form these stay blank.
+  reservation: [
+    ['buyerName', 'Buyer\'s full name'],
+    ['buyerFirstName', 'Buyer\'s first name'],
+    ['buyerLastName', 'Buyer\'s last name'],
+    ['buyerEmail', 'Buyer\'s email'],
+    ['buyerPhone', 'Buyer\'s phone'],
+    ['buyerAddress', 'Buyer\'s address'],
+    ['litterName', 'The litter (its name, else Dam × Sire), or Next available litter'],
+    ['sireName', 'Sire'],
+    ['damName', 'Dam'],
+    ['preferredSex', 'Preferred sex: Male, Female or Either'],
+    ['preferredColor', 'Preferred color'],
+    ['reservationDeposit', 'Deposit for the reservation']
+  ],
   transport: [
     ['transportFee', 'Transport fee'],
     ['deliveryDate', 'Delivery / pickup date (the one on your calendar)'],
@@ -309,6 +325,8 @@ export const FIRMA_LABELS = {
   payment1Amount: 'Payment · 1st amount', payment1Due: 'Payment · 1st due date',
   payment2Amount: 'Payment · 2nd amount', payment2Due: 'Payment · 2nd due date',
   finalPaymentAmount: 'Payment · Final amount', finalPaymentDue: 'Payment · Final due date',
+  litterName: 'Reservation · Litter', preferredSex: 'Reservation · Preferred sex',
+  preferredColor: 'Reservation · Preferred color', reservationDeposit: 'Reservation · Deposit',
   transportFee: 'Transport · Fee', deliveryDate: 'Transport · Delivery date', deliveryPlace: 'Transport · Delivery place',
   transportDueDate: 'Transport · Fee due date',
   boardingRate: 'Boarding · Rate', boardingPer: 'Boarding · Rate per', boardingLength: 'Boarding · Length',
@@ -337,6 +355,7 @@ export function fieldGroupsFor(formType) {
   if (['lease', 'foster'].includes(formType)) return ['dog'];
   if (formType === 'co_own' || formType === 'other') return [...SALE_GROUPS, 'dog'];
   if (formType === 'extra') return [...SALE_GROUPS, 'extra'];
+  if (formType === 'deposit') return [...SALE_GROUPS, 'reservation'];
   return SALE_GROUPS;
 }
 
@@ -404,7 +423,8 @@ export function prefillValues(formOrType, facts = {}) {
     // Her own name and details: the contact linked to the kennel (contractSend.breederFor).
     ...person('breeder', f.breeder)
   ];
-  const groups = fieldGroupsFor(formType);
+  // A reservation contract fills its own group whatever form goes out on it.
+  const groups = c.contract_type === 'reservation' ? [...new Set([...fieldGroupsFor(formType), 'reservation'])] : fieldGroupsFor(formType);
   if (groups.includes('sale') && f.sale) {
     const s = f.sale; const p = f.puppy || {};
     out.push(
@@ -423,6 +443,18 @@ export function prefillValues(formOrType, facts = {}) {
       ['depositDue', money(f.priceTable?.depositDue)],
       ['otherPaymentsReceived', money(f.priceTable?.otherPaid)], ['purchaseBalanceDue', money(f.priceTable?.balanceDue)],
       ...scheduleValues(f.statement)
+    );
+  }
+  if (groups.includes('reservation') && c.contract_type === 'reservation') {
+    const r = f.reservation || {};
+    out.push(
+      ...person('buyer', f.buyer),
+      ['litterName', text(r.litterName)],
+      ['sireName', text(f.sire?.registered_name || f.sire?.call_name)],
+      ['damName', text(f.dam?.registered_name || f.dam?.call_name)],
+      ['preferredSex', label(WAITLIST_PREF_SEX, c.reservation_pref_sex || 'any')],
+      ['preferredColor', text(c.reservation_pref_color)],
+      ['reservationDeposit', money(c.reservation_deposit_amount)]
     );
   }
   const a = f.addOns;

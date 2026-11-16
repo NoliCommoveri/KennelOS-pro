@@ -31,7 +31,7 @@ import { saleRepo } from '../saleRepo.js';
 import { contactRepo } from '../contactRepo.js';
 import { eventRepo } from '../eventRepo.js';
 import { accountRepo } from '../accountRepo.js';
-import { todayYMD } from '../dateUtils.js';
+import { todayYMD, kennelToday } from '../dateUtils.js';
 import { waitlistConfig, kennelBreeds, readyCheckLapsed, onlineConfig } from '../waitlistRules.js';
 import { buildProjection } from '../waitlistProjection.js';
 import { TEST_TYPES } from '../healthTestLog.js';
@@ -332,11 +332,13 @@ export async function applyFamilyEvents(token, kennels, { claim = serverWorkClai
 // every other move made for her online. A kennel online from before the ready check
 // existed gets today as its online_since, so only holds ending from now are asked.
 // → [entryId removed]
-export async function sweepReadyChecks(token, kennels, { today = todayYMD(), claim = serverWorkClaim(token) } = {}) {
+export async function sweepReadyChecks(token, kennels, { today: asked = null, claim = serverWorkClaim(token) } = {}) {
   const removed = [];
   let backing = null;
   for (const k of kennels.filter(isOnline)) {
     const config = waitlistConfig(k);
+    // "Ready now?" lapses on the kennel's own date (D11).
+    const today = asked || kennelToday(k);
     if (!config.online_since) {
       await kennelRepo.update(k.id, { waitlist_config: { ...(k.waitlist_config || {}), online_since: today } });
       continue;

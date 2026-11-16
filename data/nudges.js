@@ -44,7 +44,7 @@ import { eventRepo } from './eventRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope, getActiveKennelId } from './kennelScope.js';
 import { hasPolicies } from './waitlistForm.js';
 import { isWaitlistOnlineOffered } from './cloud/cloudConfig.js';
-import { todayYMD, monthsBetween, addDaysToYMD } from './dateUtils.js';
+import { todayYMD, kennelToday, monthsBetween, addDaysToYMD } from './dateUtils.js';
 
 // A heat with no end date logged is taken as over this many days after it started
 // (a typical heat runs about three weeks), for the "record a pairing?" nudge.
@@ -1150,6 +1150,8 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
     kennelRepo.getAll({ includeArchived: true })
   ]);
   const kennelsById = new Map(kennels.map((k) => [k.id, k]));
+  // Deadlines on each kennel's own date when it has a time zone (D11), else `today`.
+  const dayOf = (kennelId) => { const k = kennelsById.get(kennelId); return k?.time_zone ? kennelToday(k) : today; };
   const entries = inScopeOnly(entriesAll);
   const offers = inScopeOnly(offersAll);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
@@ -1194,7 +1196,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
   }
 
   // One per TURN (Spec §16.1): a turn covering two litters is one deadline.
-  for (const t of overdueTurns(offers, today)) {
+  for (const t of overdueTurns(offers, dayOf)) {
     const e = entriesById.get(t.entry_id);
     if (!e) continue;
     const o = t.offers.find((x) => x.chosen_dog_id) || t.offers[0];
@@ -1225,7 +1227,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
     });
   }
 
-  for (const e of overdueFees(entries, today)) {
+  for (const e of overdueFees(entries, dayOf)) {
     out.push({
       key: `waitlist-fee-overdue:${e.id}`,
       title: `${name(e)} hasn't paid the application fee`,
@@ -1235,7 +1237,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
     });
   }
 
-  for (const e of entries.filter((x) => canUndoRemoval(x, today) && x.removed_reason !== 'by_breeder')) {
+  for (const e of entries.filter((x) => canUndoRemoval(x, dayOf(x.kennel_id)) && x.removed_reason !== 'by_breeder')) {
     const noAnswer = e.removed_reason === 'no_ready_answer';
     out.push({
       key: `waitlist-removed:${e.id}:${e.removed_date}`,
@@ -1247,7 +1249,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
       actions: [{
         label: 'Undo',
         run: async () => {
-          await undoRemoval(e.id, { today });
+          await undoRemoval(e.id, { today: dayOf(e.kennel_id) });
           return { title: 'Removal undone', message: `${name(e)} is back in their old place. No offer was made for them; offer a litter from their page when you're ready.` };
         }
       }]
@@ -1255,8 +1257,8 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
   }
   // "Ready now?" unanswered for longer than her days, under "keep paused" (§16.7):
   // they stay held, so nobody waits forever unnoticed.
-  for (const e of entries.filter((x) => readyCheckOverdue(x, today, waitlistConfig(kennelsById.get(x.kennel_id))))) {
-    const rc = readyCheck(e, today, waitlistConfig(kennelsById.get(e.kennel_id)));
+  for (const e of entries.filter((x) => readyCheckOverdue(x, dayOf(x.kennel_id), waitlistConfig(kennelsById.get(x.kennel_id))))) {
+    const rc = readyCheck(e, dayOf(e.kennel_id), waitlistConfig(kennelsById.get(e.kennel_id)));
     out.push({
       key: `waitlist-ready-overdue:${e.id}:${rc.asked}`,
       title: `${name(e)} hasn't answered "Ready now?"`,

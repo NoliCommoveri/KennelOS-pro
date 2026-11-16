@@ -20,6 +20,15 @@ import { forgetMissingTemplates } from './esignTemplates.js';
 import { todayYMD } from './dateUtils.js';
 import { addOnFacts } from './contractAddOns.js';
 import { kennelChargeList } from './extraCharges.js';
+import { litterLabel } from './litterCheckin.js';
+
+// A reservation's litter as its agreement names it: the litter's name (else
+// "Dam × Sire"), or "Next available litter" when none is picked. Pure.
+export const NEXT_AVAILABLE_LITTER = 'Next available litter';
+export function reservationLitterName(litter, sire, dam) {
+  if (!litter) return NEXT_AVAILABLE_LITTER;
+  return litterLabel(litter, new Map([sire, dam].filter(Boolean).map((d) => [d.id, d])));
+}
 
 // Contracts that can still go out for signature (and be sent again).
 export const SENDABLE_STATUSES = ['draft', 'sent', 'declined'];
@@ -98,6 +107,12 @@ export async function gatherContractFacts(c) {
   // Her price list is the sale's kennel's (else the contract's).
   const priceKennel = sale?.kennel_id && sale.kennel_id !== c.kennel_id ? await get(kennelRepo, sale.kennel_id) : kennel;
   const credits = sale ? await getSaleCredits(sale.id) : null;
+  // A reservation (no sale yet): its buyer is the contract's contact, its litter the
+  // one she picked on it (none = the next available litter).
+  const reserving = c.contract_type === 'reservation';
+  const resLitter = reserving ? await get(litterRepo, c.reservation_litter_id) : null;
+  const resSire = resLitter ? await get(dogRepo, resLitter.sire_id) : null;
+  const resDam = resLitter ? await get(dogRepo, resLitter.dam_id) : null;
   return {
     contract: c,
     kennel,
@@ -110,9 +125,10 @@ export async function gatherContractFacts(c) {
     // plan §8.1): the schedule's payments, an extra's share of them, transport's due date.
     statement: sale ? (await getSaleStatement(sale, { today }))?.statement || null : null,
     addOns: await saleAddOns(sale, { puppy, events: pupEvents, litter, kennel: priceKennel }),
-    buyer: sale ? await get(contactRepo, sale.buyer_contact_id) : null,
-    sire: puppy ? await get(dogRepo, puppy.sire_id) : null,
-    dam: puppy ? await get(dogRepo, puppy.dam_id) : null,
+    buyer: sale ? await get(contactRepo, sale.buyer_contact_id) : reserving ? await get(contactRepo, c.related_contact_id) : null,
+    sire: puppy ? await get(dogRepo, puppy.sire_id) : resSire,
+    dam: puppy ? await get(dogRepo, puppy.dam_id) : resDam,
+    reservation: reserving ? { litter: resLitter, litterName: reservationLitterName(resLitter, resSire, resDam) } : null,
     studService: ss,
     studDog: incoming ? theirs : ours,
     studDam: incoming ? ours : theirs,

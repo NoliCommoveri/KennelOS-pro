@@ -21,12 +21,12 @@ import {
   waitlistConfig, litterQueue, nextTurn, openTurns, turnOffers, turnIdOf, eligiblePupsFor, isPupAvailable,
   overallPositions, entryName, describeOfferChanges, soonFamiliesForLitter, whelpNotes,
   isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker, autoOffers, autoOfferSummary, closingTrigger,
-  nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly
+  nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly, isTurnOverdue
 } from '../data/waitlistRules.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { WAITLIST_OFFER_OUTCOME, SEX } from '../data/vocab.js';
-import { esc, badge, fmtDate, todayYMD, confirmModal, alertModal } from './ui.js';
+import { esc, badge, fmtDate, todayYMD, kennelToday, confirmModal, alertModal } from './ui.js';
 import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink, formModal } from './waitlistUI.js';
 import { offerEmails } from './waitlistEmailUI.js';
 import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
@@ -92,7 +92,7 @@ function openNotice(d, litter, soon, opts) {
 // is saved. It only drafts the notice; she reviews it and sends it herself.
 export async function openLitterWaitlistNotice(litter) {
   const d = await loadData(litter);
-  const opts = { today: todayYMD(), config: d.config, programsById: d.programsById };
+  const opts = { today: kennelToday(d.kennel), config: d.config, programsById: d.programsById };
   const soon = soonFamiliesForLitter(d.entries, d.kennelOffers, litter, d.pups, d.sales, opts);
   openNotice(d, litter, soon, opts);
 }
@@ -124,8 +124,8 @@ export async function openPicksFromCheckin(litter) {
 // refresh its own state (the litter record and roster) after a write.
 export async function renderWaitlistPicksPanel({ mount, litter, onChange = async () => {} }) {
   if (!mount) return;
-  const today = todayYMD();
   const d = await loadData(litter);
+  const today = kennelToday(d.kennel);
   const familyName = (entry) => entryName(entry, d.contactsById.get(entry.contact_id));
   const familyLink = (entry) => `<a href="waitlist-entry.html?id=${encodeURIComponent(entry.id)}">${esc(familyName(entry))}</a>`;
   const entriesById = new Map(d.entries.map((e) => [e.id, e]));
@@ -168,7 +168,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   if (open) {
     const entry = entriesById.get(open.entry_id);
     const live = entry ? eligiblePupsFor(entry, litter, d.pups, d.sales, opts) : [];
-    const overdue = open.respond_by_date && open.respond_by_date < today;
+    const overdue = isTurnOverdue(open, today);
     const picked = isAwaitingDeposit(open) ? pupsById.get(open.chosen_dog_id) : null;
     // Her request (W2 Plan §8): the family's status-page link, to send by Messenger.
     const copyBtn = entry && statusLinkFor(entry, d.kennel)

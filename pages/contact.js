@@ -268,7 +268,9 @@ async function renderSalesSection() {
     : `<p class="muted" style="margin:14px 0 0;">No sales recorded for this contact yet.</p>`;
 
   const hasContent = sales.length > 0;
-  els.sales.innerHTML = renderCollapsibleCard('Sales (as buyer)', bodyHtml, '', { sectionKey: 'sales', hasContent });
+  // A reservation agreement before there's a sale (contract.html, type Reservation).
+  const reserveBtn = editionFlags.contracts ? `<a class="btn btn-sm" href="contract.html?new=1&type=reservation&contact=${encodeURIComponent(c.id)}">+ Reservation agreement</a>` : '';
+  els.sales.innerHTML = renderCollapsibleCard('Sales (as buyer)', bodyHtml, reserveBtn, { sectionKey: 'sales', hasContent });
   setupCollapsibleCard('sales');
 }
 
