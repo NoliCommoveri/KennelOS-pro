@@ -6,7 +6,8 @@
 import { WIZARD_STEPS } from './editionTour.js';
 import {
   getWizardStatusRaw, setWizardStatusRaw,
-  getWizardStepIndexRaw, setWizardStepIndexRaw,
+  getWizardStepIndexRaw, setWizardStepIndexRaw as setIndexOnly,
+  getWizardStepIdRaw, setWizardStepIdRaw,
   getSampleDataManifest, wasSampleDataCleared
 } from './settings.js';
 
@@ -21,7 +22,17 @@ export function getWizardStatus() {
   return getWizardStatusRaw() || 'unseen';
 }
 
+// Her place is kept as the step's id, with the index as a fallback for a place
+// saved before ids were (or an id this release no longer has): K11-18.
+function setWizardStepIndexRaw(i) {
+  setIndexOnly(i);
+  setWizardStepIdRaw(WIZARD_STEPS[i]?.id || null);
+}
+
 export function getWizardStepIndex() {
+  const id = getWizardStepIdRaw();
+  const at = id ? WIZARD_STEPS.findIndex((s) => s.id === id) : -1;
+  if (at >= 0) return at;
   const i = getWizardStepIndexRaw();
   return Math.min(Math.max(i, 0), Math.max(WIZARD_STEPS.length - 1, 0));
 }

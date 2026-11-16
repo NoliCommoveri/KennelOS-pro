@@ -22,7 +22,7 @@
 import { db } from './db.js';
 import { exportAll, inspectBackup } from './importExport.js';
 import { dropboxUploadJson, dropboxDownloadJson, DROPBOX_PATHS } from './dropbox.js';
-import { setLastBackupDate, setAssistantFeedPushedAt, markDataChanged } from './settings.js';
+import { setLastBackupDate, setAssistantFeedPushedAt, markDataChanged, getAssistantImportedIds, addAssistantImportedIds } from './settings.js';
 import { assertWritable } from './demoMode.js';
 import { EVENT_TYPES, ASSISTANT_EVENT_TYPES, descriptor } from './vocab.js';
 
@@ -117,12 +117,26 @@ export async function fetchDropboxBackup() {
 // Fetch the kid's outbox and annotate every event for the preview, without
 // writing anything. Statuses:
 //   'new'      — will be inserted;
-//   'update'   — id already exists here (a re-import); upsert is harmless;
+//   'update'   — id already exists here and the helper changed it since (their
+//                `updated_at` is newer than hers): their edit comes in;
+//   'already'  — id already exists here and the helper hasn't changed it: it is
+//                LEFT ALONE (K11-4), so her corrections, notes and archiving stay.
+//                It rides the outbox until their phone sees a feed pushed after
+//                the import, which the page sends straight after importing;
+//   'removed'  — imported here before, and she has deleted it since: skipped;
 //   'no_dog'   — subject dog doesn't exist in this database → SKIPPED, per the
 //                import rule that an unresolvable reference is flagged, never
 //                invented;
 //   'invalid'  — missing a required event field → skipped.
 // Returns null when no outbox file exists yet.
+// One outbox entry's status (the list above). Pure; exported for the tests.
+export function outboxStatus(ev, { required = true, dog = null, existing = null, imported = new Set() } = {}) {
+  if (!required) return 'invalid';
+  if (!dog) return 'no_dog';
+  if (existing) return String(ev.updated_at || '') > String(existing.updated_at || '') ? 'update' : 'already';
+  return imported.has(ev.id) ? 'removed' : 'new';
+}
+
 export async function fetchAssistantOutbox() {
   const outbox = await dropboxDownloadJson(DROPBOX_PATHS.outbox);
   if (!outbox) return null;
@@ -130,13 +144,14 @@ export async function fetchAssistantOutbox() {
     throw new Error('The assistant outbox file in Dropbox has an unexpected shape.');
   }
   const rows = [];
+  const imported = new Set(getAssistantImportedIds());
   for (const ev of outbox.events) {
     const required = ev && ev.id && ev.subject_type === 'dog' && ev.subject_id && ev.event_type && ev.event_date && ev.title;
     const dog = required ? await db.dogs.get(ev.subject_id) : null;
     const existing = required ? await db.events.get(ev.id) : null;
     rows.push({
       event: ev,
-      status: !required ? 'invalid' : !dog ? 'no_dog' : existing ? 'update' : 'new',
+      status: outboxStatus(ev, { required, dog, existing, imported }),
       dogName: dog ? (dog.call_name || dog.registered_name || '(unnamed dog)') : null,
       typeLabel: descriptor(EVENT_TYPES, ev?.event_type).label
     });
@@ -153,18 +168,25 @@ export async function importAssistantEvents(rows) {
   // repoBase's blanket check never sees these rows.
   assertWritable();
   const importable = rows.filter((r) => r.status === 'new' || r.status === 'update');
-  const records = importable.map(({ event }) => {
+  const records = [];
+  for (const { event, status } of importable) {
     const { pending, ...rest } = event;
-    return {
+    // An update keeps what only she has on the record (an archive, her notes when
+    // the helper sent none): the helper edits the entry, not her side of it.
+    const mine = status === 'update' ? await db.events.get(rest.id) : null;
+    records.push({
+      ...(mine || {}),
       ...rest,
-      is_archived: rest.is_archived ?? false,
-      created_at: rest.created_at ?? new Date().toISOString(),
+      notes: rest.notes || mine?.notes || null,
+      is_archived: mine ? mine.is_archived === true : (rest.is_archived ?? false),
+      created_at: mine?.created_at || rest.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
-    };
-  });
+    });
+  }
   if (records.length) {
     await db.events.bulkPut(records);
     markDataChanged();
+    addAssistantImportedIds(records.map((r) => r.id));
   }
   return {
     imported: records.length,

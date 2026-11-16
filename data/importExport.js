@@ -6,7 +6,7 @@
 // every table but the device-only ones, db.js), so it stays correct as later
 // stages add tables — no hardcoded table list (Data Model doc §9).
 import { db, dataTables } from './db.js';
-import { setLastBackupDate, markDataChanged, getMyKennelId, setMyKennelId, getCloudBackupState, getCloudSyncState, remapStoredIds } from './settings.js';
+import { setLastBackupDate, markDataChanged, getMyKennelId, setMyKennelId, getCloudBackupState, getCloudSyncState, remapStoredIds, clearGuidedDrafts } from './settings.js';
 import { planMatches, dogClashes, mergePair, rekey, clashKey, describeRecord } from './restoreMatch.js';
 import { assertWritable } from './demoMode.js';
 import { enforceImportDogCap, enforceImportLitterCap } from './editionConfig.js';
@@ -220,6 +220,8 @@ export async function restoreBackup(obj, mode, opts = {}) {
     }
   });
   markDataChanged();
+  // A Replace swaps every record, so a Kels draft names records that are gone (K11-2).
+  if (mode === 'replace') clearGuidedDrafts();
   await pointMyKennelAtRestoredKennel();
   return entries.map(([name, rows]) => ({ name, count: rows.length }));
 }

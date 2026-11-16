@@ -312,14 +312,29 @@ export async function offerWebsiteFor(chat, { dogIds = [], litterIds = [] } = {}
 // kennel id → snapshot. Afterwards Kels asks only when the task changed it, and
 // lists only those changes, so changes she already said Not now to (or made on
 // another page) aren't put to her again after every task.
+//
+// A check that was owed and never ran (K11-10: the task was cancelled, put off, or
+// left the page by a link) mustn't be hidden by the next task's baseline. So a
+// kennel that already has a baseline on this page keeps it until a check moves it
+// on, and a page opened while a check is owed (CHECK_OWED in sessionStorage, set
+// as a task starts, cleared once a check runs) takes none, so its first check
+// asks about everything waiting.
 let baselines = null;
+const CHECK_OWED = 'kennelOS.kelsWebsiteCheckOwed';
+const owed = {
+  get() { try { return sessionStorage.getItem(CHECK_OWED) === '1'; } catch { return false; } },
+  set(on) { try { if (on) sessionStorage.setItem(CHECK_OWED, '1'); else sessionStorage.removeItem(CHECK_OWED); } catch { /* private mode */ } }
+};
 export async function noteWebsiteBaseline() {
-  const next = new Map();
+  if (!baselines && owed.get()) { owed.set(true); return; }
+  const next = new Map(baselines || []);
   for (const k of await ownKennels()) {
+    if (next.has(k.id)) continue;
     const snap = await websiteSnapshot(k);
     if (snap) next.set(k.id, snap);
   }
   baselines = next;
+  owed.set(true);
 }
 
 // After any of Kels's tasks (kels.js onExit, and Add dogs / Record a new litter
@@ -331,6 +346,8 @@ export async function noteWebsiteBaseline() {
 const asked = new Set();
 const SHOW_LINES = 12;
 export async function offerWebsiteCheck(chat) {
+  owed.set(false);
+  if (!baselines) baselines = new Map();
   const linked = [];
   for (const k of await ownKennels()) if (await getWebsiteLink(k.id)) linked.push(k);
   for (const kennel of linked) {

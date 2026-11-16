@@ -23,7 +23,7 @@ import { ownKennels, resolveKennelIdForWrite } from '../data/kennelScope.js';
 import { editionFlags, dogCapStatus, litterCapStatus } from '../data/editionConfig.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
-import { getGuidedLitterDraft, setGuidedLitterDraft, clearGuidedLitterDraft } from '../data/settings.js';
+import { getGuidedLitterDraft, setGuidedLitterDraft, clearGuidedLitterDraft, retireDraft } from '../data/settings.js';
 import { isDemo } from '../data/demoMode.js';
 import {
   DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_STATUS, PAIRING_STATUS, LITTER_DELIVERY_TYPE, descriptor
@@ -583,11 +583,21 @@ function answerFor(stepId, draft, data) {
 
 // --- The conversation -----------------------------------------------------------------
 
+// Whether a record a draft names is still on file (guidedLitter.goneDraftRefs).
+// Contacts are loaded only where outside owners are (Pro), so elsewhere a
+// contact is taken as there.
+function recordExists(data) {
+  const maps = { dog: data.dogsById, litter: data.littersById, pairing: data.pairingsById, kennel: data.kennelsById, contact: data.contactsById };
+  return (kind, id) => (kind === 'contact' && !editionFlags.externalOwnership) || Boolean(maps[kind]?.has(id));
+}
+
+const listWords = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
 // An unfinished draft, if there is one (Kels offers to finish it).
 export function pendingLitterDraft() {
   const draft = getGuidedLitterDraft();
   if (!draft) return null;
-  if (draft.v !== G.DRAFT_VERSION) { clearGuidedLitterDraft(); return null; }
+  if (draft.v !== G.DRAFT_VERSION) return retireDraft('guidedLitterDraft', draft, 'litter');
   return draft.done ? null : draft;
 }
 
@@ -623,9 +633,26 @@ export async function runLitterTask(chat, { litterId = null, resume = false, onE
     if (!(await chat.intro('Absolutely, let\'s get those puppies added!'))) { onExit('nevermind'); return; }
   } else {
     draft.history = draft.history || [];
+    // What the draft was built on may have gone since (Clear sample data, a
+    // restore, a delete on another device): K11-2.
+    const has = recordExists(data);
+    const { gone, madeGone } = G.goneDraftRefs(draft, has);
+    if (madeGone) {
+      clearGuidedLitterDraft();
+      await chat.say(`Some of what I'd already built for ${esc(draft.label || 'your litter')} isn't in your records any more, so I can't finish it, and I've let that draft go. Anything I'd made that's still there stays as it is.`, { typing: 500 });
+      onExit('done');
+      return;
+    }
     await chat.say(`Welcome back! Here's what we have so far for ${esc(draft.label || 'your litter')}:`, { typing: 500 });
     await StepConversation.replay(chat, draft.history);
-    await chat.say('Let\'s pick up where we left off.', { typing: 500 });
+    if (gone.length) {
+      G.clearGoneDraftRefs(draft, has);
+      draft.step = null;
+      draft.returnToReview = false;
+      await chat.say(`The ${esc(listWords(gone))} we picked ${gone.length === 1 ? 'isn\'t' : 'aren\'t'} in your records any more (cleared sample data, or a restore), so let's pick again. Your other answers are kept.`, { typing: 500 });
+    } else {
+      await chat.say('Let\'s pick up where we left off.', { typing: 500 });
+    }
   }
   return new LitterConversation(chat, draft, data, onExit, onSaved).start();
 }
@@ -677,8 +704,37 @@ class LitterConversation extends StepConversation {
     if (suggested && Object.values(this.draft.prices).every((v) => v === '')) { this.draft.prices = suggested; this.draft.pricesFilled = true; }
   }
 
+  // A litter of these parents recorded since she started (K11-3): ask before a
+  // second copy is built. true = carry on with the save.
+  async notAlreadyRecorded() {
+    const litters = await litterRepo.getAll({ includeArchived: false });
+    const dup = G.litterRecordedSince(this.draft, litters);
+    if (!dup) return true;
+    const mom = this.data.dogsById.get(dup.dam_id)?.call_name || 'the mom';
+    const dad = this.data.dogsById.get(dup.sire_id)?.call_name || 'the dad';
+    const href = `${pagesPrefix()}litter.html?id=${encodeURIComponent(dup.id)}`;
+    this.panel.closest('.kels-row')?.remove();
+    await this.chat.say(`Wait: since we started, a litter of ${esc(mom)} and ${esc(dad)}${dup.whelp_date ? ` born ${esc(G.fmt(dup.whelp_date))}` : ''} has been recorded. Is this that litter?`);
+    const answer = await this.chat.choose([
+      { label: 'Yes, that\'s the one', value: 'same', primary: true },
+      { label: 'No, this is another litter', value: 'other' }
+    ]);
+    if (answer === 'same') {
+      clearGuidedLitterDraft();
+      this.onSaved();
+      await this.chat.say(`Then it's already in your records, so I won't build it again. You can add anything missing on <a href="${esc(href)}">the litter's page</a>.`);
+      this.onExit('done');
+      return false;
+    }
+    this.draft.notThisLitter = dup.id;
+    this.persist();
+    await this.ask('review');
+    return false;
+  }
+
   async save() {
     if (this.busy) return;
+    if (!(await this.notAlreadyRecorded())) return;
     this.busy = true;
     const btn = this.panel.querySelector('[data-k="save"]');
     if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }

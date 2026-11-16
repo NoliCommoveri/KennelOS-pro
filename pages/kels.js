@@ -42,7 +42,7 @@ import { isCloudAvailable, isVaultOffered, isWaitlistOnlineOffered } from '../da
 import { isLicenseGated } from '../data/license.js';
 import { param, esc, todayYMD, confirmModal } from '../assets/ui.js';
 import { orderTasks, withStart, withStar } from '../data/kelsFavorites.js';
-import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote, getGuidedPeopleDraft, clearGuidedPeopleDraft, getGuidedFormDraft, clearGuidedFormDraft } from '../data/settings.js';
+import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote, getGuidedPeopleDraft, clearGuidedPeopleDraft, getGuidedFormDraft, clearGuidedFormDraft, anyKelsSetupComplete, retireDraft, takeKelsDraftNotice } from '../data/settings.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
@@ -346,20 +346,31 @@ const TASKS = [
 
 const taskById = (id) => TASKS.find((t) => t.id === id);
 
+// People and form drafts an update can't carry on (K11-16): let go with a word.
+function retireOldDrafts() {
+  const people = getGuidedPeopleDraft();
+  if (people && !people.done && !pendingPeopleDraft(people)) retireDraft('guidedPeopleDraft', people, 'people');
+  const form = getGuidedFormDraft();
+  if (form && !form.done && !pendingFormDraft(form)) retireDraft('guidedFormDraft', form, 'application form');
+}
+
 async function state() {
+  retireOldDrafts();
   const [litters, prep, dogs, dogCare, tests, waitlist] = await Promise.all([checkinState(), prepState(), dogRepo.getAll({ includeArchived: true }), dogCheckinState(), healthTestsState(),
     editionFlags.waitlist ? import('../assets/waitlistReviewUI.js').then((m) => m.reviewWaitlistState()).catch(() => null) : null]);
   return {
     pendingLitter: pendingLitterDraft(), pendingDogs: pendingDogsDraft(),
     pendingPeople: editionFlags.contactsSection ? pendingPeopleDraft(getGuidedPeopleDraft()) : null,
     pendingForm: editionFlags.waitlist ? pendingFormDraft(getGuidedFormDraft()) : null,
-    litters, prep, setup: { dogs }, dogs: dogCare, tests, waitlist
+    litters, prep, setup: { dogs, complete: anyKelsSetupComplete() }, dogs: dogCare, tests, waitlist
   };
 }
 
 let current = null;
+let currentSince = '';
 function running(task) {
   current = task;
+  if (task) currentSince = new Date().toISOString();
   laterBtn.hidden = !task?.resumable;
   cancelBtn.hidden = !task;
 }
@@ -407,6 +418,7 @@ async function menu({ again = false } = {}) {
   const s = await state();
   const unfinished = TASKS.filter((t) => t.id.startsWith('resume-') && t.available(s));
   await chat.say(again ? 'What else can I help you with?' : kelsWelcome(), { typing: again ? 600 : 1300 });
+  for (const note of takeKelsDraftNotice()) await chat.say(esc(note), { typing: 400 });
   const pick = await chat.choose([
     ...unfinished.map((t) => ({ label: t.label(s), value: `task:${t.id}`, primary: true })),
     { label: 'Finding Something', value: 'find', primary: !unfinished.length },
@@ -459,15 +471,34 @@ function taskCandidates(s) {
 // The task's open question goes away, so nothing more can be answered in it.
 const dropOpenQuestion = () => chat.box.querySelectorAll('.kels-panel-row, .kels-choices-row').forEach((r) => r.remove());
 
+// The draft this running task keeps, if it has made one yet (K11-9): a draft is
+// written from the task's first question, so before that there's nothing to keep.
+const DRAFT_OF = new Map([
+  [discardGuidedLitterDraft, pendingLitterDraft],
+  [discardGuidedDogsDraft, pendingDogsDraft],
+  [clearGuidedPeopleDraft, () => pendingPeopleDraft(getGuidedPeopleDraft())],
+  [clearGuidedFormDraft, () => pendingFormDraft(getGuidedFormDraft())]
+]);
+function hasDraft(task) {
+  const draft = DRAFT_OF.get(task?.discard)?.();
+  if (!draft) return false;
+  return task.id.startsWith('resume-') || String(draft.updatedAt || draft.startedAt || '') >= currentSince;
+}
+
 laterBtn.addEventListener('click', async () => {
   // Her answers are already kept after every step; this just says so.
+  const task = current;
   dropOpenQuestion();
   chat.you('Let\'s finish this later.');
   running(null);
   // The Demo keeps no drafts (K11-5), so it doesn't promise one.
   await chat.say(editionFlags.demoMode
     ? 'This is the demo, so I can\'t keep it for later. In your own KennelOS, I would.'
-    : 'Saved! I\'ll keep what we\'ve got until you\'re ready to continue. Just tap me any time.');
+    : hasDraft(task)
+      ? 'Saved! I\'ll keep what we\'ve got until you\'re ready to continue. Just tap me any time.'
+      : 'We hadn\'t started on the questions yet, so there\'s nothing to keep. Just tap me any time to begin.');
+  // What it saved already may show on her website (K11-10).
+  if (task?.id !== 'website-update') await checkWebsite();
   await menu({ again: true });
 });
 
@@ -488,6 +519,8 @@ cancelBtn.addEventListener('click', async () => {
   running(null);
   task.discard?.();
   await chat.say('Okay, I\'ve stopped.');
+  // Anything it already saved may show on her website (K11-10).
+  if (task.id !== 'website-update') await checkWebsite();
   await menu({ again: true });
 });
 

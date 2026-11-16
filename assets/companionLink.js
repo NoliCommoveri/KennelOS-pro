@@ -28,8 +28,9 @@ export function channelBody(kennelName, url) {
 }
 
 // A fresh point-in-time bundle of `type` for `contact`, and what sending it needs.
-export async function buildLinkArtifacts(type, contact) {
-  const bundle = await buildBundle(type, contact);
+// `opts.kennelId`: the kennel a prospective update is for (companionExport).
+export async function buildLinkArtifacts(type, contact, opts = {}) {
+  const bundle = await buildBundle(type, contact, opts);
   const hash = compressToEncodedURIComponent(JSON.stringify(bundle));
   const url = `${SHELL_URL}#${hash}`;
   const bodyText = channelBody(bundle.kennelName, url);

@@ -87,3 +87,16 @@ export function puppyRecordFieldsValue(checked) {
   for (const key of PUPPY_RECORD_FIELD_KEYS) if (checked[key] === false) off[key] = false;
   return Object.keys(off).length ? off : null;
 }
+
+// What her puppy records leave off now, in words (Kels's Getting Started, K11-11):
+// a whole section by its name, else each field as "<section>: <field>". [] when
+// everything shows. Pure.
+export function puppyRecordLeftOff(kennel) {
+  const shows = puppyRecordShows(kennel);
+  const out = [];
+  for (const g of PUPPY_RECORD_FIELD_GROUPS) {
+    if (g.key && !shows(g.key)) { out.push(g.label); continue; }
+    for (const f of g.fields) if (!shows(f.key)) out.push(g.key ? `${g.label}: ${f.label}` : f.label);
+  }
+  return out;
+}

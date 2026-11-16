@@ -28,7 +28,7 @@ import { getIncomeRows, summarize } from '../data/incomeView.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { saleFeeEstimate } from '../data/processingFees.js';
 import { askAboutNewFees } from '../assets/paymentScheduleUI.js';
-import { subjectInScope, dogInScope, inScope, isScoped, getActiveKennelId } from '../data/kennelScope.js';
+import { expenseInScope as expenseInScopeOfMaps, isUnplacedExpenseOf, dogInScope, inScope, isScoped, getActiveKennelId } from '../data/kennelScope.js';
 import { createReportView } from '../assets/reportView.js';
 import { buildMileageFields, wireMileageMode, loadAccountChoices, buildAccountField, wireAccountField } from '../assets/expensePanel.js';
 import { buildReceiptField, wireReceiptField } from '../assets/receiptCapture.js';
@@ -83,7 +83,7 @@ function renderViewTabs() {
 // `accounts` is null outside editionFlags.accounts (Lite): no Account field,
 // column or filter at all.
 const ref = { dogs: [], litters: [], pairings: [], kennels: [], accounts: null };
-const maps = { dogsById: new Map(), littersById: new Map(), pairingsById: new Map(), kennelsById: new Map() };
+const maps = { dogsById: new Map(), littersById: new Map(), pairingsById: new Map(), kennelsById: new Map(), studServicesById: new Map() };
 const dogName = (id) => maps.dogsById.get(id)?.call_name || '—';
 
 // Active-kennel scope for the Expense ledger (Multi-Kennel Scope Spec §7).
@@ -92,15 +92,25 @@ const dogName = (id) => maps.dogsById.get(id)?.call_name || '—';
 // second stamped field would be a second source of truth for it. That makes this
 // a resolve-then-test rather than a field read — through the very same id→record
 // maps `subjectLabel` above uses to name the subject. A kennel-subject expense
-// (facility, dues, marketing) IS its kennel; a dog-subject one follows the dog,
-// so an outside stud's boarding cost stays visible under every scope.
+// (facility, dues, marketing) IS its kennel; a dog-subject one follows the dog.
+// An outside dog's cost (boarding an outside stud) is placed by its stud service,
+// and with none it counts only under All kennels (K14-11, expenseInScopeOf), the
+// same rule the money reports and the kennel hub use, so no cost is in two
+// kennels' totals. `unplacedNote` says how many are left out while scoped.
 //
 // Income is scoped at its own source (data/incomeView.js), so both halves of the
 // Overview's Net are scoped the same way.
+const expenseMaps = () => ({
+  dog: maps.dogsById, litter: maps.littersById, pairing: maps.pairingsById, stud_service: maps.studServicesById
+});
 function expenseInScope(x) {
-  return subjectInScope(x.subject_type, x.subject_id, {
-    dog: maps.dogsById, litter: maps.littersById, pairing: maps.pairingsById
-  });
+  return expenseInScopeOfMaps(x, expenseMaps());
+}
+function unplacedNote(allExpenses) {
+  if (!isScoped()) return '';
+  const n = allExpenses.filter((x) => isUnplacedExpenseOf(x, expenseMaps())).length;
+  if (!n) return '';
+  return `<p class="muted" style="margin:4px 0 0; font-size:13px;">${n} expense${n === 1 ? '' : 's'} on outside dogs ${n === 1 ? 'isn’t' : 'aren’t'} tied to a stud service, so ${n === 1 ? 'it counts' : 'they count'} only under All kennels.</p>`;
 }
 
 function subjectLabel(x) {
@@ -169,7 +179,7 @@ function openAddExpense(onSaved) {
           <select id="af-subject-id">${subjectOptionsFor('dog')}</select></div>
         ${isScoped() ? `<div class="field field-wide">
           <label class="check-inline"><input id="af-all-kennels" type="checkbox"> Show subjects from all my kennels</label>
-          <span class="field-hint">Off by default while a kennel is active. An expense takes its scope from the subject you attach it to (Multi-Kennel Scope Spec §9).</span>
+          <span class="field-hint">Off by default while a kennel is active. An expense takes its scope from the subject you attach it to.</span>
         </div>` : ''}
         ${buildMileageFields('af', null)}
         <div class="field"><label>Category</label>
@@ -262,11 +272,15 @@ function renderExpenseSummary(expenses) {
     ${accountParam ? `<p style="margin:4px 0 0; font-size:13px;">Only costs paid through this account. <a href="financials.html?view=expenses${bucket ? `&bucket=${encodeURIComponent(bucket)}` : ''}">Show every account →</a></p>` : ''}
     ${dogParam ? `<p style="margin:4px 0 0; font-size:13px;">Only ${esc(dogName(dogParam))}'s costs. <a href="financials.html?view=expenses${bucket ? `&bucket=${encodeURIComponent(bucket)}` : ''}">Show every dog →</a></p>` : ''}
     <p class="muted" style="margin:4px 0 0; font-size:13px;">Across ${expenses.length} expense${expenses.length === 1 ? '' : 's'} (active only).</p>
+    ${lastUnplacedNote}
     ${catRows ? `<ul class="linked-list" style="margin:12px 0 0; padding:0; list-style:none;">${catRows}</ul>` : ''}`;
 }
 
+let lastUnplacedNote = '';
 async function loadExpenses() {
-  const expenses = (await expenseRepo.getAll({ includeArchived: false })).filter(expenseInScope);
+  const all = await expenseRepo.getAll({ includeArchived: false });
+  lastUnplacedNote = unplacedNote(all);
+  const expenses = all.filter(expenseInScope);
   expenses.sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || ''));
   return expenses
     .filter((x) => !bucket || x.category === bucket)
@@ -668,7 +682,8 @@ async function initOverview() {
     </div>
     <p class="muted" style="margin:12px 0 0; font-size:13px;">
       Net compares cash actually earned against total expenses. Anticipated income (${esc(fmtMoney(totals.anticipated))}) is money still expected on open sales and stud services${totals.pick ? `; a further ${esc(fmtMoney(totals.pick))} of estimated non-cash pick value is tracked separately` : ''}.
-    </p>`;
+    </p>
+    ${unplacedNote(allExpenses)}`;
 
   document.getElementById('report-mount').innerHTML = `
     <div style="display:flex; gap:16px; flex-wrap:wrap;">
@@ -698,11 +713,12 @@ async function initOverview() {
 
 async function init() {
   renderViewTabs();
-  const [dogs, litters, pairings, kennels] = await Promise.all([
+  const [dogs, litters, pairings, kennels, studServices] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: true }),
     pairingRepo.getAll({ includeArchived: true }),
-    kennelRepo.getAll({ includeArchived: true })
+    kennelRepo.getAll({ includeArchived: true }),
+    studServiceRepo.getAll({ includeArchived: true })
   ]);
   ref.dogs = dogs; ref.litters = litters; ref.pairings = pairings; ref.kennels = kennels;
   ref.accounts = await loadAccountChoices();
@@ -710,6 +726,7 @@ async function init() {
   maps.littersById = new Map(litters.map((l) => [l.id, l]));
   maps.pairingsById = new Map(pairings.map((p) => [p.id, p]));
   maps.kennelsById = new Map(kennels.map((k) => [k.id, k]));
+  maps.studServicesById = new Map(studServices.map((x) => [x.id, x]));
 
   // The Invoice / Receipt generator is available from every Financials view —
   // except in Lite, where invoice/receipt generation is Pro-only (hide the button).

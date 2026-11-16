@@ -23,6 +23,7 @@ import { waitlistIsSetUp, waitlistConfig, feeForEntry, isFeeWaived, compareEntri
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { getGuidedPeopleDraft, setGuidedPeopleDraft, clearGuidedPeopleDraft } from '../data/settings.js';
 import { isDemo } from '../data/demoMode.js';
+import { isDismissed, dismiss } from '../data/nudgeState.js';
 import { CONTACT_TYPE, descriptor } from '../data/vocab.js';
 import * as G from '../data/guidedPeople.js';
 import { esc, fmtDate, fmtMoney, todayYMD } from './ui.js';
@@ -103,12 +104,15 @@ function screens(draft, data) {
             ${tile('vet', 'add', 'Yes, add my vet', { selected: v.answer === 'add' })}
             ${data.contacts.length ? tile('vet', 'onfile', 'They\'re in my contacts', { selected: v.answer === 'onfile' }) : ''}
             ${tile('vet', 'no', 'Not now', { selected: v.answer === 'no' })}
+            ${tile('vet', 'never', 'No vet to add, don\'t ask again', { selected: v.answer === 'never' })}
           </div>
           ${v.answer === 'add' ? field('Your vet', input('gp-vet-name', v.name, { placeholder: 'e.g. Lakeside Animal Clinic' }), VET_NAME_HINT) : ''}
           ${v.answer === 'onfile' ? field('Your vet', `<select id="gp-vet-pick"><option value="">Pick them…</option>${data.contacts.map((c) => `<option value="${esc(c.id)}"${v.contactId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`) : ''}`,
         onTile: (value) => {
           v.answer = value;
-          return value === 'no' ? true : 'redraw';
+          // Remembered for Tidy up too (K11-15); the Demo keeps nothing.
+          if (value === 'never' && !isDemo()) dismiss(G.NO_VET_KEY);
+          return value === 'no' || value === 'never' ? true : 'redraw';
         },
         read: (root) => {
           if (v.answer === 'add') v.name = val(root, 'gp-vet-name');
@@ -248,7 +252,7 @@ function answerFor(stepId, draft, data) {
     const v = draft.vet;
     if (v.answer === 'add') return `My vet is ${v.name}`;
     if (v.answer === 'onfile') return `My vet is ${data.contactsById.get(v.contactId)?.name || 'in my contacts'}`;
-    return 'Not now';
+    return v.answer === 'never' ? 'No vet to add' : 'Not now';
   }
   if (stepId === 'common') return draft.common.first_contact_source || 'Different for each';
   if (stepId === 'breeders') {
@@ -309,7 +313,7 @@ class PeopleConversation extends StepConversation {
     if (this.draft.saved) this.draft.saved.existing = {};
   }
 
-  async loadSteps() { return G.stepsFor(this.draft, { contacts: this.data.contacts }); }
+  async loadSteps() { return G.stepsFor(this.draft, { contacts: this.data.contacts, vetDeclined: isDismissed(G.NO_VET_KEY) }); }
 
   screenFor(stepId) {
     const all = screens(this.draft, this.data);
@@ -416,17 +420,18 @@ class PeopleConversation extends StepConversation {
     const picked = res.result;
     const kennel = await this.waitlistKennel();
     if (!kennel) return;
-    const { askApplicant } = await import('./kelsApplicant.js');
+    const { askApplicant, approveTypedFamily } = await import('./kelsApplicant.js');
     const onList = [];
     const feeDue = [];
     for (const [i, contact] of picked.entries()) {
-      await contactRepo.ensureType(contact.id, 'buyer');
       const entry = await askApplicant(this.chat, {
         kennel, contact,
         title: `<strong>${esc(contact.name)}'s application${picked.length > 1 ? ` (${i + 1} of ${picked.length})` : ''}.</strong><span class="kels-lead">Your application's questions, so it matches what families fill in online. Their name, email and phone are filled in.</span>`
       });
       if (!entry) { await this.chat.say(`Okay, I'll leave ${esc(contact.name)} off for now.`, { typing: 300 }); continue; }
-      const done = await this.approveApplicant(kennel, entry, contact);
+      // Tagged Buyer once their application is saved, not before (K11-13).
+      await contactRepo.ensureType(contact.id, 'buyer');
+      const done = await approveTypedFamily(this.chat, kennel, entry, contact);
       (done.status === 'active' ? onList : feeDue).push({ entry: done, contact });
     }
     if (feeDue.length) {
@@ -461,92 +466,6 @@ class PeopleConversation extends StepConversation {
     await this.chat.say('<strong>Which kennel\'s waitlist?</strong>', { typing: 400 });
     const kid = await this.chat.choose(kennels.map((k) => ({ label: k.kennel_name, value: k.id })));
     return kennels.find((k) => k.id === kid);
-  }
-
-  // Approve the application she just entered (waitlistActions.approve) and settle the
-  // fee: paid (when, how), not yet (fee due), or not charging (an existing waived
-  // program, a new program, or waived for just them). No fee set, or a waived program
-  // chosen on the application: straight onto the list. → the entry as saved.
-  async approveApplicant(kennel, entry, contact) {
-    const A = await import('../data/waitlistActions.js');
-    const { waitlistProgramRepo } = await import('../data/waitlistProgramRepo.js');
-    const config = waitlistConfig(kennel);
-    const programs = (await waitlistProgramRepo.getByKennel(kennel.id)).filter((p) => !p.is_archived);
-    const program = programs.find((p) => p.id === entry.waitlist_program_id) || null;
-    const fee = feeForEntry(config, program);
-    const today = todayYMD();
-    if (!(fee > 0)) {
-      const approved = await A.approve(entry.id, { date: today, contactId: contact.id });
-      return approved.status === 'active' ? approved : A.feeReceived(entry.id, { date: today, amount: null });
-    }
-    const who = esc(contact.name);
-    // Money they'd already paid her (a credit for funds already received, entered with
-    // their application) pays the fee first.
-    const { creditsOf, feeCharge, allocateCredits } = await import('../data/receivedCredits.js');
-    const credits = creditsOf(entry);
-    const covered = allocateCredits(credits, feeCharge({ ...entry, fee_amount: fee, fee_received_date: null })).byKey.fee || 0;
-    if (covered >= fee) {
-      const from = credits[0].date || today;
-      await this.chat.say(`The ${esc(fmtMoney(covered))} ${who} already paid you covers the ${esc(fmtMoney(fee))} application fee. Put them on the list from ${esc(fmtDate(from))}, when you received it?`, { typing: 300 });
-      const ok = await this.chat.choose([{ label: `Yes, from ${fmtDate(from)}`, value: 'yes', primary: true }, { label: 'Not yet', value: '' }]);
-      await A.approve(entry.id, { date: today, contactId: contact.id });
-      if (!ok) return waitlistEntryRepo.getById(entry.id);
-      return A.feeReceived(entry.id, { date: from, amount: fee, method: credits[0].method || '' });
-    }
-    if (covered > 0) await this.chat.say(`${esc(fmtMoney(covered))} of it is covered by what ${who} already paid you, so ${esc(fmtMoney(fee - covered))} is left.`, { typing: 300 });
-    await this.chat.say(covered > 0 ? `Has ${who} paid the other ${esc(fmtMoney(fee - covered))}?` : `Has ${who} already paid the ${esc(fmtMoney(fee))} application fee?`, { typing: 300 });
-    const pick = await this.chat.choose([
-      { label: 'Yes, they paid', value: 'paid', primary: true },
-      { label: 'Not yet', value: 'due' },
-      { label: 'Not charging for this applicant', value: 'free' }
-    ]);
-    if (pick === 'paid') {
-      const res = await this.chat.form({
-        title: `<strong>When did ${who} pay?</strong><span class="kels-lead">Their place in line starts the day they paid.</span>`,
-        html: `<div class="ck-inline">${field('Paid on', input('wa-paid', today, { type: 'date' }))}${field('How (optional)', input('wa-method', '', { placeholder: 'e.g. Zelle', list: 'wa-methods' }))}</div>
-          <datalist id="wa-methods">${['Cash', 'Check', 'Venmo', 'Zelle', 'PayPal', 'Credit/debit card'].map((m) => `<option value="${esc(m)}">`).join('')}</datalist>`,
-        submitLabel: 'Save',
-        cancelLabel: 'Not yet, after all',
-        submit: (root) => {
-          const date = val(root, 'wa-paid');
-          if (!date) return 'When did they pay?';
-          if (date > today) return 'That date is in the future.';
-          return { date, method: val(root, 'wa-method') };
-        },
-        reply: (r) => `Paid ${fmtDate(r.date)}${r.method ? `, ${r.method}` : ''}`
-      });
-      await A.approve(entry.id, { date: today, contactId: contact.id });
-      if (!res.done) return waitlistEntryRepo.getById(entry.id);
-      return A.feeReceived(entry.id, { date: res.result.date, amount: fee, method: res.result.method });
-    }
-    if (pick === 'free') return this.waiveFee(kennel, config, programs, entry, contact);
-    return A.approve(entry.id, { date: today, contactId: contact.id });
-  }
-
-  // "Not charging for this applicant": a program that waives the fee (one she has, or
-  // a new one: Set up my waitlist's program form, fee prefilled at $0), or waived for
-  // just them. A new program that still charges is linked, and the fee falls due.
-  async waiveFee(kennel, config, programs, entry, contact) {
-    const A = await import('../data/waitlistActions.js');
-    const today = todayYMD();
-    const waived = programs.filter((p) => isFeeWaived(config, p));
-    await this.chat.say(`Got it. Is that because of a program, like repeat buyers, or just for ${esc(contact.name)}?`, { typing: 300 });
-    const pick = await this.chat.choose([
-      ...waived.map((p) => ({ label: `${p.name} program`, value: p.id })),
-      { label: 'Set up a new program', value: 'new' },
-      { label: `Just ${contact.name}`, value: 'one', primary: !waived.length }
-    ]);
-    let programId = waived.find((p) => p.id === pick)?.id || null;
-    if (pick === 'new') {
-      const { askNewProgram } = await import('./waitlistSetupUI.js');
-      const made = await askNewProgram(this.chat, kennel, config, { fee: 0, title: '<strong>A new program</strong><span class="kels-lead">The fee is set to $0 (waived). Change it if they pay a different amount.</span>' });
-      programId = made ? made.id : null;
-      if (!made) await this.chat.say(`Okay, I'll waive it for just ${esc(contact.name)}.`, { typing: 300 });
-    }
-    const approved = await A.approve(entry.id, { date: today, contactId: contact.id, programId });
-    if (approved.status === 'active') return approved;
-    if (programId) return approved; // a new program that still charges: the fee is due
-    return A.feeReceived(entry.id, { date: today, amount: 0, method: 'Waived' });
   }
 
   // The new families now on the list, numbered in the order they'll be in line among

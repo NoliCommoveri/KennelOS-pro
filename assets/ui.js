@@ -10,6 +10,9 @@ import { pickerGroups, dogName } from '../data/dogRepo.js';
 // data/dateUtils.js so repos and assets never drift apart on "what is today."
 export { todayYMD };
 
+// safeHref (K14-17) lives in data/safeHref.js so Node can test it; re-exported here.
+export { safeHref } from '../data/safeHref.js';
+
 // Escape untrusted text for safe interpolation into innerHTML.
 export function esc(s) {
   return String(s ?? '')

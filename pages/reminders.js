@@ -14,6 +14,8 @@ import { contactRepo } from '../data/contactRepo.js';
 import { EVENT_TYPES, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate } from '../assets/ui.js';
 import { todayYMD, daysFromToday } from '../data/dateUtils.js';
+import { subjectInScope } from '../data/kennelScope.js';
+import { mountScopeChip } from '../assets/kennelScopeUI.js';
 
 // The due-soon window (§3.3) — a UI constant, not schema. reminders at or before
 // today + DUE_SOON_DAYS (and not overdue) are "due soon"; beyond it, "upcoming".
@@ -72,10 +74,17 @@ function bucketSection(title, hint, rows, bucketBadge) {
     </section>`;
 }
 
+// Scoped like the Dashboard and Today tiles that link here (K14-9), so the count
+// they show and this list agree. The maps are the UNSCOPED loads from main(), as
+// subjectInScope needs; a contact-subject reminder resolves to no map and stays in.
+const eventInScope = (ev) => subjectInScope(ev.subject_type, ev.subject_id, {
+  dog: ctx.dogsById, litter: ctx.littersById, pairing: ctx.pairingsById
+});
+
 async function refresh() {
   errorBox.innerHTML = '';
   if (showDismissed) {
-    const rows = await eventRepo.getDismissedReminders();
+    const rows = (await eventRepo.getDismissedReminders()).filter(eventInScope);
     body.innerHTML = rows.length
       ? `<section class="card">
           <div class="row-between"><h2 style="margin:0;">Dismissed <span class="muted" style="font-size:14px;">(${rows.length})</span></h2></div>
@@ -89,7 +98,7 @@ async function refresh() {
     return;
   }
 
-  const reminders = await eventRepo.getReminders();
+  const reminders = (await eventRepo.getReminders()).filter(eventInScope);
   if (!reminders.length) {
     body.innerHTML = `<div class="card empty-state">No pending reminders. Add a reminder date to any event to see it here.</div>`;
     return;
@@ -154,6 +163,7 @@ async function main() {
   ctx.littersById = new Map(litters.map((l) => [l.id, l]));
   ctx.contactsById = new Map(contacts.map((c) => [c.id, c]));
 
+  mountScopeChip(document.getElementById('scope-chip'));
   document.getElementById('show-dismissed').addEventListener('change', (e) => {
     showDismissed = e.target.checked;
     refresh();

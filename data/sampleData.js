@@ -40,7 +40,8 @@ import {
   wasSampleDataCleared,
   markSampleDataCleared,
   setCompanionSettings,
-  COMPANION_TYPES
+  COMPANION_TYPES,
+  clearGuidedDrafts
 } from './settings.js';
 
 export { getSampleDataManifest };
@@ -1446,6 +1447,8 @@ export async function clearSampleData({ archiveConflicting = false } = {}) {
   removeSampleDataManifest();
   resetCompanionSettings();
   markSampleDataCleared();
+  // A Kels draft started on the sample would build on dogs that are gone (K11-2).
+  clearGuidedDrafts();
 
   return { cleared: true, counts };
 }

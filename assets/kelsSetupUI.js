@@ -33,11 +33,11 @@ import { resolveMyKennelId } from '../data/kennelSetup.js';
 import { editionFlags, edition } from '../data/editionConfig.js';
 import { isProOnlyPage } from '../data/proPages.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
-import { setupParts, logoUses, listWords, settingsToCopy, newKennelNameProblem, possessive, accountLine, FEE_ACCOUNT_TYPES, SETUP_HOW, ACCOUNTS_HOW } from '../data/kelsSetup.js';
+import { setupParts, logoUses, listWords, settingsToCopy, newKennelNameProblem, possessive, accountLine, FEE_ACCOUNT_TYPES, SETUP_HOW, ACCOUNTS_HOW, SETUP_PART_LABELS, resumeSetupAt } from '../data/kelsSetup.js';
 import { kennelChargeList, readPriceList } from '../data/extraCharges.js';
 import { paymentLink } from '../data/paymentLinks.js';
 import { EXPORT_MAX_DAYS } from '../data/accountHealth.js';
-import { getLastBackupDate, setFureverSettings } from '../data/settings.js';
+import { getLastBackupDate, setFureverSettings, getKelsSetupDone, markKelsSetupPart } from '../data/settings.js';
 import { downloadBackup } from '../data/importExport.js';
 import { isDropboxConnected } from '../data/dropbox.js';
 import { offerCloudBackup, cloudBackupOn } from './kelsBackupSteps.js';
@@ -105,9 +105,21 @@ class Setup {
 
     const kennelPage = !(edition === 'lite' && isProOnlyPage('kennel.html'));
     const parts = setupParts(editionFlags, { kennelPage });
+    // Left partway last time: offer to pick up at the first part not answered (K11-12).
+    let from = resumeSetupAt(parts, getKelsSetupDone(kennel.id).parts);
+    if (from > 0) {
+      await this.chat.say(`Last time we got as far as ${esc(SETUP_PART_LABELS[parts[from - 1]] || 'partway')}. Pick up where we left off?`);
+      const pick = await this.chat.choose([
+        { label: `Pick up at ${SETUP_PART_LABELS[parts[from]] || 'the next part'}`, value: 'resume', primary: true },
+        { label: 'Start from the top', value: 'top' }
+      ]);
+      if (pick === 'top') from = 0;
+    }
     for (const [i, part] of parts.entries()) {
-      this.first = i === 0;
+      if (i < from) continue;
+      this.first = i === from;
       await this[part]();
+      markKelsSetupPart(kennel.id, part, { complete: i === parts.length - 1 });
     }
     return this.next();
   }
@@ -283,10 +295,24 @@ class Setup {
   // --- 3. Puppy Record fields (Pro) ------------------------------------------------
   async 'puppy-record'() {
     const { puppyRecordFieldsHtml, wirePuppyRecordFields, readPuppyRecordFields } = await fields();
-    await this.chat.say('Now your puppy records: the printout each family takes home, with their pup\'s details, parents, health history and their own contact details. Right now they show everything. Want to keep it that way, or choose what\'s left off?');
-    const pick = await this.chat.choose([{ label: 'Show everything', value: '', primary: true }, { label: 'Let me choose', value: 'choose' }]);
-    if (pick !== 'choose') {
-      if (this.kennel.puppy_record_fields) await kennelRepo.update(this.kennel.id, { puppy_record_fields: null });
+    // Says what's left off now, and keeping that is the first choice (K11-11).
+    const { puppyRecordLeftOff } = await import('../data/puppyRecordFields.js'); // Pro-only
+    const leftOff = puppyRecordLeftOff(this.kennel);
+    const intro = 'Now your puppy records: the printout each family takes home, with their pup\'s details, parents, health history and their own contact details.';
+    if (leftOff.length) {
+      const list = leftOff.length > 6 ? `${leftOff.slice(0, 6).map(esc).join(', ')} and ${leftOff.length - 6} more` : leftOff.map(esc).join(', ');
+      await this.chat.say(`${intro} Right now they leave off: ${list}. Keep it that way?`);
+    } else {
+      await this.chat.say(`${intro} Right now they show everything. Want to keep it that way, or choose what's left off?`);
+    }
+    const pick = await this.chat.choose([
+      { label: 'Keep it as it is', value: '', primary: true },
+      { label: 'Let me choose', value: 'choose' },
+      ...(leftOff.length ? [{ label: 'Show everything', value: 'all' }] : [])
+    ]);
+    if (pick === '') return this.chat.say('Okay, your puppy records stay as they are.', { typing: 300 });
+    if (pick === 'all') {
+      await kennelRepo.update(this.kennel.id, { puppy_record_fields: null });
       await this.reload();
       return this.chat.say('Everything it is. Families love a full record.', { typing: 300 });
     }

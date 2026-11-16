@@ -237,9 +237,30 @@ export async function runFormTask(chat, { resume = false, kennelId = null, onExi
   } else {
     await chat.say(`Welcome back! Here's what we have so far for ${esc(kennel.kennel_name || 'your')} form:`, { typing: 500 });
     await StepConversation.replay(chat, draft.history);
-    await chat.say('Let\'s pick up where we left off.', { typing: 500 });
+    if (!(await askAboutSavedForm(chat, draft, kennel))) await chat.say('Let\'s pick up where we left off.', { typing: 500 });
   }
   return new FormConversation(chat, draft, await loadData(kennel), { onExit, onSaved, handoff, within }).start();
+}
+
+// Her saved form changed since this draft began (K11-7): say so, and let her
+// start from what's saved now or keep the draft. → true when it asked.
+async function askAboutSavedForm(chat, draft, kennel) {
+  if (!G.formChangedSince(draft, kennel)) return false;
+  await chat.say('Your application form has been changed since we started this (on the Application form page, or on another device). Saving this draft would put its questions and FAQ over those changes.');
+  const pick = await chat.choose([
+    { label: 'Start from what\'s saved now', value: 'saved', primary: true },
+    { label: 'Keep my draft', value: 'mine' }
+  ]);
+  if (pick === 'saved') {
+    G.restartFromSaved(draft, kennel);
+    draft.step = 'questions';
+    await chat.say('Okay, I\'ve picked up your saved form. Let\'s go through the questions again.');
+  } else {
+    G.keepDraftOverSaved(draft, kennel);
+    await chat.say('Okay, we\'ll keep going with your draft.');
+  }
+  if (!isDemo()) setGuidedFormDraft(draft);
+  return true;
 }
 
 class FormConversation extends StepConversation {
@@ -263,6 +284,15 @@ class FormConversation extends StepConversation {
 
   async save() {
     if (this.busy) return;
+    // Changed on the page while she was on the review (or another device).
+    const latest = await kennelRepo.getById(this.draft.kennelId);
+    if (latest && G.formChangedSince(this.draft, latest)) {
+      this.panel.closest('.kels-row')?.remove();
+      await askAboutSavedForm(this.chat, this.draft, latest);
+      this.data = await loadData(latest);
+      await this.ask(this.draft.step === 'questions' ? 'questions' : 'review');
+      return;
+    }
     this.busy = true;
     const btn = this.panel.querySelector('[data-k="save"]');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -359,13 +389,15 @@ class FormConversation extends StepConversation {
   // "Add an applicant now?": a family she already has, asked with the new form.
   async applicants(kennel) {
     await this.chat.say('Do you have a family to put on the list now? I\'ll ask them your new form\'s questions.');
-    const { askApplicant } = await import('./kelsApplicant.js');
+    const { askApplicant, approveTypedFamily } = await import('./kelsApplicant.js');
     for (;;) {
       const pick = await this.chat.choose([{ label: 'Add a family', value: 'yes', primary: true }, { label: 'Not now', value: '' }]);
       if (pick !== 'yes') return;
       const fresh = await kennelRepo.getById(kennel.id);
       const entry = await askApplicant(this.chat, { kennel: fresh });
-      if (entry) await this.chat.say(`Added! ${esc(entry.application?.name || 'They')} ${entry.application?.name ? 'is' : 'are'} in your applications, ready for you to approve. Another?`, { typing: 500 });
+      // She typed them in herself, so they're approved here, as in Add people (K11-14).
+      const done = entry ? await approveTypedFamily(this.chat, fresh, entry) : null;
+      if (done) await this.chat.say(`Added! ${esc(entry.application?.name || 'They')} ${entry.application?.name ? 'is' : 'are'} ${done.status === 'active' ? 'on your list' : 'approved, with the fee due'}. Another?`, { typing: 500 });
       else return;
     }
   }

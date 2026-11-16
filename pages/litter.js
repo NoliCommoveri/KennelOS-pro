@@ -322,7 +322,7 @@ function renderEdit() {
       </div>` : ''}
       ${isScoped() ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show dogs and pairings from all my kennels</label>
-        <span class="field-hint">Off by default while a kennel is active. Turn it on to co-breed across your own kennels (Multi-Kennel Scope Spec §9).</span>
+        <span class="field-hint">Off by default while a kennel is active. Turn it on to co-breed across your own kennels.</span>
       </div>` : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(l.notes)}</textarea>`, { wide: true })}
       ${editionFlags.feedingSchedule ? field('Feeding schedule override', `<textarea id="f-feeding_schedule_override">${esc(l.feeding_schedule_override)}</textarea>`, { wide: true, hint: 'Optional. Overrides your breed default (Feeding Schedules page) for every pup in this litter’s Furever app — e.g. "This litter runs lean, feed on the higher end."' }) : ''}

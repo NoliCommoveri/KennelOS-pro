@@ -163,7 +163,7 @@ function renderEdit() {
       </div>` : ''}
       ${isScoped() ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show dogs from all my kennels</label>
-        <span class="field-hint">Off by default while a kennel is active. Turn it on to co-breed across your own kennels — a sire at one over a dam at another (Multi-Kennel Scope Spec §9).</span>
+        <span class="field-hint">Off by default while a kennel is active. Turn it on to co-breed across your own kennels — a sire at one over a dam at another.</span>
       </div>` : ''}
       ${websiteLinkOffered() ? field('Your website', `<label class="check-inline"><input id="f-show_on_website" type="checkbox"${p.show_on_website ? ' checked' : ''}> Show this on the website</label>`, { hint: 'Under Coming up on your KennelPort website, from your next Update website (Settings). Its litter carries the mark on when it\'s born.' + (ctx.original ? '' : ' Ticked for you when the dam is on the website.') }) : ''}
       ${field('Notes', `<textarea id="f-notes">${esc(p.notes)}</textarea>`, { wide: true })}

@@ -92,8 +92,12 @@ const isEmptyRow = (p) => blank(p.name) && !p.type;
 
 // Ask about a vet when nobody on the list is one and none of her contacts is
 // (contactSearch.hasVet, the tidy-up's rule); once answered, the question stays.
-export function asksVet(draft, contacts = []) {
+// `declined`: she said "No vet to add, don't ask again", in Tidy up or here; one
+// remembered answer for both (K11-15, the nudge ledger's NO_VET_KEY).
+export const NO_VET_KEY = 'tidy:novet';
+export function asksVet(draft, contacts = [], { declined = false } = {}) {
   if (draft.vet.answer) return true;
+  if (declined) return false;
   const listed = draft.people.some((p) => !p.fromVet && (p.type === 'vet' || (p.types || []).includes('vet')));
   return !listed && !hasVet(contacts);
 }
@@ -184,12 +188,12 @@ export function breedersWithoutKennel(draft, contacts = []) {
 // A breeder's kennel is asked unless the contact they are on file has one.
 const asksKennel = (p, contactsById) => isBreeder(p) && !(isFillIn(p) && contactsById.get(p.match)?.kennel_id);
 
-// ctx: { contacts (on file, live) }. Steps for each person are keyed by their place.
+// ctx: { contacts (on file, live), vetDeclined }. Steps for each person are keyed by their place.
 export function stepsFor(draft, ctx = {}) {
   const contacts = ctx.contacts || [];
   const byId = new Map(contacts.map((c) => [c.id, c]));
   const steps = ['roster'];
-  if (asksVet(draft, contacts)) steps.push('vet');
+  if (asksVet(draft, contacts, { declined: ctx.vetDeclined === true })) steps.push('vet');
   if (draft.people.length > 1) steps.push('common');
   draft.people.forEach((p, i) => {
     steps.push(`person:${i}`);

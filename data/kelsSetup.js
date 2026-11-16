@@ -90,8 +90,28 @@ export function isNewProgram({ dogs = [] } = {}) {
 export const SETUP_PRIORITY_NEW = 95; // under unfinished drafts (97–100)
 export const SETUP_PRIORITY = 15;     // under Check account health (20)
 
+// Once she has been through every part (on this device), it drops to its usual
+// place even before her first dog (K11-12).
 export function setupPriority(state) {
-  return isNewProgram(state) ? SETUP_PRIORITY_NEW : SETUP_PRIORITY;
+  return isNewProgram(state) && !state?.complete ? SETUP_PRIORITY_NEW : SETUP_PRIORITY;
+}
+
+// --- Where she got to (K11-12) ----------------------------------------------------
+
+// Each part's name, for "Pick up at …".
+export const SETUP_PART_LABELS = {
+  logo: 'your logo', nudges: 'the reminders', tests: 'your health tests', 'puppy-record': 'your puppy records',
+  'extra-charges': 'your extras price list', accounts: 'your accounts', kennels: 'another kennel',
+  furever: 'Furever', assistant: 'KennelAssistant', backup: 'your backup'
+};
+
+// The first part she hasn't answered, when she has answered some but not all:
+// its index in `parts`, else 0 (nothing done, or all done: from the top). Pure.
+export function resumeSetupAt(parts, done = []) {
+  const doneSet = new Set(done);
+  if (!parts.some((p) => doneSet.has(p))) return 0;
+  const i = parts.findIndex((p) => !doneSet.has(p));
+  return i < 0 ? 0 : i;
 }
 
 // The settings a second kennel starts with, copied from the one she just set up:

@@ -233,7 +233,7 @@ function renderEdit() {
       </div>
       ${isScoped() ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-all-kennels" type="checkbox"${ctx.pickerAllKennels ? ' checked' : ''}> Show my dogs from all my kennels</label>
-        <span class="field-hint">Off by default while a kennel is active; affects the "Our dog" picker only — the partner is an outside dog and is always listed (Multi-Kennel Scope Spec §9).</span>
+        <span class="field-hint">Off by default while a kennel is active; affects the "Our dog" picker only — the partner is an outside dog and is always listed.</span>
       </div>` : ''}
       ${field('Result notes', `<textarea id="f-result_notes">${esc(s.result_notes)}</textarea>`, { wide: true })}
       ${field('Notes', `<textarea id="f-notes">${esc(s.notes)}</textarea>`, { wide: true })}

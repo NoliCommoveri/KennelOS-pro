@@ -20,6 +20,7 @@
 // change. Every save goes through kennelRepo / waitlistProgramRepo, checked by
 // waitlistRules.waitlistConfigProblem (the Kennel page's settings card uses it too);
 // going online through cloudWaitlist.saveWaitlistOnline (the Online list card's save).
+import { KELS_AS_YOU_GO_INTRO } from './kelsChat.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
@@ -31,7 +32,7 @@ import {
 } from '../data/waitlistRules.js';
 import { WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER, WAITLIST_PRIORITY } from '../data/vocab.js';
 import { field } from './litterCheckinUI.js';
-import { askApplicant } from './kelsApplicant.js';
+import { askApplicant, approveTypedFamily } from './kelsApplicant.js';
 import { offerCloudBackup, CLOUD_OFF_FORM } from './kelsBackupSteps.js';
 import { askWaitlistFee } from './waitlistFeeStep.js';
 import { askPickupTransport } from './pickupTransportStep.js';
@@ -82,7 +83,7 @@ export async function askNewProgram(chat, kennel, config, { fee = null, title = 
 // `within`: run inside Add people, before its applicants: no "families you already
 // have" step (those are the people she's adding).
 export async function runWaitlistSetupTask(chat, { onExit = () => {}, handoff = null, kennelId = null, within = false } = {}) {
-  if (!(await chat.intro('Ooh, love it, let\'s get your waitlist ready for families!'))) return onExit('nevermind');
+  if (!(await chat.intro('Ooh, love it, let\'s get your waitlist ready for families!', KELS_AS_YOU_GO_INTRO))) return onExit('nevermind');
   return new Setup(chat, onExit, handoff, kennelId, within).start();
 }
 
@@ -378,7 +379,11 @@ class Setup {
         const entry = await this.addFamily();
         if (!entry) break;
         added++;
-        await this.chat.say(`Added! ${esc(entry.application?.name || 'They')} ${added === 1 ? 'is' : 'are'} in your applications, ready for you to approve on the waitlist.`);
+        // She typed them in herself, so they're approved here, as in Add people (K11-14).
+        await this.reload();
+        const done = await approveTypedFamily(this.chat, this.kennel, entry);
+        const name = esc(entry.application?.name || 'They');
+        await this.chat.say(done.status === 'active' ? `Added! ${name} ${entry.application?.name ? 'is' : 'are'} on your list.` : `Added! ${name} ${entry.application?.name ? 'is' : 'are'} approved, with the fee due.`);
         if ((await this.chat.choose([{ label: 'Add another family', value: 'more', primary: true }, { label: 'That\'s all of them', value: '' }])) !== 'more') break;
       }
       return added ? 'saved' : null;

@@ -21,7 +21,7 @@
 // kennel's breed default (breedFeedingScheduleRepo, matched against dog.breed);
 // null when neither is set, so Furever's Feeding page keeps its own generic
 // age-bracket placeholder untouched.
-import { getFureverSettings } from './settings.js';
+import { loadFureverIdentity } from './fureverIdentity.js';
 import { litterRepo } from './litterRepo.js';
 import { breedFeedingScheduleRepo } from './breedFeedingScheduleRepo.js';
 import { eventRepo } from './eventRepo.js';
@@ -106,7 +106,8 @@ export function pickupPlanFor(sale, event) {
 // from the pup's drop-off event (pickupPlanFor above).
 export async function buildSeedPacket(dog, sale) {
   if (!dog) throw new Error('buildSeedPacket: a dog is required.');
-  const identity = getFureverSettings();
+  // Her identity from her kennel record (K14-5), the same on every device.
+  const identity = await loadFureverIdentity();
   const litter = dog.litter_id ? await litterRepo.getById(dog.litter_id) : null;
   const dropoff = pickupEventFor(sale, await eventRepo.getForSubject('dog', dog.id));
   return {

@@ -16,25 +16,30 @@ import { expenseRepo } from './expenseRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { pairingRepo } from './pairingRepo.js';
-import { subjectInScope } from './kennelScope.js';
+import { expenseInScope } from './kennelScope.js';
+import { studServiceRepo } from './studServiceRepo.js';
 import { periodKey } from './reportMath.js';
 import { REGISTRATION_TYPE } from './vocab.js';
 
 // The in-scope income rows and expenses, loaded once.
 export async function loadMoney() {
-  const [incomeRows, allExpenses, dogs, litters, pairings] = await Promise.all([
+  const [incomeRows, allExpenses, dogs, litters, pairings, studServices] = await Promise.all([
     getIncomeRows({ includeArchived: false }),
     expenseRepo.getAll({ includeArchived: false }),
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: true }),
-    pairingRepo.getAll({ includeArchived: true })
+    pairingRepo.getAll({ includeArchived: true }),
+    studServiceRepo.getAll({ includeArchived: true })
   ]);
+  // The money-total rule (K14-11): an outside dog's cost goes under its stud
+  // service's kennel, or only under All kennels — as on Financials and the hub.
   const maps = {
     dog: new Map(dogs.map((d) => [d.id, d])),
     litter: new Map(litters.map((l) => [l.id, l])),
-    pairing: new Map(pairings.map((p) => [p.id, p]))
+    pairing: new Map(pairings.map((p) => [p.id, p])),
+    stud_service: new Map(studServices.map((x) => [x.id, x]))
   };
-  const expenses = allExpenses.filter((x) => subjectInScope(x.subject_type, x.subject_id, maps));
+  const expenses = allExpenses.filter((x) => expenseInScope(x, maps));
   return { incomeRows, expenses };
 }
 

@@ -29,6 +29,10 @@ export const kelsWelcome = () => `${kelsHello()} I'm here to help you manage you
 // How she works, said at the start of every new task (not a resumed one), after
 // the task's own opener. The answers are INTRO_CHOICES.
 export const KELS_INTRO = 'I\'ll ask you some questions; once I\'m done collecting the information, I\'ll build the records for you to approve. If you get stuck or need to save and come back, I\'ll save what we\'ve got so far until you\'re ready to continue. Sound good?';
+// The tasks that save each thing as she approves it (Tidy up, the check-ins, Pups
+// are going home, Check account health, Set up my waitlist): no draft and no
+// plan to approve at the end, so they say so (K11-8).
+export const KELS_AS_YOU_GO_INTRO = 'I\'ll go through things with you one at a time. Each change is saved as soon as you say yes to it, and anything you say no to stays as it is. If you need to stop partway, what you\'ve already said yes to is kept, and we can start a fresh pass any time. Sound good?';
 // Finding Something's version: it searches, so there are no records to approve.
 export const KELS_FIND_INTRO = 'I\'ll look through the app and try to find what you\'re looking for. I\'ll search app features and your existing records. If I find several matches, I\'ll ask you to choose one or ask follow-up questions. Sound good?';
 // How KennelOS works's version (Understanding Something): it explains, so nothing

@@ -31,7 +31,7 @@ import {
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { getShowRecord } from '../data/showPoints.js';
 import { titlesOf, displayName, formTitleChips, titleSuggestions, splitTitleInput, MAX_ABBR, MAX_ORGANIZATION } from '../data/dogTitles.js';
-import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
+import { esc, safeHref, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from '../assets/salePrompts.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
@@ -298,7 +298,7 @@ function renderView() {
       ${row('Imported', d.imported ? 'Yes' : '')}
       ${row('Country of origin', esc(countryOfOrigin(d)))}
       ${row('Microchip', esc(d.microchip_id))}
-      ${row('URL', d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a>${editionFlags.waitlist && d.photos_online ? ' <span class="badge badge-blue">Shown on waitlist pages</span>' : ''}` : '')}
+      ${row('URL', d.url ? `<a href="${esc(safeHref(d.url))}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a>${editionFlags.waitlist && d.photos_online ? ' <span class="badge badge-blue">Shown on waitlist pages</span>' : ''}` : '')}
       ${websiteLinkOffered() && (d.show_on_website || d.heats_online) ? row('Your website', `${d.show_on_website ? '<span class="badge badge-blue">Shown on website</span> ' : ''}${d.heats_online ? '<span class="badge badge-neutral">Heats shown</span>' : ''}`) : ''}
       ${row('Sire', dogLink(d.sire_id))}
       ${row('Dam', dogLink(d.dam_id))}

@@ -65,3 +65,32 @@ export function subjectInScopeOf(activeId, subjectType, subjectId, maps = {}) {
   if (subjectType === 'dog') return dogInScopeOf(activeId, record);
   return inScopeOf(activeId, record);
 }
+
+// Expenses in a money TOTAL (K14-11). A list may show an outside dog under every
+// kennel (§7), but a total that counts the same cost under two kennels overstates
+// what she spent. So an expense on a dog she doesn't own is placed by what it's
+// for: its stud service (`stud_service_id`, the fee or the boarding of an outside
+// stud used on her dam) puts it under that stud service's kennel. One with nothing
+// to place it counts only under All kennels, and the Financials page says how many
+// (`isUnplacedExpenseOf`). Everything else follows subjectInScopeOf. Financials,
+// the money reports and the kennel hub all use this one rule.
+// `maps` adds `stud_service` (id → stud service) to the subject maps.
+export function isUnplacedExpenseOf(expense, maps = {}) {
+  if (expense?.subject_type !== 'dog') return false;
+  const dog = maps.dog?.get?.(expense.subject_id);
+  if (!dog || isOwnedByUser(dog)) return false;
+  const stud = expense.stud_service_id ? maps.stud_service?.get?.(expense.stud_service_id) : null;
+  return !stud;
+}
+
+export function expenseInScopeOf(activeId, expense, maps = {}) {
+  if (!activeId) return true;
+  if (expense?.subject_type === 'dog') {
+    const dog = maps.dog?.get?.(expense.subject_id);
+    if (dog && !isOwnedByUser(dog)) {
+      const stud = expense.stud_service_id ? maps.stud_service?.get?.(expense.stud_service_id) : null;
+      return !!stud && stud.kennel_id === activeId;
+    }
+  }
+  return subjectInScopeOf(activeId, expense?.subject_type, expense?.subject_id, maps);
+}

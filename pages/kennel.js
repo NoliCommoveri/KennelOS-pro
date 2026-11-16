@@ -26,6 +26,8 @@ import { contactRepo } from '../data/contactRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { getIncomeRows, summarize } from '../data/incomeView.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
+import { expenseInScopeOf } from '../data/scopePredicates.js';
+import { studServiceRepo } from '../data/studServiceRepo.js';
 import { DOG_STATUS, LITTER_STATUS, SALE_STATUS, FEE_CREDIT_POLICY, FEE_CREDIT_TOWARD, WAITLIST_AUTO_OFFER_TRIGGER, WAITLIST_READY_NO_ANSWER, PARENT_TESTS_SHOWN } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { kennelChargeList, readPriceList, readChargeGroups } from '../data/extraCharges.js';
@@ -240,15 +242,17 @@ const hub = { dogsById: new Map(), contactsById: new Map() };
 const LIVE_LITTER_STATUSES = ['expected', 'whelped', 'weaning', 'ready', 'sold'];
 
 async function loadHub(k) {
-  const [dogs, litters, pairings, sales, contacts, expenses, incomeRows] = await Promise.all([
+  const [dogs, littersAll, pairingsAll, sales, contacts, expenses, incomeRows, studServices] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
-    litterRepo.getAll({ includeArchived: false }),
-    pairingRepo.getAll({ includeArchived: false }),
+    litterRepo.getAll({ includeArchived: true }),
+    pairingRepo.getAll({ includeArchived: true }),
     saleRepo.getAll({ includeArchived: false }),
     contactRepo.getAll({ includeArchived: true }),
     expenseRepo.getAll({ includeArchived: false }),
-    getIncomeRows({ includeArchived: false, kennelId: k.id })
+    getIncomeRows({ includeArchived: false, kennelId: k.id }),
+    studServiceRepo.getAll({ includeArchived: true })
   ]);
+  const litters = littersAll.filter((l) => !l.is_archived);
   hub.dogsById = new Map(dogs.map((d) => [d.id, d]));
   hub.contactsById = new Map(contacts.map((c) => [c.id, c]));
 
@@ -260,15 +264,17 @@ async function loadHub(k) {
   const kLitters = litters.filter(mine);
   const kSales = sales.filter(mine);
 
-  // An expense carries no kennel of its own (spec §4.1) — its scope is its
-  // subject's. Resolve that here by membership in this kennel's own record ids.
-  const ownIds = new Set([
-    k.id,
-    ...roster.map((d) => d.id),
-    ...kLitters.map((l) => l.id),
-    ...pairings.filter(mine).map((p) => p.id)
-  ]);
-  const kExpenses = expenses.filter((x) => ownIds.has(x.subject_id));
+  // An expense carries no kennel of its own (spec §4.1): its scope is its
+  // subject's. The same money-total rule Financials and the reports use (K14-11,
+  // expenseInScopeOf, bound to this kennel rather than the active one), so the
+  // hub's Expenses and Financials scoped to this kennel agree.
+  const expenseMaps = {
+    dog: hub.dogsById,
+    litter: new Map(littersAll.map((l) => [l.id, l])),
+    pairing: new Map(pairingsAll.map((p) => [p.id, p])),
+    stud_service: new Map(studServices.map((x) => [x.id, x]))
+  };
+  const kExpenses = expenses.filter((x) => expenseInScopeOf(k.id, x, expenseMaps));
 
   return { roster, kLitters, kSales, kExpenses, incomeRows };
 }
@@ -338,7 +344,7 @@ function financesCardHtml(incomeRows, kExpenses) {
         <h2 style="margin:0;">Finances</h2>
         <a class="btn btn-sm" href="financials.html">Financials →</a>
       </div>
-      <p class="field-hint">Derived exactly as the Financials hub derives its own totals — nothing stored. Expenses include this kennel's overhead plus the costs on its dogs, litters, and pairings.</p>
+      <p class="field-hint">Derived exactly as the Financials hub derives its own totals — nothing stored. Expenses include this kennel's overhead, the costs on its dogs, litters and pairings, and costs on an outside dog tied to one of its stud services.</p>
       <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:12px; margin-top:10px;">
         ${moneyTile('Earned income', fmtMoney(totals.earned), 'success')}
         ${moneyTile('Anticipated income', fmtMoney(totals.anticipated), 'warning')}

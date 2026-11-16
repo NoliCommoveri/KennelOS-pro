@@ -12,6 +12,7 @@
 // service checks need editionFlags.contactsSection / studServices (tidyRules), the
 // duplicate applications editionFlags.waitlist (merged in assets/applicationMergeUI.js,
 // imported only then: it's Pro-only).
+import { KELS_AS_YOU_GO_INTRO } from './kelsChat.js';
 import { dogRepo, dogName } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
@@ -68,7 +69,7 @@ const KIND_WORDS = {
 };
 
 export async function runTidyTask(chat, { onExit = () => {} } = {}) {
-  if (!(await chat.intro('Love it, let\'s get your records tidy!'))) return onExit('nevermind');
+  if (!(await chat.intro('Love it, let\'s get your records tidy!', KELS_AS_YOU_GO_INTRO))) return onExit('nevermind');
   return new Tidy(chat, onExit).start();
 }
 

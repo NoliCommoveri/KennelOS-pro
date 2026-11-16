@@ -38,6 +38,7 @@ import { litterRepo } from './litterRepo.js';
 import { expectedPricing } from './saleDefaults.js';
 import { contactRepo } from './contactRepo.js';
 import { kennelRepo } from './kennelRepo.js';
+import { getActiveKennelId } from './kennelScope.js';
 import { todayYMD } from './dateUtils.js';
 import { getCompanionSettings } from './settings.js';
 import { accountRepo } from './accountRepo.js';
@@ -229,11 +230,23 @@ const PARTNER_KEYS = [
 // available pups nested inside. Carries the litter's per-sex list price + deposit
 // (owner decision 1 reversed the old "NO price" rule); still NO per-recipient
 // private data — every prospect sees the same availability. -----------------
-export async function buildProspectiveBundle(contact) {
+//
+// The pups are ONE kennel's (K14-2): the Companion identity is global (spec §10),
+// so the header names one kennel and the litters under it must be that kennel's.
+// `kennelId` is the kennel the update is for (the guided litter flow passes its
+// litter's); else the active kennel. Under All kennels with available pups in
+// two or more of her kennels it refuses, saying to pick the kennel first, rather
+// than send one kennel's name over another's litters and prices.
+export async function buildProspectiveBundle(contact, { kennelId = null } = {}) {
   const h = headerCopy('prospective', contact);
   const inc = getCompanionSettings('prospective').include;
   const dogs = await dogRepo.getAll();
-  const available = dogs.filter((d) => d.status === 'puppy' && d.disposition === 'available');
+  const forKennel = kennelId || getActiveKennelId();
+  const allAvailable = dogs.filter((d) => d.status === 'puppy' && d.disposition === 'available');
+  const available = forKennel ? allAvailable.filter((d) => !d.kennel_id || d.kennel_id === forKennel) : allAvailable;
+  if (!forKennel && new Set(allAvailable.map((d) => d.kennel_id).filter(Boolean)).size > 1) {
+    throw new Error('Your available pups are in more than one of your kennels. Pick the kennel this update is for in the kennel switcher at the top, then prepare the link again.');
+  }
 
   // Which parent-card fields to include, and whether each price/deposit shows —
   // a child flag only counts when its master (parents / pricing) is on.
@@ -557,8 +570,8 @@ export async function buildPartnerBundle(contact) {
 }
 
 // Convenience dispatcher used by the Send-Link UI.
-export function buildBundle(type, contact) {
-  if (type === 'prospective') return buildProspectiveBundle(contact);
+export function buildBundle(type, contact, opts = {}) {
+  if (type === 'prospective') return buildProspectiveBundle(contact, opts);
   if (type === 'family') return buildFamilyBundle(contact);
   if (type === 'partner') return buildPartnerBundle(contact);
   throw new Error(`Unknown companion bundle type "${type}".`);

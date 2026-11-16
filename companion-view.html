@@ -103,6 +103,14 @@
     var root = document.getElementById('root');
 
     // --- helpers -----------------------------------------------------------
+    // A link from the bundle goes in an href only when it is http(s) or mailto
+    // (K14-17): esc() stops HTML injection, not a javascript: scheme.
+    function safeHref(u) {
+      var v = String(u == null ? '' : u).trim();
+      if (!v) return '#';
+      if (/^(https?:|mailto:)/i.test(v)) return v;
+      return /^[a-z][a-z0-9+.-]*:/i.test(v) ? '#' : 'https://' + v.replace(/^\/+/, '');
+    }
     function esc(s) {
       return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -239,7 +247,7 @@
       var h = '<div class="parent">';
       h += '<div class="role">' + esc(role) + '</div>';
       h += '<div class="pname">' + line + '</div>';
-      if (dc.photosUrl) h += '<a class="doc" href="' + esc(dc.photosUrl) + '" target="_blank" rel="noopener noreferrer">' + esc(photosLabel || 'See photos here') + ' →</a>';
+      if (dc.photosUrl) h += '<a class="doc" href="' + esc(safeHref(dc.photosUrl)) + '" target="_blank" rel="noopener noreferrer">' + esc(photosLabel || 'See photos here') + ' →</a>';
       h += renderTests(dc.tests);
       return h + '</div>';
     }
@@ -282,7 +290,13 @@
     function renderFooter(b) {
       var h = '';
       if (b.closer) h += '<div class="card"><p class="intro" style="margin:0;">' + esc(b.closer) + '</p></div>';
-      return h + renderUpdated(b);
+      return h + renderUpdated(b) + renderNotChecked();
+    }
+    // K14-13: anyone can make a link that opens this page, so every page says
+    // that KennelOS didn't check it and that payment details are to be confirmed
+    // with the kennel directly.
+    function renderNotChecked() {
+      return '<p class="updated not-checked">The kennel made this page from its own records. KennelOS doesn\u2019t check what it says. Before you pay anything, confirm the amount and how to pay with the kennel, using contact details you already have.</p>';
     }
 
     // --- prospective -------------------------------------------------------
@@ -389,7 +403,7 @@
           var c = b.contracts[i];
           h += '<div style="padding:10px 0; border-top:1px solid var(--border);">';
           h += row('Signed', c.signedDate ? esc(fmtDate(c.signedDate)) : 'Not Signed');
-          if (c.documentUrl) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(c.documentUrl) + '" target="_blank" rel="noopener noreferrer">View/sign contract here →</a></p>';
+          if (c.documentUrl) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(safeHref(c.documentUrl)) + '" target="_blank" rel="noopener noreferrer">View/sign contract here →</a></p>';
           h += '</div>';
         }
         return h + '</div>';
@@ -398,7 +412,7 @@
       if (!urls.length) return '';
       var h2 = '<div class="card"><h2>Your contract</h2>';
       for (var u = 0; u < urls.length; u++) {
-        h2 += '<p><a class="doc" href="' + esc(urls[u]) + '" target="_blank" rel="noopener noreferrer">View your signed contract →</a></p>';
+        h2 += '<p><a class="doc" href="' + esc(safeHref(urls[u])) + '" target="_blank" rel="noopener noreferrer">View your signed contract →</a></p>';
       }
       return h2 + '</div>';
     }
@@ -417,7 +431,7 @@
         h += '<div><strong>' + esc(r.name || '') + '</strong></div>';
         if (r.code) h += row('Code', '<strong>' + esc(r.code) + '</strong>');
         if (r.instructions) h += '<p style="margin:6px 0 0;">' + esc(r.instructions) + '</p>';
-        if (link) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">Shop through our link →</a></p>';
+        if (link) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(safeHref(link)) + '" target="_blank" rel="noopener noreferrer">Shop through our link →</a></p>';
         h += '</div>';
       }
       return h + '</div>';
@@ -453,7 +467,7 @@
         if (sireCall || damCall) {
           h += '<p class="subhead">Sire ' + (sireCall ? '“' + sireCall + '”' : '—') + ' × Dam ' + (damCall ? '“' + damCall + '”' : '—') + '</p>';
         }
-        if (p.photosUrl) h += '<p><a class="doc" href="' + esc(p.photosUrl) + '" target="_blank" rel="noopener noreferrer">View pictures here →</a></p>';
+        if (p.photosUrl) h += '<p><a class="doc" href="' + esc(safeHref(p.photosUrl)) + '" target="_blank" rel="noopener noreferrer">View pictures here →</a></p>';
 
         if (p.age && p.age.ageWeeks != null) {
           h += '<p class="intro" style="margin:8px 0 0;">As of ' + esc(asOf) + ', your puppy is ' + esc(p.age.ageWeeks) + ' weeks, ' + esc(p.age.ageDays) + ' days.</p>';
@@ -610,7 +624,7 @@
           if (s.contract) {
             h += '<div class="section-label">Contract</div>';
             h += row('Signed', s.contract.signedDate ? esc(fmtDate(s.contract.signedDate)) : 'Not Signed');
-            if (s.contract.documentUrl) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(s.contract.documentUrl) + '" target="_blank" rel="noopener noreferrer">View/sign contract here →</a></p>';
+            if (s.contract.documentUrl) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(safeHref(s.contract.documentUrl)) + '" target="_blank" rel="noopener noreferrer">View/sign contract here →</a></p>';
           }
           h += '</div>';
         }
@@ -643,7 +657,7 @@
           // signedDate is present only on new links; show "Not Signed" when null.
           if (has(ct, 'signedDate')) h += row('Signed', ct.signedDate ? esc(fmtDate(ct.signedDate)) : 'Not Signed');
           if (ct.terms) h += row('Terms', esc(ct.terms));
-          if (ct.document_url) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(ct.document_url) + '" target="_blank" rel="noopener noreferrer">View contract here →</a></p>';
+          if (ct.document_url) h += '<p style="margin:6px 0 0;"><a class="doc" href="' + esc(safeHref(ct.document_url)) + '" target="_blank" rel="noopener noreferrer">View contract here →</a></p>';
           h += '</div>';
         }
         h += '</div>';

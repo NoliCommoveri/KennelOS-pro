@@ -19,6 +19,7 @@ import { portalOn } from '../data/portalFeed.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { getFureverSettings, setFureverSettings, getMyKennelId } from '../data/settings.js';
+import { loadFureverIdentity, saveFureverIdentity } from '../data/fureverIdentity.js';
 import { isDemo } from '../data/demoMode.js';
 import { resolveMyContactId } from '../data/kennelSetup.js';
 import { eventRepo } from '../data/eventRepo.js';
@@ -129,7 +130,8 @@ function matchVetId(vets, vetName) {
 
 async function renderIdentity() {
   const { defaults, vets } = await loadIdentityContext();
-  let s = getFureverSettings();
+  // The identity on her kennel record wins over this device's copy (K14-5).
+  let s = isDemo() ? getFureverSettings() : await loadFureverIdentity();
 
   // Seed blanks from the breeder's records once, and persist so Prepare link works
   // without a manual save. Non-destructive: only empty fields are filled.
@@ -148,7 +150,7 @@ async function renderIdentity() {
       ? { ...s, ...prefill,
         breederContact: { ...s.breederContact, ...(prefill.breederContact || {}) },
         breederVet: { ...s.breederVet, ...(prefill.breederVet || {}) } }
-      : setFureverSettings(prefill);
+      : await saveFureverIdentity(prefill);
   }
 
   const selectedVetId = matchVetId(vets, s.breederVet.name);
@@ -173,8 +175,8 @@ function wireIdentity(vets) {
       els.identity.querySelector('.id-bv-address').value = f.address;
     });
   }
-  document.getElementById('id-save')?.addEventListener('click', () => {
-    setFureverSettings({
+  document.getElementById('id-save')?.addEventListener('click', async () => {
+    await saveFureverIdentity({
       kennelName: els.identity.querySelector('.id-kennelName').value.trim(),
       tagline: els.identity.querySelector('.id-tagline').value.trim(),
       breederContact: {
@@ -593,13 +595,19 @@ function pickerHtml({ prefix, rows, selectedIds, parentIds }) {
     </div>`;
 }
 
-function sensitiveConfirmHtml(sensitiveDocs) {
+// `pupDocs` (a litter publish, K14-3): one pup's own documents sit in the litter's
+// one folder, which every family in the litter can open, though each family's
+// app shows only its own pup's.
+function sensitiveConfirmHtml(sensitiveDocs, { pupDocs = false } = {}) {
   const list = sensitiveDocs.map((d) => `<li>${esc(d.title || descriptor(DOC_TYPES, d.doc_type).label)}</li>`).join('');
+  const why = pupDocs
+    ? 'A pup’s own documents go in the litter’s one folder, so every family in the litter can open each pup’s files, not only their own (their app shows only theirs). A registration, vet record or contract can carry a family’s name and address. Only include them if you’re sure.'
+    : 'A contract often carries the buyer\'s name and address — only include it if you\'re sure.';
   return `
     <div class="inline-warn">
       <strong>This will become publicly readable by anyone with the link:</strong>
       <ul style="margin:6px 0;">${list}</ul>
-      <p style="margin:6px 0;">A contract often carries the buyer's name and address — only include it if you're sure.</p>
+      <p style="margin:6px 0;">${esc(why)}</p>
       <button type="button" class="btn btn-sm cp-confirm-yes">Yes, publish anyway</button>
       <button type="button" class="btn btn-sm cp-confirm-no">Cancel</button>
     </div>`;
@@ -765,7 +773,8 @@ async function doKennelPublish() {
       uploads: allUploads,
       removedKeys
     });
-    setFureverSettings({ contentPack: pointer, driveConnected: true });
+    setFureverSettings({ driveConnected: true });
+    await saveFureverIdentity({ contentPack: pointer });
     kennelUploads = [];
     removedKennelUploadIds.clear();
     statusEl.textContent = 'Published.';
@@ -783,11 +792,15 @@ async function doLitterPublish(litter, rows) {
   const docsById = flattenDocs(rows);
   const selectedDocs = collectSelectedIds(root).map((id) => docsById.get(id))
     .filter((d) => d && isFureverShareable(d, publishedDocIds));
-  const sensitive = selectedDocs.filter((d) => isSensitiveDocType(d.doc_type));
+  // Every pup's own document is public to the whole litter (K14-3), whatever its
+  // type; the sire's and dam's are meant for every family.
+  const parentIds = [litter.sire_id, litter.dam_id].filter(Boolean);
+  const pupDocs = selectedDocs.filter((d) => d.dog_id && !parentIds.includes(d.dog_id));
+  const sensitive = [...new Set([...selectedDocs.filter((d) => isSensitiveDocType(d.doc_type)), ...pupDocs])];
 
   const confirmBox = card.querySelector('.cp-litter-confirm');
   if (sensitive.length && !confirmBox.dataset.confirmed) {
-    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive);
+    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive, { pupDocs: pupDocs.length > 0 });
     wireSensitiveConfirm(confirmBox, () => { confirmBox.dataset.confirmed = '1'; doLitterPublish(litter, rows); });
     return;
   }

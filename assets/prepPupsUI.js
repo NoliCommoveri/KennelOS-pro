@@ -22,6 +22,7 @@
 // so only offered) and the printed puppy records: one file, a cover page for her,
 // then each pup's record (pages/puppy-record.html?dogs=…&cover=1). Anything that
 // opens a new tab is announced first and waits for her OK.
+import { KELS_AS_YOU_GO_INTRO } from './kelsChat.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
@@ -76,7 +77,7 @@ export async function prepState() {
 
 // Run the task. `litterId` skips "which litter?" (when it's one she can prep).
 export async function runPrepTask(chat, { litterId = null, onExit = () => {} } = {}) {
-  if (!(await chat.intro('Sure thing, let\'s get those pups ready to go home!'))) return onExit('nevermind');
+  if (!(await chat.intro('Sure thing, let\'s get those pups ready to go home!', KELS_AS_YOU_GO_INTRO))) return onExit('nevermind');
   return new Prep(chat, onExit).start(litterId);
 }
 

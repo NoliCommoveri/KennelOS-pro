@@ -9,6 +9,8 @@ import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { STUD_SERVICE_DIRECTION, STUD_SERVICE_ROLE, STUD_SERVICE_STATUS, CONTRACT_TYPE, CONTRACT_STATUS, descriptor } from '../data/vocab.js';
 import { ourRole } from '../data/studRules.js';
+import { inScopeOnly } from '../data/kennelScope.js';
+import { mountScopeChip } from '../assets/kennelScopeUI.js';
 import { esc, badge, fmtDate } from '../assets/ui.js';
 
 const body = document.getElementById('stud-service-list');
@@ -67,12 +69,15 @@ function studServiceCard(s, dogsById, contactsById, contractsByStud, linkableCon
 }
 
 async function main() {
-  const [studServices, dogs, contacts, contracts] = await Promise.all([
+  mountScopeChip(document.getElementById('scope-chip'));
+  const [studServicesAll, dogs, contacts, contracts] = await Promise.all([
     studServiceRepo.getAll({ includeArchived: false }),
     dogRepo.getAll({ includeArchived: true }),
     contactRepo.getAll({ includeArchived: true }),
     contractRepo.getAll({ includeArchived: false })
   ]);
+  // Scoped to the active kennel like every other list (K14-10); the chip says so.
+  const studServices = inScopeOnly(studServicesAll);
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
 

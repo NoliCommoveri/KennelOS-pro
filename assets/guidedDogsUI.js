@@ -16,7 +16,7 @@ import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
 import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
-import { getGuidedDogsDraft, setGuidedDogsDraft, clearGuidedDogsDraft } from '../data/settings.js';
+import { getGuidedDogsDraft, setGuidedDogsDraft, clearGuidedDogsDraft, retireDraft } from '../data/settings.js';
 import { isDemo } from '../data/demoMode.js';
 import { DOG_STATUS, OWNERSHIP_TYPE, DISPOSITION, REGISTRATION_TYPE, DOC_TYPES, VACCINE_CHECKLIST, VACCINE_GOOD_FOR, documentFieldsFor, descriptor } from '../data/vocab.js';
 import { SCOPED_OWNERSHIP } from '../data/kennelScope.js';
@@ -464,7 +464,7 @@ function answerFor(stepId, draft, data) {
 export function pendingDogsDraft() {
   const draft = getGuidedDogsDraft();
   if (!draft) return null;
-  if (draft.v !== G.DRAFT_VERSION) { clearGuidedDogsDraft(); return null; }
+  if (draft.v !== G.DRAFT_VERSION) return retireDraft('guidedDogsDraft', draft, 'dogs');
   return draft.done ? null : draft;
 }
 

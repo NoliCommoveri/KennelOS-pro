@@ -9,7 +9,7 @@
 // hand-built HTML goes through esc().
 import {
   buildDogCard, encodeDogCard, dogCardLink, dogCardFileName, decodeDogCard, previewDogCard,
-  applyDogCard, extractDogCardPayload, sendableDogs, DogCardError, DOG_FIELDS, ANCESTOR_GENERATIONS
+  applyDogCard, extractDogCardPayload, sendableDogs, canSendFrom, DogCardError, DOG_FIELDS, ANCESTOR_GENERATIONS
 } from '../data/dogCard.js';
 import { dogName } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
@@ -41,7 +41,6 @@ async function renderSend() {
   send.kennels = await ownKennels();
   for (const c of await contactRepo.getAll({ includeArchived: true })) send.contacts.set(c.id, c);
   const preset = param('dog');
-  if (preset && send.dogs.some((d) => d.id === preset)) send.picked.add(preset);
 
   if (!send.kennels.length) {
     sendEl.innerHTML = '<p class="muted">Set up your kennel first: a card is sent from one of your own kennels.</p>';
@@ -55,7 +54,7 @@ async function renderSend() {
     .map((id) => send.contacts.get(id)).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
   const active = getActiveKennelId();
   sendEl.innerHTML = `
-    <p class="field-hint" style="margin-top:0;">Tick the dogs to send. Each goes with up to ${ANCESTOR_GENERATIONS} generations of its ancestors, and its health tests and titles.</p>
+    <p class="field-hint" style="margin-top:0;">Tick the dogs to send. Each goes with up to ${ANCESTOR_GENERATIONS} generations of its ancestors, and its health tests and titles. Only your own dogs at the kennel you send from are listed; outside dogs go along as ancestors. A microchip number goes only for a dog still in your program.</p>
     <div class="form-grid">
       ${send.kennels.length > 1 ? `<div class="field"><label>Send from</label><select id="s-kennel">${send.kennels.map((k) => `<option value="${esc(k.id)}"${k.id === active ? ' selected' : ''}>${esc(k.kennel_name)}</option>`).join('')}</select></div>` : ''}
       <div class="field"><label>Show</label><select id="s-filter">
@@ -75,6 +74,17 @@ async function renderSend() {
     <div id="s-error"></div>
     <div id="s-out"></div>`;
 
+  // A preset dog (from its own page) picks the kennel it's filed under.
+  const presetDog = preset ? send.dogs.find((d) => d.id === preset) : null;
+  const kennelSelect = sendEl.querySelector('#s-kennel');
+  if (presetDog && kennelSelect && send.kennels.some((k) => k.id === presetDog.kennel_id)) kennelSelect.value = presetDog.kennel_id;
+  if (presetDog && canSendFrom(presetDog, fromKennelId())) send.picked.add(preset);
+  // Only the "Send from" kennel's own dogs are listed (K14-8); changing it drops
+  // ticks that no longer fit.
+  kennelSelect?.addEventListener('change', () => {
+    for (const id of [...send.picked]) if (!canSendFrom(send.dogs.find((d) => d.id === id), fromKennelId())) send.picked.delete(id);
+    renderSendList();
+  });
   sendEl.querySelector('#s-filter').addEventListener('change', (e) => { send.filter = e.target.value; renderSendList(); });
   sendEl.querySelector('#s-all').addEventListener('click', () => { for (const d of shownDogs()) send.picked.add(d.id); renderSendList(); });
   sendEl.querySelector('#s-none').addEventListener('click', () => { send.picked.clear(); renderSendList(); });
@@ -83,7 +93,10 @@ async function renderSend() {
   if (preset && send.picked.size) makeCard();
 }
 
-const shownDogs = () => (send.filter ? send.dogs.filter((d) => (d.co_owner_contact_ids || []).includes(send.filter)) : send.dogs);
+const fromKennelId = () => sendEl.querySelector('#s-kennel')?.value || send.kennels[0].id;
+const shownDogs = () => send.dogs
+  .filter((d) => canSendFrom(d, fromKennelId()))
+  .filter((d) => !send.filter || (d.co_owner_contact_ids || []).includes(send.filter));
 
 function renderSendList() {
   const rows = shownDogs();
@@ -112,7 +125,7 @@ async function makeCard() {
   out.innerHTML = '';
   let card;
   try {
-    card = await buildDogCard({ fromKennelId: sendEl.querySelector('#s-kennel')?.value || send.kennels[0].id, dogIds: [...send.picked] });
+    card = await buildDogCard({ fromKennelId: fromKennelId(), dogIds: [...send.picked] });
   } catch (e) {
     showError(errBox, e instanceof DogCardError ? e.message : (e.message || String(e)));
     return;

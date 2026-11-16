@@ -102,7 +102,9 @@ async function doAssistantImport() {
 
 const OUTBOX_STATUS_LABELS = {
   new: { text: 'New', cls: 'badge-green' },
-  update: { text: 'Already imported', cls: 'badge-neutral' },
+  update: { text: 'Changed by your helper', cls: 'badge-amber' },
+  already: { text: 'Already in — left as you have it', cls: 'badge-neutral' },
+  removed: { text: 'Skipped — you deleted it', cls: 'badge-neutral' },
   no_dog: { text: 'Skipped — unknown dog', cls: 'badge-red' },
   invalid: { text: 'Skipped — incomplete', cls: 'badge-red' }
 };
@@ -142,7 +144,11 @@ function showAssistantPreviewModal({ generated_at, rows }) {
     try {
       const result = await importAssistantEvents(rows);
       overlay.remove();
-      flash(`Imported — ${result.imported} entr${result.imported === 1 ? 'y' : 'ies'}${result.skipped ? `, ${result.skipped} skipped` : ''}.`);
+      // Send a fresh feed, so their phone sees these are in and clears them from
+      // its outbox (K11-4). Best effort: the import already stands.
+      let pushed = true;
+      try { await pushAssistantFeed(); } catch { pushed = false; }
+      flash(`Imported — ${result.imported} entr${result.imported === 1 ? 'y' : 'ies'}${result.skipped ? `, ${result.skipped} left as they are or skipped` : ''}.${pushed ? '' : ' Send your helper a fresh copy so their phone clears them.'}`);
     } catch (e) {
       overlay.remove();
       flash(e.message || String(e), 'err');

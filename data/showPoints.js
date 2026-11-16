@@ -56,7 +56,7 @@ const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 // selection (and the `since` cut-off) already happened.
 function tally(counting, track) {
   const perShowMax = track.perShowMax ?? Infinity;
-  let points = 0, majors = 0, championDefeats = 0;
+  let points = 0, majors = 0, majorsNoJudge = 0, championDefeats = 0;
   const majorJudges = new Set();
   const judges = new Set();
   for (const ev of counting) {
@@ -67,10 +67,11 @@ function tally(counting, track) {
     if (pts >= track.majorMin) {
       majors += 1;
       if (judge) majorJudges.add(judge);
+      else majorsNoJudge += 1;
     }
     if (ev.details?.defeated_champion === 'Yes') championDefeats += 1;
   }
-  return { points, majors, majorJudges: majorJudges.size, judges: judges.size, championDefeats };
+  return { points, majors, majorsNoJudge, majorJudges: majorJudges.size, judges: judges.size, championDefeats };
 }
 
 // Human-readable gaps between a tally and the track's requirements. Empty when
@@ -83,7 +84,11 @@ function gaps(t, track) {
   // A major only helps if it's under a judge not already among the majors, so the
   // shortfall is whichever is larger: majors still needed, or major judges still
   // needed. Two majors under one judge leave one more major (new judge) to go.
-  const majorsShort = Math.max((track.majors ?? 0) - t.majors, (track.distinctMajorJudges ?? 0) - t.majorJudges);
+  // A major with no judge typed (the field isn't required) might be under a new
+  // judge, so it isn't counted as short (K14-12): it's named as a judge to add.
+  const judgesShortNamed = Math.max(0, (track.distinctMajorJudges ?? 0) - t.majorJudges);
+  const unchecked = Math.min(t.majorsNoJudge || 0, judgesShortNamed);
+  const majorsShort = Math.max((track.majors ?? 0) - t.majors, judgesShortNamed - unchecked);
   if (majorsShort > 0) {
     if (t.majorJudges === 0) {
       missing.push(majorsShort === 1 ? '1 major' : `${majorsShort} majors under ${majorsShort} different judges`);
@@ -91,6 +96,7 @@ function gaps(t, track) {
       missing.push(`${plural(majorsShort, 'more major')} under ${majorsShort === 1 ? 'a new judge' : 'new judges'}`);
     }
   }
+  if (unchecked > 0) missing.push(`the judge on ${plural(unchecked, 'major')}, so ${unchecked === 1 ? 'it' : 'they'} can be checked`);
 
   const judgesShort = (track.distinctJudges ?? 0) - t.judges;
   if (judgesShort > 0) missing.push(`points under ${plural(judgesShort, 'more judge')}`);

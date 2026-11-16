@@ -10,6 +10,8 @@ import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../dat
 import { litterRepo } from '../data/litterRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { fileRepo } from '../data/fileRepo.js';
+import { inScopeOnly } from '../data/kennelScope.js';
+import { mountScopeChip } from '../assets/kennelScopeUI.js';
 import { DOC_TYPES, docTypeIcon } from '../data/vocab.js';
 import { openDocumentModal, openDocumentViewModal } from '../assets/documentModal.js';
 
@@ -154,7 +156,10 @@ async function refreshData() {
   ]);
   publishedIds = publishedFureverDocIds(litters);
   dogsById = new Map(dogs_.map((d) => [d.id, d]));
-  docs = docs_;
+  // Scoped to the active kennel like every other list (K14-10). A dog reached by
+  // id (?dog=, from its own page) shows all of that dog's documents, as a detail
+  // page reached by id is never scoped.
+  docs = param('dog') ? docs_ : inScopeOnly(docs_);
   filesById = new Map(filesMeta.map((f) => [f.id, f]));
 }
 
@@ -202,6 +207,7 @@ function wireEvents() {
 }
 
 async function boot() {
+  if (!param('dog')) mountScopeChip(document.getElementById('scope-chip'));
   renderTypeChips();
   wireEvents();
   await refresh();

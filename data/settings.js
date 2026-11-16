@@ -16,6 +16,7 @@ const KEYS = {
   expensesMigrated: 'kennelOS.expensesMigrated',
   wizardStatus: 'kennelOS.wizardStatus',
   wizardStepIndex: 'kennelOS.wizardStepIndex',
+  wizardStepId: 'kennelOS.wizardStepId',
   dropbox: 'kennelOS.dropbox',
   assistantLastSync: 'kennelOS.assistantLastSync',
   assistantFeedPushedAt: 'kennelOS.assistantFeedPushedAt',
@@ -25,6 +26,9 @@ const KEYS = {
   cloudOfferPending: 'kennelOS.cloudOfferPending',
   cloudRestoredAt: 'kennelOS.cloudRestoredAt',
   assistReady: 'kennelOS.assistReady',
+  assistantImported: 'kennelOS.assistantImported',
+  kelsSetupDone: 'kennelOS.kelsSetupDone',
+  kelsDraftNotice: 'kennelOS.kelsDraftNotice',
   guidedLitterDraft: 'kennelOS.guidedLitterDraft',
   guidedDogsDraft: 'kennelOS.guidedDogsDraft',
   guidedPeopleDraft: 'kennelOS.guidedPeopleDraft',
@@ -273,6 +277,11 @@ export function setCompanionSettings(type, values) {
 // to "My Kennel" (settings' myKennelId): Furever should work even if Kennel Setup
 // was skipped.
 //
+// This localStorage block is the device's CACHE. The program's copy rides on her
+// own kennel's record (`furever_identity`, data/fureverIdentity.js, K14-5), so
+// backups, cloud backup and live sync carry it and every device sends the same
+// key; the Furever console and the seed packet load through that module.
+//
 // Deliberately ONE shared block across all of a user's own kennels, even in
 // Pro's multi-kennel mode (Multi-Kennel Scope Spec §10) — same owner decision
 // as Companion above, kept global rather than keyed per kennel. Per-kennel
@@ -427,6 +436,17 @@ export function getWizardStepIndexRaw() {
   return Number.isFinite(n) ? n : 0;
 }
 
+// The step's id beside its index (K11-18): a release that adds or removes a stop
+// moves the indexes, not the ids. wizardState reads the id first.
+export function getWizardStepIdRaw() {
+  return localStorage.getItem(KEYS.wizardStepId) || null;
+}
+
+export function setWizardStepIdRaw(id) {
+  if (id) localStorage.setItem(KEYS.wizardStepId, id);
+  else localStorage.removeItem(KEYS.wizardStepId);
+}
+
 export function setWizardStepIndexRaw(index) {
   localStorage.setItem(KEYS.wizardStepIndex, String(index));
 }
@@ -479,6 +499,47 @@ export function getAssistantFeedPushedAt() {
 export function setAssistantFeedPushedAt(iso = new Date().toISOString()) {
   localStorage.setItem(KEYS.assistantFeedPushedAt, iso);
   return iso;
+}
+
+// --- Kels's Getting Started: the parts she has answered, per kennel (K11-12) ---
+// { [kennelId]: { parts: [...], complete } } on this device, so a run left partway
+// can pick up where she stopped. In KEYS, so Reset App clears it.
+function readSetupDone() {
+  try { return JSON.parse(localStorage.getItem(KEYS.kelsSetupDone) || '{}') || {}; } catch { return {}; }
+}
+export function getKelsSetupDone(kennelId) {
+  const entry = readSetupDone()[kennelId] || {};
+  return { parts: Array.isArray(entry.parts) ? entry.parts : [], complete: entry.complete === true };
+}
+export function markKelsSetupPart(kennelId, part, { complete = false } = {}) {
+  const all = readSetupDone();
+  const entry = all[kennelId] || { parts: [] };
+  const parts = [...new Set([...(entry.parts || []), ...(part ? [part] : [])])];
+  all[kennelId] = { parts: complete ? [] : parts, complete: complete || entry.complete === true };
+  localStorage.setItem(KEYS.kelsSetupDone, JSON.stringify(all));
+}
+// Any kennel set up all the way through (the menu's priority).
+export function anyKelsSetupComplete() {
+  return Object.values(readSetupDone()).some((e) => e && e.complete === true);
+}
+
+// --- KennelAssistant: the helper's entries imported on this device (K11-4) ----
+// Ids only, newest last, at most ASSISTANT_IMPORTED_MAX. An entry she deleted
+// after importing is then known as one she removed, not offered as New again.
+// Device-only; in KEYS, so Reset App clears it.
+const ASSISTANT_IMPORTED_MAX = 5000;
+export function getAssistantImportedIds() {
+  try {
+    const list = JSON.parse(localStorage.getItem(KEYS.assistantImported) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+export function addAssistantImportedIds(ids) {
+  const list = getAssistantImportedIds().filter((id) => !ids.includes(id));
+  const next = [...list, ...ids].slice(-ASSISTANT_IMPORTED_MAX);
+  localStorage.setItem(KEYS.assistantImported, JSON.stringify(next));
 }
 
 // --- Guided "Record a new litter" draft (assets/guidedLitterUI.js) ----------
@@ -562,6 +623,35 @@ export function setGuidedFormDraft(draft) {
 
 export function clearGuidedFormDraft() {
   localStorage.removeItem(KEYS.guidedFormDraft);
+}
+
+// A draft an update can't carry on (its DRAFT_VERSION changed) is let go with a
+// word, never silently (K11-16): `retireDraft` clears it and leaves a notice Kels
+// says once on her next visit (takeKelsDraftNotice), naming what it was and, when
+// its save had already made some records, that those are kept. → null.
+export function retireDraft(key, draft, what) {
+  const name = (draft && draft.label) || what;
+  const s = (draft && draft.saved) || {};
+  const made = Object.values(s).some((v) => v && (typeof v === 'string' || (typeof v === 'object' && Object.values(v).some(Boolean))))
+    || [...(draft?.pups || []), ...(draft?.dogs || []), ...(draft?.people || [])].some((x) => x && x.saved && x.id);
+  const text = `After the last update I couldn't keep the draft you hadn't finished (${name}), so I've let it go.${made ? ' Some of it was already saved before it stopped, and those records are still in your program: have a look there before starting it again.' : ''}`;
+  const list = takeKelsDraftNotice({ keep: true });
+  localStorage.setItem(KEYS.kelsDraftNotice, JSON.stringify([...list, text]));
+  localStorage.removeItem(KEYS[key]);
+  return null;
+}
+export function takeKelsDraftNotice({ keep = false } = {}) {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(KEYS.kelsDraftNotice) || '[]') || []; } catch { list = []; }
+  if (!keep) localStorage.removeItem(KEYS.kelsDraftNotice);
+  return Array.isArray(list) ? list : [];
+}
+
+// Every Kels draft at once: where the records they name go away wholesale (Clear
+// sample data, the tour's end, a Replace restore), so none resumes over records
+// that are gone (K11-2).
+export function clearGuidedDrafts() {
+  for (const k of ['guidedLitterDraft', 'guidedDogsDraft', 'guidedPeopleDraft', 'guidedFormDraft']) localStorage.removeItem(KEYS[k]);
 }
 
 // --- Kels's "Pups are going home": the optional checks she ticked last time ----

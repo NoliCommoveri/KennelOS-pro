@@ -59,8 +59,48 @@ export function emptyDraft(kennel) {
     start: hasOwnForm(kennel) ? '' : 'standard',
     questions: copy(formQuestions(config)),
     faq: copy(formFaq(config)),
+    // The saved form as it was when she started (K11-7): a resume or the save
+    // compares it with what's saved now (formChangedSince).
+    basis: savedFormKey(kennel),
     done: false
   };
+}
+
+// --- The saved form changed since the draft began (K11-7) ---------------------------
+
+// The kennel's saved form and FAQ, as one comparable string. Pure.
+export function savedFormKey(kennel) {
+  const config = waitlistConfig(kennel);
+  return JSON.stringify({ q: formQuestions(config), f: formFaq(config) });
+}
+
+// Has her saved form changed since this draft began (on the Application form
+// page, or on another device)? A draft from before `basis` was kept counts as
+// changed only when the kennel was saved after the draft began and its form
+// isn't the draft's. Pure.
+export function formChangedSince(draft, kennel) {
+  if (!kennel) return false;
+  const now = savedFormKey(kennel);
+  if (draft.basis) return now !== draft.basis;
+  const mine = JSON.stringify({ q: finalForm(draft).form_questions, f: finalForm(draft).application_faq });
+  return String(kennel.updated_at || '') > String(draft.startedAt || '') && now !== mine;
+}
+
+// "Start from what's saved now": the saved questions and FAQ replace the draft's.
+export function restartFromSaved(draft, kennel) {
+  const config = waitlistConfig(kennel);
+  draft.questions = copy(formQuestions(config));
+  draft.faq = copy(formFaq(config));
+  draft.start = 'mine';
+  draft.basis = savedFormKey(kennel);
+  draft.returnToReview = false;
+  return draft;
+}
+
+// "Keep my draft": she has seen the change, so it isn't asked again.
+export function keepDraftOverSaved(draft, kennel) {
+  draft.basis = savedFormKey(kennel);
+  return draft;
 }
 
 // "Where do we start?": her saved form, or the standard one (her FAQ kept either way).

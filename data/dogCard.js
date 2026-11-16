@@ -164,6 +164,7 @@ export async function buildDogCard({ fromKennelId, dogIds, generations = ANCESTO
   for (const id of ids) {
     const d = await dogRepo.getById(id);
     if (!d) throw new DogCardError('One of those dogs is no longer on this device.');
+    if (!canSendFrom(d, from.id)) throw new DogCardError(`${dogName(d) || 'One of those dogs'} isn’t one of ${from.kennel_name}’s own dogs, so it can’t be sent from there. An outside dog goes along only as an ancestor.`);
     if (!depth.has(id)) { depth.set(id, 0); order.push(d); }
   }
   for (let i = 0; i < order.length; i++) {
@@ -188,6 +189,7 @@ export async function buildDogCard({ fromKennelId, dogIds, generations = ANCESTO
     const sent = ids.includes(d.id);
     const entry = { publicId: publicIds.get(d.id), sent, status: text(d.status) };
     for (const { card, field, kind } of DOG_FIELDS) entry[card] = cardValue(kind, d[field]);
+    if (!sendsMicrochip(d, sent)) entry.microchipId = '';
     entry.sirePublicId = d.sire_id && inCard.has(d.sire_id) ? publicIds.get(d.sire_id) : '';
     entry.damPublicId = d.dam_id && inCard.has(d.dam_id) ? publicIds.get(d.dam_id) : '';
     entry.breederKennelRef = await kennelRef(d.breeder_kennel_id);
@@ -583,9 +585,29 @@ async function applyEvents(cardDog, dogId) {
   return { added, changed };
 }
 
-// For the send screen: the dogs she can put on a card (not pedigree-only ancestors,
-// not archived), and a dog's name for lists.
+// Which dogs a card may SEND (K14-8): her own (owned, co-owned, leased out), filed
+// under the kennel the card is sent from, since the receiver files a new dog at
+// that kennel. Outside and leased-in dogs aren't hers to send; they still travel
+// as ancestors of a dog that is. Not pedigree-only, not archived.
+const SENDABLE_OWNERSHIP = new Set(['owned', 'co_owned', 'leased_out']);
+export function canSendFrom(dog, fromKennelId) {
+  if (!dog || dog.pedigree_only || dog.is_archived || !SENDABLE_OWNERSHIP.has(dog.ownership_type)) return false;
+  return dog.kennel_id === fromKennelId || (!dog.kennel_id && dog.ownership_type === 'leased_out');
+}
+
+// Whether a dog's microchip number goes on the card (K14-15, owner 2026-11-16):
+// only for a dog being sent that is still in her program. Never for an ancestor,
+// and never for a dog placed in a pet home (or no longer living), whose chip is
+// a lookup key to its new family's contact details.
+export function sendsMicrochip(dog, sent) {
+  if (!sent || !dog) return false;
+  if (['pet_home', 'deceased'].includes(dog.status)) return false;
+  return dog.disposition !== 'placed';
+}
+
+// For the send screen: the dogs she can put on a card from some kennel of hers
+// (`canSendFrom` narrows them to the "Send from" kennel), and a dog's name for lists.
 export async function sendableDogs() {
-  return (await dogRepo.getAll()).filter((d) => !d.pedigree_only);
+  return (await dogRepo.getAll()).filter((d) => !d.pedigree_only && SENDABLE_OWNERSHIP.has(d.ownership_type));
 }
 export { dogName };

@@ -24,7 +24,8 @@ import { editionFlags } from './editionConfig.js';
 // has). This file binds them to the LIVE active kennel; pages import the bound
 // forms below and never pass an id by hand.
 import {
-  SCOPED_OWNERSHIP, isOwnedByUser, inScopeOf, dogInScopeOf, subjectInScopeOf
+  SCOPED_OWNERSHIP, isOwnedByUser, inScopeOf, dogInScopeOf, subjectInScopeOf,
+  expenseInScopeOf, isUnplacedExpenseOf
 } from './scopePredicates.js';
 
 export { SCOPED_OWNERSHIP, isOwnedByUser };
@@ -111,6 +112,14 @@ export function dogsInScope(dogs) {
 export function subjectInScope(subjectType, subjectId, maps = {}) {
   return subjectInScopeOf(getActiveKennelId(), subjectType, subjectId, maps);
 }
+
+// An expense in a money total (scopePredicates.expenseInScopeOf, K14-11): an
+// outside dog's cost goes under the kennel of its stud service, or only under All
+// kennels. `maps` is the subject maps plus `stud_service`.
+export function expenseInScope(expense, maps = {}) {
+  return expenseInScopeOf(getActiveKennelId(), expense, maps);
+}
+export { isUnplacedExpenseOf };
 
 // --- Validation ------------------------------------------------------------
 

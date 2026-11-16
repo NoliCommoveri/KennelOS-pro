@@ -209,6 +209,87 @@ export function sireChoices(dogs, { showAll = false, excludeId = null } = {}) {
   return dogs.filter((d) => usable(d) && d.sex === 'male' && d.id !== excludeId && (showAll || isMine(d))).sort(byName);
 }
 
+// --- A resumed draft (K11-2, K11-3) -------------------------------------------
+
+// What a draft points at that isn't on file any more (Clear sample data, a
+// restore, a delete on another device). `has(kind, id)` answers for 'dog',
+// 'litter', 'pairing', 'kennel', 'contact'. Returns { gone, madeGone }:
+// `gone` the answers that named a missing record; `madeGone` true when a record
+// the save already made is gone too, so the draft can't be finished. Pure.
+export function goneDraftRefs(draft, has) {
+  const gone = [];
+  const check = (kind, id, label) => { if (id && id !== 'none' && !has(kind, id)) gone.push(label); };
+  check('dog', draft.damId, 'mom');
+  check('dog', draft.sireId, 'dad');
+  check('litter', draft.litterId, 'litter');
+  check('litter', draft.litterChoice, 'litter');
+  check('pairing', draft.pairingId, 'breeding');
+  check('pairing', draft.pairingChoice, 'breeding');
+  check('kennel', draft.kennelId, 'kennel');
+  for (const role of ['newDam', 'newSire']) {
+    const spec = draft[role];
+    if (!spec) continue;
+    check('dog', spec.bringInId, role === 'newDam' ? 'mom' : 'dad');
+    check('contact', spec.ownerId, 'owner');
+    check('kennel', spec.kennelId, 'kennel');
+  }
+  const s = draft.saved || {};
+  const madeGone = [
+    ['dog', s.dam?.dogId], ['dog', s.sire?.dogId], ['litter', s.litterId], ['pairing', s.pairingId]
+  ].some(([kind, id]) => id && !has(kind, id)) || (draft.pups || []).some((p) => p.saved && p.id && !has('dog', p.id));
+  return { gone: [...new Set(gone)], madeGone };
+}
+
+// Clear the answers that named a missing record, so the steps ask them again:
+// the parents (and with them the litter and breeding matched to them), a missing
+// kennel, a new parent's missing owner. Pups taken from a missing litter become
+// new pups. Mutates and returns the draft. Pure.
+export function clearGoneDraftRefs(draft, has) {
+  const missing = (kind, id) => id && id !== 'none' && !has(kind, id);
+  const parentGone = missing('dog', draft.damId) || missing('dog', draft.sireId)
+    || ['newDam', 'newSire'].some((r) => draft[r] && missing('dog', draft[r].bringInId));
+  const litterGone = missing('litter', draft.litterId) || missing('litter', draft.litterChoice);
+  if (parentGone || litterGone) {
+    if (missing('dog', draft.damId)) draft.damId = null;
+    if (missing('dog', draft.sireId)) draft.sireId = null;
+    for (const r of ['newDam', 'newSire']) if (draft[r] && missing('dog', draft[r].bringInId)) draft[r].bringInId = null;
+    draft.source = 'new';
+    draft.lockedSource = false;
+    draft.litterId = null;
+    draft.litterChoice = null;
+    draft.pairingId = null;
+    draft.pairingChoice = null;
+    draft.pups = (draft.pups || []).map((p) => (p.id && !has('dog', p.id) ? { ...p, id: null, key: p.key } : p));
+  }
+  if (missing('pairing', draft.pairingId) || missing('pairing', draft.pairingChoice)) { draft.pairingId = null; draft.pairingChoice = null; }
+  if (missing('kennel', draft.kennelId)) draft.kennelId = null;
+  if (missing('kennel', draft.autoKennelId)) draft.autoKennelId = null;
+  for (const r of ['newDam', 'newSire']) {
+    const spec = draft[r];
+    if (!spec) continue;
+    if (missing('contact', spec.ownerId)) spec.ownerId = null;
+    if (missing('kennel', spec.kennelId)) spec.kennelId = null;
+  }
+  return draft;
+}
+
+// A litter of these parents recorded since the draft was started (on the Litter
+// page, or on another device; made after `startedAt`): born within `days` of the
+// draft's birth date, with
+// or without puppies, and not the one the draft is filling in or already made.
+// Asked again before a second copy is built (K11-3). Pure.
+export function litterRecordedSince(draft, litters, { days = 3 } = {}) {
+  if (!draft.damId || !draft.sireId || draft.lockedSource) return null;
+  const own = new Set([draft.litterId, draft.litterChoice, draft.saved?.litterId, draft.notThisLitter].filter(Boolean));
+  const near = (a, b) => {
+    if (!a || !b) return true; // no date on one side: the parents decide
+    return Math.abs((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000) <= days;
+  };
+  const since = (l) => !draft.startedAt || String(l.created_at || '') >= draft.startedAt;
+  return litters.find((l) => !l.is_archived && l.dam_id === draft.damId && l.sire_id === draft.sireId
+    && !own.has(l.id) && since(l) && near(l.whelp_date, draft.whelpDate)) || null;
+}
+
 // Litters of these two parents with no puppies yet: "Is this the litter?"
 export function litterCandidates({ litters, dogs, damId, sireId }) {
   if (!damId || !sireId) return [];

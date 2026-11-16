@@ -60,7 +60,7 @@ export async function renderShareStep({ mount, foot, litter, pups, onDone }) {
     let anchors = '';
     try {
       const { buildLinkArtifacts, sendHrefs } = await import('./companionLink.js');
-      const artifacts = await buildLinkArtifacts('prospective', contact);
+      const artifacts = await buildLinkArtifacts('prospective', contact, { kennelId: litter?.kennel_id || null });
       const h = sendHrefs(artifacts, contact);
       anchors = [
         !h.overEmail && contact.email ? `<a class="btn btn-primary gl-big" href="${esc(h.mailto)}" data-sent="1">✉️ Email ${esc(contact.name)}</a>` : '',

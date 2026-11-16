@@ -116,6 +116,12 @@ export const SYNC_REGISTRY = Object.freeze({
       // D32; owner decision 2026-11-12: cloud, so every device of hers has it). It
       // goes to Firma on each send anyway.
       'esign_signer_name',
+      // Her Furever identity (K14-5; owner decision 2026-11-16: cloud): the key a
+      // family's Furever app files her breeder card under, the name, tagline,
+      // contact and vet on that card, and the kennel pack's Drive pointer. All of
+      // it goes to every family she sends a Furever link anyway; cloud so a resend
+      // from her other device or after a restore doesn't fork the family's card.
+      'furever_identity',
       // Her own waitlist setup: rules, application form questions, FAQ, fee and
       // payment instructions. Her business settings, not anyone else's personal
       // data, so cloud, or a restore couldn't run her waitlist (decided 2026-10-07,

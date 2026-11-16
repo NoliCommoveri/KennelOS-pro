@@ -10,6 +10,7 @@
 // `accounts`, the waitlist `waitlist`. What isn't offered isn't checked or named.
 // Reads go only where those features already go (the cloud, Lemon Squeezy,
 // Stripe), each wrapped so an offline one is skipped, never guessed.
+import { KELS_AS_YOU_GO_INTRO } from './kelsChat.js';
 import * as A from '../data/accountHealth.js';
 import { getLastBackupDate, getIntegrationsState } from '../data/settings.js';
 import { requestPersistentStorage } from '../data/db.js';
@@ -112,7 +113,7 @@ async function vendorKeys() {
 
 // For Kels's menu: always offered.
 export async function runHealthTask(chat, { onExit = () => {} } = {}) {
-  if (!(await chat.intro('Good idea, let\'s make sure everything\'s safe and sound!'))) return onExit('nevermind');
+  if (!(await chat.intro('Good idea, let\'s make sure everything\'s safe and sound!', KELS_AS_YOU_GO_INTRO))) return onExit('nevermind');
   return new Health(chat, onExit).start();
 }
 

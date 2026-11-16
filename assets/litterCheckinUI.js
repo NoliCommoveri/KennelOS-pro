@@ -15,6 +15,7 @@
 // The rules and wording helpers are in data/litterCheckin.js. Open picks uses
 // the Litter page's waitlist panel (assets/waitlistPicksPanel.js, Pro-only),
 // imported only when the edition has the waitlist.
+import { KELS_AS_YOU_GO_INTRO } from './kelsChat.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
@@ -52,7 +53,7 @@ export async function checkinState() {
 // `handoff(taskId, opts)` starts another of Kels's tasks (an Expected litter's
 // birth); `onExit(reason)` hands the chat back to her menu.
 export async function runCheckinTask(chat, { litterId = null, onExit = () => {}, handoff = null } = {}) {
-  if (!(await chat.intro('Of course, let\'s check in on your litter!'))) return onExit('nevermind');
+  if (!(await chat.intro('Of course, let\'s check in on your litter!', KELS_AS_YOU_GO_INTRO))) return onExit('nevermind');
   return new Checkin(chat, onExit, handoff).start(litterId);
 }
 
@@ -164,11 +165,10 @@ class Checkin {
       if (!next && !home) return;
       if (next) {
         this.asked.add(`${next.id}:${next.status || ''}`);
-        if (next.id === 'open-picks') await this.offerPicks();
-        else await this.offerStatus(next);
+        await this.safely(() => (next.id === 'open-picks' ? this.offerPicks() : this.offerStatus(next)));
       } else {
         this.asked.add(`gohome:${home.pup.id}:${home.kind}`);
-        if (await this.offerGoHome(home) === 'left') return;
+        if (await this.safely(() => this.offerGoHome(home)) === 'left') return;
       }
       await this.load(this.litter.id);
     }
@@ -359,6 +359,17 @@ class Checkin {
     }
   }
 
+  // Every write the visit makes, said and carried on from when it's refused (K11-6):
+  // a refusal (the Demo, a repo's check) ends that one thing, never the visit.
+  async safely(fn) {
+    try {
+      return await fn();
+    } catch (e) {
+      await this.chat.say(`Hmm, that didn't save: ${esc(e.message || String(e))}`);
+      return null;
+    }
+  }
+
   // --- "What are we doing?" -----------------------------------------------------
 
   async loop() {
@@ -380,7 +391,7 @@ class Checkin {
       const what = pick === 'more' ? await this.moreMenu() : pick;
       if (what === 'done' || what === 'nevermind') return this.finish(what);
       if (what === 'page') { location.href = litterHref(this.litter); return; }
-      if (what) await this.run(what);
+      if (what) await this.safely(() => this.run(what));
       await this.load(this.litter.id);
       await this.raiseSuggestions();
     }
