@@ -11,6 +11,7 @@
 // events (a `placement` pickup, a `boarding` span) and, for 'overdue', the Sale
 // page's own Delivered save (sale.html?id=…&deliver=1), so delivery's prompts run.
 import { addDaysToYMD, addMonthsToYMD } from './dateUtils.js';
+import { saleExtraCharges } from './extraCharges.js';
 
 export const READY_AFTER_DAYS = 56;
 // Kels and Today start asking about the pickup this many days before the ready date.
@@ -165,6 +166,70 @@ export function trainingStayEvent(pup, sale, charge, start) {
     event_end_date: addDaysToYMD(start, days - 1), title: charge.label,
     details: { boarding_reason: TRAINING_REASON, sale_id: sale.id, extra_charge_id: charge.id }
   };
+}
+
+// The day after the pup's last boarding (any reason) still to end on or after `from`'s
+// day before: where a pickup can go once its stays are over. `events`: the pup's.
+// → YYYY-MM-DD (the later of `from` and the day after the last stay).
+export function afterStays(events, from) {
+  let at = from;
+  for (const e of events || []) {
+    if (e.is_archived || e.event_type !== 'boarding' || !ymd(e.event_date)) continue;
+    const next = addDaysToYMD(e.event_end_date || e.event_date, 1);
+    if (next > at) at = next;
+  }
+  return at;
+}
+
+// What a save put on a sale that needs the pup to stay: the stay extras it added (by
+// id) and whether it added boarding. `before`: the sale as it was (null: new).
+// → { chargeIds: [id], boarding: bool } | null (nothing new to stay for)
+export function addedStays(before, after) {
+  if (!after) return null;
+  const had = new Set(saleExtraCharges(before).map((c) => c.id));
+  const chargeIds = saleExtraCharges(after).filter((c) => c.boarding_days && !had.has(c.id)).map((c) => c.id);
+  const boarding = hasDeferredBoarding(after) && !hasDeferredBoarding(before);
+  return chargeIds.length || boarding ? { chargeIds, boarding } : null;
+}
+
+// A stay extra or boarding just put on a sale (owner, 2026-11-15): what goes on the
+// pup's calendar. Each stay extra (boarding_days) with no linked stay: a stay from the
+// ready date (today once that's passed), after the stays already logged for the sale,
+// one after another. Boarding just added, none logged: from the day after the last
+// stay, its length long. Then the pickup the day after it all ends: a new one, or the
+// next one on the calendar moved there when it falls before. `chargeIds`: the extras
+// just added (null: every stay extra); `boarding`: the boarding was just added.
+// `events`: the pup's. → null (nothing to put on the calendar) | { stays: [event],
+// boarding: event | null, pickup: { date, event: the pickup to move | null } | null }
+export function stayPickupPlan({ sale, pup, litter = null, events = [], today, chargeIds = null, boarding = false }) {
+  if (!sale || !pup) return null;
+  const live = (events || []).filter((e) => !e.is_archived);
+  let from = defaultStart(readyDateOf(litter), today);
+  for (const e of live) {
+    if (e.event_type !== 'boarding' || e.details?.sale_id !== sale.id || !e.details?.extra_charge_id) continue;
+    const next = addDaysToYMD(e.event_end_date || e.event_date, 1);
+    if (next > from) from = next;
+  }
+  const stays = [];
+  for (const c of saleExtraCharges(sale).filter((x) => x.boarding_days && (!chargeIds || chargeIds.includes(x.id)))) {
+    if (trainingStaysFor(sale, c, live).length) continue;
+    const stay = trainingStayEvent(pup, sale, c, from);
+    stays.push(stay);
+    from = addDaysToYMD(stay.event_end_date, 1);
+  }
+  let board = null;
+  if (boarding && hasDeferredBoarding(sale)) {
+    const since = addDaysToYMD(readyDateOf(litter) || today, -SCHEDULE_LEAD_DAYS);
+    const logged = live.some((e) => e.event_type === 'boarding' && e.details?.boarding_reason === 'Deferred pickup' && (e.event_end_date || e.event_date) >= since);
+    if (!logged) {
+      board = boardingEvent(pup, from, boardingEnd(sale, from));
+      from = board.event_end_date ? addDaysToYMD(board.event_end_date, 1) : '';
+    }
+  }
+  if (!stays.length && !board) return null;
+  const next = live.filter(pickupFor(sale)).filter((e) => e.event_date >= today).sort((a, b) => a.event_date.localeCompare(b.event_date))[0] || null;
+  const pickup = next && from && next.event_date >= from ? null : { date: from, event: next };
+  return { stays, boarding: board, pickup };
 }
 
 // Linked stays whose charge is gone from its sale (or the sale is): still on the

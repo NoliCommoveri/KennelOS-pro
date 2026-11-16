@@ -27,6 +27,7 @@ import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { CONTRACT_FORM_TYPE } from '../data/vocab.js';
 import { esc, fmtDate, confirmModal } from './ui.js';
+import { openFieldGuide } from './fieldGuideUI.js';
 
 // Whether she signs a template (D32): one choice of three, as radio buttons.
 const SIGN_CHOICES = [['first', 'I sign first', 'You sign before the buyer'], ['last', 'I sign last', 'You sign after the buyer'], ['none', 'I don\'t sign', 'Only the buyer signs']];
@@ -76,6 +77,12 @@ export function openContractTemplates() {
   const box = overlay.querySelector('.modal');
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  // The Field guide (assets/fieldGuideUI.js): every detail's label in Firma's editor, and
+  // how to use the editor, in a window that stays up beside it.
+  box.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-guide]');
+    if (btn) openFieldGuide({ tab: btn.dataset.guide || 'fields' }).catch(() => {});
+  });
   let busy = false;
 
   const frame = (body, actions = '') => {
@@ -160,6 +167,7 @@ export function openContractTemplates() {
         <button type="button" class="btn btn-sm" data-edit="${esc(t.id)}">Place fields</button>
       </div>`;
     frame(`<p class="field-hint" style="margin-top:0;">${usageLine(status.usage)} A contract's <strong>Send for signature</strong> offers the templates of its kind, beside your own contract forms.</p>
+      <p class="field-hint"><button type="button" class="btn btn-sm" data-guide="help">Field guide</button> How to use Firma's editor (the Text type, a second signer), every detail KennelOS fills in by its label there, and sample sales showing which detail to place on each contract line. It stays open beside Firma's editor.</p>
       ${rows.length ? rows.map(row).join('') : '<p class="muted">No templates yet. Upload your first contract below.</p>'}
       ${signers.length ? `<div class="form-grid" style="margin-top:12px;">${signers.map(signerRow).join('')}</div>` : ''}
       <h3 style="font-size:15px; margin:16px 0 4px;">Add a template</h3>
@@ -235,7 +243,8 @@ export function openContractTemplates() {
       say('<p class="field-hint">Opening Firma\'s editor in a new tab…</p>');
       try {
         const opened = await openInNewTab(editorLink(btn.dataset.edit));
-        say(`<p class="field-hint">${opened ? 'Firma\'s editor is open in a new tab. Place the fields, save, then close that tab.' : 'Your browser blocked the new tab. Allow pop-ups for KennelOS, then tap Place fields again.'} Each detail field you add there is named for what KennelOS fills in (buyerName, puppyName, price…).</p>`);
+        say(`<p class="field-hint">${opened ? 'Firma\'s editor is open in a new tab. Place the fields, save, then close that tab.' : 'Your browser blocked the new tab. Allow pop-ups for KennelOS, then tap Place fields again.'} Use a Text field for each detail, with its Prefilled Data set to the detail's label (Buyer · Full name, Sale · Price…).</p>
+          ${opened ? '<p class="field-hint"><button type="button" class="btn btn-sm" data-guide="fields">Open the field guide beside it</button></p>' : ''}`);
       } catch (err) { problem(err); }
     }));
     box.querySelector('#ct-upload').addEventListener('click', async (e) => {

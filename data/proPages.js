@@ -121,6 +121,8 @@ export const PRO_ONLY_STANDALONE = [
   // dialog, opened from the Pro-only Contracts, Contract and waitlist family pages.
   // Its data layer (data/cloud/cloudEsign.js, data/esignTemplates.js) stays shared.
   'assets/esignUI.js',
+  // ...and its Field guide window (its rows, data/prefillGuide.js, stay shared).
+  'assets/fieldGuideUI.js',
   // The Companion link builder (shared by the Companion console and the guided
   // litter flow's share step) and that share step itself: guidedLitterUI.js
   // imports guidedShareUI.js dynamically only when editionFlags.waitlist or

@@ -6,7 +6,7 @@
 // never re-fetches a stale precached file on its own; only a CACHE_NAME change
 // (which changes these bytes, so the browser detects a new service worker,
 // installs it, and purges the old cache in `activate`) rolls it over.
-const CACHE_NAME = 'kennelos-pro-shell-v147';
+const CACHE_NAME = 'kennelos-pro-shell-v148';
 
 const PRECACHE_URLS = [
   './',
@@ -80,6 +80,8 @@ const PRECACHE_URLS = [
   'assets/pedigree.js',
   'assets/pickToSend.js',
   'assets/esignUI.js',
+  'assets/fieldGuideUI.js',
+  'assets/stayPickupUI.js',
   'assets/paymentRequestUI.js',
   'assets/puppyForm.js',
   'assets/receiptCapture.js',
@@ -144,6 +146,8 @@ const PRECACHE_URLS = [
   'data/contractForms.js',
   'data/contractSend.js',
   'data/esignTemplates.js',
+  'data/prefillGuide.js',
+  'data/prefillSamples.js',
   'data/csvImport.js',
   'data/csvImportHelp.js',
   'data/csvBatch.js',

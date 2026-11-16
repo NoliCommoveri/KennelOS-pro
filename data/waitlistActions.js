@@ -48,7 +48,7 @@ import { todayYMD } from './dateUtils.js';
 import { applicationMergeBlocker, applicationMergeChanges } from './applicationDuplicates.js';
 import { replaceAndDelete, mergeDuplicate, mergeBlocker } from './recordMerge.js';
 import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
-import { RELEASED_SALE_STATUSES, SALE_END_REASON, registrationsForPurposes, descriptor } from './vocab.js';
+import { RELEASED_SALE_STATUSES, SALE_END_REASON, BOARDING_FREQUENCY_OPTIONS, registrationsForPurposes, descriptor } from './vocab.js';
 import {
   waitlistConfig, openDays, businessDays, closedDates, liveClosedDates, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, passToForgive,
   respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
@@ -1592,6 +1592,53 @@ const decideExtra = (entry, requestId, decision, date) =>
 async function ownSale(entry, sales) {
   const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(entry.kennel_id), waitlistOfferRepo.getByKennel(entry.kennel_id)]);
   return familySale(entry, sales, offers, entries);
+}
+
+// Add charges (owner, 2026-11-15): from the family's page, with or without a request,
+// an extra, the transport fee or boarding goes on their open sale, as the Sale page puts
+// it there. `add`: { kind: 'extra', listId } (from her price list: its price, group and
+// payment plan as dated steps, its stay days) | { kind: 'extra', label, amount } (typed)
+// | { kind: 'transport', fee } (replaces the sale's; 0 takes it off) | { kind:
+// 'boarding', rate, per, count } (replaces the sale's; hers now, not a pickup date's).
+// No email: their status page shows it. → { before, sale, charge } (charge: an extra added).
+export async function addSaleCharge(entryId, add, { date = todayYMD() } = {}) {
+  const entry = await load(entryId);
+  const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
+  const before = await ownSale(entry, sales);
+  if (!before) throw new Error('They have no open sale to add a charge to.');
+  const money = (v) => Math.round(Number(v) * 100) / 100;
+  let charge = null;
+  let changes;
+  if (add?.kind === 'extra') {
+    if (add.listId) {
+      const kennel = await kennelRepo.getById(before.kennel_id);
+      const item = kennelChargeList(kennel).find((x) => x.id === add.listId);
+      if (!item) throw new Error('That extra is no longer on your price list.');
+      if (saleExtraCharges(before).some((c) => c.list_id === item.id)) throw new Error(`${item.label} is already on their sale.`);
+      const dog = before.dog_id ? await dogRepo.getById(before.dog_id) : null;
+      const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+      charge = chargeFromPriceList(item, { groups: kennelChargeGroups(kennel), approvalDate: date, birthDate: pupBirthDate(dog, litter), openDays: businessDays(waitlistConfig(kennel)) });
+    } else {
+      const label = String(add.label || '').trim();
+      if (!label) throw new Error('Give the extra a name.');
+      if (!(Number(add.amount) > 0)) throw new Error(`Give "${label}" an amount above $0.`);
+      charge = { id: crypto.randomUUID(), label, amount: money(add.amount) };
+    }
+    changes = { extra_charges: [...(before.extra_charges || []), charge] };
+  } else if (add?.kind === 'transport') {
+    if (add.fee === '' || add.fee == null || !(Number(add.fee) >= 0)) throw new Error('Enter the transport fee ($0 takes it off).');
+    changes = { transport_fee: Number(add.fee) > 0 ? money(add.fee) : null };
+  } else if (add?.kind === 'boarding') {
+    const count = Math.round(Number(add.count));
+    if (!(Number(add.rate) > 0)) throw new Error('Enter the boarding rate.');
+    if (!BOARDING_FREQUENCY_OPTIONS.includes(add.per)) throw new Error('Pick a day, week or month.');
+    if (!(count > 0)) throw new Error('Enter how many.');
+    changes = { deferred_boarding_amount: money(add.rate), deferred_boarding_frequency: add.per, deferred_boarding_duration_days: String(count), boarding_from_pickup: false };
+  } else {
+    throw new Error('Pick an extra, transport or boarding.');
+  }
+  const sale = await saleRepo.update(before.id, changes);
+  return { before, sale, charge };
 }
 
 // Approve: an extra asked for goes on their open sale, its name and price copied

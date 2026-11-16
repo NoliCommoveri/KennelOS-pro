@@ -26,7 +26,8 @@ import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
 import { renderScopeNotice } from '../assets/kennelScopeUI.js';
-import { deliveredOwnershipChanges } from '../data/goHome.js';
+import { deliveredOwnershipChanges, addedStays } from '../data/goHome.js';
+import { offerStayAndPickup } from '../assets/stayPickupUI.js';
 
 // Statuses that warrant the "log a scheduled pickup" prompt (Stage4.5 Addendum §D4).
 const PLACEMENT_PROMPT_STATUSES = ['paid_in_full', 'delivered'];
@@ -963,6 +964,11 @@ async function doSave() {
     // A transport fee, boarding or an extra just added (Payment Schedule plan D17):
     // show the schedule and ask whether to adjust it. Never changes it by itself.
     await askAboutNewFees({ before: isNew ? null : ctx.original, after: saved, savedList: savedSchedules(await saleKennel(saved)) });
+
+    // A stay extra (a training package) or boarding just added: offer the stay and the
+    // pickup the day after it (goHome.stayPickupPlan). Only on a sale still under way.
+    const stays = isOpenSale(saved) ? addedStays(isNew ? null : ctx.original, saved) : null;
+    if (stays) await offerStayAndPickup({ sale: saved, ...stays });
 
     // Co-own placement convenience (Data Model v3 §5.6): pairs naturally with
     // adding the buyer to the dog's co_owner_contact_ids — never automatic.

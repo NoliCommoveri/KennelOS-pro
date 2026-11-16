@@ -435,6 +435,23 @@ export function holdsPlace(entry, { sales, dogs } = {}) {
   return !dog || (!dog.is_archived && !GONE_DOG_STATUSES.includes(dog.status));
 }
 
+// The waitlist record a contact's "Waitlist page" opens (owner, 2026-11-15): one that
+// isn't closed, else the most recent. Not closed: still in the pipeline
+// (WAITLIST_OPEN_STATUSES), or placed with its sale still open (their sale, charges and
+// requests live on that page). Several not closed: the most recent of them. Archived
+// records count only when every one is archived. Most recent: created_at, else the
+// applied date. `sales`: array or Map by id. → the entry, or null.
+export function entryForContact(entries, sales) {
+  const all = (entries || []).filter(Boolean);
+  const live = all.filter((e) => !e.is_archived);
+  const pool = live.length ? live : all;
+  const open = (e) => WAITLIST_OPEN_STATUSES.includes(e.status) || (e.status === 'placed' && !!e.placed_sale_id && isOpenSale(saleLookup(sales)(e.placed_sale_id)));
+  const when = (e) => e.created_at || e.applied_date || '';
+  const newest = (list) => [...list].sort((a, b) => when(b).localeCompare(when(a)))[0] || null;
+  const notClosed = pool.filter(open);
+  return newest(notClosed.length ? notClosed : pool);
+}
+
 function requireSalesAndDogs(opts, who) {
   if (!opts || !(Array.isArray(opts.sales) || opts.sales instanceof Map) || !(Array.isArray(opts.dogs) || opts.dogs instanceof Map)) {
     throw new Error(`${who} needs the sales and dogs (a family with a pup selected keeps its number).`);

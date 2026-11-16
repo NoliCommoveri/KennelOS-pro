@@ -6,6 +6,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo, ReferenceBlockedError } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
+import { entryForContact } from '../data/waitlistRules.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { CONTACT_TYPE, DOG_STATUS, WAITLIST_STATUS, SALE_STATUS, REGISTRATION_TYPE, WAITLIST_ENTRY_STATUS } from '../data/vocab.js';
 import { esc, badge, badges, param, confirmModal, promptModal, selectModal } from '../assets/ui.js';
@@ -291,7 +292,10 @@ async function renderHeaderActions() {
   const delTitle = blockers.length
     ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
     : 'Permanently delete this contact.';
+  // Their waitlist family page (Pro): the record entryForContact picks.
+  const entry = editionFlags.waitlist && ctx.waitlistEntries.length ? entryForContact(ctx.waitlistEntries, await saleRepo.getByBuyer(c.id)) : null;
   els.headerActions.innerHTML = `
+    ${entry ? `<a class="btn btn-sm" href="waitlist-entry.html?id=${encodeURIComponent(entry.id)}" title="${ctx.waitlistEntries.length > 1 ? 'Their open waitlist record, else the most recent (all of them are in the Waitlist card)' : 'Their waitlist record'}">Waitlist page →</a>` : ''}
     ${editionFlags.accounts ? '<button class="btn btn-sm" id="btn-thanks" title="A thank-you note for using your referral link or code, or for recommending you">Send a thank-you</button>' : ''}
     ${ctx.listing ? '<button class="btn btn-sm" id="btn-dns-off">Take off do-not-sell list…</button>' : '<button class="btn btn-sm" id="btn-dns">Move to do-not-sell list…</button>'}
     <button class="btn btn-sm" id="btn-archive">${c.is_archived ? 'Unarchive' : 'Archive'}</button>

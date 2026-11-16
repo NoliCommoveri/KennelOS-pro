@@ -27,8 +27,9 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import * as actions from '../data/waitlistActions.js';
-import { kennelChargeList, kennelChargeGroups, chargeRules, planText } from '../data/extraCharges.js';
+import { kennelChargeList, kennelChargeGroups, chargeRules, planText, groupedChargeList, saleExtraCharges } from '../data/extraCharges.js';
 import { pendingExtraRequests, familySale, pupBirthDate } from '../data/familyExtras.js';
+import { offerStayAndPickup } from '../assets/stayPickupUI.js';
 import { suggestOutcome, policyRowText, backOutReasons, ageWeeks, BACK_OUT_OUTCOMES } from '../data/backOut.js';
 import { pendingPickupRequests, requestText as pickupRequestText, ownPlaceAllowed } from '../data/familyPickup.js';
 import { standardLocation, timeRange } from '../data/pickupSlots.js';
@@ -39,8 +40,8 @@ import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { entryDoNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { applicationMatches, matchReasonText, isLiveEntry } from '../data/applicationDuplicates.js';
 import { sameFamilyDialog, mergedMessage, isPairDismissed, markNotSame } from '../assets/applicationMergeUI.js';
-import { PLACEMENT_METHODS } from '../data/vocab.js';
-import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf, boardingChargeText } from '../data/goHome.js';
+import { PLACEMENT_METHODS, BOARDING_FREQUENCY_OPTIONS } from '../data/vocab.js';
+import { trainingStaysFor, boardingChargeText, addedStays } from '../data/goHome.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmailUI.js';
 import { programIconHtml } from '../assets/programIcons.js';
@@ -461,6 +462,7 @@ function pendingRequests(e) {
       hint: q ? `${q.text}${q.far ? ' · Farther than your limit: they were told you\'ll be in touch.' : ''}` : 'Not measured yet.',
       buttons: `<a class="btn btn-sm" href="${esc(mapsLink(from, r.address))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>
         <button class="btn btn-sm" data-req="${kind}:transport">Send transport options</button>
+        <button class="btn btn-sm" data-req="${kind}:addtransport">Add transport…</button>
         <button class="btn btn-sm btn-primary" data-req="${kind}:approve">Approve…</button>
         <button class="btn btn-sm" data-req="${kind}:decline">Decline</button>` });
   }
@@ -553,6 +555,7 @@ function wireRequests(root) {
   const pickup = (requestId, decision) => async () => {
     const request = (e.pickup_requests || []).find((r) => r.id === requestId);
     if (decision === 'transport') return emailThem('transport_options', Number.isFinite(request?.miles) ? { distance: request.miles } : {});
+    if (decision === 'addtransport') return onAddCharges('transport', { miles: Number.isFinite(request?.miles) ? request.miles : null, to: request.address });
     if (decision === 'decline') { await actions.declinePickupRequest(e.id, requestId); await afterAction(); return emailThem('request_declined', { request: { field: 'pickup_request', request } }); }
     if (request.kind === 'address') { if (await approveAddress(request)) await emailThem('request_approved', { request: { field: 'pickup_request', request } }); return; }
     const res = await actions.approvePickupRequest(e.id, requestId);
@@ -665,6 +668,112 @@ async function approveAddress(request) {
   });
 }
 
+// Add charges (owner, 2026-11-15): an extra (from her price list, or typed), the
+// transport fee or boarding on their open sale, with or without a request from them
+// (actions.addSaleCharge). Then the schedule question (afterAction) and, for a stay
+// extra or boarding, the stay and pickup (stayPickupUI). No email: their status page
+// shows it. `start`: the choice it opens on; `miles` / `to`: a place they asked for.
+async function onAddCharges(start = 'extra', { miles = null, to = '' } = {}) {
+  const e = ctx.entry;
+  const sales = e.contact_id ? await saleRepo.getByBuyer(e.contact_id) : [];
+  const sale = familySale(e, sales, ctx.kennelOffers, ctx.kennelEntries);
+  if (!sale) throw new Error('They have no open sale to add a charge to.');
+  const onSale = new Set(saleExtraCharges(sale).map((c) => c.list_id).filter(Boolean));
+  const list = kennelChargeList(ctx.kennel);
+  const from = standardLocation(ctx.kennel)?.address || '';
+  const dest = to || e.home_place || '';
+  let oneWay = Number.isFinite(miles) ? miles : Number.isFinite(e.home_miles) ? e.home_miles : null;
+  const quote = () => (oneWay != null ? transportQuote(oneWay, ctx.config) : null);
+  const curFee = Number(sale.transport_fee) > 0 ? Number(sale.transport_fee) : null;
+  const curRate = Number(sale.deferred_boarding_amount) > 0 ? Number(sale.deferred_boarding_amount) : null;
+  const rate = curRate ?? (Number(ctx.config.boarding_rate) > 0 ? Number(ctx.config.boarding_rate) : '');
+  const opt = (p) => `<option value="${esc(p.id)}"${onSale.has(p.id) ? ' disabled' : ''}>${esc(p.label)} (${esc(fmtMoney(p.amount))})${p.boarding_days ? ` · ${p.boarding_days}-day stay` : ''}${onSale.has(p.id) ? ' · on their sale' : ''}</option>`;
+  const extraOptions = groupedChargeList(list).map(({ group, items }) => (group ? `<optgroup label="${esc(group)}">${items.map(opt).join('')}</optgroup>` : items.map(opt).join(''))).join('');
+  const radio = (v, label) => `<label class="check-inline" style="gap:6px;"><input type="radio" name="ac-kind" value="${v}"${v === start ? ' checked' : ''}> ${label}</label>`;
+  let result = null;
+  const ok = await formModal({
+    title: 'Add a charge to their sale',
+    confirmLabel: 'Add to the sale',
+    bodyHtml: `<div role="radiogroup" aria-label="What to add" style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:10px;">${radio('extra', 'Extra')}${radio('transport', 'Transport')}${radio('boarding', 'Boarding')}</div>
+      <div data-ac="extra">
+        <div class="field"><label for="ac-extra">Extra</label><select id="ac-extra">${extraOptions}<option value="custom">Something else…</option></select></div>
+        <p class="field-hint" id="ac-extra-hint"></p>
+        <div class="form-grid" id="ac-custom" hidden>
+          <div class="field"><label for="ac-label">Name</label><input id="ac-label" type="text" maxlength="120" placeholder="e.g. Gold photo package"></div>
+          <div class="field"><label for="ac-amount">Amount</label><input id="ac-amount" type="number" min="0" step="0.01"></div>
+        </div>
+      </div>
+      <div data-ac="transport" hidden>
+        ${dest ? `<p style="margin-top:0;">To ${esc(dest)}${from ? ` <a href="${esc(mapsLink(from, dest))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>` : ''}</p>` : ''}
+        <div class="form-grid">
+          <div class="field"><label for="ac-miles">Miles, one way</label><span style="display:inline-flex; gap:6px; align-items:center;"><input id="ac-miles" type="number" min="0" step="0.1" value="${oneWay ?? ''}" style="width:7em;">${from && dest ? '<button type="button" class="btn btn-sm" id="ac-measure">Get driving miles</button>' : ''}</span></div>
+          <div class="field"><label for="ac-fee">Transport fee</label><input id="ac-fee" type="number" min="0" step="0.01" value="${curFee ?? (quote()?.fee ?? '')}" style="width:9em;"></div>
+        </div>
+        <span class="field-hint" id="ac-working">${esc(quote()?.text || '')}</span>
+        ${curFee != null ? `<p class="field-hint">On the sale now: ${esc(fmtMoney(curFee))}. Saving replaces it ($0 takes it off).</p>` : ''}
+      </div>
+      <div data-ac="boarding" hidden>
+        <div class="form-grid">
+          <div class="field"><label for="ac-rate">Rate</label><input id="ac-rate" type="number" min="0" step="0.01" value="${esc(rate)}" style="width:8em;"></div>
+          <div class="field"><label for="ac-per">Per</label><select id="ac-per">${BOARDING_FREQUENCY_OPTIONS.map((f) => `<option${f === (sale.deferred_boarding_frequency || 'Day') ? ' selected' : ''}>${esc(f)}</option>`).join('')}</select></div>
+          <div class="field"><label for="ac-count">How many</label><input id="ac-count" type="number" min="1" step="1" value="${esc(sale.deferred_boarding_duration_days || '')}" style="width:6em;"></div>
+        </div>
+        <p class="field-hint">${curRate != null ? `On the sale now: ${esc(boardingChargeText(sale, fmtMoney))}. Saving replaces it.` : 'Your standard boarding rate (Pickup & transport) starts in the box.'}</p>
+      </div>
+      <p class="field-hint" style="margin-bottom:0;">It goes on their sale as if you'd added it on the Sale page, and their status page shows it. Nothing is emailed.</p>`,
+    onConfirm: async (o) => {
+      const kind = o.querySelector('input[name="ac-kind"]:checked').value;
+      const v = (id) => o.querySelector(id).value;
+      const pick = v('#ac-extra');
+      const add = kind === 'extra' ? (pick === 'custom' ? { kind, label: v('#ac-label'), amount: v('#ac-amount') } : { kind, listId: pick })
+        : kind === 'transport' ? { kind, fee: v('#ac-fee') }
+          : { kind, rate: v('#ac-rate'), per: v('#ac-per'), count: v('#ac-count') };
+      result = await actions.addSaleCharge(e.id, add);
+    }
+  }, (o) => {
+    const show = () => {
+      const kind = o.querySelector('input[name="ac-kind"]:checked').value;
+      o.querySelectorAll('[data-ac]').forEach((p) => { p.hidden = p.dataset.ac !== kind; });
+    };
+    o.querySelectorAll('input[name="ac-kind"]').forEach((r) => r.addEventListener('change', show));
+    const extra = o.querySelector('#ac-extra');
+    const first = [...extra.options].find((x) => !x.disabled);
+    if (first) extra.value = first.value;
+    const hint = () => {
+      const item = list.find((p) => p.id === extra.value);
+      o.querySelector('#ac-custom').hidden = extra.value !== 'custom';
+      const plan = item ? planText(chargeRules(item, kennelChargeGroups(ctx.kennel)).payment_plan) : '';
+      o.querySelector('#ac-extra-hint').textContent = item ? [plan ? `Paid ${plan}.` : 'Paid with the balance.', item.boarding_days ? `The pup stays ${item.boarding_days} days for it: you'll be offered the stay and the pickup next.` : ''].filter(Boolean).join(' ') : '';
+    };
+    extra.addEventListener('change', hint);
+    hint();
+    const refresh = () => {
+      const val = o.querySelector('#ac-miles').value;
+      oneWay = val === '' ? null : Number(val);
+      const q = quote();
+      o.querySelector('#ac-working').textContent = q?.text || '';
+      if (curFee == null && q?.fee != null) o.querySelector('#ac-fee').value = q.fee;
+    };
+    o.querySelector('#ac-miles').addEventListener('change', refresh);
+    o.querySelector('#ac-measure')?.addEventListener('click', async (ev) => {
+      ev.target.disabled = true;
+      try {
+        const { drivingMiles } = await import('../data/cloud/cloudWaitlist.js');
+        o.querySelector('#ac-miles').value = (await drivingMiles(from, dest)).miles;
+        refresh();
+      } catch (err) {
+        o.querySelector('#ac-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'driving miles aren\'t available right now' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
+      }
+      ev.target.disabled = false;
+    });
+    show();
+  });
+  if (!ok || !result) return;
+  await afterAction();
+  const stays = addedStays(result.before, result.sale);
+  if (stays && await offerStayAndPickup({ sale: result.sale, ...stays })) { await reload(); renderAll(); }
+}
+
 // Training stays (Family Requests plan §6): a package the pup stays for is offered
 // as a boarding stay once it's approved; cancelling it offers to remove the stay.
 async function linkedStays(chargeId) {
@@ -685,13 +794,9 @@ async function afterTrainingApproval(res, staysBefore) {
     }
     return;
   }
+  // A stay extra: its stay and the pickup the day after, in one dialog (stayPickupUI).
   if (!res.boardingDays || !res.sale?.dog_id || !res.charge) return;
-  const dog = await dogRepo.getById(res.sale.dog_id);
-  const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
-  const stay = trainingStayEvent(dog, res.sale, res.charge, defaultStart(readyDateOf(litter), todayYMD()));
-  if (await confirmModal({ title: 'Log the training stay?', message: `${res.charge.label} needs ${dog.call_name || 'the pup'} to stay ${res.boardingDays} days. Log it as boarding (Training), ${fmtDate(stay.event_date)} to ${fmtDate(stay.event_end_date)}? You can change the dates on ${dog.call_name || 'the pup'}'s page.`, confirmLabel: 'Log the stay', cancelLabel: 'Not now' })) {
-    await eventRepo.create(stay);
-  }
+  await offerStayAndPickup({ sale: res.sale, chargeIds: [res.charge.id] });
 }
 
 // Their messages, their status-page activity and the emails she sent (History),
@@ -2189,9 +2294,11 @@ function interactButtons(e) {
     else if (e.fee_received_date) main += b('onlist', 'Put back on the list…');
   }
   const end = !lost && endableSale(e) ? b('endsale', 'End the sale…') : '';
+  // Add charges (owner, 2026-11-15): an extra, transport or boarding on their open sale.
+  const charges = !lost && endableSale(e) ? b('charges', 'Add charges…') : '';
   // Their live status page, as they see it signed in (only once it's online).
   const page = statusLinkFor(e, ctx.kennel) ? b('viewpage', 'View their page ↗') : '';
-  return lost + main + end + b('communicate', 'Communicate…') + page;
+  return lost + main + charges + end + b('communicate', 'Communicate…') + page;
 }
 
 function renderInteract() {
@@ -2216,7 +2323,7 @@ function renderInteract() {
   wireSideSale(pane);
   wireSuggestions(pane);
   wireDuplicates(pane);
-  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel) };
+  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, charges: () => onAddCharges(), communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel) };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });

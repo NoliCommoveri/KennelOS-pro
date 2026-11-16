@@ -37,7 +37,7 @@ import { dogRepo } from './dogRepo.js';
 import { kennelRepo } from './kennelRepo.js';
 import { pairingRepo } from './pairingRepo.js';
 import { litterSoldDue, litterReopenDue, litterCloseDue } from './litterCheckin.js';
-import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boardingChargeText, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE, readyDateOf, trainingStaysFor, trainingStayEvent, orphanTrainingStays } from './goHome.js';
+import { goHomeIssue, GO_HOME_SALE_STATUSES, defaultStart, boardingEnd, boardingChargeText, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE, readyDateOf, trainingStaysFor, trainingStayEvent, orphanTrainingStays, stayPickupPlan, afterStays, pickupEvent } from './goHome.js';
 import { litterRepo } from './litterRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { eventRepo } from './eventRepo.js';
@@ -724,15 +724,28 @@ export async function computeNudges() {
         const start = defaultStart(readyDateOf(littersById.get(pup.litter_id)), today);
         const stay = trainingStayEvent(pup, sale, charge, start);
         const name = pup.call_name || 'The pup';
+        // With it, the pickup the day after (a new one, or the next one moved there when
+        // it falls before the stay ends): goHome.stayPickupPlan.
+        const plan = stayPickupPlan({ sale, pup, litter: littersById.get(pup.litter_id), events: events.filter((e) => e.subject_type === 'dog' && e.subject_id === pup.id), today, chargeIds: [charge.id] });
+        const pickup = plan?.stays.length === 1 ? plan.pickup : null;
         nudges.push({
           key: `training-stay:${sale.id}:${charge.id}`,
           title: `${name}'s ${charge.label} needs a ${charge.boarding_days}-day stay. Log it?`,
           detail: `It goes on ${name}'s calendar as boarding (Training), ${stay.event_date} to ${stay.event_end_date}, linked to the sale. Change the dates on ${name}'s page afterwards if you need to.`,
           subjectHref: `sale.html?id=${encodeURIComponent(sale.id)}`,
-          actions: [{ label: 'Log the stay', run: async () => {
-            await eventRepo.create(stay);
-            return { title: 'Stay logged', message: `${name} stays with you ${stay.event_date} to ${stay.event_end_date} for ${charge.label}.` };
-          } }]
+          actions: [
+            ...(pickup ? [{ label: pickup.event ? `Log the stay, move the pickup to ${pickup.date}` : `Log the stay and the pickup (${pickup.date})`, run: async () => {
+              const logged = plan.stays[0];
+              await eventRepo.create(logged);
+              if (pickup.event) await eventRepo.update(pickup.event.id, { event_date: pickup.date });
+              else await eventRepo.create(pickupEvent(pup, sale, pickup.date));
+              return { title: 'Stay and pickup on the calendar', message: `${name} stays with you ${logged.event_date} to ${logged.event_end_date} for ${charge.label}, and goes home ${pickup.date}.` };
+            } }] : []),
+            { label: 'Log the stay', run: async () => {
+              await eventRepo.create(stay);
+              return { title: 'Stay logged', message: `${name} stays with you ${stay.event_date} to ${stay.event_end_date} for ${charge.label}.` };
+            } }
+          ]
         });
       }
     }
@@ -784,7 +797,8 @@ export async function computeNudges() {
         const name = pup.call_name || pup.registered_name || 'This puppy';
         const family = contactsById.get(s2.buyer_contact_id)?.name || 'their family';
         const dogHref = (q) => `dog.html?id=${encodeURIComponent(pup.id)}&${new URLSearchParams(q).toString()}`;
-        const start = defaultStart(issue.readyDate, today);
+        // After any stay still to end (a training package, boarding): the day after it.
+        const start = afterStays(eventsByDog.get(pup.id) || [], defaultStart(issue.readyDate, today));
         const wish = wishes.get(s2.id) || null;
         const wishDetails = wish ? Object.fromEntries(Object.entries({ placement_time: wish.time, location: wish.location, dropoff_method: wish.method }).filter(([, v]) => v)) : {};
         const wishText = wish ? ` They asked for ${[wish.date, wish.time].filter(Boolean).join(', ') || 'a time'}${wish.location ? ` at ${wish.location}` : ''} on their status page: Schedule pickup fills it in.` : '';
