@@ -9,6 +9,8 @@
 //   templates()             her Firma templates
 //   liveTemplateIds()       their ids, when the list is known complete (else null)
 //   uploadTemplate(...)     a new template from her PDF
+//   libraryTemplates()      the templates KennelOS offers her (its template library)
+//   addFromLibrary(id)      a copy of one in her workspace, its details already placed
 //   editorLink(templateId)  Firma's editor in its own tab (the Worker's sandboxed page)
 //   sendForEsign(...)       send a contract; the contract is marked Sent
 //   previewLink(...)        a free draft of that send, read-only in Firma's editor
@@ -125,6 +127,29 @@ export async function uploadTemplate({ name, file }) {
   if (!/pdf$/i.test(file.type || '') && !/\.pdf$/i.test(file.name || '')) throw new Error('Upload your contract as a PDF.');
   if (file.size > TEMPLATE_MAX_BYTES) throw new Error('That PDF is over 4.5 MB. Save a smaller copy (fewer pictures, or "reduce file size") and try again.');
   return api.createFirmaTemplate(token, { name: String(name || '').trim() || String(file.name || 'Contract').replace(/\.pdf$/i, ''), document: await fileToBase64(file) });
+}
+
+// The template library (Integrations plan §2.3b): templates KennelOS support built,
+// offered to her. → [{ id, name, description, signs, added }]
+export async function libraryTemplates() {
+  return (await api.listFirmaLibrary(requireSession())).templates || [];
+}
+
+// Add one to her templates: the Worker copies it to her workspace and points each
+// detail at her own fields, over as many calls as a long contract takes. Her fields
+// are made first (as Place fields does), so every detail has one to point at.
+// → { id, name, signs, unmapped } (unmapped: details that don't fill yet)
+export const LIBRARY_ADD_ROUNDS = 8;
+export async function addFromLibrary(templateId) {
+  const token = requireSession();
+  await syncFactFields();
+  for (let i = 0; i < LIBRARY_ADD_ROUNDS; i++) {
+    const r = await api.addFirmaLibraryTemplate(token, templateId);
+    if (r.ready) return { id: r.id, name: r.name, signs: r.signs || 'none', unmapped: Number(r.unmapped) || 0 };
+  }
+  const err = new Error('Adding that template is taking longer than it should. Try again in a minute: it carries on where it stopped.');
+  err.code = 'library_incomplete';
+  throw err;
 }
 
 // The address of Firma's editor for one template: the Worker's sandboxed page,
@@ -260,6 +285,10 @@ export function esignProblem(err) {
   if (code === 'esign_not_open') return { kind: 'other', message: 'This contract isn\'t out for signature any more, so there\'s nothing to countersign.' };
   if (code === 'no_countersigner') return { kind: 'other', message: 'This contract was sent without you as a signer, so there\'s nothing to countersign. To sign it too, mark its template "I countersign" and send it again.' };
   if (code === 'template_missing') return { kind: 'template_missing', message: 'This template isn\'t in Firma any more (it was deleted), so KennelOS has stopped offering it. Nothing was sent or counted. Pick another, or upload it again on Contracts → Contract templates.' };
+  if (code === 'library_not_linked') return { kind: 'other', message: 'KennelOS\'s templates aren\'t available right now. Try again later.' };
+  if (code === 'not_found' && err?.status === 404) return { kind: 'other', message: 'KennelOS doesn\'t offer that template to you any more.' };
+  if (code === 'copy_missing') return { kind: 'other', message: 'Your copy was deleted in Firma before it was ready. Add it again.' };
+  if (code === 'library_incomplete') return { kind: 'other', message: err.message };
   if (code === 'too_large') return { kind: 'other', message: 'That PDF is too large for Firma. Save a smaller copy and try again.' };
   if (err instanceof api.CloudOfflineError || code === 'esign_unavailable' || code === 'esign_setup_failed') return { kind: 'offline', message: 'Couldn\'t reach Firma right now. Check your connection and try again.' };
   return { kind: 'other', message: err?.message || String(err) };

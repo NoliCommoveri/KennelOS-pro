@@ -99,16 +99,17 @@ export function withTemplateRow(forms, { templateId, name, formType, signs, coun
 // Set what kind of contract a template is ('' = not offered), whether she
 // signs it (`signs`, or `countersign`), and whether KennelOS keeps and emails the
 // signed copy (each left out = unchanged). A `signs` she picks is remembered for
-// her next new template (esign_signs_default). Makes the E-sign (Firma) account
-// the first time. → the account.
-export async function setTemplateType({ templateId, name, formType, signs, countersign, keepCopy, extraListId }) {
+// her next new template (esign_signs_default), unless `remember: false` (one added
+// from KennelOS's library, which comes with its own). Makes the E-sign (Firma)
+// account the first time. → the account.
+export async function setTemplateType({ templateId, name, formType, signs, countersign, keepCopy, extraListId, remember = true }) {
   let account = firmaAccountOf(await accountRepo.getAll());
   if (!account) {
     if (!formType) return null;
     account = await accountRepo.create({ ...FIRMA_ACCOUNT, contract_forms: [] });
   }
-  const remember = formType && SIGNS.includes(signs) ? { esign_signs_default: signs } : {};
-  return accountRepo.update(account.id, { ...remember, contract_forms: withTemplateRow(account.contract_forms, { templateId, name, formType, signs, countersign, keepCopy, extraListId }) });
+  const remembered = remember && formType && SIGNS.includes(signs) ? { esign_signs_default: signs } : {};
+  return accountRepo.update(account.id, { ...remembered, contract_forms: withTemplateRow(account.contract_forms, { templateId, name, formType, signs, countersign, keepCopy, extraListId }) });
 }
 
 // The forms without her Firma templates that aren't in `liveIds` any more (a

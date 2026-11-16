@@ -345,6 +345,13 @@ export const createFirmaTemplate = (token, { name, document }) =>
   getJson('/integrations/firma/templates', { method: 'POST', token, json: { name, document }, timeoutMs: 120 * 1000 });
 // → { token, expiresAt }: Firma's editor token for one of her templates
 export const firmaTemplateToken = (token, templateId) => getJson('/integrations/firma/template-token', { method: 'POST', token, json: { templateId } });
+// The template library (Integrations plan §2.3b): KennelOS's templates offered to her.
+// → { templates: [{ id, name, description, signs, added }] }
+export const listFirmaLibrary = (token) => getJson('/integrations/firma/library', { token });
+// Copy one to her workspace, its prefills pointed at her fields. Call again while
+// `ready` is false. → { id (her copy), name, signs, ready, unmapped, already }
+export const addFirmaLibraryTemplate = (token, templateId) =>
+  getJson('/integrations/firma/library/add', { method: 'POST', token, json: { templateId }, timeoutMs: 60 * 1000 });
 // { contractId, templateId, title, signer: { firstName, lastName, email }, facts, emailSigner, resend }
 // → { signingRequestId, signingLink, usage }
 export const sendForEsign = (token, body) => getJson('/integrations/esign/send', { method: 'POST', token, json: body, timeoutMs: 60 * 1000 });

@@ -2,9 +2,10 @@
 // D25–D26, D30–D31). Pro-only (proPages.PRO_ONLY_STANDALONE).
 //
 //   openContractTemplates()  Contracts → Contract templates: set up e-signing once,
-//                            upload her contract PDFs, say what kind of contract
-//                            each is, and open Firma's editor (its own tab) to
-//                            place the signature and detail fields.
+//                            upload her contract PDFs (or add one KennelOS offers
+//                            her, From KennelOS), say what kind of contract each
+//                            is, and open Firma's editor (its own tab) to place
+//                            the signature and detail fields.
 //   sendWithFirma(...)       a contract's Send for signature with one of those
 //                            templates: who signs, this month's count, send.
 //   openCountersign(ref)     her own signing link, on a template she signs (D32),
@@ -13,7 +14,7 @@
 // She has no Firma login: KennelOS holds the account and her kennel gets its own
 // workspace. Everything goes through data/cloud/cloudEsign.js.
 import {
-  esignSignedIn, esignStatus, setUpEsign, templateList, uploadTemplate, editorLink,
+  esignSignedIn, esignStatus, setUpEsign, templateList, uploadTemplate, editorLink, libraryTemplates, addFromLibrary,
   sendForEsign, signedCopyLink, countersignLink, countersignerFor, esignProblem, TEMPLATE_MAX_BYTES,
   previewLink, discardPreview, sendDetails, previewNotes, heldText
 } from '../data/cloud/cloudEsign.js';
@@ -138,12 +139,15 @@ export function openContractTemplates() {
   async function drawList(status) {
     let rows;
     let accounts;
+    let library = [];
     try {
       const { templates: list, complete } = await templateList();
       // One deleted in Firma's editor stops being offered (only from a full list).
       if (complete) await forgetMissingTemplates(new Set(list.map((t) => t.id)));
       accounts = await accountRepo.getAll();
       rows = mergeTemplates(list, accounts);
+      // The templates KennelOS offers her (Integrations plan §2.3b). Never fatal.
+      library = await libraryTemplates().catch(() => []);
     } catch (err) {
       // Her workspace was deleted in Firma: the Worker dropped the link, so set up again.
       if (err?.code === 'esign_workspace_gone') { await drawSetUp(); say(`<div class="inline-error">${esc(esignProblem(err).message)}</div>`); return; }
@@ -166,10 +170,19 @@ export function openContractTemplates() {
           <input type="checkbox" class="ct-flag" data-flag="keepCopy"${t.keepCopy ? ' checked' : ''}${t.form_type ? '' : ' disabled'}> Email the buyer the signed copy</label>
         <button type="button" class="btn btn-sm" data-edit="${esc(t.id)}">Place fields</button>
       </div>`;
+    const libraryRow = (t) => `<div class="acct-row" data-lib="${esc(t.id)}" style="flex-wrap:wrap; gap:8px; padding:6px 0; border-top:1px solid var(--border,#e2e6ec);">
+        <span class="acct-v" style="min-width:160px; flex:1;"><strong>${esc(t.name)}</strong>${t.description ? `<br><span class="muted">${esc(t.description)}</span>` : ''}</span>
+        ${t.added ? '<span class="muted">Added</span>'
+          : `<select class="ct-libtype" aria-label="What kind of contract ${esc(t.name)} is">${kindOptions(extras)}</select>
+        <button type="button" class="btn btn-sm btn-primary" data-libadd="${esc(t.id)}">Add</button>`}
+      </div>`;
     frame(`<p class="field-hint" style="margin-top:0;">${usageLine(status.usage)} A contract's <strong>Send for signature</strong> offers the templates of its kind, beside your own contract forms.</p>
       <p class="field-hint"><button type="button" class="btn btn-sm" data-guide="help">Field guide</button> How to use Firma's editor (the Text type, a second signer), every detail KennelOS fills in by its label there, and sample sales showing which detail to place on each contract line. It stays open beside Firma's editor.</p>
       ${rows.length ? rows.map(row).join('') : '<p class="muted">No templates yet. Upload your first contract below.</p>'}
       ${signers.length ? `<div class="form-grid" style="margin-top:12px;">${signers.map(signerRow).join('')}</div>` : ''}
+      ${library.length ? `<h3 style="font-size:15px; margin:16px 0 4px;">From KennelOS</h3>
+      <p class="field-hint" style="margin-top:0;">Contracts KennelOS made for you, with the signature and details already placed. Adding one puts your own copy in your templates above: send it as it is, or change it with <strong>Place fields</strong>.</p>
+      ${library.map(libraryRow).join('')}` : ''}
       <h3 style="font-size:15px; margin:16px 0 4px;">Add a template</h3>
       <p class="field-hint" style="margin-top:0;">Upload your contract as a PDF (up to ${Math.round(TEMPLATE_MAX_BYTES / 100_000) / 10} MB). Then, on a computer, <strong>Place fields</strong> opens Firma's editor in a new tab, where you put the buyer's signature, and the details KennelOS fills in (buyer, pup, price…), where they go on the page.</p>
       <p class="field-hint">If you sign your contracts too, pick <strong>I sign last</strong> or <strong>I sign first</strong>, and in Firma's editor add a second signer with your signature field, in that place: second when you sign last, first when you sign first. With <strong>I sign last</strong> the buyer signs, then you sign from the contract's <strong>Countersign</strong> button. With <strong>I sign first</strong> you sign from its <strong>Sign first</strong> button as soon as it's sent, and the buyer signs after you. It's still one e-sign contract. A new template starts with your last choice.</p>
@@ -246,6 +259,24 @@ export function openContractTemplates() {
         say(`<p class="field-hint">${opened ? 'Firma\'s editor is open in a new tab. Place the fields, save, then close that tab.' : 'Your browser blocked the new tab. Allow pop-ups for KennelOS, then tap Place fields again.'} Use a Text field for each detail, with its Prefilled Data set to the detail's label (Buyer · Full name, Sale · Price…).</p>
           ${opened ? '<p class="field-hint"><button type="button" class="btn btn-sm" data-guide="fields">Open the field guide beside it</button></p>' : ''}`);
       } catch (err) { problem(err); }
+    }));
+    box.querySelectorAll('[data-libadd]').forEach((btn) => btn.addEventListener('click', async () => {
+      if (busy) return;
+      const el = btn.closest('[data-lib]');
+      const offer = library.find((t) => t.id === btn.dataset.libadd);
+      const { formType, extraListId } = readFormKind(el.querySelector('.ct-libtype').value);
+      if (!formType || (formType === 'extra' && !extraListId)) { say('<div class="inline-error">Pick what kind of contract it is.</div>'); return; }
+      busy = true; btn.disabled = true;
+      say(`<p class="field-hint">Adding ${esc(offer?.name || 'the template')}…</p>`);
+      try {
+        const t = await addFromLibrary(btn.dataset.libadd);
+        await setTemplateType({ templateId: t.id, name: t.name, formType, extraListId, signs: t.signs, remember: false });
+        busy = false;
+        await drawList(await esignStatus());
+        const signNote = t.signs === 'first' ? ' You sign it first, before the buyer.' : t.signs === 'last' ? ' You sign it last, after the buyer.' : '';
+        say(`<p class="field-hint">Added ${esc(t.name)}. It's in your templates, ready to send.${signNote}</p>${t.unmapped
+          ? `<p class="field-hint">${t.unmapped === 1 ? '1 of its details doesn\'t' : `${t.unmapped} of its details don't`} fill in yet: open <strong>Place fields</strong> on it and set each empty box's Prefilled Data to the detail's label.</p>` : ''}`);
+      } catch (err) { busy = false; btn.disabled = false; problem(err); }
     }));
     box.querySelector('#ct-upload').addEventListener('click', async (e) => {
       if (busy) return;
