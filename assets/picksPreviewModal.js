@@ -20,7 +20,7 @@ import { previewPicks } from '../data/picksPreview.js';
 import { entryName, waitlistConfigProblem, openDays, closedDates, liveClosedDates } from '../data/waitlistRules.js';
 import { SEX, DISPOSITION, REGISTRATION_TYPE, SALE_STATUS, WAITLIST_PREF_SEX, WAITLIST_AUTO_OFFER_TRIGGER, PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
 import { isDemo } from '../data/demoMode.js';
-import { esc, fmtDate, todayYMD } from './ui.js';
+import { esc, fmtDate, todayYMD, confirmModal } from './ui.js';
 
 const PARAM = 'preview';
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -58,6 +58,14 @@ function setParam(litterId) {
 // picks now": resolves { opened: true, turn } (openPicks' result) once she opens
 // them, or null when she closes it. With picks already open it's "Who's in line"
 // and resolves null.
+// A selector that finds the same control after a redraw: its data-pp-* attribute.
+function focusKey(el) {
+  for (const a of el.attributes || []) {
+    if (a.name.startsWith('data-pp')) return `[${a.name}${a.value !== '' ? `="${CSS.escape(a.value)}"` : ''}]`;
+  }
+  return null;
+}
+
 export async function openPicksPreview({ litterId }) {
   const litter = await litterRepo.getById(litterId);
   if (!litter) throw new Error('That litter no longer exists.');
@@ -70,11 +78,33 @@ export async function openPicksPreview({ litterId }) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal modal-wide" role="dialog" aria-modal="true"></div>';
+    overlay.innerHTML = '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="Picks preview" tabindex="-1"></div>';
     document.body.appendChild(overlay);
     const modal = overlay.querySelector('.modal');
-    const done = (val) => { overlay.remove(); setParam(null); resolve(val); };
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+    const before = document.activeElement;
+    const done = (val) => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      setParam(null);
+      before?.focus?.();
+      resolve(val);
+    };
+    // Every way out (a tap outside, Escape, Close or Cancel) asks first while she has
+    // unsaved settings (K6b-9): they'd be gone without a word.
+    let asking = false;
+    const tryClose = async () => {
+      if (asking) return;
+      if (state.draft) {
+        asking = true;
+        const leave = await confirmModal({ title: 'Leave without saving?', message: 'Your changes to the waitlist settings aren\'t saved. Leave, and they\'re gone.', confirmLabel: 'Leave without saving', cancelLabel: 'Keep editing', danger: true });
+        asking = false;
+        if (!leave) return;
+      }
+      done(null);
+    };
+    const onKey = (e) => { if (e.key === 'Escape' && !asking) { e.preventDefault(); tryClose(); } };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) tryClose(); });
 
     const draw = () => {
       try {
@@ -84,8 +114,12 @@ export async function openPicksPreview({ litterId }) {
         modal.querySelector('[data-pp="close"]').addEventListener('click', () => done(null));
         return;
       }
+      // A redraw replaces every control: put focus back on the one she was on.
+      const focused = document.activeElement && modal.contains(document.activeElement) ? focusKey(document.activeElement) : null;
       modal.innerHTML = render(p, data, state);
       wire();
+      const again = focused && modal.querySelector(focused);
+      if (again) again.focus(); else if (!modal.contains(document.activeElement)) modal.focus();
     };
 
     const reload = async () => { data = await loadData(litter.kennel_id); draw(); };
@@ -94,7 +128,7 @@ export async function openPicksPreview({ litterId }) {
       const q = (s) => modal.querySelector(s);
       modal.querySelectorAll('[data-pp-view]').forEach((b) => b.addEventListener('click', () => { state.view = b.dataset.ppView; draw(); }));
       modal.querySelectorAll('[data-pp-either]').forEach((b) => b.addEventListener('click', () => { state.eitherAs = b.dataset.ppEither; draw(); }));
-      q('[data-pp="close"]')?.addEventListener('click', () => done(null));
+      q('[data-pp="close"]')?.addEventListener('click', () => tryClose());
       // Settings: every change previews at once (unsaved) until she saves.
       const form = q('[data-pp-settings]');
       if (form) {
@@ -303,7 +337,7 @@ function turnOrderHtml(p, data, n) {
   }).join('');
   return `<h3 style="margin:12px 0 4px;font-size:15px;">Turn order</h3>
     <p class="field-hint" style="margin:0 0 6px;">In list order, with the pups each family qualifies for as things are now. Pups come off as earlier families choose; nobody can say who'll take which.</p>
-    <table class="data"><thead><tr><th>Place</th><th>Family</th><th>Qualifies for</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <div class="table-scroll"><table class="data"><thead><tr><th>Place</th><th>Family</th><th>Qualifies for</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 const PUP_FLAG = {
@@ -352,7 +386,7 @@ function pupsHtml(p, data, n, state) {
     }).join('');
     return `<h3 style="margin:16px 0 4px;font-size:15px;">${esc(n.litterName(L.litter_id))}${L.is_target ? (p.already_open ? '' : ' <span class="badge badge-blue">Opening now</span>') : ' <span class="badge badge-gray">Picks open</span>'}</h3>
       <div class="field-hint" style="margin:0 0 6px;">${sexLine('female', 'Females')}${sexLine('male', 'Males')}</div>
-      ${rows ? `<table class="data"><thead><tr><th>Pup</th><th>Offered?</th><th>Who qualifies, in order</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">No pups recorded in this litter yet.</p>'}`;
+      ${rows ? `<div class="table-scroll"><table class="data"><thead><tr><th>Pup</th><th>Offered?</th><th>Who qualifies, in order</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">No pups recorded in this litter yet.</p>'}`;
   }).join('');
 }
 
@@ -402,7 +436,7 @@ function excludedHtml(p, data, n) {
   }).join('');
   const notOn = p.notOnList.map((x) => `<li>${n.familyLink(x.entry_id)}: ${x.status === 'applied' ? 'applied, not approved yet' : 'approved, fee not recorded'}</li>`).join('');
   return `<h3 style="margin:16px 0 4px;font-size:15px;">Left out</h3>
-    ${rows ? `<table class="data"><thead><tr><th>Place</th><th>Family</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted" style="margin:0;">Everyone on the list is in line.</p>'}
+    ${rows ? `<div class="table-scroll"><table class="data"><thead><tr><th>Place</th><th>Family</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted" style="margin:0;">Everyone on the list is in line.</p>'}
     ${notOn ? `<p style="margin:8px 0 2px;"><strong>Not on the list yet</strong> <span class="faint">(they can't be offered until they are)</span></p><ul style="margin:0;">${notOn}</ul>` : ''}`;
 }
 

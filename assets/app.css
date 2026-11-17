@@ -516,6 +516,9 @@ button.title-chip-readonly { cursor: pointer; }
 .promote-age-row .field { flex: 1 1 0; min-width: 0; }
 
 .form-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+/* A settings Save that keeps her on the page (kennel.js flashSaved). */
+.btn.is-saved { background: var(--accent-dark); border-color: var(--accent-dark); }
+.save-flash { align-self: center; font-size: 13px; font-weight: 600; color: var(--accent); }
 .inline-warn { color: var(--warn); background: var(--warn-soft); border: 1px solid #e6d5ad; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
 .inline-error { color: var(--danger); background: var(--danger-soft); border: 1px solid #e6c3c3; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
 .inline-notice { color: var(--accent-dark); background: var(--accent-soft); border: 1px solid var(--border); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
@@ -1348,6 +1351,9 @@ body:has(> .kels-fab) main { padding-bottom: 104px; }
 #wl-policies-list .qa-row textarea { min-height: 170px; }
 .qa-note { margin: 6px 0 0; font-size: 13px; color: var(--text-muted); }
 .qa-note.changed { color: var(--warn, #8a5f17); font-weight: 600; }
+.qa-count:empty { display: none; }
+.qa-count { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
+.qa-count.changed { color: var(--warn, #8a5f17); font-weight: 600; }
 
 
 /* Do-not-sell warnings and "Add to [program]?" (waitlist family page, Approve dialog,

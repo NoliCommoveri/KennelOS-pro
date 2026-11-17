@@ -252,7 +252,9 @@ export function planFamilyEvent(event, ctx) {
       const place = clean(p.place).slice(0, 120);
       if (!place) return skip('bad_payload');
       return { op: 'home_location', date, place, miles: Number.isFinite(p.miles) ? p.miles : null,
-        activity: line(`Said they live in ${place}${Number.isFinite(p.miles) ? `, about ${Math.round(p.miles)} miles from your standard location` : ''}, on their status page.`) };
+        activity: line(Number.isFinite(p.miles)
+          ? `Said they live in ${place}, about ${Math.round(p.miles)} miles from your standard location, on their status page.`
+          : `Said they live in ${place}, on their status page. The miles couldn't be measured just then; KennelOS tries again with the next sync.`) };
     }
     case 'pref_change': {
       if (!open) return skip('not_on_list');

@@ -140,11 +140,13 @@ export async function libraryTemplates() {
 // are made first (as Place fields does), so every detail has one to point at.
 // → { id, name, signs, unmapped } (unmapped: details that don't fill yet)
 export const LIBRARY_ADD_ROUNDS = 8;
-export async function addFromLibrary(templateId) {
+// `another`: she has it already and adds it again for another kind (a second extra),
+// named `name` so the two read apart in her list.
+export async function addFromLibrary(templateId, { another = false, name = '' } = {}) {
   const token = requireSession();
   await syncFactFields();
   for (let i = 0; i < LIBRARY_ADD_ROUNDS; i++) {
-    const r = await api.addFirmaLibraryTemplate(token, templateId);
+    const r = await api.addFirmaLibraryTemplate(token, templateId, { another, name });
     if (r.ready) return { id: r.id, name: r.name, signs: r.signs || 'none', unmapped: Number(r.unmapped) || 0 };
   }
   const err = new Error('Adding that template is taking longer than it should. Try again in a minute: it carries on where it stopped.');

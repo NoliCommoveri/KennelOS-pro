@@ -45,6 +45,21 @@ export const aboutMiles = (m) => `about ${miles(m)}`;
 
 // A directions link from one address to another (no API: it opens the person's own
 // maps), to check a figure or to get there.
+// Why Get driving miles didn't work, as a sentence for her (K8-5), from the cloud
+// error's code. The caller adds what to do ("Use Open in Maps and type the miles.").
+export function milesErrorText(err) {
+  const code = err?.code;
+  if (code === 'geo_off') return 'Driving miles aren\'t switched on for KennelOS yet.';
+  if (code === 'not_found') return 'The map service couldn\'t find that address, or a road to it.';
+  if (code === 'imprecise') return 'The map service could only place that address roughly (a whole state or a guess), so the miles would be wrong. Check the address has a street and city.';
+  if (code === 'geo_failed' || code === 'geo_unreachable') return 'The map service didn\'t answer just now.';
+  if (code === 'rate_limited') return 'That\'s a lot of measuring in one hour; try again later.';
+  if (code === 'bad_address') return 'One of the two addresses is empty or too long.';
+  if (err?.name === 'CloudOfflineError') return 'This device is offline.';
+  if (err?.name === 'CloudAuthError') return 'Sign in to cloud backup again to measure miles.';
+  return String(err?.message || 'Something went wrong.').replace(/[.\s]+$/, '') + '.';
+}
+
 export function mapsLink(from, to) {
   const q = new URLSearchParams({ api: '1', ...(from ? { origin: String(from) } : {}), destination: String(to || '') });
   return `https://www.google.com/maps/dir/?${q.toString()}`;

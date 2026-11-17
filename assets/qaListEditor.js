@@ -8,7 +8,8 @@
 //
 // opts: { name (unique per page, e.g. 'faq'), a, b (the two field keys, e.g.
 // 'question', 'answer'), aPlaceholder, aLabel, bLabel, noun ('FAQ', 'policy'), empty,
-// note? }. `items` is edited in place; onChange() after each edit, rerender() after a
+// note?, aMax?, bMax? }. aMax/bMax: a live "N of max" count under that field, warned past it
+// (the max isn't enforced here: the page's Save validates, so a paste is never cut). `items` is edited in place; onChange() after each edit, rerender() after a
 // move, delete or add.
 import { esc } from './ui.js';
 
@@ -22,17 +23,35 @@ export function qaListHtml(items, o) {
           <button type="button" class="btn btn-sm" data-qa-up title="Move up"${i === 0 ? ' disabled' : ''}>↑</button>
           <button type="button" class="btn btn-sm" data-qa-down title="Move down"${i === items.length - 1 ? ' disabled' : ''}>↓</button>
           <button type="button" class="btn btn-sm btn-danger" data-qa-del title="Delete this ${esc(o.noun)}">✕</button>
-        </div></div>
-      <div class="field" style="margin-top:8px;"><label>${esc(o.bLabel)}</label><textarea data-qf="${esc(o.b)}">${esc(x[o.b] ?? '')}</textarea></div>
+        </div></div>${countHtml(x[o.a], o.aMax, o.a, true)}
+      <div class="field" style="margin-top:8px;"><label>${esc(o.bLabel)}</label><textarea data-qf="${esc(o.b)}">${esc(x[o.b] ?? '')}</textarea>${countHtml(x[o.b], o.bMax, o.b)}</div>
       ${o.note ? o.note(x, i) : ''}
     </div>`).join('');
+}
+
+// The heading's count (quiet) shows only once it's over; the text's always.
+function countText(v, max, quiet = false) {
+  const n = String(v ?? '').trim().length;
+  if (quiet && n <= max) return '';
+  return n > max ? `${(n - max).toLocaleString('en-US')} character${n - max === 1 ? '' : 's'} over the ${max.toLocaleString('en-US')} families can see` : `${n.toLocaleString('en-US')} of ${max.toLocaleString('en-US')}`;
+}
+function countHtml(v, max, key, quiet = false) {
+  if (!max) return '';
+  const over = String(v ?? '').trim().length > max;
+  return `<p class="qa-count${over ? ' changed' : ''}" data-qa-count="${esc(key)}">${esc(countText(v, max, quiet))}</p>`;
 }
 
 export function wireQaList(root, items, o, { onChange, rerender, newItem }) {
   root.querySelectorAll(`[data-qa="${o.name}"]`).forEach((row) => {
     const i = Number(row.dataset.i);
     const x = items[i];
-    row.querySelectorAll('[data-qf]').forEach((input) => input.addEventListener('input', () => { x[input.dataset.qf] = input.value; onChange(); }));
+    row.querySelectorAll('[data-qf]').forEach((input) => input.addEventListener('input', () => {
+      x[input.dataset.qf] = input.value;
+      const max = input.dataset.qf === o.a ? o.aMax : input.dataset.qf === o.b ? o.bMax : 0;
+      const count = max && row.querySelector(`[data-qa-count="${input.dataset.qf}"]`);
+      if (count) { count.textContent = countText(input.value, max, input.dataset.qf === o.a); count.classList.toggle('changed', input.value.trim().length > max); }
+      onChange();
+    }));
     const move = (j) => { [items[i], items[j]] = [items[j], items[i]]; onChange(); rerender(); };
     row.querySelector('[data-qa-up]').addEventListener('click', () => move(i - 1));
     row.querySelector('[data-qa-down]').addEventListener('click', () => move(i + 1));

@@ -449,13 +449,27 @@ export function waitlistPolicies(config) {
 }
 export const hasPolicies = (config) => waitlistPolicies(config).length > 0;
 
-// Problems that block saving: a heading with no wording, or the reverse.
+// What families can be shown: the Worker keeps the first 30 policies, a heading's first 200
+// characters and a body's first 5,000 (cloud/src/familyPages.js POLICY_LIMITS, which
+// tests/waitlistPolicies.test.js holds equal). Save refuses past them, so nothing she
+// writes is cut short in silence.
+export const POLICY_LIMITS = Object.freeze({ count: 30, heading: 200, body: 5000 });
+
+// Problems that block saving: a heading with no wording, or the reverse; more than the
+// families' pages can show.
 export function validatePolicies(items) {
   const problems = [];
+  const has = (v) => clean(v) !== '';
   items.forEach((x, i) => {
-    const has = (v) => clean(v) !== '';
     if (has(x.heading) !== has(x.body)) problems.push(`Policy ${i + 1} needs both a heading and its wording.`);
+    const over = (v, max) => String(v ?? '').trim().length - max;
+    const h = over(x.heading, POLICY_LIMITS.heading);
+    if (h > 0) problems.push(`Policy ${i + 1}'s heading is ${h.toLocaleString('en-US')} character${h === 1 ? '' : 's'} over the ${POLICY_LIMITS.heading} families can see.`);
+    const b = over(x.body, POLICY_LIMITS.body);
+    if (b > 0) problems.push(`Policy ${i + 1}'s wording is ${b.toLocaleString('en-US')} character${b === 1 ? '' : 's'} over the ${POLICY_LIMITS.body.toLocaleString('en-US')} families can see: shorten it or split it into two policies.`);
   });
+  const count = items.filter((x) => has(x.heading) || has(x.body)).length;
+  if (count > POLICY_LIMITS.count) problems.push(`Families can see ${POLICY_LIMITS.count} policies; you have ${count}. Combine or delete ${count - POLICY_LIMITS.count}.`);
   return problems;
 }
 

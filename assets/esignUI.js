@@ -172,7 +172,11 @@ export function openContractTemplates() {
       </div>`;
     const libraryRow = (t) => `<div class="acct-row" data-lib="${esc(t.id)}" style="flex-wrap:wrap; gap:8px; padding:6px 0; border-top:1px solid var(--border,#e2e6ec);">
         <span class="acct-v" style="min-width:160px; flex:1;"><strong>${esc(t.name)}</strong>${t.description ? `<br><span class="muted">${esc(t.description)}</span>` : ''}</span>
-        ${t.added ? '<span class="muted">Added</span>'
+        ${t.added
+          // Added already: once more for another kind (the same agreement for a second extra).
+          ? `<span class="muted">Added</span>
+        <select class="ct-libtype" aria-label="Add ${esc(t.name)} again, for another kind of contract">${kindOptions(extras)}</select>
+        <button type="button" class="btn btn-sm" data-libadd="${esc(t.id)}" data-another="1">Add again for this kind</button>`
           : `<select class="ct-libtype" aria-label="What kind of contract ${esc(t.name)} is">${kindOptions(extras)}</select>
         <button type="button" class="btn btn-sm btn-primary" data-libadd="${esc(t.id)}">Add</button>`}
       </div>`;
@@ -269,7 +273,9 @@ export function openContractTemplates() {
       busy = true; btn.disabled = true;
       say(`<p class="field-hint">Adding ${esc(offer?.name || 'the template')}…</p>`);
       try {
-        const t = await addFromLibrary(btn.dataset.libadd);
+        const another = btn.dataset.another === '1';
+        // A second copy is named for its kind, so the two read apart in her list.
+        const t = await addFromLibrary(btn.dataset.libadd, another ? { another, name: `${offer?.name || 'Template'} (${kindLabel(extras, { formType, extraListId })})` } : {});
         await setTemplateType({ templateId: t.id, name: t.name, formType, extraListId, signs: t.signs, remember: false });
         busy = false;
         await drawList(await esignStatus());

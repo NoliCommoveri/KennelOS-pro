@@ -39,7 +39,7 @@ import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
 import { MILEAGE_BASIS } from '../data/transportFee.js';
 import { backOutReasons, backOutPolicy, BACK_OUT_OUTCOMES, BACK_OUT_POLICY_TEXT_DEFAULT } from '../data/backOut.js';
 import { waitlistConfig, waitlistConfigProblem, openDays, closedDates, liveClosedDates, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, passReasons, showUpcoming, UPCOMING_STAGES } from '../data/waitlistRules.js';
-import { waitlistPolicies, validatePolicies, newPolicy } from '../data/waitlistForm.js';
+import { waitlistPolicies, validatePolicies, newPolicy, POLICY_LIMITS } from '../data/waitlistForm.js';
 import { policyStarters, policyHint, basisChanges } from '../data/waitlistPolicies.js';
 import { qaListHtml, wireQaList } from '../assets/qaListEditor.js';
 import { EMAIL_TEMPLATE_KINDS, EMAIL_PLACEHOLDERS, DEFAULT_EMAIL_TEMPLATES, emailTemplate } from '../data/waitlistEmails.js';
@@ -73,6 +73,23 @@ let allDogs = [];        // loaded once, for the "Apply to dogs" picker
 let applyOpen = false;   // whether the "Apply to dogs" picker is expanded
 
 function showError(msg) { els.error.innerHTML = `<div class="inline-error">${esc(msg)}</div>`; }
+
+// A settings card's Save keeps her on the page and redraws the card, so nothing else
+// says it took: after the redraw, its button reads "Saved ✓" for a moment and a note
+// beside it says when (announced to screen readers). `act`: the button's data-act.
+function flashSaved(act) {
+  const btn = els.config.querySelector(`[data-act="${act}"]`);
+  if (!btn) return;
+  const label = btn.textContent;
+  btn.textContent = 'Saved ✓';
+  btn.classList.add('is-saved');
+  const note = document.createElement('span');
+  note.className = 'save-flash';
+  note.setAttribute('role', 'status');
+  note.textContent = `Saved at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  btn.after(note);
+  setTimeout(() => { if (btn.isConnected) { btn.textContent = label; btn.classList.remove('is-saved'); } }, 2000);
+}
 function clearError() { els.error.innerHTML = ''; }
 
 function row(label, valueHtml) {
@@ -408,7 +425,7 @@ let openWaitlistGroups = new Set();
 // saved with the rest by the card's one Save.
 let policiesDraft = null;
 let policiesUnsaved = false; // she's changed the list since it was loaded (or saved)
-const POLICY_LIST = { name: 'policies', a: 'heading', b: 'body', aPlaceholder: 'Heading, e.g. Passes and not responding', aLabel: 'Policy heading', bLabel: 'What families read', noun: 'policy', empty: 'No policies yet. Families see none, and your application doesn\'t ask about them.' };
+const POLICY_LIST = { name: 'policies', a: 'heading', b: 'body', aPlaceholder: 'Heading, e.g. Passes and not responding', aLabel: 'Policy heading', bLabel: 'What families read', noun: 'policy', aMax: POLICY_LIMITS.heading, bMax: POLICY_LIMITS.body, empty: 'No policies yet. Families see none, and your application doesn\'t ask about them.' };
 function policyNote(c) {
   return (x) => {
     const changed = basisChanges(x, c);
@@ -772,6 +789,7 @@ async function onSaveWaitlist() {
     });
     await reloadKennel();
     renderConfig();
+    flashSaved('save-waitlist');
   } catch (err) { showError(err.message || String(err)); }
 }
 
@@ -815,6 +833,7 @@ async function onSavePuppyRecord() {
     await kennelRepo.update(kennel.id, { puppy_record_fields: readPuppyRecordFields(els.config) });
     await reloadKennel();
     renderConfig();
+    flashSaved('save-puppy-record');
   } catch (err) { showError(err.message || String(err)); }
 }
 
@@ -851,6 +870,7 @@ async function onSaveCharges() {
     await kennelRepo.update(kennel.id, { extra_charge_list: list, extra_charge_groups: groups });
     await reloadKennel();
     renderConfig();
+    flashSaved('save-charges');
   } catch (err) { showError(err.message || String(err)); }
 }
 
@@ -910,6 +930,7 @@ async function onSavePaymentSchedules() {
     await kennelRepo.update(kennel.id, { payment_schedules: list, final_payment_methods: card.querySelector('#pss-final').value.trim() || null });
     await reloadKennel();
     renderConfig();
+    flashSaved('save-payment-schedules');
   } catch (err) { showError(err.message || String(err)); }
 }
 
@@ -1070,6 +1091,7 @@ async function onSavePickup() {
     await kennelRepo.update(kennel.id, { pickup_locations: pickupLocations({ pickup_locations: rows }), waitlist_config });
     await reloadKennel();
     renderConfig();
+    flashSaved('save-pickup');
   } catch (err) { showError(err.message || String(err)); }
 }
 
@@ -1190,6 +1212,7 @@ async function onSaveNudges() {
     await kennelRepo.update(kennel.id, changes);
     await reloadKennel();
     renderConfig();
+    flashSaved('save-nudges');
   } catch (err) { showError(err.message || String(err)); }
 }
 

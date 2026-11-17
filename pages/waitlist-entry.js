@@ -33,7 +33,7 @@ import { offerStayAndPickup } from '../assets/stayPickupUI.js';
 import { suggestOutcome, policyRowText, backOutReasons, ageWeeks, BACK_OUT_OUTCOMES } from '../data/backOut.js';
 import { pendingPickupRequests, requestText as pickupRequestText, ownPlaceAllowed } from '../data/familyPickup.js';
 import { standardLocation, timeRange } from '../data/pickupSlots.js';
-import { transportQuote, mapsLink } from '../data/transportFee.js';
+import { transportQuote, mapsLink, milesErrorText } from '../data/transportFee.js';
 import { locationRuleOn } from '../data/waitlistForm.js';
 import { programSuggestions, suggestionWhy } from '../data/programSuggest.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
@@ -45,7 +45,7 @@ import { trainingStaysFor, boardingChargeText, addedStays } from '../data/goHome
 import { eventRepo } from '../data/eventRepo.js';
 import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmailUI.js';
 import { programIconHtml } from '../assets/programIcons.js';
-import { offerSpecs, retryEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
+import { offerSpecs, retryEmail, dropEmail, isHeldEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
   entryName, publicSourceName, holdsPlace, waitlistLitters, isWaitlistLitter, LISTEN_LIVE_PAIRING, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, isPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
@@ -374,7 +374,7 @@ async function onCommunicate() {
 // Making a new status link (header ⋯ menu): the old one stops working, so it's
 // a safety step, not a way to reach them.
 async function onNewLink() {
-  if (!(await confirmModal({ title: 'Make a new link?', message: 'Their current link stops working as soon as the new one is published. Send them the new link.', confirmLabel: 'Make a new link' }))) return;
+  if (!(await confirmModal({ title: 'Make a new link?', message: 'Their current link stops working as soon as the new one is published, and every browser signed in to their page is signed out. Send them the new link.', confirmLabel: 'Make a new link' }))) return;
   const { replaceStatusToken } = await import('../data/cloud/cloudWaitlist.js');
   await replaceStatusToken(ctx.entry.id);
   await afterAction();
@@ -472,13 +472,16 @@ function pendingRequests(e) {
 // One email she sent them (W2 step 6), with how it went.
 function emailItemHtml(m) {
   const state = m.status === 'sent' ? `<span class="badge badge-green">Sent</span>`
+    : isHeldEmail(m) ? `<span class="badge badge-amber">Waiting for you</span>`
     : m.status === 'failed' ? `<span class="badge badge-red">Not sent</span>`
     : `<span class="badge badge-neutral">Waiting to send</span>`;
   return `<li style="padding:6px 0;border-top:1px solid var(--border);">
       <div class="faint" style="font-size:0.85em;">${esc(fmtDate(String(m.sent_at || m.at).slice(0, 10)))} · ${m.via === 'own' ? 'Sent by you (your own email or messages)' : `Email from you ${state}`}</div>
       <div><strong>${esc(m.subject)}</strong></div>
       <details><summary class="faint">The message</summary><div>${multiline(m.body)}</div></details>
-      ${m.status === 'failed' ? `<p class="field-hint" style="margin:2px 0;">${esc(emailErrorText(m.error))} <button class="btn btn-sm" data-email-retry="${esc(m.id)}">Retry</button></p>` : ''}
+      ${isHeldEmail(m) ? `<p class="field-hint" style="margin:2px 0;">${esc(emailErrorText(m.error))} <button class="btn btn-sm btn-primary" data-email-retry="${esc(m.id)}">Send as written</button> <button class="btn btn-sm" data-email-drop="${esc(m.id)}">Don't send</button></p>`
+        : m.status === 'failed' && m.error !== 'not_sent' ? `<p class="field-hint" style="margin:2px 0;">${esc(emailErrorText(m.error))} <button class="btn btn-sm" data-email-retry="${esc(m.id)}">Retry</button></p>`
+          : m.status === 'failed' ? `<p class="field-hint" style="margin:2px 0;">${esc(emailErrorText(m.error))}</p>` : ''}
     </li>`;
 }
 
@@ -661,7 +664,7 @@ async function approveAddress(request) {
         o.querySelector('#pa-miles').value = d.miles;
         refresh();
       } catch (err) {
-        o.querySelector('#pa-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'driving miles aren\'t available right now' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
+        o.querySelector('#pa-working').textContent = `Couldn't measure. ${milesErrorText(err)} Use Open in Maps and type the miles.`;
       }
       ev.target.disabled = false;
     });
@@ -762,7 +765,7 @@ async function onAddCharges(start = 'extra', { miles = null, to = '' } = {}) {
         o.querySelector('#ac-miles').value = (await drivingMiles(from, dest)).miles;
         refresh();
       } catch (err) {
-        o.querySelector('#ac-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'driving miles aren\'t available right now' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
+        o.querySelector('#ac-working').textContent = `Couldn't measure. ${milesErrorText(err)} Use Open in Maps and type the miles.`;
       }
       ev.target.disabled = false;
     });
@@ -825,6 +828,7 @@ function wireMessages(root) {
     await retryEmail(e.id, btn.dataset.emailRetry);
     syncSoon();
   })));
+  root.querySelectorAll('[data-email-drop]').forEach((btn) => btn.addEventListener('click', () => run(() => dropEmail(e.id, btn.dataset.emailDrop))));
 }
 
 // Put them back in line after a lost pup (the same dialog the Sale page asks).
@@ -2111,6 +2115,8 @@ async function renderHeaderActions() {
       if (!(await confirmModal({ title: 'Delete this entry?', message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
       try {
         await waitlistEntryRepo.hardDelete(e.id);
+        // An online application also leaves the server, so a new device can't bring it back.
+        if (e.source === 'online_form') await import('../data/cloud/cloudWaitlist.js').then((m) => m.forgetApplication(e)).catch(() => {});
         location.href = `waitlist.html?kennel=${encodeURIComponent(e.kennel_id)}`;
       } catch (err) {
         if (err instanceof ReferenceBlockedError) renderHeaderActions();

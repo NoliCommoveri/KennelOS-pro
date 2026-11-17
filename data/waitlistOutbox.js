@@ -164,8 +164,22 @@ export async function setEmailStatus(entryId, messageId, patch) {
   });
 }
 
-// Retry: back in the queue (same id, so it can never arrive twice).
-export const retryEmail = (entryId, messageId) => setEmailStatus(entryId, messageId, { status: 'queued', error: null });
+// Retry: back in the queue (same id, so it can never arrive twice). Its age counts
+// again from now, so one held as stale goes as written once she says so.
+export const retryEmail = (entryId, messageId) => setEmailStatus(entryId, messageId, { status: 'queued', error: null, requeued_at: nowISO() });
+
+// She chose not to send one that was held (K8-11).
+export const dropEmail = (entryId, messageId) => setEmailStatus(entryId, messageId, { status: 'failed', error: 'not_sent' });
+
+// An email that waited more than a day for a connection (K8-11) isn't sent by itself:
+// its dates ("send your deposit by Wednesday") may have passed. Counted from when she
+// approved it, or sent it again.
+export const EMAIL_STALE_MS = 24 * 60 * 60 * 1000;
+export function isStaleEmail(message, now = Date.now()) {
+  const from = Date.parse(message?.requeued_at || message?.at || '');
+  return Number.isFinite(from) && now - from > EMAIL_STALE_MS;
+}
+export const isHeldEmail = (m) => m?.from === 'breeder' && m.kind === 'email' && m.status === 'failed' && m.error === 'stale';
 
 // Every queued email of these entries, oldest first: [{ entry, message }].
 export function queuedEmails(entries) {
@@ -179,6 +193,8 @@ export function queuedEmails(entries) {
 // Plain words for why an email couldn't go, from the server's answer.
 export function emailErrorText(code) {
   return {
+    stale: 'Held, not sent: it waited more than a day for a connection, so its dates or details may be out of date. Read it, then send it as written, or write them a new one.',
+    not_sent: 'You chose not to send it.',
     not_published: 'This family isn\'t on your online list yet. It goes once the list is published again.',
     no_email: 'There\'s no email address for this family.',
     bad_message: 'The email couldn\'t be sent as written.',

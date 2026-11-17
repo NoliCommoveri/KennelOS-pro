@@ -27,6 +27,7 @@
 // and then sends the deposit within the same respond-by window. Only the deposit
 // makes the offer `accepted`, places the family, and moves the turn on. No deposit
 // by the deadline = no response: the Sale is cancelled and the pup is free again.
+import { db, dataTables } from './db.js';
 import { kennelRepo } from './kennelRepo.js';
 import { creditsOf, feeCharge, allocateCredits, creditsWithCarried, carriedCredit, carriedCreditsOf } from './receivedCredits.js';
 import { getSaleStatement, paidBesidesCredits, paidOnSaleByPart, getSaleFeeCredit } from './incomeView.js';
@@ -58,6 +59,19 @@ import {
   turnIsEmpty, emptiedTurns, turnRespondBy, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan
 } from './waitlistRules.js';
 
+// Every action here is one transaction over her data tables (K6-13): a deposit, a pass
+// across a turn's litters, a back-out — each makes several writes, and a phone that
+// reclaims the tab, a reload or a crash halfway must leave none of them, not some.
+// Moving the list on to the next turn is part of the action. An action another one
+// calls joins its transaction. Only IndexedDB is awaited inside (no network, no
+// timers), which is what keeps a Dexie transaction open. The scope handed to Dexie must
+// itself be an `async` function: Dexie keeps its transaction across native `await`s
+// only then (a plain arrow returning the action's promise loses it after the first
+// write that returns through another async function: PrematureCommitError).
+function atomic(fn) {
+  return (...args) => db.transaction('rw', dataTables(), async () => await fn(...args));
+}
+
 const nowISO = () => new Date().toISOString();
 // The kennel's own date (D11): every action that sets or reads a waitlist deadline
 // defaults its day to this, never the device's.
@@ -77,11 +91,20 @@ function requireStatus(entry, allowed, verb) {
 }
 
 // An undo that would reopen a closed entry is refused once the family has a newer
-// live one on the same list (they re-applied), so they're never on it twice.
+// live one on the same list (they re-applied), so they're never on it twice. The same
+// family: the same contact, or (K6b-7: a declined or withdrawn application usually has
+// no contact yet, linked only at approve) the same email, the contact's or the one
+// they applied with.
 async function assertNotReapplied(entry, what) {
-  if (!entry.contact_id) return;
-  const again = (await waitlistEntryRepo.getAll()).find((x) => x.id !== entry.id && x.kennel_id === entry.kennel_id
-    && x.contact_id === entry.contact_id && ['applied', 'approved', 'active'].includes(x.status));
+  const emailOf = async (e) => String((e.contact_id && (await contactRepo.getById(e.contact_id))?.email) || e.application?.email || '').trim().toLowerCase();
+  const email = await emailOf(entry);
+  if (!entry.contact_id && !email) return;
+  const live = (await waitlistEntryRepo.getAll()).filter((x) => x.id !== entry.id && x.kennel_id === entry.kennel_id
+    && ['applied', 'approved', 'active'].includes(x.status));
+  let again = entry.contact_id ? live.find((x) => x.contact_id === entry.contact_id) : null;
+  if (!again && email) {
+    for (const x of live) if ((await emailOf(x)) === email) { again = x; break; }
+  }
   if (again) throw new Error(`This family has applied again since, so the ${what} can't be undone. Their new application is on the list.`);
 }
 
@@ -113,7 +136,7 @@ function contactFromApplication(app = {}) {
 // show privately on the public list ("A***** K", Spec §15.3): she decides it in
 // the Approve dialog. Without a request it's ignored; with one and no answer the
 // request stays undecided (she can still set it on the Edit form).
-export async function approve(entryId, { date, contactId = null, programId, privateListing } = {}) {
+export const approve = atomic(async function approve(entryId, { date, contactId = null, programId, privateListing } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['applied'], 'approve');
@@ -144,7 +167,7 @@ export async function approve(entryId, { date, contactId = null, programId, priv
     Object.assign(changes, onlineFeeReceived(entry.fee_paid_online));
   }
   return waitlistEntryRepo.update(entryId, changes);
-}
+});
 
 // A fee they paid online while not approved (fee_paid_online, waitlistFeePay's
 // `prepaid`), applied: on the list from the day they paid. Never `fee_received_manual`:
@@ -158,7 +181,7 @@ const onlineFeeReceived = (p) => ({
 // open it just takes the program; once approved and waiting for its fee, the fee
 // follows the program (feeForEntry), and a program that waives it puts them on the
 // list today, as approving into it would. → { entry, feeBefore, feeAfter, onList }.
-export async function addSuggestedProgram(entryId, programId, { date } = {}) {
+export const addSuggestedProgram = atomic(async function addSuggestedProgram(entryId, programId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['applied', 'approved'], 'add a program to');
@@ -180,31 +203,31 @@ export async function addSuggestedProgram(entryId, programId, { date } = {}) {
   }
   const saved = await waitlistEntryRepo.update(entryId, changes);
   return { entry: saved, feeBefore, feeAfter, onList };
-}
+});
 
 // "Add to [program]?" answered No: not asked again on this application.
-export async function declineSuggestedProgram(entryId, programId) {
+export const declineSuggestedProgram = atomic(async function declineSuggestedProgram(entryId, programId) {
   const entry = await load(entryId);
   const declined = new Set(entry.program_suggestions_declined || []);
   declined.add(programId);
   return waitlistEntryRepo.update(entryId, { program_suggestions_declined: [...declined] });
-}
+});
 
-export async function decline(entryId, { date } = {}) {
+export const decline = atomic(async function decline(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['applied'], 'decline');
   return waitlistEntryRepo.update(entryId, { status: 'declined', declined_date: date });
-}
+});
 
 // The 7-day undo on a decline: the application is open again (applied).
-export async function undoDecline(entryId, { today } = {}) {
+export const undoDecline = atomic(async function undoDecline(entryId, { today } = {}) {
   const entry = await load(entryId);
   today ??= await kennelDay(entry.kennel_id);
   if (!canUndoDecline(entry, today)) throw new Error('This decline can no longer be undone.');
   await assertNotReapplied(entry, 'decline');
   return waitlistEntryRepo.update(entryId, { status: 'applied', declined_date: null });
-}
+});
 
 // Fee received — this fixes the family's place in line (fee_received_date is the
 // position anchor, §6.1; fee_received_at, the moment she recorded it, orders two
@@ -216,7 +239,7 @@ export async function undoDecline(entryId, { today } = {}) {
 // `manual`: she marked it (the 7-day "marked by mistake?" undo). A fee recorded from
 // her payment service (waitlistFeeLinks.checkFeePayments) passes false: undoing it
 // wouldn't stick, since the next check finds the same payment (K6b-5).
-export async function feeReceived(entryId, { date, amount, method = '', reference = '', creditAmount, manual = true } = {}) {
+export const feeReceived = atomic(async function feeReceived(entryId, { date, amount, method = '', reference = '', creditAmount, manual = true } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['approved'], 'mark the fee received for');
@@ -237,11 +260,11 @@ export async function feeReceived(entryId, { date, amount, method = '', referenc
   // No offer is made here, even if they're now next on a litter with open picks:
   // the page tells her, and she offers it (see the header note).
   return waitlistEntryRepo.update(entryId, changes);
-}
+});
 
 // The 7-day undo on "Fee received": back to approved, the fee not received (their
 // fee amount and pay-by date stand). Their place in line goes with it.
-export async function undoFeeReceived(entryId, { today } = {}) {
+export const undoFeeReceived = atomic(async function undoFeeReceived(entryId, { today } = {}) {
   const entry = await load(entryId);
   today ??= await kennelDay(entry.kennel_id);
   const [offers, sales] = await Promise.all([waitlistOfferRepo.getByEntry(entryId), saleRepo.getAll({ includeArchived: true })]);
@@ -250,21 +273,21 @@ export async function undoFeeReceived(entryId, { today } = {}) {
     status: 'approved', fee_received_date: null, fee_received_at: null, fee_received_manual: null,
     fee_payment_method: '', fee_payment_reference: '', fee_credit_amount: null
   });
-}
+});
 
 // A credit for funds she'd already received from them (receivedCredits.js): added,
 // or one of theirs replaced by id. `credit` comes from receivedCredits.newCredit.
-export async function saveCredit(entryId, credit) {
+export const saveCredit = atomic(async function saveCredit(entryId, credit) {
   const entry = await load(entryId);
   const list = creditsWithCarried(entry);
   const next = list.some((c) => c.id === credit.id) ? list.map((c) => (c.id === credit.id ? credit : c)) : [...list, credit];
   return waitlistEntryRepo.update(entryId, { received_credits: next, ...movedCarried(entry) });
-}
+});
 
-export async function removeCredit(entryId, creditId) {
+export const removeCredit = atomic(async function removeCredit(entryId, creditId) {
   const entry = await load(entryId);
   return waitlistEntryRepo.update(entryId, { received_credits: creditsWithCarried(entry).filter((c) => c.id !== creditId), ...movedCarried(entry) });
-}
+});
 
 // An older entry's carried_payment, once its credits are written (creditsWithCarried
 // moved it into received_credits): cleared, so it isn't read twice.
@@ -283,43 +306,43 @@ async function carriedCoversDeposit(entry, saleId) {
   return !!deposit && deposit.amount > 0 && deposit.owed <= 0;
 }
 
-export async function markFeeExpired(entryId, { date } = {}) {
+export const markFeeExpired = atomic(async function markFeeExpired(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['approved'], 'expire');
   return waitlistEntryRepo.update(entryId, { status: 'expired', expired_date: date });
-}
+});
 
 // The 7-day undo on "The fee wasn't received in time": approved again, with the
 // same pay-by date (past, so Today asks about it again unless she marks it received).
 // A fee they paid online after it closed (kept as fee_paid_online) is applied as
 // approving applies it: they're on the list from the day they paid (K6b-8).
-export async function undoExpire(entryId, { today } = {}) {
+export const undoExpire = atomic(async function undoExpire(entryId, { today } = {}) {
   const entry = await load(entryId);
   today ??= await kennelDay(entry.kennel_id);
   if (!canUndoExpire(entry, today)) throw new Error('Closing this application can no longer be undone.');
   await assertNotReapplied(entry, 'closing');
   const paid = entry.fee_paid_online?.date && !entry.fee_received_date ? onlineFeeReceived(entry.fee_paid_online) : {};
   return waitlistEntryRepo.update(entryId, { status: 'approved', expired_date: null, ...paid });
-}
+});
 
 // The family left the list themselves. Any open offer they held is voided and
 // that litter's turn moves on. `byBreeder`: she entered it ("They withdrew" on
 // their page), so it keeps the status they left in `withdrawn_from` and gets the
 // 7-day undo; a withdrawal from their own status page doesn't.
 // Returns { entry, voided, offered }.
-export async function withdraw(entryId, { date, moveOn = true, byBreeder = false } = {}) {
+export const withdraw = atomic(async function withdraw(entryId, { date, moveOn = true, byBreeder = false } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['applied', 'approved', 'active'], 'withdraw');
   const saved = await waitlistEntryRepo.update(entryId, { status: 'withdrawn', withdrawn_date: date, withdrawn_from: byBreeder ? entry.status : null });
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'the family withdrew from the list', moveOn })) };
-}
+});
 
 // "Ready now?" (Spec §16.7). Yes: the hold is over. No: a new date and a required
 // reason, which becomes a pause request she approves or declines (the reason
 // rides it, like a pause note). `by`: 'family' (their status page) or 'breeder'.
-export async function recordReadyAnswer(entryId, { answer, until = null, reason = '', date, by = 'breeder' } = {}) {
+export const recordReadyAnswer = atomic(async function recordReadyAnswer(entryId, { answer, until = null, reason = '', date, by = 'breeder' } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['active'], 'answer the ready check for');
@@ -332,41 +355,41 @@ export async function recordReadyAnswer(entryId, { answer, until = null, reason 
     ready_check: { answer: 'no', answered_date: date, until, reason: why, by },
     pause_request: { requested_date: date, until, note: why, from_ready_check: true }
   });
-}
+});
 
 // Her device's move under remove_after (§16.7): no answer in her window. Removed
 // with the 7-day undo, like a second-pass removal. They're held, so no offer is open.
-export async function removeForNoReadyAnswer(entryId, { date } = {}) {
+export const removeForNoReadyAnswer = atomic(async function removeForNoReadyAnswer(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['active'], 'remove');
   const saved = await waitlistEntryRepo.update(entryId, { status: 'removed', removed_date: date, removed_reason: 'no_ready_answer' });
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'they didn\'t answer the ready check' })) };
-}
+});
 
 // She removes a family from the list (7-day undo, then coming back means re-applying). Any
 // open offer they held is voided and moves on. Returns { entry, voided, offered }.
-export async function removeByBreeder(entryId, { date } = {}) {
+export const removeByBreeder = atomic(async function removeByBreeder(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['active'], 'remove');
   const saved = await waitlistEntryRepo.update(entryId, { status: 'removed', removed_date: date, removed_reason: 'by_breeder' });
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'you removed the family from the list' })) };
-}
+});
 
 // Archive an entry (it drops off the list). An open offer it held is voided and
 // moves on, the same as the family leaving. Unarchive goes straight to the repo:
 // it makes no offers. Returns { entry, voided, offered }.
-export async function archiveEntry(entryId, { date = todayYMD() } = {}) {
+export const archiveEntry = atomic(async function archiveEntry(entryId, { date = todayYMD() } = {}) {
   await load(entryId);
   const saved = await waitlistEntryRepo.archive(entryId);
   return { entry: saved, ...(await releaseOpenOffers(entryId, { date, why: 'the entry was archived' })) };
-}
+});
 
 // The 7-day undo on a removal (§6.4). A second pass: forgives the triggering pass so
 // the family isn't removed again at once; their anchor is untouched, so they're
 // back at their old place. Makes no offers (the page says where they're next).
-export async function undoRemoval(entryId, { today } = {}) {
+export const undoRemoval = atomic(async function undoRemoval(entryId, { today } = {}) {
   const entry = await load(entryId);
   today ??= await kennelDay(entry.kennel_id);
   if (!canUndoRemoval(entry, today)) throw new Error('This removal can no longer be undone.');
@@ -392,23 +415,23 @@ export async function undoRemoval(entryId, { today } = {}) {
     });
   }
   return waitlistEntryRepo.update(entryId, { status: 'active', removed_date: null, removed_reason: null });
-}
+});
 
 // The 7-day undo on a withdrawal she entered. Back to the status they left, with
 // their anchor untouched, so an active family is back at their old place. Makes
 // no offers (an offer voided by the withdrawal has moved on). Refused once the
 // family has re-applied, so they're never on the list twice.
-export async function undoWithdrawal(entryId, { today } = {}) {
+export const undoWithdrawal = atomic(async function undoWithdrawal(entryId, { today } = {}) {
   const entry = await load(entryId);
   today ??= await kennelDay(entry.kennel_id);
   if (!canUndoWithdrawal(entry, today)) throw new Error('This withdrawal can no longer be undone.');
   await assertNotReapplied(entry, 'withdrawal');
   return waitlistEntryRepo.update(entryId, { status: entry.withdrawn_from, withdrawn_date: null, withdrawn_from: null });
-}
+});
 
 // A closed run (placed, removed, withdrawn, declined, expired) → a NEW application
 // for the same family on the same kennel's list. New fee, new place (§6.4).
-export async function reapply(entryId, { date } = {}) {
+export const reapply = atomic(async function reapply(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   if (['applied', 'approved', 'active'].includes(entry.status)) {
@@ -426,13 +449,13 @@ export async function reapply(entryId, { date } = {}) {
     pref_purposes: [...(entry.pref_purposes || [])],
     pref_colors: [...(entry.pref_colors || [])]
   });
-}
+});
 
 // Manual position override (§6.1): a date that replaces the fee date for ordering
 // only. Pass `null` to clear it. `afterEntryId` takes another family's anchor
 // instead ("right after the Smiths") — date-only, so the family lands among that
 // family's same-day peers (Spec §14 known limit).
-export async function setPositionAnchor(entryId, { date = null, afterEntryId = null } = {}) {
+export const setPositionAnchor = atomic(async function setPositionAnchor(entryId, { date = null, afterEntryId = null } = {}) {
   let anchor = date || null;
   if (afterEntryId) {
     const other = await load(afterEntryId);
@@ -441,17 +464,17 @@ export async function setPositionAnchor(entryId, { date = null, afterEntryId = n
     if (!anchor) throw new Error('That family has no date in line yet, so there\'s nothing to place them with. Pick a date instead.');
   }
   return waitlistEntryRepo.update(entryId, { position_anchor_date: anchor });
-}
+});
 
 // "It's almost your turn" was sent (Spec §15.5): stamp each family with the date
 // and the litters the notice was about. A record only — it never skips a family
 // next time (she may need them again, e.g. for a "sorry, next time" note if a
 // litter falls short). `litterIdsByEntry` maps entryId → litter ids.
-export async function markSoonNotified(litterIdsByEntry, { date = todayYMD() } = {}) {
+export const markSoonNotified = atomic(async function markSoonNotified(litterIdsByEntry, { date = todayYMD() } = {}) {
   for (const [entryId, litterIds] of litterIdsByEntry) {
     await waitlistEntryRepo.update(entryId, { soon_notified_date: date, soon_notified_litter_ids: [...litterIds] });
   }
-}
+});
 
 // --- Duplicate applications (docs/KennelOS_Duplicate_Applications_Plan.md) ---------
 //
@@ -463,7 +486,7 @@ export async function markSoonNotified(litterIdsByEntry, { date = todayYMD() } =
 // the other is deleted (recordMerge.replaceAndDelete). `mergeContacts` (when each
 // had its own contact) merges the other's contact into the kept one's in the same
 // step, `contactChoices` as recordMerge's. → { entry, moved, contactsMerged }.
-export async function mergeApplications(keepId, dropId, { choices = {}, mergeContacts = false, contactChoices = {}, date = todayYMD(), dropName = '' } = {}) {
+export const mergeApplications = atomic(async function mergeApplications(keepId, dropId, { choices = {}, mergeContacts = false, contactChoices = {}, date = todayYMD(), dropName = '' } = {}) {
   const [keep, drop] = await Promise.all([waitlistEntryRepo.getById(keepId), waitlistEntryRepo.getById(dropId)]);
   if (!keep || !drop) throw new Error('One of those applications no longer exists.');
   const offers = [...await waitlistOfferRepo.getByEntry(keepId), ...await waitlistOfferRepo.getByEntry(dropId)];
@@ -487,7 +510,7 @@ export async function mergeApplications(keepId, dropId, { choices = {}, mergeCon
     contactsMerged = true;
   }
   return { entry: await waitlistEntryRepo.getById(keepId), moved, contactsMerged };
-}
+});
 
 // --- Offers: turns (Spec §6.4–§6.5, §16.1) ------------------------------------------
 //
@@ -625,7 +648,7 @@ async function makeTurn(c, entry, ls, { today, note = '', prepassed = [] }) {
 // the way), `{ none: true, auto_passed }` when families were passed but nobody is
 // left to offer, or null (a turn is open, or nobody is eligible for any open
 // litter). Callers must show auto_passed: a pass she didn't see is a surprise.
-export async function offerNextTurn(kennelId, { today } = {}) {
+export const offerNextTurn = atomic(async function offerNextTurn(kennelId, { today } = {}) {
   today ??= await kennelDay(kennelId);
   const autoPassed = [];
   for (;;) {
@@ -636,7 +659,7 @@ export async function offerNextTurn(kennelId, { today } = {}) {
     if (offer.length) return { ...(await makeTurn(c, next.entry, offer, { today, prepassed })), auto_passed: autoPassed };
     autoPassed.push(await autoPassTurn(c, next.entry, prepassed, today));
   }
-}
+});
 
 // Who'd get the next turn in this kennel, without offering it (Kels's Review my
 // waitlist: "Next in line is…"): nextTurn on the kennel's records. → { entry,
@@ -652,7 +675,7 @@ export async function previewNextTurn(kennelId, { today } = {}) {
 // date must be after today; a day she's closed moves to her next open day, as
 // every other deadline does (K6-8). → the turn (turnView), with `moved_from` set
 // when the date was moved.
-export async function extendTurn(turnId, { until, date } = {}) {
+export const extendTurn = atomic(async function extendTurn(turnId, { until, date } = {}) {
   const offers = (await waitlistOfferRepo.getAll()).filter((o) => !o.is_archived && o.outcome === 'open' && turnIdOf(o) === turnId);
   if (!offers.length) throw new Error('That turn isn\'t open any more.');
   const kennel = offers[0].kennel_id ? await kennelRepo.getById(offers[0].kennel_id) : null;
@@ -665,15 +688,15 @@ export async function extendTurn(turnId, { until, date } = {}) {
     rows.push(await waitlistOfferRepo.update(o.id, { respond_by_date: until, notes: appendNote(o.notes, `Given more time on ${date}: until ${until} (was ${o.respond_by_date || 'no date'}).`) }));
   }
   return { ...turnView(rows), moved_from: until !== asked ? asked : null };
-}
+});
 
 // The next turn in this litter's kennel (the Litter page's "Offer to them").
-export async function offerNext(litterId, { today } = {}) {
+export const offerNext = atomic(async function offerNext(litterId, { today } = {}) {
   const litter = await litterRepo.getById(litterId);
   if (!litter) throw new Error('That litter no longer exists.');
   assertOnWaitlist(litter);
   return offerNextTurn(litter.kennel_id, { today });
-}
+});
 
 // A litter kept off the waitlist (E3) is never offered: no picks, no turn.
 function assertOnWaitlist(litter) {
@@ -689,7 +712,7 @@ function assertOnWaitlist(litter) {
 // an error whose `nextEntry` is the family the turn belongs to (K6-6). An
 // out-of-order turn always carries a note saying who was next: `note`, else one
 // written here. Returns the turn.
-export async function offerTo(litterId, entryId, { today, note = '', outOfOrder = false } = {}) {
+export const offerTo = atomic(async function offerTo(litterId, entryId, { today, note = '', outOfOrder = false } = {}) {
   const litter = await litterRepo.getById(litterId);
   if (!litter) throw new Error('That litter no longer exists.');
   let c = await kennelContext(litter.kennel_id);
@@ -716,7 +739,7 @@ export async function offerTo(litterId, entryId, { today, note = '', outOfOrder 
   const ls = turnLittersFor(entry, c.offers, c.litters, c.pups, c.sales, { today, config: c.config });
   const { offer, prepassed } = splitPrepassed(entry, ls);
   return makeTurn(c, entry, offer, { today, note, prepassed });
-}
+});
 
 // **Open picks** (Spec §6.5): stamp the litter. With no turn open, the next turn is
 // offered. With one open, the litter joins it when its holder is the
@@ -725,7 +748,7 @@ export async function offerTo(litterId, entryId, { today, note = '', outOfOrder 
 // and otherwise waits for the next turn. Opening picks again keeps the first
 // opened date (K6-11); only closePicks clears it.
 // Returns the turn offered or joined (`joined: true`), or null.
-export async function openPicks(litterId, { date } = {}) {
+export const openPicks = atomic(async function openPicks(litterId, { date } = {}) {
   const before = await litterRepo.getById(litterId);
   if (!before) throw new Error('That litter no longer exists.');
   date ??= await kennelDay(before.kennel_id);
@@ -753,13 +776,13 @@ export async function openPicks(litterId, { date } = {}) {
     offered_date: date, respond_by_date: respondBy, eligible_dog_ids: eligible.map((d) => d.id), outcome: 'open'
   }));
   return { ...turnView(rows), joined: true };
-}
+});
 
 // Stop making new offers on this litter. An open turn stays open until she records
 // how it ended.
-export async function closePicks(litterId) {
+export const closePicks = atomic(async function closePicks(litterId) {
   return litterRepo.update(litterId, { picks_opened_date: null });
-}
+});
 
 // The turn moved on (a turn closed, or its family left the list). `trigger` is how
 // it closed: accepted / passed / no_response / no_deposit / left. With automatic
@@ -885,7 +908,7 @@ async function openTurnRows(offer) {
 // nothing of the deposit to send, the pick goes straight on to confirmDeposit (the
 // deposit received on the pick's date, the pup and family placed, the turn moves
 // on): confirmDeposit's result plus depositDone: true.
-export async function recordPick(offerId, { chosenDogId, date } = {}) {
+export const recordPick = atomic(async function recordPick(offerId, { chosenDogId, date } = {}) {
   const offer = await loadOpenOffer(offerId);
   date ??= await kennelDay(offer.kennel_id);
   if (offer.chosen_dog_id) throw new Error('They\'ve already picked a pup. Use "Change pup" to switch.');
@@ -921,14 +944,14 @@ export async function recordPick(offerId, { chosenDogId, date } = {}) {
     return { ...placed, depositDone: true };
   }
   return { offer: saved, sale, depositDone: false };
-}
+});
 
 // Switch the pup a family picked (Spec §6.5 — they clicked the wrong one), within
 // the same litter. Allowed while the deposit is pending, and after it too as long
 // as nobody else has been offered a turn since. The same Sale moves to the new pup;
 // its price and deposit follow the new pup's expected amounts only where she hasn't
 // changed them (and a paid deposit is never touched). Returns { offer, sale }.
-export async function changePick(offerId, { chosenDogId, date } = {}) {
+export const changePick = atomic(async function changePick(offerId, { chosenDogId, date } = {}) {
   const offer = await loadOffer(offerId);
   date ??= await kennelDay(offer.kennel_id);
   const c = await litterContext(offer.litter_id);
@@ -962,7 +985,7 @@ export async function changePick(offerId, { chosenDogId, date } = {}) {
     notes: appendNote(offer.notes, `Pick switched from ${oldDog ? oldDog.call_name : 'another pup'} to ${dog.call_name} on ${date}.`)
   });
   return { offer: saved, sale: savedSale };
-}
+});
 
 // The deposit arrived for a picked pup: the Sale moves to deposit paid, the pup is
 // placed, the offer is accepted, the family is placed and leaves the list (the
@@ -970,7 +993,7 @@ export async function changePick(offerId, { chosenDogId, date } = {}) {
 // pass), and the next turn comes up. Returns the same shape as recordOutcome.
 // `paidDate` (default `date`): when the money came in, for the sale's deposit_date
 // (she enters it; never a credit's date, plan §3.2a).
-export async function confirmDeposit(offerId, { date, amount, paidDate = null } = {}) {
+export const confirmDeposit = atomic(async function confirmDeposit(offerId, { date, amount, paidDate = null } = {}) {
   const offer = await loadOpenOffer(offerId);
   date ??= await kennelDay(offer.kennel_id);
   if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
@@ -995,7 +1018,7 @@ export async function confirmDeposit(offerId, { date, amount, paidDate = null } 
   // Another open turn this pup was the last one in ends too (never a pass).
   result.ended = (await endEmptiedTurns({ kennelId: offer.kennel_id, date, why: 'another family\'s deposit arrived first', moveOn: false })).ended;
   return finishTurn(result, offer.kennel_id, date, 'accepted');
-}
+});
 
 // --- Side sales (Side Sale Spec) ---------------------------------------------------
 // She sells a pup to a family on her list outside the turn order. A deposit-pending
@@ -1009,7 +1032,7 @@ export async function confirmDeposit(offerId, { date, amount, paidDate = null } 
 // A pup that wasn't Available becomes Available and is held for this family until
 // the deposit or a cancel (then it goes back). Returns { sale, issues, depositDone }
 // (a carried-over deposit from a pup they lost places them at once).
-export async function recordSideSale(entryId, { dogId, registration, depositDue = null, updateAnswers = false, updateRegistration = false, date } = {}) {
+export const recordSideSale = atomic(async function recordSideSale(entryId, { dogId, registration, depositDue = null, updateAnswers = false, updateRegistration = false, date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   if (entry.status !== 'active') throw new Error('Only families on the list can have a side sale.');
@@ -1067,7 +1090,7 @@ export async function recordSideSale(entryId, { dogId, registration, depositDue 
     return { ...placed, issues, depositDone: true };
   }
   return { sale, issues, depositDone: false };
-}
+});
 
 // The deposit for a side sale arrived: the sale is deposit paid, the pup placed, the
 // family placed. Any other claim on the pup is resolved (§5): a side sale is
@@ -1077,7 +1100,7 @@ export async function recordSideSale(entryId, { dogId, registration, depositDue 
 // No turn moves on, unless a turn ended here: their own (a turn the server gave
 // them while her phone was off, moved on as `accepted`) or one left with no pup
 // (moved on as `left`). → { sale, entry, resolved, ended, next, waiting, auto_passed }
-export async function confirmSideDeposit(saleId, { date, amount, paidDate = null } = {}) {
+export const confirmSideDeposit = atomic(async function confirmSideDeposit(saleId, { date, amount, paidDate = null } = {}) {
   const sale = await saleRepo.getById(saleId);
   if (!sale || !sale.side_entry_id) throw new Error('That isn\'t a side sale.');
   date ??= await kennelDay((await waitlistEntryRepo.getById(sale.side_entry_id))?.kennel_id);
@@ -1098,13 +1121,13 @@ export async function confirmSideDeposit(saleId, { date, amount, paidDate = null
   const result = { sale: saved, entry: placed, resolved, ended, next: null, waiting: [], auto_passed: [] };
   if (!released.voided.length && !ended.length && !resolved.some((r) => r.voided)) return result;
   return finishTurn(result, entry.kennel_id, date, released.voided.length ? 'accepted' : 'left');
-}
+});
 
 // Cancel a side sale (hers, or its deposit never came): the sale is cancelled and the
 // family keeps their place (never a pass). A pup it held goes back to what it was.
 // → { sale, restored: the disposition restored, or null }
 // `leaving`: the family is leaving the list (releaseOpenOffers), so no place is kept.
-export async function cancelSideSale(saleId, { date, why = 'you cancelled it', leaving = false } = {}) {
+export const cancelSideSale = atomic(async function cancelSideSale(saleId, { date, why = 'you cancelled it', leaving = false } = {}) {
   const sale = await saleRepo.getById(saleId);
   if (!sale || !sale.side_entry_id) throw new Error('That isn\'t a side sale.');
   date ??= await kennelDay((await waitlistEntryRepo.getById(sale.side_entry_id))?.kennel_id);
@@ -1123,7 +1146,7 @@ export async function cancelSideSale(saleId, { date, why = 'you cancelled it', l
     await addFamilyActivity(entry.id, [{ id: `side-sale-cancel-${sale.id}`, kind: 'action', body: `The side sale was cancelled (${why}).${leaving ? '' : ' They keep their place on the list.'}` }]);
   }
   return { sale: saved, restored };
-}
+});
 
 // Two claims on one pup, one deposit in (§5): end the rest. `keepSaleId` is the sale
 // that won. → [{ kind: 'side_cancelled', entry_id, sale_id, restored } |
@@ -1165,7 +1188,7 @@ async function resolveOtherClaims(dogId, { keepSaleId, date, who }) {
 // `kennelId`: one kennel, or every kennel with an open turn. `why`: what took the
 // pup, when the caller knows. → { ended: [{ entry_id, turn_id, litter_ids }],
 // offered: [turn], waiting: [...], auto_passed: [...] }
-export async function endEmptiedTurns({ kennelId = null, date: asked = null, why = null, moveOn = true } = {}) {
+export const endEmptiedTurns = atomic(async function endEmptiedTurns({ kennelId = null, date: asked = null, why = null, moveOn = true } = {}) {
   const result = { ended: [], offered: [], waiting: [], auto_passed: [] };
   const open = (await waitlistOfferRepo.getAll()).filter((o) => o.outcome === 'open' && (!kennelId || o.kennel_id === kennelId));
   for (const kid of [...new Set(open.map((o) => o.kennel_id).filter(Boolean))]) {
@@ -1194,7 +1217,7 @@ export async function endEmptiedTurns({ kennelId = null, date: asked = null, why
     }
   }
   return result;
-}
+});
 
 // Started once per page (app.js) where the waitlist is on: ends emptied turns
 // (endEmptiedTurns) shortly after any change to her data, wherever it was made (the
@@ -1235,7 +1258,7 @@ export function watchEmptiedTurns({ win = globalThis, onEnded = () => {}, busy =
 // never a pass, and they're next again once this family's turn settles — unless
 // they've already picked a pup (then she settles that first). Makes no other
 // offer. Returns { offer, offers, voided, restored }.
-export async function undoPass(offerId, { today } = {}) {
+export const undoPass = atomic(async function undoPass(offerId, { today } = {}) {
   const offer = await loadOffer(offerId);
   today ??= await kennelDay(offer.kennel_id);
   const entry = await load(offer.entry_id);
@@ -1287,7 +1310,7 @@ export async function undoPass(offerId, { today } = {}) {
   }
   result.offer = result.offers.find((o) => o.id === offerId) || result.offers[0];
   return result;
-}
+});
 
 // Record how a turn ended, from any of its rows. `outcome` is accepted / passed /
 // no_response / voided. Returns { offer, sale, removed, passes, next, voided,
@@ -1312,7 +1335,7 @@ export async function undoPass(offerId, { today } = {}) {
 // counted is forgiven. While they hold a turn in the kennel and still match a pup in
 // it, the litter joins that turn at its deadline; otherwise it waits for their next
 // turn by the usual rule (or she offers it from their page). → { voided, joined }
-export async function undoPrepass(offerId, { today } = {}) {
+export const undoPrepass = atomic(async function undoPrepass(offerId, { today } = {}) {
   const offer = await loadOffer(offerId);
   if (!isPrepassedRow(offer)) throw new Error('That isn\'t a "Not this litter" they said ahead of time.');
   const entry = await load(offer.entry_id);
@@ -1337,9 +1360,9 @@ export async function undoPrepass(offerId, { today } = {}) {
     joined = turnView([...mine.offers, row]);
   }
   return { voided, joined };
-}
+});
 
-export async function recordOutcome(offerId, outcome, { date, chosenDogId = null, depositDate = null, depositAmount, passReason = null, moveOn = true } = {}) {
+export const recordOutcome = atomic(async function recordOutcome(offerId, outcome, { date, chosenDogId = null, depositDate = null, depositAmount, passReason = null, moveOn = true } = {}) {
   const offer = await loadOpenOffer(offerId);
   date ??= await kennelDay(offer.kennel_id);
   const entry = await load(offer.entry_id);
@@ -1397,13 +1420,13 @@ export async function recordOutcome(offerId, outcome, { date, chosenDogId = null
   // `moveOn: false`: the server already moved the turn on (W2 step 7).
   if (!moveOn) return result;
   return finishTurn(result, offer.kennel_id, date, closingTrigger(picked || offer, outcome));
-}
+});
 
 // A turn KennelOS offered while her phone was off (W2 step 7;
 // waitlistEvents.planServerEvent checked it against her records): the same rows,
 // with the server's ids, so the family's pick on it maps to them.
 // `turn`: { turn_id, offered_date, respond_by_date, rows: [{ offer_id, litter_id, dog_ids }] }.
-export async function applyServerOffer(entryId, turn) {
+export const applyServerOffer = atomic(async function applyServerOffer(entryId, turn) {
   const entry = await load(entryId);
   const rows = [];
   for (const r of turn.rows) {
@@ -1416,7 +1439,7 @@ export async function applyServerOffer(entryId, turn) {
     }));
   }
   return turnView(rows);
-}
+});
 
 // --- A lost pup (Spec §16.11) ------------------------------------------------------
 //
@@ -1451,7 +1474,7 @@ export async function lostSaleFamilyFor(saleId) {
 // automatic offers on for it and nobody holding a turn → the next turn is offered
 // now (to them, when they're next); otherwise who's next is returned.
 // Returns { kind, entry, offers, voided, next, waiting }.
-export async function restoreAfterLostSale(saleId, { date, carry = null } = {}) {
+export const restoreAfterLostSale = atomic(async function restoreAfterLostSale(saleId, { date, carry = null } = {}) {
   const found = await lostSaleFamilyFor(saleId);
   if (!found) throw new Error('This sale isn\'t a waitlist family\'s lost pup (it must be voided, or returned for a health problem).');
   const { kind, entry, offer, sale } = found;
@@ -1507,7 +1530,7 @@ export async function restoreAfterLostSale(saleId, { date, carry = null } = {}) 
     notes: entryNote(result.offers.length ? 'Their turn was given back' : 'Their turn ended with no other pup for them')
   });
   return result.offers.length ? result : finishTurn(result, entry.kennel_id, date, 'restored');
-}
+});
 
 // --- The status page (W2 step 5): family actions, requests, messages -------------
 //
@@ -1524,7 +1547,7 @@ export const MESSAGE_MAX = 10000;
 
 // Add lines to a family's activity (by id, so the same line is never added twice).
 // → the entry, or null when there was nothing new.
-export async function addFamilyActivity(entryId, items) {
+export const addFamilyActivity = atomic(async function addFamilyActivity(entryId, items) {
   const entry = await load(entryId);
   const have = new Set((entry.messages || []).map((m) => m.id));
   const fresh = items.filter((m) => m && m.id && !have.has(m.id)).map((m) => ({
@@ -1536,13 +1559,13 @@ export async function addFamilyActivity(entryId, items) {
     .sort((a, b) => String(a.at).localeCompare(String(b.at)))
     .slice(-MESSAGES_KEPT);
   return waitlistEntryRepo.update(entryId, { messages });
-}
+});
 
-export async function markMessagesRead(entryId) {
+export const markMessagesRead = atomic(async function markMessagesRead(entryId) {
   const entry = await load(entryId);
   if (!(entry.messages || []).some((m) => !m.read)) return entry;
   return waitlistEntryRepo.update(entryId, { messages: entry.messages.map((m) => ({ ...m, read: true })) });
-}
+});
 
 const decided = (req, decision, date) => ({ ...req, decided: decision, decided_date: date });
 const pending = (req) => Boolean(req && req.requested_date && !req.decided);
@@ -1557,7 +1580,7 @@ function loadPending(entry, field, what) {
 // her records refuse after all (the pup was sold a moment ago…) becomes an
 // activity line instead, never an error that stops the other events.
 // → { done: op, result?, activity: entry | null }
-export async function applyFamilyPlan(entryId, plan) {
+export const applyFamilyPlan = atomic(async function applyFamilyPlan(entryId, plan) {
   const { date } = plan;
   let result = null;
   let activity = plan.activity;
@@ -1577,7 +1600,8 @@ export async function applyFamilyPlan(entryId, plan) {
       case 'companion_request': await waitlistEntryRepo.update(entryId, { companion_request: plan.request }); break;
       case 'extra_request': await addExtraRequest(entryId, plan.request); break;
       case 'pickup_request': await addPickupRequest(entryId, plan.request); break;
-      case 'home_location': await setHomeLocation(entryId, { place: plan.place, miles: plan.miles, date }); break;
+      // Unmeasured (the map service was down): left for her device to measure (K8-5).
+      case 'home_location': await setHomeLocation(entryId, { place: plan.place, miles: plan.miles, date: Number.isFinite(plan.miles) ? date : null }); break;
       case 'back_out_request': await waitlistEntryRepo.update(entryId, { back_out_request: plan.request }); break;
       case 'listen_apply': await waitlistEntryRepo.update(entryId, plan.changes); break;
       case 'note': case 'skip': break;
@@ -1589,29 +1613,29 @@ export async function applyFamilyPlan(entryId, plan) {
     result = null;
   }
   return { done: plan.op, result, activity: activity ? await addFamilyActivity(entryId, [activity]) : null };
-}
+});
 
 // A pause they asked for (Spec §6.3, Q7): approving sets paused_until to their
 // date (their note, if any, becomes the pause reason); declining changes nothing.
-export async function approvePauseRequest(entryId, { date } = {}) {
+export const approvePauseRequest = atomic(async function approvePauseRequest(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const req = loadPending(entry, 'pause_request', 'pause');
   return waitlistEntryRepo.update(entryId, {
     paused_until: req.until, pause_reason: req.note || entry.pause_reason || '', pause_request: decided(req, 'approved', date)
   });
-}
+});
 
-export async function declinePauseRequest(entryId, { date } = {}) {
+export const declinePauseRequest = atomic(async function declinePauseRequest(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   return waitlistEntryRepo.update(entryId, { pause_request: decided(loadPending(entry, 'pause_request', 'pause'), 'declined', date) });
-}
+});
 
 // A change to their matching answers (Spec §15.9). Approving applies it and logs
 // it `by: 'request'`; declining logs what they asked for with `declined: true`.
 // Neither closes an open offer.
-export async function approvePrefChange(entryId, { date } = {}) {
+export const approvePrefChange = atomic(async function approvePrefChange(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const req = loadPending(entry, 'pref_change_request', 'answer-change');
@@ -1621,9 +1645,9 @@ export async function approvePrefChange(entryId, { date } = {}) {
     pref_change_log: [...(entry.pref_change_log || []), ...lines],
     pref_change_request: decided(req, 'approved', date)
   });
-}
+});
 
-export async function declinePrefChange(entryId, { date } = {}) {
+export const declinePrefChange = atomic(async function declinePrefChange(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const req = loadPending(entry, 'pref_change_request', 'answer-change');
@@ -1632,10 +1656,10 @@ export async function declinePrefChange(entryId, { date } = {}) {
     pref_change_log: [...(entry.pref_change_log || []), ...lines],
     pref_change_request: decided(req, 'declined', date)
   });
-}
+});
 
 // A narrower listen-only change they asked for (Spec §15.7 item 6).
-export async function approveListenChange(entryId, { date } = {}) {
+export const approveListenChange = atomic(async function approveListenChange(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const req = loadPending(entry, 'listen_change_request', 'listen-only');
@@ -1644,37 +1668,37 @@ export async function approveListenChange(entryId, { date } = {}) {
     ...((req.listen_mode || 'all') !== 'all' ? { listen_sire_ids: [...(req.listen_sire_ids || [])], listen_dam_ids: [...(req.listen_dam_ids || [])] } : {}),
     listen_change_request: decided(req, 'approved', date)
   });
-}
+});
 
-export async function declineListenChange(entryId, { date } = {}) {
+export const declineListenChange = atomic(async function declineListenChange(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   return waitlistEntryRepo.update(entryId, { listen_change_request: decided(loadPending(entry, 'listen_change_request', 'listen-only'), 'declined', date) });
-}
+});
 
 // Their Companion link request (Spec §8.3). She sends the link herself from the
 // Companion page (her device builds it; it never goes through the server), then
 // marks the request sent, or declines it. Either way their page shows it.
-export async function markCompanionLinkSent(entryId, { date } = {}) {
+export const markCompanionLinkSent = atomic(async function markCompanionLinkSent(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   return waitlistEntryRepo.update(entryId, { companion_request: decided(loadPending(entry, 'companion_request', 'Companion link'), 'sent', date) });
-}
+});
 
-export async function declineCompanionRequest(entryId, { date } = {}) {
+export const declineCompanionRequest = atomic(async function declineCompanionRequest(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   return waitlistEntryRepo.update(entryId, { companion_request: decided(loadPending(entry, 'companion_request', 'Companion link'), 'declined', date) });
-}
+});
 
 // --- Extras they ask for or cancel (Family Requests plan §3) ------------------------
 // A request waits on the entry (familyExtras.js) until she approves or declines it.
 
-export async function addExtraRequest(entryId, request) {
+export const addExtraRequest = atomic(async function addExtraRequest(entryId, request) {
   const entry = await load(entryId);
   const next = withExtraRequest(entry, request);
   return next ? waitlistEntryRepo.update(entryId, { extra_requests: next }) : entry;
-}
+});
 
 function loadExtraRequest(entry, requestId) {
   const req = (entry.extra_requests || []).find((r) => r.id === requestId);
@@ -1699,7 +1723,7 @@ async function ownSale(entry, sales) {
 // | { kind: 'transport', fee } (replaces the sale's; 0 takes it off) | { kind:
 // 'boarding', rate, per, count } (replaces the sale's; hers now, not a pickup date's).
 // No email: their status page shows it. → { before, sale, charge } (charge: an extra added).
-export async function addSaleCharge(entryId, add, { date } = {}) {
+export const addSaleCharge = atomic(async function addSaleCharge(entryId, add, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const sales = entry.contact_id ? await saleRepo.getByBuyer(entry.contact_id) : [];
@@ -1738,13 +1762,13 @@ export async function addSaleCharge(entryId, add, { date } = {}) {
   }
   const sale = await saleRepo.update(before.id, changes);
   return { before, sale, charge };
-}
+});
 
 // Approve: an extra asked for goes on their open sale, its name and price copied
 // from her price list and its payment plan copied as dated steps; a cancellation
 // takes it off (not when part of it is paid: she edits the sale for a refund).
 // → { entry, sale, charge, kind, boardingDays } (charge: the row added or removed).
-export async function approveExtraRequest(entryId, requestId, { date } = {}) {
+export const approveExtraRequest = atomic(async function approveExtraRequest(entryId, requestId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const req = loadExtraRequest(entry, requestId);
@@ -1775,34 +1799,35 @@ export async function approveExtraRequest(entryId, requestId, { date } = {}) {
   }
   const updated = await waitlistEntryRepo.update(entryId, { extra_requests: decideExtra(entry, requestId, 'approved', date) });
   return { entry: updated, sale: await saleRepo.getById(sale.id), charge, kind: req.kind, boardingDays };
-}
+});
 
-export async function declineExtraRequest(entryId, requestId, { date } = {}) {
+export const declineExtraRequest = atomic(async function declineExtraRequest(entryId, requestId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   loadExtraRequest(entry, requestId);
   return waitlistEntryRepo.update(entryId, { extra_requests: decideExtra(entry, requestId, 'declined', date) });
-}
+});
 
 // --- Pickup (Family Requests plan §4) ---------------------------------------------
 
-export async function addPickupRequest(entryId, request) {
+export const addPickupRequest = atomic(async function addPickupRequest(entryId, request) {
   const entry = await load(entryId);
   const next = withPickupRequest(entry, request);
   return next ? waitlistEntryRepo.update(entryId, { pickup_requests: next }) : entry;
-}
+});
 
 // Where they live, measured once (her device from their application, or the server
-// from their answer on the status page). `miles` null = not measured.
-export async function setHomeLocation(entryId, { place, miles = null, date = todayYMD() }) {
+// from their answer on the status page). `miles` null = not measured; `date` null =
+// not tried yet, so her device's next sync measures it (measureHomes).
+export const setHomeLocation = atomic(async function setHomeLocation(entryId, { place, miles = null, date = todayYMD() }) {
   return waitlistEntryRepo.update(entryId, { home_place: place || null, home_miles: Number.isFinite(miles) ? miles : null, home_measured_date: date });
-}
+});
 
 // Her choice for this family: true (they may suggest a place), false (listed places
 // only), or null (follow her distance rule).
-export async function setOwnPlaceOverride(entryId, value) {
+export const setOwnPlaceOverride = atomic(async function setOwnPlaceOverride(entryId, value) {
   return waitlistEntryRepo.update(entryId, { own_place_override: typeof value === 'boolean' ? value : null });
-}
+});
 
 function loadPickupRequest(entry, requestId) {
   const req = (entry.pickup_requests || []).find((r) => r.id === requestId);
@@ -1826,20 +1851,20 @@ async function clearPickupBoarding(sale) {
 // Her standard boarding for a pickup on a boarding date: the sale's deferred
 // boarding (her rate, per Day, that many days) marked as set from the pickup, and
 // the stay logged. `b` is pickupSlots.standardBoarding's result.
-export async function applyPickupBoarding(saleId, b, rate) {
+export const applyPickupBoarding = atomic(async function applyPickupBoarding(saleId, b, rate) {
   const sale = await saleRepo.getById(saleId);
   await saleRepo.update(sale.id, { deferred_boarding_amount: rate, deferred_boarding_frequency: 'Day', deferred_boarding_duration_days: b.days, boarding_from_pickup: true });
   await eventRepo.create({
     subject_type: 'dog', subject_id: sale.dog_id, event_type: 'boarding', event_date: b.start, event_end_date: b.end, title: BOARDING_TITLE,
     details: { boarding_reason: 'Deferred pickup', sale_id: sale.id, pickup_boarding: 'yes' }
   });
-}
+});
 
 // Take the transport fee off a sale (she said so, after the family moved off their
 // own address).
-export async function clearTransportFee(saleId) {
+export const clearTransportFee = atomic(async function clearTransportFee(saleId) {
   return saleRepo.update(saleId, { transport_fee: null });
-}
+});
 
 // A deferred boarding charge she put on the sale herself (not one a pickup set).
 const ownBoarding = (sale) => Number(sale.deferred_boarding_amount) > 0 && !sale.boarding_from_pickup;
@@ -1858,7 +1883,7 @@ const decidePickup = (entry, requestId, decision, date) =>
 // or clear. → { entry, sale, event, boarding, boardingKept, transportFeeLeft }
 // `time`: the drop-off time for their own place (free text); left out (null), the
 // time they asked for, if any. '' means none.
-export async function approvePickupRequest(entryId, requestId, { date, when = null, time = null, method = 'Ground transport', fee = null } = {}) {
+export const approvePickupRequest = atomic(async function approvePickupRequest(entryId, requestId, { date, when = null, time = null, method = 'Ground transport', fee = null } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const req = loadPickupRequest(entry, requestId);
@@ -1875,6 +1900,16 @@ export async function approvePickupRequest(entryId, requestId, { date, when = nu
     const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
     const slot = (litter?.pickup_slots || []).find((s) => s.id === req.slot_id);
     if (!slot) throw new Error('That pickup time isn\'t on the litter any more. Decline it, and they can choose another.');
+    // Two families can ask for the last place in the same moment (K8-14): approving
+    // checks the time still has room among the bookings already confirmed, this
+    // family's own earlier one aside.
+    const mine = new Set(upcoming.map((e) => e.id));
+    const taken = (await eventRepo.getByType('placement')).filter((e) => !e.is_archived
+      && e.details?.pickup_slot_id === slot.id && !mine.has(e.id)).length;
+    const places = Math.max(1, Number(slot.capacity) || 1);
+    if (taken >= places) {
+      throw new Error(`That time is full: ${taken} of its ${places} place${places === 1 ? ' is' : 's are'} already booked. Decline this request so they can choose another time, or give the time more places on the litter's Pickup times first.`);
+    }
     const place = pickupLocations(kennel).find((l) => l.id === slot.location_id);
     for (const e of upcoming) await eventRepo.archive(e.id);
     await clearPickupBoarding(sale);
@@ -1914,7 +1949,7 @@ export async function approvePickupRequest(entryId, requestId, { date, when = nu
   const after = await saleRepo.getById(sale.id);
   const transportFeeLeft = req.kind !== 'address' && Number(after.transport_fee) > 0 ? Number(after.transport_fee) : null;
   return { entry: updated, sale: after, event, boarding, boardingKept, transportFeeLeft };
-}
+});
 
 // Each sale's pickupWish: what its family asked for and she hasn't decided, for a
 // pickup she logs another way. `sales`: the sales to look up. → Map sale id → wish
@@ -1941,12 +1976,12 @@ export async function pickupWishesFor(sales) {
   return out;
 }
 
-export async function declinePickupRequest(entryId, requestId, { date } = {}) {
+export const declinePickupRequest = atomic(async function declinePickupRequest(entryId, requestId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   loadPickupRequest(entry, requestId);
   return waitlistEntryRepo.update(entryId, { pickup_requests: decidePickup(entry, requestId, 'declined', date) });
-}
+});
 
 // --- Backing out (Family Requests plan §7) ------------------------------------------
 //
@@ -1975,7 +2010,7 @@ export async function declinePickupRequest(entryId, requestId, { date } = {}) {
 // they paid (her choice, 0 up to what they paid beyond their credits) as a credit for
 // funds received toward their next pup. Without `credit`, all they paid.
 // A decided `refund` from before D9 still reads; a new one is refused.
-export async function approveBackOut(entryId, { outcome, credit = null, remove = [], pup = null, date, told = null } = {}) {
+export const approveBackOut = atomic(async function approveBackOut(entryId, { outcome, credit = null, remove = [], pup = null, date, told = null } = {}) {
   if (outcome === 'refund') throw new Error('Nothing is refunded when a family backs out: keep what they paid, or put them back in line with a credit for some of it.');
   if (!['keep', 'move'].includes(outcome)) throw new Error('Choose what happens to what they paid.');
   const entry = await load(entryId);
@@ -2048,7 +2083,7 @@ export async function approveBackOut(entryId, { outcome, credit = null, remove =
   }
   result.sale = await saleRepo.getById(sale.id);
   return openTurn ? finishTurn(result, entry.kennel_id, date, 'left') : result;
-}
+});
 
 // The waitlist family an open sale belongs to (familySale: placed with it, or their
 // pick's), for a back-out she records herself (End the sale…, the Sale page's
@@ -2087,33 +2122,33 @@ export function closeRequests(entry, date) {
   return out;
 }
 
-export async function declineBackOut(entryId, { date } = {}) {
+export const declineBackOut = atomic(async function declineBackOut(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   return waitlistEntryRepo.update(entryId, { back_out_request: decided(loadPending(entry, 'back_out_request', 'back-out'), 'declined', date) });
-}
+});
 
 // "Not this litter" (Spec §16.2): a pending pass on a litter (or an upcoming
 // pairing), with the family's reason. Nothing counts until their turn comes; one
 // per litter, and saying it again replaces it. `prepass` is { litter_id | pairing_id,
 // reason: { id, label, text }, date }.
-export async function addPrepass(entryId, prepass) {
+export const addPrepass = atomic(async function addPrepass(entryId, prepass) {
   const entry = await load(entryId);
   const same = (p) => (prepass.litter_id ? p.litter_id === prepass.litter_id : p.pairing_id === prepass.pairing_id);
   return waitlistEntryRepo.update(entryId, { prepasses: [...(entry.prepasses || []).filter((p) => !same(p)), prepass] });
-}
+});
 
 // Take a "Not this litter" back. `target` is { litter_id } or { pairing_id }.
-export async function removePrepass(entryId, target) {
+export const removePrepass = atomic(async function removePrepass(entryId, target) {
   const entry = await load(entryId);
   const same = (p) => (target.litter_id ? p.litter_id === target.litter_id : p.pairing_id === target.pairing_id);
   return waitlistEntryRepo.update(entryId, { prepasses: (entry.prepasses || []).filter((p) => !same(p)) });
-}
+});
 
 // Her closed dates more than CLOSED_DATES_KEPT_DAYS (7) past drop off by themselves:
 // run when the app loads (app.js), for each of her kennels with a list. → how many
 // kennels changed.
-export async function tidyClosedDates(today = todayYMD()) {
+export const tidyClosedDates = atomic(async function tidyClosedDates(today = todayYMD()) {
   let changed = 0;
   for (const kennel of await kennelRepo.getAll()) {
     if (!kennel.is_own_kennel || kennel.is_archived) continue;
@@ -2124,7 +2159,7 @@ export async function tidyClosedDates(today = todayYMD()) {
     changed++;
   }
   return changed;
-}
+});
 
 // --- Family pages without the list (E3, Waitlist Fixes Plan §3.3) -------------------
 //
@@ -2138,7 +2173,7 @@ export async function tidyClosedDates(today = todayYMD()) {
 // One sale's family page. Refuses an ended sale, a sale with no buyer, and a sale
 // another record already claims (familyPageBlocker). Its status link is minted when
 // she publishes, as for any record. → the new entry.
-export async function addFamilyPage(saleId, { date = todayYMD() } = {}) {
+export const addFamilyPage = atomic(async function addFamilyPage(saleId, { date = todayYMD() } = {}) {
   const sale = await saleRepo.getById(saleId);
   const dog = sale ? await dogRepo.getById(sale.dog_id) : null;
   const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
@@ -2151,12 +2186,12 @@ export async function addFamilyPage(saleId, { date = todayYMD() } = {}) {
     kennel_id: kennelId, contact_id: sale.buyer_contact_id, status: 'placed', placed_sale_id: sale.id, off_list: true,
     notes: `Family page only from ${date}: ${dog?.call_name || 'their pup'}'s sale, not a place on the list.`
   });
-}
+});
 
 // "Keep off the list (family page only)": a placed family she put through a side sale
 // (or any placed record) stops holding a place and shows on no list; `on: false` puts
 // them back as an ordinary placed family. Only while their sale is still open.
-export async function setFamilyPageOnly(entryId, on = true, { date } = {}) {
+export const setFamilyPageOnly = atomic(async function setFamilyPageOnly(entryId, on = true, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   if (Boolean(entry.off_list) === Boolean(on)) return entry;
@@ -2167,7 +2202,7 @@ export async function setFamilyPageOnly(entryId, on = true, { date } = {}) {
     off_list: Boolean(on),
     notes: appendNote(entry.notes, on ? `Kept off the list on ${date}: a family page only.` : `Back on the list on ${date}, at the place they held.`)
   });
-}
+});
 
 // What "Non-Waitlist Sales…" would do on this litter (waitlistRules.familyPagePlan),
 // with each buyer's contact: { litter, rows: [{ dog, sale, contact, blocker }], unsold }.
@@ -2187,7 +2222,7 @@ export async function soldBeforeWaitlistPlan(litterId) {
 // live sale of its pups with a buyer gets a family page. Refused while picks are open
 // or a family holds a turn or a side sale on it: close those first.
 // → { litter, created: [entry], skipped: [{ dog, sale, blocker }] }
-export async function soldBeforeWaitlist(litterId, { date = todayYMD() } = {}) {
+export const soldBeforeWaitlist = atomic(async function soldBeforeWaitlist(litterId, { date = todayYMD() } = {}) {
   const litter = await litterRepo.getById(litterId);
   if (!litter) throw new Error('That litter no longer exists.');
   if (litter.picks_opened_date) throw new Error('Picks are open on this litter. Close picks first.');
@@ -2206,9 +2241,9 @@ export async function soldBeforeWaitlist(litterId, { date = todayYMD() } = {}) {
     created.push(await addFamilyPage(r.sale.id, { date }));
   }
   return { litter: saved, created, skipped };
-}
+});
 
 // Put a litter kept off the waitlist back on it. Its family pages stay as they are.
-export async function putLitterOnWaitlist(litterId) {
+export const putLitterOnWaitlist = atomic(async function putLitterOnWaitlist(litterId) {
   return litterRepo.update(litterId, { waitlist_off: false });
-}
+});

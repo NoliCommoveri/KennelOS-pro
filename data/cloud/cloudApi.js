@@ -300,6 +300,7 @@ export const publishWaitlist = (token, publicId, projection) =>
 export const readWaitlistInbox = (token, { all = false, after = null } = {}) =>
   getJson(`/waitlist/inbox${all || after ? `?${new URLSearchParams({ ...(all ? { all: '1' } : {}), ...(after ? { after } : {}) })}` : ''}`, { token });
 export const ackWaitlistInbox = (token, ids) => getJson('/waitlist/inbox/ack', { method: 'POST', token, json: { ids } });
+export const dropWaitlistInbox = (token, ids) => getJson('/waitlist/inbox/drop', { method: 'POST', token, json: { ids } });
 // The server work's lease on a syncing program (Cloud Phase 2 plan §7; serverWork.js):
 // → { mode: 'lease', until } | { mode: 'backing' }; 409 'lease_held' { holder }.
 export const takeWaitlistLease = (token) => getJson('/waitlist/lease', { method: 'POST', token, json: {} });
@@ -350,8 +351,9 @@ export const firmaTemplateToken = (token, templateId) => getJson('/integrations/
 export const listFirmaLibrary = (token) => getJson('/integrations/firma/library', { token });
 // Copy one to her workspace, its prefills pointed at her fields. Call again while
 // `ready` is false. → { id (her copy), name, signs, ready, unmapped, already }
-export const addFirmaLibraryTemplate = (token, templateId) =>
-  getJson('/integrations/firma/library/add', { method: 'POST', token, json: { templateId }, timeoutMs: 60 * 1000 });
+// `another`: one more copy beside hers, for another kind, named `name`.
+export const addFirmaLibraryTemplate = (token, templateId, { another = false, name = '' } = {}) =>
+  getJson('/integrations/firma/library/add', { method: 'POST', token, json: { templateId, ...(another ? { another: true } : {}), ...(name ? { name } : {}) }, timeoutMs: 60 * 1000 });
 // { contractId, templateId, title, signer: { firstName, lastName, email }, facts, emailSigner, resend }
 // → { signingRequestId, signingLink, usage }
 export const sendForEsign = (token, body) => getJson('/integrations/esign/send', { method: 'POST', token, json: body, timeoutMs: 60 * 1000 });

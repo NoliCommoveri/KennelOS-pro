@@ -47,7 +47,7 @@ import {
 import { hasOwnForm } from '../data/guidedForm.js';
 import { entryQuestions, formQuestions, answerText } from '../data/waitlistForm.js';
 import { backOutItems, backOutSummary, backOutPaidText, suggestOutcome } from '../data/backOut.js';
-import { transportQuote, mapsLink } from '../data/transportFee.js';
+import { transportQuote, mapsLink, milesErrorText } from '../data/transportFee.js';
 import { familySale, pendingExtraRequests } from '../data/familyExtras.js';
 import { pendingPickupRequests } from '../data/familyPickup.js';
 import { trainingStaysFor, trainingStayEvent, defaultStart, readyDateOf } from '../data/goHome.js';
@@ -544,7 +544,7 @@ class Review {
             root.querySelector('#wr-miles').value = (await drivingMiles(from, r.address)).miles;
             refresh();
           } catch (err) {
-            root.querySelector('#wr-working').textContent = `Couldn't measure: ${err.code === 'geo_off' ? 'driving miles aren\'t available right now' : err.code === 'not_found' ? 'the address wasn\'t found' : err.message}. Use Open in Maps and type the miles.`;
+            root.querySelector('#wr-working').textContent = `Couldn't measure. ${milesErrorText(err)} Use Open in Maps and type the miles.`;
           }
           ev.target.disabled = false;
         });

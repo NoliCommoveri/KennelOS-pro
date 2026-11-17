@@ -40,7 +40,7 @@ import { generateFormKey, currentFormKey, rotateFormKeys, openSealed } from '../
 import { applicationToEntry } from '../waitlistInbox.js';
 import { planFamilyEvent, activityId } from '../waitlistEvents.js';
 import { applyFamilyPlan, addFamilyActivity, removeForNoReadyAnswer, MESSAGE_MAX } from '../waitlistActions.js';
-import { queuedEmails, setEmailStatus } from '../waitlistOutbox.js';
+import { queuedEmails, setEmailStatus, isStaleEmail } from '../waitlistOutbox.js';
 import { setHomeLocation } from '../waitlistActions.js';
 import { locationRuleOn } from '../waitlistForm.js';
 import { standardLocation } from '../pickupSlots.js';
@@ -139,6 +139,29 @@ export async function rotateFormKey(kennelId) {
   return saved;
 }
 
+// An online application she deleted (K7-13): the server is told to forget it, so a new
+// or reset device's first take-in (which reads every application the server still
+// holds) can't bring it back. Queued on this device until the server has it: offline,
+// signed out, or no cloud at all, it waits, and takeInApplications skips it meanwhile.
+// Only for an entry that came from the online form (its id is the inbox item's id).
+export async function forgetApplication(entry) {
+  if (!entry || entry.source !== 'online_form') return;
+  const queue = getWaitlistOnlineState().droppedInbox || [];
+  if (!queue.includes(entry.id)) updateWaitlistOnlineState({ droppedInbox: [...queue, entry.id] });
+  await flushDroppedApplications().catch(() => {});
+}
+
+// → how many the server forgot. Leaves the queue as it was when it can't reach it.
+export async function flushDroppedApplications(token = sessionToken()) {
+  const queue = getWaitlistOnlineState().droppedInbox || [];
+  if (!queue.length || !token || !isWaitlistOnlineOffered()) return 0;
+  let dropped = 0;
+  for (let i = 0; i < queue.length; i += 100) dropped += (await api.dropWaitlistInbox(token, queue.slice(i, i + 100)))?.dropped ?? 0;
+  const left = (getWaitlistOnlineState().droppedInbox || []).filter((id) => !queue.includes(id));
+  updateWaitlistOnlineState({ droppedInbox: left });
+  return dropped;
+}
+
 // Take in new applications (W2 Plan step 4): each confirmed application in the
 // inbox for an own kennel is opened with that kennel's form keys and becomes an
 // `applied` entry whose id is the inbox item's id (D5), so taking one in twice
@@ -151,6 +174,7 @@ export async function takeInApplications(token, kennels, { claim = serverWorkCla
   const byPublicId = new Map(kennels.filter((k) => k.public_id).map((k) => [k.public_id, k]));
   const state = getWaitlistOnlineState();
   const all = !state.inboxFetchedAll;
+  const deleted = new Set(state.droppedInbox || []); // she deleted it; the server hasn't heard yet
   const done = [];
   let taken = 0;
   let filled = 0;
@@ -172,6 +196,7 @@ export async function takeInApplications(token, kennels, { claim = serverWorkCla
         continue;
       }
       if (item.kind !== 'application') continue;
+      if (deleted.has(item.id)) continue;
       const existing = await waitlistEntryRepo.getById(item.id);
       // Already here with its answers: just tell the server.
       if (existing && Object.keys(existing.application || {}).length > 2) { if (!item.acked) done.push(item.id); continue; }
@@ -364,9 +389,15 @@ export async function sweepReadyChecks(token, kennels, { today: asked = null, cl
 // sync. A refusal about one email (that family isn't published, has no address)
 // marks it failed with the reason; she can retry it. → { sent, failed }
 export async function sendQueuedEmails(token, kennels, { claim = serverWorkClaim(token) } = {}) {
-  const counts = { sent: 0, failed: 0 };
+  const counts = { sent: 0, failed: 0, held: 0 };
   for (const kennel of kennels.filter(isOnline)) {
     for (const { entry, message } of queuedEmails(await waitlistEntryRepo.getByKennel(kennel.id))) {
+      // Too old to send by itself (K8-11): held for her say-so (Today, their entry).
+      if (isStaleEmail(message)) {
+        await setEmailStatus(entry.id, message.id, { status: 'failed', error: 'stale' });
+        counts.held++;
+        continue;
+      }
       let res;
       await claim();
       try {
@@ -413,15 +444,18 @@ export async function measureHomes(token, kennels) {
       const sales = await saleRepo.getByBuyer(entry.contact_id);
       if (!familySale(entry, sales, kennelOffers, kennelEntries)) continue;
       const contact = await contactRepo.getById(entry.contact_id);
-      const place = String(entry.application?.location || contact?.address || '').trim();
+      // Where they said they live on their status page first (an answer the map service
+      // couldn't measure then), else their application's or their contact's.
+      const place = String(entry.home_place || entry.application?.location || contact?.address || '').trim();
       if (!place) continue;
       try {
         const d = await api.getDistance(token, from, place);
         await setHomeLocation(entry.id, { place, miles: d.miles });
         measured++;
       } catch (err) {
-        // A place it can't find is remembered as unmeasured (their page asks); any
-        // other trouble (no map key, offline) stops until the next sync.
+        // A place it can't find, or only roughly, is remembered as unmeasured (their
+        // page asks); any other trouble (no map key, the map service down or out of
+        // reach, offline) stops until the next sync, and they're tried again then.
         if (err?.status !== 422) return measured;
         await setHomeLocation(entry.id, { place, miles: null });
       }
@@ -531,6 +565,8 @@ async function syncNow({ force, asked }) {
     const claim = serverWorkClaim(token);
     // New applications and messages first, then what families did on their
     // pages, so the projection that follows includes all of it.
+    // Deletions first, so a take-in that reads everything never sees them.
+    await flushDroppedApplications(token).catch(() => {});
     if (wanted.length) inbox = await takeInApplications(token, wanted, { claim });
     if (wanted.length) events = await applyFamilyEvents(token, kennels, { claim });
     if (wanted.length) await sweepReadyChecks(token, kennels, { claim });

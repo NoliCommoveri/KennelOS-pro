@@ -137,6 +137,24 @@ export function withDateRule(litter, date, rule) {
   return rule ? [...rest, { date, ...rule }].sort((a, b) => a.date.localeCompare(b.date)) : rest;
 }
 
+// Copy to another litter (K8-15): the rules of the dates being copied go with their
+// times. A date that already has its own rule on the other litter keeps it.
+// → { rules: the other litter's new pickup_date_rules, copied, kept }
+export function copyDateRules(from, to, dates) {
+  let rules = dateRules(to);
+  let copied = 0;
+  let kept = 0;
+  for (const date of [...new Set(dates)]) {
+    const r = ruleFor(from, date);
+    if (!r) continue;
+    if (ruleFor(to, date)) { kept++; continue; }
+    const { date: _d, ...rule } = r;
+    rules = withDateRule({ pickup_date_rules: rules }, date, rule);
+    copied++;
+  }
+  return { rules, copied, kept };
+}
+
 const ms = (ymd) => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10)));
 
 // Standard boarding for a pickup on `date`: the days from `from` (the day the pup

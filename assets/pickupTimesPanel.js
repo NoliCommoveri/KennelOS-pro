@@ -12,7 +12,7 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { familySale } from '../data/familyExtras.js';
-import { pickupLocations, cleanSlots, makeSlots, timeRange, slotBookings, ruleFor, withDateRule } from '../data/pickupSlots.js';
+import { pickupLocations, cleanSlots, makeSlots, timeRange, slotBookings, ruleFor, withDateRule, copyDateRules } from '../data/pickupSlots.js';
 import { kennelChargeList } from '../data/extraCharges.js';
 import { waitlistConfig } from '../data/waitlistRules.js';
 import { esc, fmtDate, todayYMD, confirmModal } from './ui.js';
@@ -103,8 +103,13 @@ export async function renderPickupTimesPanel({ mount, litter, onChange = async (
     const pick = await chooseLitter(others);
     if (!pick) return;
     const fresh = upcoming.map((s) => ({ ...s, id: crypto.randomUUID() }));
-    await litterRepo.update(pick.id, { pickup_slots: cleanSlots([...(pick.pickup_slots || []), ...fresh]) });
-    await confirmModal({ title: 'Copied', message: `${fresh.length} time${fresh.length === 1 ? '' : 's'} copied to ${pick.nickname || 'that litter'}.`, confirmLabel: 'OK' });
+    // Each date's rule (an extra it needs, or boarding) goes with its times.
+    const { rules, copied, kept } = copyDateRules(litter, pick, fresh.map((s) => s.date));
+    await litterRepo.update(pick.id, { pickup_slots: cleanSlots([...(pick.pickup_slots || []), ...fresh]), pickup_date_rules: rules });
+    const name = pick.nickname || 'that litter';
+    const ruleWords = [copied ? `${copied} date rule${copied === 1 ? '' : 's'} went with them` : '',
+      kept ? `${kept} date${kept === 1 ? '' : 's'} there already had a rule of ${kept === 1 ? 'its' : 'their'} own, kept as it was` : ''].filter(Boolean).join('; ');
+    await confirmModal({ title: 'Copied', message: `${fresh.length} time${fresh.length === 1 ? '' : 's'} copied to ${name}.${ruleWords ? ` ${ruleWords[0].toUpperCase()}${ruleWords.slice(1)}.` : ''}`, confirmLabel: 'OK' });
   });
 }
 

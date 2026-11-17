@@ -76,7 +76,7 @@ import {
 } from './waitlistActions.js';
 import { pendingExtraRequests } from './familyExtras.js';
 import { pendingPickupRequests, requestText as pickupRequestText } from './familyPickup.js';
-import { offerSpecs } from './waitlistOutbox.js';
+import { offerSpecs, isHeldEmail, retryEmail, dropEmail } from './waitlistOutbox.js';
 import { outcomeReport } from './waitlistReview.js';
 import { contractRepo } from './contractRepo.js';
 import { ourStudPairingIds, studParents, pickDue, serviceDate, boardingEndedUpdate } from './studRules.js';
@@ -1473,6 +1473,20 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         detail: `${r.kind === 'address' ? (r.far ? 'Farther than your limit: they were told you\'ll be in touch about driving or a flight nanny. ' : 'Approve on their page with the day, time and transport fee. ') : ''}${said(r.note)}`.trim(),
         subjectHref: href(e),
         actions
+      });
+    }
+    // An email held because it waited more than a day to go (K8-11): still send it?
+    for (const m of (e.messages || []).filter(isHeldEmail)) {
+      out.push({
+        key: `waitlist-email-held:${e.id}:${m.id}`,
+        title: `Your email to ${name(e)} is waiting for you`,
+        detail: `"${m.subject}" waited more than a day for a connection, so it wasn't sent by itself: its dates or details may be out of date. Send it as written, or don't and write them a new one.`,
+        subjectHref: href(e),
+        actions: [
+          { label: 'Open', run: async () => { location.href = href(e); } },
+          { label: 'Send as written', run: async () => { await retryEmail(e.id, m.id); return { title: 'Sending', message: 'It goes with the next sync.' }; } },
+          { label: 'Don\'t send', run: async () => { await dropEmail(e.id, m.id); } }
+        ]
       });
     }
     const unread = (e.messages || []).filter((m) => !m.read);
