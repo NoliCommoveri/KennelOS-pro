@@ -131,6 +131,12 @@ export function testsToPlan(dog, kennels) {
 export const kennelRepo = {
   ...base,
 
+  // Sorted by kennel name (case-insensitive), so kennel pickers read alphabetically.
+  async getAll(opts) {
+    const rows = await base.getAll(opts);
+    return rows.sort((a, b) => String(a.kennel_name || '').localeCompare(String(b.kennel_name || ''), undefined, { sensitivity: 'base', numeric: true }));
+  },
+
   async create(data) {
     validateKennel(data);
     const record = { ...data };

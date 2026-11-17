@@ -17,7 +17,7 @@ import { studServiceRepo } from '../data/studServiceRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { documentRepo } from '../data/documentRepo.js';
-import { rankForms, splitName, signatureMessage, isFirmaForm, prefillValues } from '../data/contractForms.js';
+import { rankForms, formTypeGroups, splitName, signatureMessage, isFirmaForm, prefillValues } from '../data/contractForms.js';
 import { esignOffered, esignSignedIn } from '../data/cloud/cloudEsign.js';
 import { SENDABLE_STATUSES, NEXT_AVAILABLE_LITTER, reservationLitterName, loadContractForms, gatherContractFacts, buildSignatureLink, markContractSent, contractForForm, logPickup } from '../data/contractSend.js';
 import { pickupToSet } from '../data/contractAddOns.js';
@@ -552,11 +552,13 @@ async function doDelete() {
 
 // --- Send for signature (Integrations plan §2.1a) -----------------------------
 
-// Pick a form, see what it fills. → Promise<form | null>.
+// Pick a form, see what it fills. → Promise<form | null>. Her forms sit folded
+// under their kind (formTypeGroups: kinds A–Z), nothing picked until she picks.
 function pickForm(c, ranked, facts) {
   return new Promise((resolve) => {
     let showAll = !ranked.matching.length;
-    let picked = ranked.matching[0] || ranked.others[0];
+    let picked = null;
+    const open = new Set(); // the kinds she has unfolded, kept across redraws
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     document.body.appendChild(overlay);
@@ -565,36 +567,42 @@ function pickForm(c, ranked, facts) {
     document.addEventListener('keydown', onKey);
     const option = (f) => `<label class="check-inline" style="display:flex; gap:8px; align-items:center; padding:4px 0;">
       <input type="radio" name="cf-pick" value="${esc(f.id)}"${f === picked ? ' checked' : ''}>
-      <span>${esc(f.label)} ${badge(CONTRACT_FORM_TYPE, f.form_type)}${isFirmaForm(f) ? ' <span class="badge badge-green">E-sign</span>' : f.account_name ? ` <span class="muted" style="font-size:13px;">· ${esc(f.account_name)}</span>` : ''}</span></label>`;
+      <span>${esc(f.label)}${isFirmaForm(f) ? ' <span class="badge badge-green">E-sign</span>' : f.account_name ? ` <span class="muted" style="font-size:13px;">· ${esc(f.account_name)}</span>` : ''}</span></label>`;
+    const cards = (forms, part) => formTypeGroups(forms).map((g) => `<details class="settings-group" data-kind="${esc(part + ':' + g.value)}"${open.has(part + ':' + g.value) ? ' open' : ''}>
+      <summary><strong>${esc(g.label)}</strong> <span class="field-hint">${g.forms.length} ${g.forms.length === 1 ? 'form' : 'forms'}</span></summary>
+      <div class="form-pick-list">${g.forms.map(option).join('')}</div></details>`).join('');
     const draw = () => {
-      const firma = isFirmaForm(picked);
-      const { values, url } = firma ? { values: prefillValues(picked, facts), url: '' } : buildSignatureLink(picked, facts);
+      const firma = picked && isFirmaForm(picked);
+      const { values, url } = !picked ? { values: [], url: '' } : firma ? { values: prefillValues(picked, facts), url: '' } : buildSignatureLink(picked, facts);
       overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:620px;">
         <h2 style="margin-top:0;">Send for signature</h2>
-        <p class="field-hint" style="margin-top:0;">Pick the form to send. ${firma ? 'The details below go to Firma with it, into the fields you placed on the template.' : 'The details below go into it, in the link itself.'}</p>
-        ${ranked.matching.length ? ranked.matching.map(option).join('') : `<p class="muted">None of your forms is for a ${esc(descriptor(CONTRACT_TYPE, c.contract_type).label.toLowerCase())} contract, so here are all of them.</p>`}
+        <p class="field-hint" style="margin-top:0;">Open a kind of contract and pick the form to send. ${!picked ? '' : firma ? 'The details below go to Firma with it, into the fields you placed on the template.' : 'The details below go into it, in the link itself.'}</p>
+        ${ranked.matching.length ? cards(ranked.matching, 'm') : `<p class="muted">None of your forms is for a ${esc(descriptor(CONTRACT_TYPE, c.contract_type).label.toLowerCase())} contract, so here are all of them.</p>`}
         ${ranked.others.length && ranked.matching.length ? `<button type="button" class="btn btn-sm" id="cf-all" style="margin:4px 0;">${showAll ? 'Hide other forms' : `Show all forms (${ranked.others.length} more)`}</button>` : ''}
-        ${showAll ? ranked.others.map(option).join('') : ''}
-        <h3 style="font-size:15px; margin:14px 0 4px;">Filled in</h3>
+        ${showAll ? cards(ranked.others, 'o') : ''}
+        ${picked ? `<h3 style="font-size:15px; margin:14px 0 4px;">Filled in</h3>
         <dl class="dl-meta" style="font-size:14px; max-height:220px; overflow:auto;">
           ${values.map(([k, v]) => `<dt><code>${esc(k)}</code></dt><dd>${esc(v)}</dd>`).join('')}
         </dl>
-        <p class="field-hint">${firma ? 'Only the fields you placed on the template get filled (Contracts → Contract templates → Place fields).' : 'Only fields your form has (by Unique Name) get filled; the field names are listed on the Accounts page.'}</p>
+        <p class="field-hint">${firma ? 'Only the fields you placed on the template get filled (Contracts → Contract templates → Place fields).' : 'Only fields your form has (by Unique Name) get filled; the field names are listed on the Accounts page.'}</p>` : ''}
         ${facts.breeder ? '' : '<div class="inline-warn">Your name, email and phone aren\'t filled in: no contact is linked to this contract\'s kennel. Open your own contact and set its <strong>Kennel</strong> to this kennel.</div>'}
-        ${!firma && url.length > 2000 ? '<div class="inline-warn">This link is very long, and some browsers or email apps may cut it off. Remove fields you don\'t need from the form, or shorten long values.</div>' : ''}
+        ${picked && !firma && url.length > 2000 ? '<div class="inline-warn">This link is very long, and some browsers or email apps may cut it off. Remove fields you don\'t need from the form, or shorten long values.</div>' : ''}
         <div class="form-actions">
-          <button class="btn btn-primary" id="cf-go">Continue</button>
-          ${firma ? '' : `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Preview form</a>`}
+          <button class="btn btn-primary" id="cf-go"${picked ? '' : ' disabled'}>Continue</button>
+          ${picked && !firma ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Preview form</a>` : ''}
           <button class="btn" id="cf-cancel">Cancel</button>
         </div>
       </div>`;
       const $ = (sel) => overlay.querySelector(sel);
+      overlay.querySelectorAll('details[data-kind]').forEach((d) => d.addEventListener('toggle', () => {
+        if (d.open) open.add(d.dataset.kind); else open.delete(d.dataset.kind);
+      }));
       overlay.querySelectorAll('input[name="cf-pick"]').forEach((r) => r.addEventListener('change', () => {
         picked = [...ranked.matching, ...ranked.others].find((f) => f.id === r.value) || picked;
         draw();
       }));
       $('#cf-all')?.addEventListener('click', () => { showAll = !showAll; draw(); });
-      $('#cf-go').addEventListener('click', () => done({ form: picked, url }));
+      $('#cf-go').addEventListener('click', () => { if (picked) done({ form: picked, url }); });
       $('#cf-cancel').addEventListener('click', () => done(null));
     };
     overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });

@@ -174,6 +174,21 @@ export function rankForms(forms, contract, sale = null, addOns = null) {
   return { matching, others };
 }
 
+// Her forms grouped by kind, for the folded pickers (Send for signature, Review
+// sale & send): one group per kind she has a form of, the kinds by label A–Z,
+// each kind's forms by label. → [{ value, label, forms }].
+export function formTypeGroups(forms) {
+  const byLabel = (a, b) => String(a.label || '').localeCompare(String(b.label || ''), undefined, { sensitivity: 'base', numeric: true });
+  const groups = new Map();
+  for (const f of forms || []) {
+    if (!groups.has(f.form_type)) groups.set(f.form_type, { value: f.form_type, label: descriptor(CONTRACT_FORM_TYPE, f.form_type).label, forms: [] });
+    groups.get(f.form_type).forms.push(f);
+  }
+  const out = [...groups.values()].sort(byLabel);
+  for (const g of out) g.forms.sort(byLabel);
+  return out;
+}
+
 // The parameter names a form can use, by group, with what each holds. Shown on
 // the Accounts page (Copy) so she can name her form's fields.
 export const PREFILL_FIELDS = {

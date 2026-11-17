@@ -1336,6 +1336,7 @@ body:has(> .kels-fab) main { padding-bottom: 104px; }
 .settings-group > summary .field-hint { margin: 0; }
 .settings-group[open] > summary { border-bottom: 1px solid var(--border); }
 .settings-group > .form-grid { padding: 12px; }
+.settings-group > .form-pick-list { padding: 4px 12px 8px; }
 
 /* qaListEditor.js: her FAQ and her waitlist policies, rows of heading + text. */
 .qa-row { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-top: 10px; background: var(--surface); }

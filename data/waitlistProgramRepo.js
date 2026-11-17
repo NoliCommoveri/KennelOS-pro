@@ -31,6 +31,12 @@ function withDefaults(data) {
 export const waitlistProgramRepo = {
   ...base,
 
+  // Sorted by name (case-insensitive), so program pickers read alphabetically.
+  async getAll(opts) {
+    const rows = await base.getAll(opts);
+    return rows.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base', numeric: true }));
+  },
+
   async create(data) {
     const candidate = withDefaults(data);
     validateProgram(candidate);

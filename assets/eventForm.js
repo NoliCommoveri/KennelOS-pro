@@ -325,7 +325,7 @@ export async function openEventForm(opts) {
     // restored into Lite) keeps its own type in the picker rather than
     // silently displaying the first option.
     const pickable = types.some((t) => t.value === draft.event_type) ? types : [...types, typeDef];
-    const typeOptions = pickable.map((t) =>
+    const typeOptions = [...pickable].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })).map((t) =>
       `<option value="${esc(t.value)}"${t.value === draft.event_type ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
     const isSpan = typeDef.duration === 'span';
     modal.innerHTML = `

@@ -27,7 +27,7 @@ import { contractRepo } from '../data/contractRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { priceForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from './salePrompts.js';
-import { rankForms, splitName, isFirmaForm } from '../data/contractForms.js';
+import { rankForms, formTypeGroups, splitName, isFirmaForm } from '../data/contractForms.js';
 import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, contractForForm, saleAddOns, logPickup } from '../data/contractSend.js';
 import { pickupToSet } from '../data/contractAddOns.js';
 import { depositRequestMessage, depositMessageMoney } from '../data/depositRequest.js';
@@ -37,7 +37,7 @@ import { logOwnMessage } from '../data/waitlistOutbox.js';
 import { depositPaid, getSaleStatement } from '../data/incomeView.js';
 import { photoLink } from '../data/waitlistProjection.js';
 import { todayYMD } from '../data/dateUtils.js';
-import { esc, badge, fmtDate, fmtMoney, promptModal } from './ui.js';
+import { esc, fmtDate, fmtMoney, promptModal } from './ui.js';
 import { REGISTRATION_TYPE, CONTRACT_FORM_TYPE, descriptor } from '../data/vocab.js';
 
 const numOrNull = (v) => (String(v ?? '').trim() === '' ? null : Number(v));
@@ -70,7 +70,8 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
     let addOns = null;       // the sale's separate agreements' facts, for the form list
     let chosen = null;       // { form, url, values } or null for no contract
     const firmaSent = new Map(); // template id → its signing link, sent from this modal
-    let pickedFormId = null; // step 2's radio
+    let pickedFormId = null; // step 2's radio: null until she picks ('' = no contract)
+    const openKinds = new Set(); // step 2's unfolded kinds, kept across redraws
     let showAll = false;
     let recorded = false;    // the send was recorded (once per modal)
     let message = null;      // step 3's { subject, body }
@@ -221,26 +222,40 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
     function drawContract() {
       const ranked = rankForms(forms, { contract_type: 'sale' }, sale, addOns);
       const all = [...ranked.matching, ...ranked.others];
-      if (pickedFormId === null) pickedFormId = all.length ? (ranked.matching[0] || all[0]).id : '';
+      // Nothing picked until she picks (a form, or No contract); with no forms, No contract.
+      if (pickedFormId === null && !all.length) pickedFormId = '';
       const option = (f) => `<label class="check-inline" style="display:flex; gap:8px; align-items:center; padding:4px 0;">
           <input type="radio" name="ps-form" value="${esc(f.id)}"${f.id === pickedFormId ? ' checked' : ''}>
-          <span>${esc(f.label)} ${badge(CONTRACT_FORM_TYPE, f.form_type)}${isFirmaForm(f) ? ' <span class="badge badge-green">E-sign</span>' : ''}</span></label>`;
+          <span>${esc(f.label)}${isFirmaForm(f) ? ' <span class="badge badge-green">E-sign</span>' : ''}</span></label>`;
+      // Her forms folded under their kind, the kinds A–Z (formTypeGroups).
+      const cards = (list, part) => formTypeGroups(list).map((g) => {
+        const key = `${part}:${g.value}`;
+        const isOpen = openKinds.has(key) || g.forms.some((f) => f.id === pickedFormId);
+        return `<details class="settings-group" data-kind="${esc(key)}"${isOpen ? ' open' : ''}>
+          <summary><strong>${esc(g.label)}</strong> <span class="field-hint">${g.forms.length} ${g.forms.length === 1 ? 'form' : 'forms'}</span></summary>
+          <div class="form-pick-list">${g.forms.map(option).join('')}</div></details>`;
+      }).join('');
       const sent = contract?.esign_url
         ? `<p class="field-hint">This sale's ${esc(contract.esign_form_label || 'contract')} went out ${contract.esign_sent_date ? esc(fmtDate(contract.esign_sent_date)) : 'before'}. Sending again makes a fresh link with today's details.</p>` : '';
       shell(`${forms.length
-          ? `${ranked.matching.map(option).join('')}
+          ? `<p class="field-hint" style="margin-top:0;">Open a kind of contract and pick the form to send.</p>
+             ${cards(ranked.matching, 'm')}
              ${ranked.others.length && ranked.matching.length ? `<button type="button" class="btn btn-sm" id="ps-all" style="margin:4px 0;">${showAll ? 'Hide other forms' : `Show all forms (${ranked.others.length} more)`}</button>` : ''}
-             ${showAll || !ranked.matching.length ? ranked.others.map(option).join('') : ''}`
+             ${showAll || !ranked.matching.length ? cards(ranked.others, 'o') : ''}`
           : '<p class="muted">You have no contract forms yet. Add your form service on the Accounts page as a <strong>Form service</strong> account with your contract forms, and they\'ll show here.</p>'}
         <label class="check-inline" style="display:flex; gap:8px; align-items:center; padding:4px 0;">
           <input type="radio" name="ps-form" value=""${pickedFormId === '' ? ' checked' : ''}> <span>No contract in this message</span></label>
         ${sent}`,
-      `<button class="btn btn-primary" id="ps-next">Continue</button><button class="btn" id="ps-back">Back</button><button class="btn" id="ps-cancel">Cancel</button>`);
-      overlay.querySelectorAll('input[name="ps-form"]').forEach((r) => r.addEventListener('change', () => { pickedFormId = r.value; }));
+      `<button class="btn btn-primary" id="ps-next"${pickedFormId === null ? ' disabled' : ''}>Continue</button><button class="btn" id="ps-back">Back</button><button class="btn" id="ps-cancel">Cancel</button>`);
+      overlay.querySelectorAll('details[data-kind]').forEach((d) => d.addEventListener('toggle', () => {
+        if (d.open) openKinds.add(d.dataset.kind); else openKinds.delete(d.dataset.kind);
+      }));
+      overlay.querySelectorAll('input[name="ps-form"]').forEach((r) => r.addEventListener('change', () => { pickedFormId = r.value; $('#ps-next').disabled = false; }));
       $('#ps-all')?.addEventListener('click', () => { showAll = !showAll; drawContract(); });
       $('#ps-back').addEventListener('click', () => { step = 1; drawSale(); });
       $('#ps-next').addEventListener('click', async (e) => {
         const next = e.currentTarget;
+        if (pickedFormId === null) return;
         next.disabled = true;
         try {
           const form = all.find((f) => f.id === pickedFormId) || null;
