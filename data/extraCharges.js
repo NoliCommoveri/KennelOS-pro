@@ -21,14 +21,21 @@
 //   boarding_days              a package that needs the pup to stay (training)
 //   payment_plan               [{ percent, due, n? }] (PLAN_DUE); blank = the group's
 // and Kennel.extra_charge_groups: [{ name, request_from_weeks, request_until_weeks,
-// cancel_until_weeks, payment_plan }] holds each group's defaults, which a row's
-// own value overrides. Pure; no db.
+// cancel_until_weeks, payment_plan, info_url?, info_label? }] holds each group's
+// defaults, which a row's own value overrides, and `info_url`, her own page about that
+// group (https only), linked under the group's extras on a family's status page with
+// `info_label` as the link's words (blank = INFO_LABEL_DEFAULT). Pure; no db.
 import { feeRate, isUsableRate, processingFee } from './processingFees.js';
 import { addDaysToYMD, addOpenDays } from './dateUtils.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
 const cents = (n) => Math.round(n * 100) / 100;
 const text = (v) => String(v ?? '').trim();
+// A group's page link as kept: an https web address, else '' (the same rule as
+// waitlistRules.extrasInfoLink, the kennel-wide extras page).
+export const INFO_LABEL_DEFAULT = 'See details and pricing';
+export const INFO_LABEL_MAX = 80;
+export const groupInfoLink = (v) => (/^https:\/\/[^\s"'<>]{1,500}$/i.test(text(v)) ? text(v) : '');
 
 // A list as stored: rows with a label and an amount above 0, amounts to the cent.
 // Anything else in the field (not an array, a blank row) reads as nothing. A row
@@ -294,6 +301,10 @@ export function kennelChargeGroups(kennel) {
     const plan = cleanPlan(g.payment_plan);
     if (plan) row.payment_plan = plan;
     if (g.own_due_dates === true) row.own_due_dates = true;
+    const link = groupInfoLink(g.info_url);
+    if (link) row.info_url = link;
+    const label = text(g.info_label).slice(0, INFO_LABEL_MAX);
+    if (label && label !== INFO_LABEL_DEFAULT) row.info_label = label;
     out.push(row);
   }
   return out;
@@ -377,6 +388,7 @@ export function readChargeGroups(rows = []) {
     if (from != null && until != null && until <= from) return { groups: [], error: `${name}: the "until" age has to be after the "from" age.` };
     const planError = planProblem(g.payment_plan);
     if (planError) return { groups: [], error: `${name}: ${planError}` };
+    if (text(g.info_url) && !groupInfoLink(g.info_url)) return { groups: [], error: `${name}: the link has to be a web address starting with https://.` };
   }
   return { groups: kennelChargeGroups({ extra_charge_groups: rows }), error: '' };
 }

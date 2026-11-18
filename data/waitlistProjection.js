@@ -40,7 +40,7 @@ import { creditsOf, allocateCredits, feeCharge } from './receivedCredits.js';
 import { familyPickupView } from './familyPickup.js';
 import { backOutReasons, backOutPolicyText } from './backOut.js';
 import { standardLocation } from './pickupSlots.js';
-import { EXTRAS_INTRO_DEFAULT, extrasInfoLink } from './waitlistRules.js';
+import { EXTRAS_INTRO_DEFAULT, EXTRAS_INTRO_OLD_DEFAULT, FEATURED_LABEL_DEFAULT, FEATURED_LABEL_MAX, extrasInfoLink } from './waitlistRules.js';
 import { portalEntryView, portalOn } from './portalFeed.js';
 import { familyPaymentsView } from './paymentSchedule.js';
 import { titlesByDogId, titleAbbrs } from './dogTitles.js';
@@ -111,6 +111,15 @@ export function photoLink(v) {
 }
 export const dogPhotosLink = (dog) => (dog && dog.photos_online ? photoLink(dog.url) : null);
 const withPhotos = (url) => (url ? { photos_url: url } : {});
+
+// Her logo as family pages may show it: a base64 image data URL (PNG, JPEG, WebP, GIF
+// or SVG, which an <img> never runs), at most FAMILY_LOGO_MAX characters; else null.
+export const FAMILY_LOGO_MAX = 300_000;
+const LOGO_URL = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+export function familyLogo(kennel) {
+  const v = String(kennel?.logo_data_url || '');
+  return v.length <= FAMILY_LOGO_MAX && LOGO_URL.test(v) ? v : null;
+}
 
 // A pup's link as family pages show it: its page on her KennelPort website when its
 // `url` is one (Update website fills it; the page is public anyway, so no
@@ -375,7 +384,9 @@ export function titlesByDog(events = [], dogs = []) {
 // A parent as family pages show one (Coming up, Available Puppies, Review Your
 // Preferences, a turn): call name and earned titles, and, where she shows them,
 // its completed health tests (`tests`: [{ name, result }], absent when none or
-// hidden), and its photos link where she shows it (`photos_url`, dogPhotosLink).
+// hidden), and its link: its page on her KennelPort website when its `url` is one
+// (`page: true`; public anyway, so no photos_online tick needed, as for a pup), else
+// its photos link where she shows it (`photos_url`, dogPhotosLink).
 // Its registered name whenever it has one (`registered_name`), and with her
 // setting `parent_pedigree` its own sire's and dam's registered names where known
 // (`pedigree`: { sire, dam }, either null; absent when neither is known). The
@@ -388,13 +399,13 @@ export function parentPedigree(dog, dogsById) {
   const dam = regName(dogsById.get(dog.dam_id));
   return sire || dam ? { sire, dam } : null;
 }
-const parentView = (dogsById, titles, id, testsOf = () => [], { pedigree = false } = {}) => {
+const parentView = (dogsById, titles, id, testsOf = () => [], { pedigree = false, kennel = null } = {}) => {
   const dog = dogsById.get(id);
   const tests = testsOf(id);
   const reg = regName(dog);
   const ped = pedigree ? parentPedigree(dog, dogsById) : null;
   return {
-    name: dog?.call_name || regName(dog) || 'Unknown', titles: [...(titles.get(id) || [])], ...(tests.length ? { tests } : {}), ...withPhotos(dogPhotosLink(dog)),
+    name: dog?.call_name || regName(dog) || 'Unknown', titles: [...(titles.get(id) || [])], ...(tests.length ? { tests } : {}), ...(dog ? pupLink(dog, kennel) : {}),
     ...(reg ? { registered_name: reg } : {}), ...(ped ? { pedigree: ped } : {})
   };
 };
@@ -423,7 +434,7 @@ const breedOf = (dogsById, damId, sireId) => orNull(dogsById.get(damId)?.breed |
 
 function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today }) {
   const show = showUpcoming(config);
-  const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true });
+  const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true, kennel });
   const where = (u) => ({ public: show[u.stage].public, family: show[u.stage].family });
   const shown = (u) => show[u.stage].public || show[u.stage].family;
   const litterItems = upcomingItems(kennel, { litters, pairings })
@@ -437,7 +448,7 @@ function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogs
       expected_whelp_date: u.kind === 'early_litter' ? null : orNull(u.pairing?.expected_due_date),
       whelp_date: u.kind === 'early_litter' ? orNull(u.litter.whelp_date) : null,
       picks_expected_date: u.kind === 'early_litter' ? orNull(u.litter.accept_deposits_date) : null,
-      ...withPhotos(u.kind === 'early_litter' ? photoLink(u.litter.photos_url) : null),
+      ...(u.kind === 'early_litter' ? litterLink(u.litter, kennel) : {}),
       expected_month: null,
       ...where(u)
     }));
@@ -460,7 +471,7 @@ function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogs
 const toUpcomingView = (u) => ({
   id: u.id, kind: u.kind, label: u.label, pairing_id: u.pairing_id, litter_id: u.litter_id,
   sire: u.sire, dam: u.dam, breed: u.breed, expected_whelp_date: u.expected_whelp_date, whelp_date: u.whelp_date,
-  picks_expected_date: u.picks_expected_date, expected_month: u.expected_month, ...withPhotos(u.photos_url), public: u.public, family: u.family
+  picks_expected_date: u.picks_expected_date, expected_month: u.expected_month, ...withPhotos(u.photos_url), ...(u.page && u.photos_url ? { page: true } : {}), public: u.public, family: u.family
 });
 
 const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by, answer: rc.answer } : null);
@@ -487,7 +498,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const opts = { today, config, programsById };
   const titles = titlesByDog(events, [...dogsById.values()]);
   const testsOf = parentTestsOf(dogsById, config, events);
-  const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true });
+  const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true, kennel });
 
   // Each live litter's queue tells which families match it now (Q13); a family
   // sees only that they match, never their place in it (decided 2026-10-08).
@@ -699,6 +710,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     kennel: {
       public_id: kennel.public_id,
       name: kennel.kennel_name || '',
+      // Her logo at the top of her family pages (owner, 2026-11-18): an image data URL
+      // as her kennel settings keep it (at most LOGO_MAX_CHARS); none = absent.
+      ...(familyLogo(kennel) ? { logo: familyLogo(kennel) } : {}),
       // The message under her public list's heading (publicIntroText).
       intro: publicIntroText(config, kennel.kennel_name || ''),
       time_zone: orNull(kennel.time_zone),
@@ -751,9 +765,11 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       } : {}),
       // Only while some family has extras to see.
       ...(Object.values(entryViews).some((v) => v.extras) ? {
-        extras_intro: (config.extras_intro_text || '').trim() || EXTRAS_INTRO_DEFAULT,
+        extras_intro: ((t) => (!t || t === EXTRAS_INTRO_OLD_DEFAULT ? EXTRAS_INTRO_DEFAULT : t))((config.extras_intro_text || '').trim()),
         ...(extrasInfoLink(config.extras_info_url) ? { extras_info_url: extrasInfoLink(config.extras_info_url) } : {})
       } : {}),
+      // Her featured pup page, its own card on a waiting family's page (new tab).
+      ...(extrasInfoLink(config.featured_url) ? { featured: { url: extrasInfoLink(config.featured_url), label: String(config.featured_label || '').trim().slice(0, FEATURED_LABEL_MAX) || FEATURED_LABEL_DEFAULT } } : {}),
       ...(applyPay ? { fee_pay: { url: applyPay.url, amount: applyPay.amount, fee: Number(feeForEntry(config, null)), ref_param: applyPay.stripe, instructions: config.payment_instructions || '' } } : {})
     },
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when

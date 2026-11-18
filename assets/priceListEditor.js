@@ -3,13 +3,14 @@
 // "Training"), each a name and a price with optional details (a line families
 // see, whether families can ask for it, the pup's age window, boarding days, a
 // payment plan, whether it's paid on its own dates, never on a sale's payment
-// schedule), and each group's defaults that its extras follow unless they set their own. The group an extra is in is the section it sits in, so renaming a
+// schedule), each group's defaults that its extras follow unless they set their own,
+// and each group's own page, linked under its extras on a family's status page. The group an extra is in is the section it sits in, so renaming a
 // group renames it for all of its extras.
 //
 // priceListHtml(kennel, { familyRequests }) → the card's inner HTML;
 // wirePriceList(root) wires adding, removing and moving; readPriceListForm(root)
 // → { rows, groups } for extraCharges.readPriceList / readChargeGroups.
-import { kennelChargeList, kennelChargeGroups, groupedChargeList, PLAN_DUE, planText, chargeRules } from '../data/extraCharges.js';
+import { INFO_LABEL_DEFAULT, INFO_LABEL_MAX, kennelChargeList, kennelChargeGroups, groupedChargeList, PLAN_DUE, planText, chargeRules } from '../data/extraCharges.js';
 import { esc } from './ui.js';
 
 const UNGROUPED = '';
@@ -81,6 +82,11 @@ function groupHtml(group, items, { familyRequests, groups }, named = group !== U
   return `<div class="xc-group" data-named="${named ? '1' : ''}" style="margin:12px 0 4px;">
       ${named
         ? `<div class="field" style="margin-bottom:4px;"><label>Group</label><input class="xcg-name" type="text" value="${esc(group)}" placeholder="e.g. Training" style="font-weight:600;"></div>
+           ${familyRequests ? `<div class="field" style="margin-bottom:4px;"><label>Details/marketing URL (optional)</label>
+             <input class="xcg-url" type="url" inputmode="url" autocomplete="url" value="${esc(rules.info_url || '')}" placeholder="https://yourkennel.com/training">
+             <label style="margin-top:6px;">Custom hyperlink display phrase (optional)</label>
+             <input class="xcg-label" type="text" maxlength="${INFO_LABEL_MAX}" value="${esc(rules.info_label || '')}" placeholder="${esc(INFO_LABEL_DEFAULT)}">
+             <span class="field-hint">On a family's status page, this phrase is a link under this group's extras that opens the page in a new tab. Blank: <strong>${esc(INFO_LABEL_DEFAULT)}</strong>.</span></div>` : ''}
            <details class="xcg-rules" style="margin-bottom:4px;"><summary class="faint">Rules for every extra in this group</summary>
              ${familyRequests ? windowFields(rules, 'Ages families can ask for these and cancel them. An extra with its own ages uses those instead.') : ''}
              <div class="field" style="margin-top:8px;"><label>When they're paid</label>${planFields(rules.payment_plan, 'Blank: all with the balance. An extra with its own plan uses that instead.')}</div>
@@ -200,7 +206,7 @@ export function readPriceListForm(root, { familyRequests = false } = {}) {
     if (sec.dataset.named && !name && filled.length) return { rows: [], groups: [], error: 'Give each group a name, or move its extras to "Not in a group".' };
     if (sec.dataset.named && name) {
       const rules = sec.querySelector('.xcg-rules');
-      groups.push({ name, ...(familyRequests ? readWindows(rules) : {}), payment_plan: readPlan(rules), own_due_dates: rules.querySelector('.xcg-own').checked });
+      groups.push({ name, ...(familyRequests ? { ...readWindows(rules), info_url: sec.querySelector('.xcg-url').value.trim(), info_label: sec.querySelector('.xcg-label').value.trim() } : {}), payment_plan: readPlan(rules), own_due_dates: rules.querySelector('.xcg-own').checked });
     }
     for (const el of secRows) {
       const d = el.querySelector('.xc-details');

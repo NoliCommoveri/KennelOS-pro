@@ -63,6 +63,8 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   website_feed: false, // her KennelPort website may read the public list and draw it in its own style (End-State guide §29)
   extras_info_url: '', // her own page with the extras' details and prices (Family Requests plan §3); https only
   extras_intro_text: '', // her message above the extras on a family's status page; blank = EXTRAS_INTRO_DEFAULT
+  featured_url: '', // her featured pup page, its own card on a waiting family's status page; https only
+  featured_label: '', // that card's link words; blank = FEATURED_LABEL_DEFAULT
   // Pickup and transport (Family Requests plan §4–§5; transportFee.js):
   mileage_rate: null, // fee per mile for a family's own meetup address; blank = no fee worked out
   mileage_basis: 'round_trip', // 'one_way' | 'round_trip'
@@ -83,7 +85,12 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
 });
 
 // The default message above the extras on a family's status page (the owner's wording).
-export const EXTRAS_INTRO_DEFAULT = 'We offer several paid extras to our families. Please click the link below to see the details before making your selection below.';
+export const FEATURED_LABEL_DEFAULT = 'Meet our featured pup';
+export const FEATURED_LABEL_MAX = 80;
+// Each group of her extras links to its own page (2026-11-18), so the default points
+// at those. The old default, if it was ever saved as her own words, reads as the new.
+export const EXTRAS_INTRO_DEFAULT = 'We offer several paid extras to our families. Each group below links to its details and prices, so have a look before you choose.';
+export const EXTRAS_INTRO_OLD_DEFAULT = 'We offer several paid extras to our families. Please click the link below to see the details before making your selection below.';
 // Her extras page link, when it's a usable https address; else ''.
 export const extrasInfoLink = (v) => (/^https:\/\/[^\s"'<>]{1,500}$/i.test(String(v || '').trim()) ? String(v).trim() : '');
 
@@ -101,6 +108,7 @@ export function waitlistConfigProblem(c) {
   if (c.facebook_button && !String(c.facebook_page || '').trim()) return 'Add your Page link first.';
   if (String(c.facebook_page || '').trim() && !messengerLink(c.facebook_page)) return 'That link isn\'t a Facebook Page. Use a facebook.com or m.me address.';
   if (String(c.extras_info_url || '').trim() && !extrasInfoLink(c.extras_info_url)) return 'The extras page link has to be a web address starting with https://.';
+  if (String(c.featured_url || '').trim() && !extrasInfoLink(c.featured_url)) return 'The featured pup page link has to be a web address starting with https://.';
   const atLeast0 = (v) => v == null || v === '' || (Number.isFinite(Number(v)) && Number(v) >= 0);
   if (!atLeast0(c.mileage_rate)) return 'The fee per mile can\'t be negative.';
   if (!atLeast0(c.boarding_rate)) return 'The boarding rate can\'t be negative.';

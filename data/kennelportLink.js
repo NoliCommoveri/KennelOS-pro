@@ -13,8 +13,9 @@
 // - What comes back fills, never overwrites what she typed: a dog's `url` and a
 //   litter's `photos_url` get their page's address only when blank or holding an
 //   address KennelPort wrote (any kennelport.com page, or her site's own); one that
-//   left the site is blanked. The same rule fills the kennel's `website` and her
-//   waitlist's `extras_info_url`.
+//   left the site is blanked. The same rule fills the kennel's `website`. Her
+//   waitlist's `extras_info_url` is hers alone: never filled from the site (the
+//   owner, 2026-11-18: she links her own pages, one per extras group).
 import { dogRepo } from './dogRepo.js';
 import { litterRepo } from './litterRepo.js';
 import { pairingRepo } from './pairingRepo.js';
@@ -61,8 +62,7 @@ export function addressChanges({ dogs = [], litters = [], addresses = {}, sites 
 }
 
 // The kennel settings the site's facts fill (KennelPort plan 5.5, "Filled in when
-// linked"): its `website`, and in her waitlist settings `extras_info_url`, her
-// public list for the website (`website_feed`, when the site's waitlist page wants
+// linked"): its `website`, and in her waitlist settings her public list for the website (`website_feed`, when the site's waitlist page wants
 // it and her list is online), and the site in `embed_origins` when she has listed
 // any. Each only when blank or KennelPort's own. → changes for kennelRepo.update,
 // or null when nothing changes.
@@ -76,9 +76,6 @@ export function kennelChanges(kennel, site, sites = []) {
   const before = kennel.waitlist_config || {};
   const c = waitlistConfig(kennel);
   const config = {};
-  const extras = String(c.extras_info_url ?? '').trim();
-  const nextExtras = site.extras_info_url || '';
-  if (extras !== nextExtras && (!extras || isWebsiteAddress(extras, known))) config.extras_info_url = nextExtras;
   if (site.waitlist_page && c.online === true && c.website_feed !== true) config.website_feed = true;
   const listed = Array.isArray(c.embed_origins) ? c.embed_origins : [];
   const siteOrigin = originOf(site.website);
