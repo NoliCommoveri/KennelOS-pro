@@ -7,7 +7,7 @@
 //   bootCloud()                 app.js, every page: scheduler, service notices
 //   mountCloudPane(el, getMode) Import/Export: the Cloud destination of Backup & restore
 //   mountCloudAccountCard(el)   Settings: the Account card
-//   renderTodayCloudNudge(el)   Today: "turn it on" while off, or "paused"
+//   (Today's card is assets/todayCloudCard.js; it loads this on a button press)
 //   runSignInAndRestore()       first-run "I already use KennelOS"
 //   resetSignOutFieldHtml() / signOutAfterResetIfChecked()   Reset App's question
 //   devicesModal()              "Your devices": erase a lost one, free its Pro license
@@ -46,9 +46,9 @@ import {
   getCloudRestoredAt, setCloudRestoredAt, getProLicense, getLastBackupDate, getCloudSyncState, SYNC_STATUS_EVENT
 } from '../data/settings.js';
 import { isLicenseGated } from '../data/license.js';
-import { hasSampleData } from '../data/sampleData.js';
+// Today's card and the helpers it shares with the Account card.
+import { pausedReason, changeRequestedBy, shortDate, FAILED_CHANGE_TEXT } from './todayCloudCard.js';
 import { getMyKennelName, shouldRequireKennelSetup } from '../data/kennelSetup.js';
-import { dismiss, dismissedAt, undismiss } from '../data/nudgeState.js';
 
 // --- Small helpers --------------------------------------------------------------
 
@@ -99,22 +99,6 @@ export function statusLine(status, now = Date.now()) {
     return `Not backed up for ${days} day${days === 1 ? '' : 's'}: no internet?`;
   }
   return `Backed up ${relativeTime(status.lastPushedAt, now)}.`;
-}
-
-function pausedReason(lastError) {
-  switch (lastError?.code) {
-    case 'conflict': if (lastError.movedToEdition === 'pro') return 'Your records moved to KennelOS Pro.';
-      if (lastError.syncing && isSyncOffered()) return 'Your other devices keep in step. Join them to keep backing up from this one.';
-      return lastError.ownDevice
-      ? 'The cloud already has a backup from this device, made before it was reset.'
-      : `Backups are coming from ${lastError.backingDevice?.label || 'another device'}.`;
-    case 'shrink': return 'This device has far fewer records than your last backup.';
-    case 'auth': return 'Your sign-in has expired.';
-    case 'vault_locked': return lastError.stale
-      ? 'Sensitive records backup was turned off and on again on another device. Unlock it here with the new recovery code.'
-      : 'Your sensitive records are locked on this device. Unlock them to keep backing up.';
-    default: return null;
-  }
 }
 
 export function errorText(e) {
@@ -210,9 +194,6 @@ export function progressModal(title) {
   };
 }
 
-// Today's "turn on" nudge: dismissing it snoozes it for 30 days (plan §2.1).
-const NUDGE_KEY = 'cloud-backup-offer';
-const NUDGE_SNOOZE_MS = 30 * DAY;
 
 export const notify = () => { try { window.dispatchEvent(new CustomEvent(CLOUD_BACKUP_EVENT, { detail: { status: 'ui' } })); } catch { /* fine */ } };
 
@@ -436,10 +417,6 @@ function recoveryErrorText(e) {
   return errorText(e);
 }
 
-// Who asked for a pending email change, for its notice (Account card, Today).
-const changeRequestedBy = (c) => (c?.via === 'recovery'
-  ? 'Requested with your recovery code'
-  : `Requested on ${esc(c?.deviceLabel || 'one of your devices')}`);
 
 // --- "What gets backed up" (plan §2.1 step 3) ------------------------------------
 // Information only, opened from "What's backed up?" (since 2026-10-10 it's no
@@ -1107,11 +1084,8 @@ function renderAccountCard(el) {
 }
 
 // --- Changing the account's email (plan §2.6) ---------------------------------------
-const shortDate = (iso) => new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 // A pending change, as every signed-in device shows it. '' when there's none.
-// What a change that couldn't happen says (review K4-8).
-const FAILED_CHANGE_TEXT = 'That address was taken while the change was waiting, so nothing changed: your account still uses its current email.';
 
 function emailChangeNoticeHtml() {
   const status = getBackupStatus();
@@ -1130,7 +1104,7 @@ function emailChangeNoticeHtml() {
     </div>`;
 }
 
-async function cancelEmailChangeFlow() {
+export async function cancelEmailChangeFlow() {
   if (!(await confirmModal({ title: 'Cancel the email change?', message: 'The account keeps its current email.', confirmLabel: 'Cancel the change', cancelLabel: 'Keep it' }))) return;
   await cancelAccountEmailChange();
   notify();
@@ -1625,85 +1599,8 @@ async function joinInsteadOfRestore() {
   return joined;
 }
 
-// --- Today (plan §2.1): turn it on, or it's paused -------------------------------------
-
-export function renderTodayCloudNudge(el) {
-  if (!el) return;
-  const render = () => {
-    el.innerHTML = '';
-    if (!isCloudAvailable() || hasSampleData()) return;
-    const status = getBackupStatus();
-    const paused = status.enabled ? pausedReason(status.lastError) : null;
-    const expired = status.account && !status.account.signedIn;
-
-    let html = '';
-    const change = status.emailChange;
-    if (status.emailChangeFailed && !change && !expired) {
-      html = `<div class="row-between">
-          <div><strong>✉️ Your email change didn't happen.</strong>
-            <div class="muted" style="font-size:13px;">${esc(FAILED_CHANGE_TEXT)}</div></div>
-          <div class="pill-row"><button class="btn btn-sm" data-act="email-dismiss">OK</button></div>
-        </div>`;
-    } else if (change && !expired) {
-      html = `<div class="row-between">
-          <div><strong>✉️ Your account's email is changing.</strong>
-            <div class="muted" style="font-size:13px;">${changeRequestedBy(change)}; it takes effect ${esc(shortDate(change.effectiveAt))}. Not you? Cancel it.</div></div>
-          <div class="pill-row"><button class="btn btn-sm" data-act="email-cancel">Cancel it</button></div>
-        </div>`;
-    } else if (unsavedCode && status.enabled && !paused && !expired) {
-      html = `<div class="row-between">
-          <div><strong>🔑 Save your recovery code.</strong>
-            <div class="muted" style="font-size:13px;">If you ever lose your passkey, it's the other way to unlock your sensitive records.</div></div>
-          <div class="pill-row"><button class="btn btn-sm btn-primary" data-act="code">Show code</button></div>
-        </div>`;
-    } else if (paused || expired) {
-      html = `<div class="row-between">
-          <div><strong>☁️ Cloud backup is paused.</strong>
-            <div class="muted" style="font-size:13px;">${esc(paused || 'Your sign-in has expired.')}</div></div>
-          <div class="pill-row"><a class="btn btn-sm btn-primary" href="import-export.html#backup-restore">Resolve</a></div>
-        </div>`;
-    } else if (!status.enabled && status.movedToEdition !== 'pro') {
-      const at = dismissedAt(NUDGE_KEY);
-      if (at && Date.now() - Date.parse(at) < NUDGE_SNOOZE_MS) return;
-      if (at) undismiss(NUDGE_KEY); // 30 days passed: show again
-      html = `<div class="row-between">
-          <div><strong>☁️ Protect your records: turn on free cloud backup.</strong>
-            <div class="muted" style="font-size:13px;">If this device is lost or replaced, sign in on the new one and your records come back.</div></div>
-          <div class="pill-row">
-            <button class="btn btn-sm btn-primary" data-act="on">Turn on</button>
-            <button class="btn btn-sm" data-act="later">Not now</button>
-          </div>
-        </div>`;
-    }
-    if (!html) return;
-    el.innerHTML = `<section class="card" style="margin-bottom:16px;">${html}</section>`;
-    el.querySelector('[data-act="on"]')?.addEventListener('click', async () => { await turnOnFlow(); render(); });
-    el.querySelector('[data-act="email-cancel"]')?.addEventListener('click', async () => {
-      try { await cancelEmailChangeFlow(); } catch (e) { await alertModal({ title: "That didn't work", message: errorText(e) }); }
-      render();
-    });
-    el.querySelector('[data-act="email-dismiss"]')?.addEventListener('click', async () => {
-      try { await cancelAccountEmailChange(); } catch (e) { await alertModal({ title: "That didn't work", message: errorText(e) }); }
-      render();
-    });
-    el.querySelector('[data-act="code"]')?.addEventListener('click', async () => {
-      await (await vaultUI()).saveRecoveryCodeFlow();
-      await refreshCode();
-    });
-    el.querySelector('[data-act="later"]')?.addEventListener('click', () => { dismiss(NUDGE_KEY); render(); });
-  };
-  // The unsaved recovery code is an IndexedDB read: look it up, then render.
-  let unsavedCode = false;
-  const refreshCode = async () => {
-    try {
-      unsavedCode = isVaultOffered() && Boolean(await (await import('../data/cloud/cloudVault.js')).unsavedRecoveryCode());
-    } catch { unsavedCode = false; }
-    render();
-  };
-  window.addEventListener(CLOUD_BACKUP_EVENT, refreshCode);
-  render();
-  refreshCode();
-}
+// Today's card (plan §2.1: turn it on, or it's paused) is assets/todayCloudCard.js,
+// which loads this module only when one of its buttons is pressed.
 
 // --- Service notices (plan §2.1: the in-app shutdown channel) ---------------------------
 async function renderServiceNotices() {
@@ -1713,6 +1610,8 @@ async function renderServiceNotices() {
   for (const n of notices) {
     if (!n || seen.has(n.id)) continue;
     seen.add(n.id);
+    // app.js draws the notices this session already fetched at boot.
+    if (n.id != null && document.querySelector(`.cloud-notice[data-notice-id="${CSS.escape(String(n.id))}"]`)) continue;
     const bar = document.createElement('div');
     bar.className = `cloud-notice cloud-notice-${['info', 'warning', 'shutdown'].includes(n.level) ? n.level : 'info'}`;
     bar.setAttribute('role', 'status');

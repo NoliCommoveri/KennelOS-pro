@@ -22,7 +22,10 @@
 // pressure is highest) is protected by the Pro code genuinely not being there;
 // Pro leans on the key.
 import { editionFlags, licenseConfig } from './editionConfig.js';
-import { getProLicense, setProLicense, clearProLicense, getDeviceId } from './settings.js';
+import {
+  getProLicense, setProLicense, clearProLicense, getDeviceId,
+  getLicenseCheckedAt, wasLicenseAskedThisSession, markLicenseAsked
+} from './settings.js';
 
 // Lemon Squeezy License API base. Fixed (not store-specific — the key identifies
 // the store), so it's a constant here rather than edition config.
@@ -143,13 +146,21 @@ export function recordFromPayload(key, data, instanceId, instanceName) {
   };
 }
 
+// How long a call to the store may take before it counts as unreachable (D6 of
+// the Load Performance plan). A connection that is up but not working used to
+// hold the Pro app until the browser gave up; now it falls back to the cache, as
+// offline does.
+export const LICENSE_TIMEOUT_MS = 5000;
+
 // A browser POST to the License API. Form-encoded body (what the endpoints expect),
 // key in the body — no Authorization header, no store secret.
 async function postLicense(path, params) {
+  const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(LICENSE_TIMEOUT_MS) : undefined;
   const res = await fetch(`${API}/${path}`, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params),
+    ...(signal ? { signal } : {}),
   });
   const data = await res.json().catch(() => ({}));
   return { res, data };
@@ -326,6 +337,34 @@ export function offlineVerdict(record) {
   }
   if (since > graceFor(record)) return 'wall';
   return base;
+}
+
+// --- How often the store is asked (D6 of the Load Performance plan) ----------
+// Every page load used to ask Lemon Squeezy before the app could draw. Now the app
+// draws from the stored verdict and asks at most once per browsing session, and
+// again once 6 hours have passed. A refunded or released key therefore walls at
+// the next session or within 6 hours, instead of on the next page.
+export const LICENSE_RECHECK_MS = 6 * 60 * 60 * 1000;
+
+export function licenseCheckDue(now = Date.now()) {
+  if (!wasLicenseAskedThisSession()) return true;
+  const at = Date.parse(getLicenseCheckedAt() || '');
+  // A clock moved backwards counts as due, so it can't put the next check off.
+  return !Number.isFinite(at) || now < at || now - at >= LICENSE_RECHECK_MS;
+}
+
+// The verdict from the stored record alone, with no request: what the app draws
+// from while the store is asked in the background (or not at all, between checks).
+export function cachedLicense() {
+  const record = getProLicense();
+  if (!record) return { state: 'unactivated', record: null };
+  return { state: offlineVerdict(record), record };
+}
+
+// Ask the store now (evaluateLicense) and note that it was asked, whatever came of it.
+export async function askLicenseStore() {
+  markLicenseAsked();
+  return evaluateLicense();
 }
 
 // Evaluate the current license: read the cache, refresh it online when possible,

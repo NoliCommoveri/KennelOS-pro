@@ -19,6 +19,11 @@ export const upgradeUrl = null;
 // hasEditionLinks() is false and the nav/Today footer render nothing.
 export const demoUrl = null;
 
+// Where "Take the tour" goes once this device has a program of its own (Load
+// Performance plan D3): the seeded, read-only Demo, in a new tab. Not an edition
+// link: Pro's nav still has none.
+export const tourUrl = 'https://demo.kennelos.app/';
+
 // Cloud backup API (Cloud Phase 1 plan §7): production, live since the go-live
 // change (plan §9 step 6). Back to null is how a shutdown release turns every
 // cloud feature off: the final build (build/finalRelease.mjs) does that. `devCloudUrl` (the staging Worker) applies when served from

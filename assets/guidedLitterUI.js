@@ -24,7 +24,7 @@ import { editionFlags, dogCapStatus, litterCapStatus } from '../data/editionConf
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { getGuidedLitterDraft, setGuidedLitterDraft, clearGuidedLitterDraft, retireDraft } from '../data/settings.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly } from '../data/demoMode.js';
 import {
   DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_STATUS, PAIRING_STATUS, LITTER_DELIVERY_TYPE, descriptor
 } from '../data/vocab.js';
@@ -669,7 +669,7 @@ class LitterConversation extends StepConversation {
     const damName = d.newDam?.call_name || this.data.dogsById.get(d.damId)?.call_name;
     d.label = damName ? `${damName}'s litter` : '';
     // The Demo keeps no draft (K11-5).
-    if (!d.done && !isDemo()) setGuidedLitterDraft(d);
+    if (!d.done && !isReadOnly()) setGuidedLitterDraft(d);
   }
 
   dropDraft() { clearGuidedLitterDraft(); }

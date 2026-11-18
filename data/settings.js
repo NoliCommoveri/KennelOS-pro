@@ -40,7 +40,12 @@ const KEYS = {
   kelsTaskUse: 'kennelOS.kelsTaskUse',
   kelsNoPromote: 'kennelOS.kelsNoPromote',
   meetKelsPending: 'kennelOS.meetKelsPending',
-  studTripsMigrated: 'kennelOS.studTripsMigrated'
+  studTripsMigrated: 'kennelOS.studTripsMigrated',
+  dataChangedAt: 'kennelOS.dataChangedAt',
+  navKennels: 'kennelOS.navKennels',
+  websiteStrip: 'kennelOS.websiteStrip',
+  cloudCodeUnsaved: 'kennelOS.cloudCodeUnsaved',
+  tourCleanupNotice: 'kennelOS.tourCleanupNotice'
 };
 
 // A restore gave records new ids (importExport.restoreFileMerge): every value this
@@ -101,8 +106,64 @@ export function setSampleDataManifest(manifest) {
   localStorage.setItem(KEYS.sampleDataManifest, JSON.stringify(manifest));
 }
 
+// Is the tour's sample data loaded? One localStorage read, so the shell and the
+// write guard (demoMode.assertWritable) can ask without loading sampleData.js.
+export function hasSampleData() {
+  try { return getSampleDataManifest() != null; } catch { return false; } // no storage (tests): none
+}
+
 export function removeSampleDataManifest() {
   localStorage.removeItem(KEYS.sampleDataManifest);
+}
+
+// The tour's seed lives only in the browsing session that seeded it (Load
+// Performance plan D2): the seed's `seededAt` is marked in sessionStorage, and a
+// page load in any other session clears the seed (assets/sampleDataUI.js).
+const TOUR_SESSION_KEY = 'kennelOS.tourSeededAt';
+const TOUR_CLEAR_KEY = 'kennelOS.tourClearTried';
+
+export function markTourSeededThisSession(seededAt) {
+  try { globalThis.sessionStorage?.setItem(TOUR_SESSION_KEY, String(seededAt || '')); } catch { /* storage unavailable */ }
+}
+
+export function wasTourSeededThisSession() {
+  const seededAt = getSampleDataManifest()?.seededAt;
+  try { return Boolean(seededAt) && globalThis.sessionStorage?.getItem(TOUR_SESSION_KEY) === String(seededAt); } catch { return false; }
+}
+
+// Should a page load clear the tour's seed (D2)? Yes unless the tour is active
+// and this browsing session seeded it. False when there's no seed.
+export function tourSeedExpired() {
+  if (!hasSampleData()) return false;
+  return !(getWizardStatusRaw() === 'active' && wasTourSeededThisSession());
+}
+
+// The one reload after an automatic clear, so a clear that didn't stick can't
+// reload forever (sampleDataUI.autoClearTourSeed).
+export function tookTourClearReload() {
+  try { return globalThis.sessionStorage?.getItem(TOUR_CLEAR_KEY) === '1'; } catch { return false; }
+}
+
+export function setTourClearReload(on) {
+  try {
+    if (on) globalThis.sessionStorage?.setItem(TOUR_CLEAR_KEY, '1');
+    else globalThis.sessionStorage?.removeItem(TOUR_CLEAR_KEY);
+  } catch { /* storage unavailable */ }
+}
+
+// What clearing an old seed changed in her own records (sampleData.clearSampleData
+// `detached`), shown once on the next page and then dropped.
+export function setTourCleanupNotice(lines) {
+  try {
+    if (lines?.length) localStorage.setItem(KEYS.tourCleanupNotice, JSON.stringify(lines));
+    else localStorage.removeItem(KEYS.tourCleanupNotice);
+  } catch { /* storage unavailable: no notice */ }
+}
+
+export function takeTourCleanupNotice() {
+  const lines = readJson(KEYS.tourCleanupNotice, null, (v) => Array.isArray(v));
+  try { localStorage.removeItem(KEYS.tourCleanupNotice); } catch { /* fine */ }
+  return lines || [];
 }
 
 export function wasSampleDataCleared() {
@@ -742,8 +803,12 @@ export const CLOUD_DATA_CHANGED_EVENT = 'kennelos:datachanged';
 // Live sync's: every sync run ends with it (data/cloud/cloudSync.js), so an open
 // status line can redraw itself.
 export const SYNC_STATUS_EVENT = 'kennelos:syncstatus';
+// Cloud backup's: every push attempt past the quick skips ends with it
+// (data/cloud/cloudBackup.js), so an open status line or Today's card can redraw.
+export const CLOUD_BACKUP_EVENT = 'kennelos:cloudbackup';
 
 export function markDataChanged(iso = new Date().toISOString()) {
+  noteDataChanged(iso);
   try {
     localStorage.setItem(KEYS.cloudDirtyAt, iso);
     if (!localStorage.getItem(KEYS.cloudDirtySince)) localStorage.setItem(KEYS.cloudDirtySince, iso);
@@ -756,6 +821,20 @@ export function markDataChanged(iso = new Date().toISOString()) {
     /* no window (tests) */
   }
   return iso;
+}
+
+// When this device's records last changed, by a local edit (markDataChanged) or a
+// live-sync apply (syncApply.js, which must not mark the backup dirty). Unlike
+// cloudDirtyAt it is never cleared by a push, so a reader that saved a result
+// (the website strip, Load Performance plan D7) can tell whether anything moved
+// since. In KEYS: Reset App drops it along with the results it guards.
+export function noteDataChanged(iso = new Date().toISOString()) {
+  try { localStorage.setItem(KEYS.dataChangedAt, iso); } catch { /* storage unavailable */ }
+  return iso;
+}
+
+export function getDataChangedAt() {
+  try { return localStorage.getItem(KEYS.dataChangedAt); } catch { return null; }
 }
 
 export function getCloudDirtyAt() {
@@ -812,6 +891,53 @@ export function setCloudRestoredAt(iso) {
   else localStorage.removeItem(KEYS.cloudRestoredAt);
 }
 
+// --- What the shell draws before its first database read --------------------
+// (Load Performance plan Phase 1.) Each is a copy of something the database
+// holds, kept so the page's first paint already has it; the page corrects the
+// copy after it reads the real thing, so a stale one costs a redraw, never a
+// wrong record. All in KEYS, so Reset App drops them.
+
+// The nav's kennel name (under "KennelOS") and the kennel switcher's own kennels:
+// { name: string|null, own: [{ id, kennel_name }] }.
+export function getNavKennels() {
+  const v = readJson(KEYS.navKennels, null, (x) => x && typeof x === 'object' && Array.isArray(x.own));
+  return v ? { name: typeof v.name === 'string' ? v.name : null, own: v.own.filter((k) => k && typeof k.id === 'string') } : null;
+}
+
+export function setNavKennels(value) {
+  try {
+    if (!value) localStorage.removeItem(KEYS.navKennels);
+    else localStorage.setItem(KEYS.navKennels, JSON.stringify({ name: value.name || null, own: (value.own || []).map((k) => ({ id: k.id, kennel_name: k.kennel_name || '' })) }));
+  } catch { /* storage unavailable: the nav fills in after its read */ }
+}
+
+// The KennelPort website strip's last compare (assets/websiteBanner.js, D7):
+// { checkedAt, signature, html, waiting: [{ kennel: { id, kennel_name }, lines, never, portal }] }.
+// `html` is the strip's closed state, drawn as-is in the first paint.
+export function getWebsiteStripCache() {
+  return readJson(KEYS.websiteStrip, null, (x) => x && typeof x === 'object' && Array.isArray(x.waiting));
+}
+
+export function setWebsiteStripCache(value) {
+  try {
+    if (!value) localStorage.removeItem(KEYS.websiteStrip);
+    else localStorage.setItem(KEYS.websiteStrip, JSON.stringify(value));
+  } catch { /* storage unavailable: the strip compares on every page instead */ }
+}
+
+// Whether this device's private-vault recovery code was still unsaved when last
+// looked up (Today's cloud card shows "Save your recovery code" from it).
+export function getCloudCodeUnsavedCache() {
+  try { return localStorage.getItem(KEYS.cloudCodeUnsaved) === '1'; } catch { return false; }
+}
+
+export function setCloudCodeUnsavedCache(on) {
+  try {
+    if (on) localStorage.setItem(KEYS.cloudCodeUnsaved, '1');
+    else localStorage.removeItem(KEYS.cloudCodeUnsaved);
+  } catch { /* storage unavailable */ }
+}
+
 // Full app reset (Reset App to Start): drop every key this app owns in
 // localStorage, so the next load has no memory of sample data, kennel setup,
 // or backup history — same blank slate as a browser that's never visited.
@@ -844,6 +970,27 @@ export function setProLicense(record) {
 
 export function clearProLicense() {
   localStorage.removeItem(PRO_LICENSE_KEY);
+}
+
+// When this device last asked the store about its license, and whether it has in
+// this browsing session (data/license.js licenseCheckDue: once a session and
+// again after 6 hours, decision D6 of the Load Performance plan). Outside KEYS
+// like the record itself. The session mark is in sessionStorage, so a new tab or
+// a relaunched app asks again.
+const LICENSE_CHECKED_KEY = 'kennelOS.licenseCheckedAt';
+const LICENSE_SESSION_KEY = 'kennelOS.licenseAsked';
+
+export function getLicenseCheckedAt() {
+  try { return localStorage.getItem(LICENSE_CHECKED_KEY); } catch { return null; }
+}
+
+export function wasLicenseAskedThisSession() {
+  try { return globalThis.sessionStorage?.getItem(LICENSE_SESSION_KEY) === '1'; } catch { return false; }
+}
+
+export function markLicenseAsked(iso = new Date().toISOString()) {
+  try { localStorage.setItem(LICENSE_CHECKED_KEY, iso); } catch { /* storage unavailable */ }
+  try { globalThis.sessionStorage?.setItem(LICENSE_SESSION_KEY, '1'); } catch { /* storage unavailable */ }
 }
 
 // --- Cloud backup session, state and device id (Cloud Phase 1 plan §3.3) -----
@@ -886,6 +1033,16 @@ function readJsonKey(key) {
 
 export function getCloudSession() {
   return readJsonKey(CLOUD_SESSION_KEY);
+}
+
+// The cloud service notices this browsing session already fetched (cloudDevices.js
+// cacheNotices writes them to sessionStorage under this key), so the shell can
+// draw them at boot instead of after the cloud UI loads. Null when none fetched yet.
+export function getCachedCloudNotices() {
+  try {
+    const v = JSON.parse(globalThis.sessionStorage?.getItem('kennelOS.cloudNotices') || 'null');
+    return Array.isArray(v) ? v : null;
+  } catch { return null; }
 }
 
 export function setCloudSession(session) {

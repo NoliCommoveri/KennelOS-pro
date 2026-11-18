@@ -6,15 +6,17 @@
 // The branches:
 //   "Start my kennel"        → no sample data (declineSampleData), then the kennel
 //                              setup modal, whose optional email turns on backup.
-//   "Take the tour"          → seed the Thornfield sample data, start the guided
-//                              tour, reload so the destination page picks it up.
+//   "Take the tour"          → seed the Thornfield sample data (read-only, for this
+//                              browsing session only), start the guided tour,
+//                              reload so the destination page picks it up.
 //   "I already use KennelOS" → sign in and restore (only with a cloud server).
 import { shouldOfferFirstRunPrompt, declineSampleData } from '../data/sampleData.js';
 import { seedSampleData } from '../data/editionTour.js';
 import { startWizard } from '../data/wizardState.js';
 import { showKennelSetupModal } from './kennelSetupUI.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
-import { isMeetKelsPending, setMeetKelsPending } from '../data/settings.js';
+import { isMeetKelsPending, setMeetKelsPending, getSampleDataManifest, markTourSeededThisSession } from '../data/settings.js';
+import { withSeedAllowed } from '../data/demoMode.js';
 import { KELS, kelsPhotoUrl } from './kelsChat.js';
 import { editionFlags } from '../data/editionConfig.js';
 
@@ -69,7 +71,7 @@ const WELCOME_HTML = `
     ${DOC_THINGS ? `<li><strong>Generate documents</strong> — ${DOC_THINGS}, ready to print.</li>` : ''}
   </ul>
   <p>Everything lives securely on this device — no account, no cloud, nothing leaves your browser.</p>
-  <p class="muted">New here? The tour shows you around with sample records in a couple of minutes, and you can leave it at any time.</p>`;
+  <p class="muted">New here? The tour shows you around a sample kennel in a couple of minutes. Nothing in it is saved, and you can leave it at any time.</p>`;
 
 // The whole first-run sequence. Returns true when it handled the first run (so
 // app.js knows not to fall through to its own kennel-setup prompt); false when
@@ -107,7 +109,11 @@ export async function runFirstRunOnboarding() {
   }
 
   if (choice === 'tour') {
-    await seedSampleData();   // load Thornfield so the tour has live records to point at
+    // Load Thornfield so the tour has live records to point at. The tour is
+    // read-only, so the seed goes in through the seed window; it lives only in
+    // this browsing session (Load Performance plan D2, sampleDataUI.js).
+    await withSeedAllowed(() => seedSampleData());
+    markTourSeededThisSession(getSampleDataManifest()?.seededAt);
     startWizard();            // status active, index 0 = the tour-intro card
     location.reload();        // destination page's runWizardStep picks the tour back up
     return true;              // (never returns past the reload)

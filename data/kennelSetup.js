@@ -4,12 +4,11 @@
 // records). Companion to sampleData.js/settings.js in the data layer.
 import { kennelRepo } from './kennelRepo.js';
 import { contactRepo } from './contactRepo.js';
-import { hasSampleData } from './sampleData.js';
 import { hasOwnKennel, ownKennels } from './kennelScope.js';
 import {
   getMyKennelId, setMyKennelId,
   getMyContactId, setMyContactId,
-  wasSampleDataCleared
+  wasSampleDataCleared, hasSampleData
 } from './settings.js';
 
 // The "My kennel" id, repaired when it's missing or stale. The setting lives in

@@ -247,3 +247,45 @@ export async function findBlockingReferences(registry, id) {
   }
   return blockers;
 }
+
+// --- Which registry guards which table --------------------------------------
+// For code that removes a whole set of records at once and has to deal with what
+// points at them (data/recordDetach.js: clearing the tour's sample data, Kels's
+// leftover tour records). Every table with a registry above, by table name.
+export const REFERENCES_BY_TABLE = {
+  dogs: DOG_REFERENCES, litters: LITTER_REFERENCES, pairings: PAIRING_REFERENCES,
+  contacts: CONTACT_REFERENCES, kennels: KENNEL_REFERENCES, sales: SALE_REFERENCES,
+  stud_services: STUD_SERVICE_REFERENCES, contracts: CONTRACT_REFERENCES, events: EVENT_REFERENCES,
+  waitlist_entries: WAITLIST_ENTRY_REFERENCES, waitlist_programs: WAITLIST_PROGRAM_REFERENCES,
+  waitlist_offers: WAITLIST_OFFER_REFERENCES, do_not_sell: DO_NOT_SELL_REFERENCES,
+  expenses: EXPENSE_REFERENCES, accounts: ACCOUNT_REFERENCES, documents: DOCUMENT_REFERENCES
+};
+
+// The value at a registry entry's field: a dotted path, `list[].key` (every
+// matching item's key), or a multi-entry array. Always a list of ids.
+export function refIdsOf(row, ref) {
+  const at = (obj, dotted) => dotted.split('.').reduce((v, k) => (v == null ? v : v[k]), obj);
+  if (ref.compoundIndex) return row.subject_type === ref.discriminatorValue && row.subject_id != null ? [row.subject_id] : [];
+  const [list, item] = ref.field.split('[].');
+  if (item != null) {
+    const xs = at(row, list);
+    return Array.isArray(xs) ? xs.map((x) => at(x, item)).filter((v) => v != null) : [];
+  }
+  const v = at(row, ref.field);
+  if (Array.isArray(v)) return v.filter((x) => x != null);
+  return v == null ? [] : [v];
+}
+
+// Every row matching one registry entry for ANY of `ids` (a Set). One query per
+// entry: the index when there is one, else one pass over the table (`scan`).
+export async function findReferencingRows(ref, ids) {
+  if (!ids.size || !new Set(existingTableNames()).has(ref.table)) return [];
+  const table = db.table(ref.table);
+  const list = [...ids];
+  if (ref.compoundIndex) return table.where(ref.compoundIndex).anyOf(list.map((id) => [ref.discriminatorValue, id])).toArray();
+  if (ref.scan) return table.filter((row) => refIdsOf(row, ref).some((id) => ids.has(id))).toArray();
+  const rows = await table.where(ref.field).anyOf(list).toArray();
+  // A multi-entry index answers a row once per matching id: keep each row once.
+  const seen = new Set();
+  return rows.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
+}

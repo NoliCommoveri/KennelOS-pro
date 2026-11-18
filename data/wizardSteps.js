@@ -52,7 +52,7 @@ export const WIZARD_STEPS = [
   {
     id: 'tour-intro', kind: 'tour-intro', button: 'Start the tour →',
     title: 'Meet Thornfield Kennels',
-    body: 'We’ve loaded a fictional sample kennel — Thornfield Kennels — with several dogs, litters and records already filled in so you have something real to explore. Nothing here is yours: once you finish the tour you can delete the sample data. If you leave the tour to explore on your own, a yellow “Clear sample data” banner stays at the top — click it whenever you’re ready to reset to a blank slate and load your own program.'
+    body: 'We’ve loaded a fictional sample kennel — Thornfield Kennels — with several dogs, litters and records already filled in so you have something real to explore. Nothing here is yours, and nothing you change is saved: it’s all here to look at. You can leave the tour at any time with Skip tour; the sample kennel then goes away and you start your own.'
   },
 
   // --- Today -------------------------------------------------------------

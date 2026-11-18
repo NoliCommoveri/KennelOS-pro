@@ -20,6 +20,12 @@
 // Reset App clears it with every other table. Not kennel data, so writing it
 // doesn't mark the cloud backup dirty (tests/cloudDirty.test.js).
 import { db } from './db.js';
+import { setWebsiteStripCache } from './settings.js';
+
+// A link, an Update website or the site's own answer changes what the website
+// strip compares against, so its kept answer is dropped and the next page
+// compares again (assets/websiteBanner.js, Load Performance plan D7).
+const forgetStrip = () => setWebsiteStripCache(null);
 
 const rowId = (kennelId) => `kennelport:${kennelId}`;
 
@@ -31,6 +37,7 @@ export async function getWebsiteLink(kennelId) {
 
 export async function setWebsiteLink(kennelId, { token, site, device_label = '' }) {
   await db.device_secrets.put({ id: rowId(kennelId), kennel_id: kennelId, token, site: site || null, device_label, linked_at: new Date().toISOString(), last_sent_at: null, last_summary: null });
+  forgetStrip();
 }
 
 // After an answer from KennelPort: the site's facts, and after an Update website
@@ -45,6 +52,7 @@ export async function noteWebsiteAnswer(kennelId, { site, summary, kept_website,
     ...(sent ? { sent } : {}),
     ...(summary ? { last_summary: summary, last_sent_at: new Date().toISOString() } : {})
   });
+  forgetStrip();
 }
 
 // After the portal's family feed was sent (portalFeedSync.js): what went, and
@@ -63,6 +71,7 @@ export async function notePortalSent(kennelId, { sent, known, site, checked = fa
 
 export async function clearWebsiteLink(kennelId) {
   if (kennelId) await db.device_secrets.delete(rowId(kennelId));
+  forgetStrip();
 }
 
 // Is a website linked for any kennel on this device? (Kels asks about the

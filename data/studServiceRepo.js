@@ -13,7 +13,7 @@ import { STUD_SERVICE_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
 import { eventRepo } from './eventRepo.js';
-import { getStudTripsMigrated, markStudTripsMigrated } from './settings.js';
+import { getStudTripsMigrated, markStudTripsMigrated, hasSampleData } from './settings.js';
 import { travellingDogId, studBoardingFor, studBoardingPrefill } from './studRules.js';
 
 const base = makeRepo('stud_services', STUD_SERVICE_REFERENCES);
@@ -90,6 +90,9 @@ export const studServiceRepo = {
   //    (studRules.studBoardingPrefill). The match check keeps a second device, or a
   //    re-run after Reset App, from adding it twice.
   async migrateStudTrips() {
+    // Not over the tour's sample data, which is read-only and goes away (Load
+    // Performance plan Phase 2): it runs on her own records after.
+    if (hasSampleData()) return;
     const all = await db.stud_services.toArray();
     for (const s of all) {
       if (s.direction !== 'outgoing' && s.direction !== 'incoming') continue;

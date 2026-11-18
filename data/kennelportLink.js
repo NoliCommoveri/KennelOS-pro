@@ -29,6 +29,7 @@ import { todayYMD } from './dateUtils.js';
 import { isLicenseGated, evaluateLicense } from './license.js';
 import { editionFlags } from './editionConfig.js';
 import { getCloudSession, getWebsitePublishOnSend } from './settings.js';
+import { assertWritable } from './demoMode.js';
 import { buildSiteBundle, websiteCounts, websiteGaps, bundleChanges } from './siteExport.js';
 import { redeemLinkCode, linkStatus, stopLink, sendBundle, setSiteSettings, publishSite, websiteLinkOffered, KennelportError } from './kennelportApi.js';
 import { getWebsiteLink, setWebsiteLink, noteWebsiteAnswer, clearWebsiteLink, anyWebsiteLink } from './kennelportLinkStore.js';
@@ -196,6 +197,9 @@ async function applyKennelFacts(kennel, site, previous) {
 // Redeem the code from KennelPort Site Manager's Link KennelOS for this kennel, on
 // this device. → the site's facts.
 export async function connectWebsite(kennel, code, deviceLabel) {
+  // Never the tour's sample kennel (read-only; Load Performance plan Phase 2):
+  // its records would go to her real website.
+  assertWritable();
   if (!websiteLinkOffered()) throw new KennelportError('other', 'Your website isn\'t available in this edition.');
   if (!kennel?.id) throw new KennelportError('other', 'Choose a kennel first.');
   const out = await redeemLinkCode(code, kennel.id, deviceLabel);

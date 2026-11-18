@@ -15,7 +15,7 @@ import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
 import { EXPENSE_REFERENCES } from './referenceRegistry.js';
 import { EXPENSE_SUBJECT_TYPES, defaultExpenseCategoryFor } from './vocab.js';
-import { getExpensesMigrated, markExpensesMigrated, markDataChanged } from './settings.js';
+import { getExpensesMigrated, markExpensesMigrated, markDataChanged, hasSampleData } from './settings.js';
 import { fileRepo } from './fileRepo.js';
 
 const base = makeRepo('expenses', EXPENSE_REFERENCES);
@@ -193,7 +193,8 @@ export const expenseRepo = {
   // flag, so it runs at most once and is a no-op after Reset App (no event has a
   // cost then). Safe to call on every boot.
   async migrateEventCosts() {
-    if (getExpensesMigrated()) return;
+    // Not over the tour's sample data (read-only; Load Performance plan Phase 2).
+    if (getExpensesMigrated() || hasSampleData()) return;
     const events = await db.events.toArray();
     for (const ev of events) {
       if (ev.cost == null || ev.cost === '') continue;

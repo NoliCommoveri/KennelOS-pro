@@ -11,10 +11,24 @@
 //
 // Pro with a KennelPort address only (app.js loads this under editionFlags.websiteLink,
 // never in the Demo); nothing shows until a kennel is linked on this device.
+//
+// When it compares (Load Performance plan D7): the compare reads seven tables and
+// rebuilds the whole site bundle, so its answer is kept (settings
+// getWebsiteStripCache) and the next page draws the strip from it in the first
+// paint (app.js, and today.js for the card). A page compares again only when
+// records changed since the last compare (settings.getDataChangedAt), on a new
+// day (the bundle counts from today's date), or when nothing is kept (a link,
+// a send or a site answer clears it: kennelportLinkStore.js). After a change
+// while the page is open, it compares CHECK_DELAY_MS later, as before.
 import { ownKennels } from '../data/kennelScope.js';
+import { kennelRepo } from '../data/kennelRepo.js';
 import { getWebsiteLink } from '../data/kennelportLinkStore.js';
 import { pendingWebsiteChanges } from '../data/kennelportLink.js';
-import { CLOUD_DATA_CHANGED_EVENT, getWebsiteLaterFor, setWebsiteLaterFor, getWebsitePublishOnSend } from '../data/settings.js';
+import { todayYMD } from '../data/dateUtils.js';
+import {
+  CLOUD_DATA_CHANGED_EVENT, getWebsiteLaterFor, setWebsiteLaterFor, getWebsitePublishOnSend,
+  getWebsiteStripCache, setWebsiteStripCache, getDataChangedAt
+} from '../data/settings.js';
 
 // ui.js's esc, here so the words can be tested without a page (ui.js reads the
 // document as it loads); websiteCard.js is loaded only when she presses Send.
@@ -58,23 +72,48 @@ export function waitingHtml(waiting, { open = false, note = null, publish = getW
     </span>${detail}`;
 }
 
-// The strip on every page (or, with `el`, Today's card). Never throws.
+// What is kept of a compare: only what the strip draws and Send now needs.
+const keep = (waiting) => waiting.map((w) => ({
+  kennel: { id: w.kennel.id, kennel_name: w.kennel.kennel_name || '' },
+  lines: w.lines || [], never: Boolean(w.never), portal: Boolean(w.portal)
+}));
+
+// Is the kept compare still good? Pure, for tests.
+export function compareIsFresh(cache, { dataChangedAt = null, today = todayYMD() } = {}) {
+  if (!cache?.checkedAt) return false;
+  if (cache.checkedAt.slice(0, 10) !== today) return false;
+  return !dataChangedAt || dataChangedAt <= cache.checkedAt;
+}
+
+// Keep a compare's answer for the next page's first paint.
+export function rememberCompare(waiting, checkedAt = new Date().toISOString()) {
+  const kept = keep(waiting);
+  setWebsiteStripCache({
+    checkedAt, waiting: kept, signature: waitingSignature(kept),
+    html: kept.length ? waitingHtml(kept) : null
+  });
+  return kept;
+}
+
+const idle = (win, fn) => (win.requestIdleCallback ? win.requestIdleCallback(fn, { timeout: 2000 }) : win.setTimeout(fn, 200));
+
+// The strip on every page (or, with `el`, Today's card). Never throws. Adopts the
+// strip app.js already drew from the kept compare, if any.
 export function startWebsiteBanner({ el = null, win = globalThis } = {}) {
   const doc = win.document;
-  let box = el;
+  let box = el || doc.querySelector('.website-banner-strip');
   let open = false;
   let note = null;
-  let waiting = [];
+  const cache = getWebsiteStripCache();
+  let waiting = cache?.waiting || [];
   let timer = null;
   let sending = false;
 
   const ensureBox = () => {
     if (box) return box;
     box = doc.createElement('div');
-    box.className = 'website-banner inline-notice';
+    box.className = 'website-banner website-banner-strip inline-notice';
     box.setAttribute('role', 'status');
-    // Full width under the nav, like the sample-data strip.
-    box.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0;border-radius:0;border-width:0 0 1px;padding:8px 16px;';
     // Under the app's nav bar, where the sample-data strip goes.
     const nav = doc.getElementById('app-nav') || doc.querySelector('nav');
     if (nav) nav.insertAdjacentElement('afterend', box); else doc.body.prepend(box);
@@ -99,7 +138,9 @@ export function startWebsiteBanner({ el = null, win = globalThis } = {}) {
     const texts = [];
     const { pressUpdateWebsite } = await import('./websiteCard.js');
     for (const w of waiting) {
-      const out = await pressUpdateWebsite(w.kennel);
+      // The kept compare has only the kennel's id and name; send the record itself.
+      const kennel = (await kennelRepo.getById(w.kennel.id).catch(() => null)) || w.kennel;
+      const out = await pressUpdateWebsite(kennel);
       texts.push(`${waiting.length > 1 ? `${w.kennel.kennel_name || 'Your kennel'}: ` : ''}${out.ok ? out.text : `That didn't go: ${out.text}${out.notLinked ? ' Connect again in Settings, under Your website.' : ''}`}`);
     }
     sending = false;
@@ -112,11 +153,16 @@ export function startWebsiteBanner({ el = null, win = globalThis } = {}) {
   async function check() {
     timer = null;
     if (sending || note) return;
-    try { waiting = await websiteWaiting(); } catch { waiting = []; }
+    // Stamped before the compare, so a change made while it runs compares again.
+    const startedAt = new Date().toISOString();
+    try { waiting = rememberCompare(await websiteWaiting(), startedAt); } catch { waiting = []; }
     draw();
   }
   const schedule = () => { if (timer) win.clearTimeout(timer); timer = win.setTimeout(check, CHECK_DELAY_MS); };
   win.addEventListener?.(CLOUD_DATA_CHANGED_EVENT, schedule);
-  schedule();
+  // The kept answer is drawn at once (again, if app.js drew it, so its buttons are
+  // wired); a compare runs after first paint only when that answer may be stale.
+  draw();
+  if (!compareIsFresh(cache, { dataChangedAt: getDataChangedAt() })) idle(win, () => { if (!timer) check(); });
   return { check, stop: () => win.removeEventListener?.(CLOUD_DATA_CHANGED_EVENT, schedule) };
 }

@@ -8,7 +8,17 @@
 import { db, dataTables } from './db.js';
 import { setLastBackupDate, markDataChanged, getMyKennelId, setMyKennelId, getCloudBackupState, getCloudSyncState, remapStoredIds, clearGuidedDrafts } from './settings.js';
 import { planMatches, dogClashes, mergePair, rekey, clashKey, describeRecord } from './restoreMatch.js';
-import { assertWritable } from './demoMode.js';
+import { assertWritable, isTourMode, withSeedAllowed } from './demoMode.js';
+
+// While the guided tour's sample data is loaded (the app is read-only then), a
+// restore, an import or a sync join clears it first and then goes ahead (Load
+// Performance plan Phase 2). Her own kennel comes with what's restored, so an old
+// seed's links to the sample kennel are cleared rather than waiting for a kennel.
+async function leaveTourFirst() {
+  if (!isTourMode()) return;
+  const { clearSampleData } = await import('./sampleData.js');
+  await withSeedAllowed(() => clearSampleData({ dropKennelLinks: true }));
+}
 import { enforceImportDogCap, enforceImportLitterCap } from './editionConfig.js';
 import { SYNC_REGISTRY, overlayCloudFields, snapshotRowToLocal, isCloudField } from './syncRegistry.js';
 
@@ -186,6 +196,7 @@ export async function countRecords() {
 //                    see restoreFileMerge below. Takes `opts`.
 // Unknown collections (tables not in this schema version) are skipped, not an error.
 export async function restoreBackup(obj, mode, opts = {}) {
+  await leaveTourFirst();
   assertWritable(); // restore is a full-DB write — inert in demo (defense-in-depth;
                     // the Import/Export page is also excluded from the demo build)
   if (mode === 'cloud-merge') return restoreCloudMerge(obj, opts);
@@ -345,6 +356,7 @@ export async function planJoinMatches(incoming, { answers = {} } = {}) {
 
 // Writes the pairs (unanswered questions stay two records). → how many were paired.
 export async function mergeJoinMatches(incoming, { answers = {}, clashChoices = {}, now = new Date() } = {}) {
+  await leaveTourFirst();
   assertWritable();
   const tables = dataTables();
   const local = await readLocal(tables);
@@ -568,6 +580,7 @@ export function cloudSnapshotRows(snapshot) {
 }
 
 export async function restoreCloudMerge(snapshot, { overwrite = false, fetchFile = null, only = null } = {}) {
+  await leaveTourFirst();
   assertWritable();
   const { writes, summary } = await planCloudMerge(snapshot, { overwrite, only });
 
@@ -707,6 +720,7 @@ export async function planVaultMerge(payload, { overwrite = false, only = null }
 }
 
 export async function restoreVaultMerge(payload, { overwrite = false, fetchFile = null, only = null } = {}) {
+  await leaveTourFirst();
   assertWritable();
   const { writes, summary } = await planVaultMerge(payload, { overwrite, only });
 

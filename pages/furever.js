@@ -20,7 +20,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { documentRepo, isFureverShareable, publishedFureverDocIds } from '../data/documentRepo.js';
 import { getFureverSettings, setFureverSettings, getMyKennelId } from '../data/settings.js';
 import { loadFureverIdentity, saveFureverIdentity } from '../data/fureverIdentity.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly, readOnlyWhy } from '../data/demoMode.js';
 import { resolveMyContactId } from '../data/kennelSetup.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { buildSeedPacket, pickupEventFor, FUREVER_APP_URL } from '../data/fureverSeedExport.js';
@@ -112,9 +112,9 @@ function identityCardHtml(s, vets, selectedVetId) {
       <div class="field"><label>Your vet's phone</label><input class="id-bv-phone" type="text" value="${esc(s.breederVet.phone)}"></div>
       <div class="field field-wide"><label>Your vet's address</label><input class="id-bv-address" type="text" value="${esc(s.breederVet.address)}"></div>
     </div>
-    <div style="margin-top:8px;">${isDemo()
-      // The Demo saves nothing (K13-6): the identity writes settings, outside the repos' guard.
-      ? '<span class="muted">This is a demo: the kennel identity isn\'t saved.</span>'
+    <div style="margin-top:8px;">${isReadOnly()
+      // The Demo and the tour save nothing (K13-6): the identity writes settings, outside the repos' guard.
+      ? `<span class="muted">${readOnlyWhy()}: the kennel identity isn't saved.</span>`
       : '<button class="btn btn-primary btn-sm" id="id-save">Save kennel identity</button> <span class="muted" id="id-saved"></span>'}</div>`;
 }
 
@@ -131,7 +131,7 @@ function matchVetId(vets, vetName) {
 async function renderIdentity() {
   const { defaults, vets } = await loadIdentityContext();
   // The identity on her kennel record wins over this device's copy (K14-5).
-  let s = isDemo() ? getFureverSettings() : await loadFureverIdentity();
+  let s = isReadOnly() ? getFureverSettings() : await loadFureverIdentity();
 
   // Seed blanks from the breeder's records once, and persist so Prepare link works
   // without a manual save. Non-destructive: only empty fields are filled.
@@ -144,9 +144,9 @@ async function renderIdentity() {
   if (Object.keys(bc).length) prefill.breederContact = bc;
   if (!s.breederVet.name && vets.length === 1) prefill.breederVet = vetToFields(vets[0]);
   const didPrefill = Object.keys(prefill).length > 0;
-  // The Demo shows the prefill without keeping it (K13-6).
+  // The Demo and the tour show the prefill without keeping it (K13-6).
   if (didPrefill) {
-    s = isDemo()
+    s = isReadOnly()
       ? { ...s, ...prefill,
         breederContact: { ...s.breederContact, ...(prefill.breederContact || {}) },
         breederVet: { ...s.breederVet, ...(prefill.breederVet || {}) } }
@@ -156,7 +156,7 @@ async function renderIdentity() {
   const selectedVetId = matchVetId(vets, s.breederVet.name);
   els.identity.innerHTML = identityCardHtml(s, vets, selectedVetId);
   wireIdentity(vets);
-  if (didPrefill && !isDemo()) {
+  if (didPrefill && !isReadOnly()) {
     const saved = document.getElementById('id-saved');
     saved.textContent = 'Prefilled from your kennel records — review and Save.';
   }
@@ -936,11 +936,11 @@ function wireContentPackages(litterEntries) {
 }
 
 async function renderContentPackages() {
-  // The Demo never connects Google Drive or publishes (K13-6): publishing would
-  // upload the demo's records to the visitor's own Drive, shared by link.
-  if (isDemo()) {
+  // The Demo and the tour never connect Google Drive or publish (K13-6):
+  // publishing would upload sample records to the visitor's own Drive, shared by link.
+  if (isReadOnly()) {
     els.contentPackages.innerHTML = `<p class="muted" style="margin:0;">In your own KennelOS, this publishes your
-      documents and photos to your Google Drive for each family's Furever app. The demo doesn't connect to Google Drive.</p>`;
+      documents and photos to your Google Drive for each family's Furever app. ${readOnlyWhy()}, so it doesn't connect to Google Drive.</p>`;
     return;
   }
   const settings = getFureverSettings();

@@ -21,7 +21,7 @@
 import { exportAll, restoreBackup, planCloudMerge, planVaultMerge, VAULT_PAYLOAD_FORMAT, cloudSnapshotRows, planJoinMatches, mergeJoinMatches } from '../importExport.js';
 import {
   getSampleDataManifest, getCloudDirtyAt, getCloudDirtySince, clearCloudDirty,
-  getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT,
+  getCloudBackupState, updateCloudBackupState, CLOUD_DATA_CHANGED_EVENT, CLOUD_BACKUP_EVENT,
   getMyKennelId, setMyKennelId, markSampleDataCleared, setCloudRestoredAt, getCloudSyncState
 } from '../settings.js';
 import { scanLocalChanges } from './syncState.js';
@@ -315,7 +315,7 @@ function fail(status, error, extra = {}) {
 //                 progress bar (the first backup with documents can take a minute)
 // Every attempt that gets past the quick skips dispatches CLOUD_BACKUP_EVENT on
 // the window with the result, so an open status line can refresh itself.
-export const CLOUD_BACKUP_EVENT = 'kennelos:cloudbackup';
+export { CLOUD_BACKUP_EVENT }; // defined in settings.js, so Today's card needn't load this
 
 export function pushIfDirty({ force = false, allowShrink = false, onProgress = null } = {}) {
   return exclusive(async () => {

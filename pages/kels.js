@@ -44,6 +44,7 @@ import { param, esc, todayYMD, confirmModal } from '../assets/ui.js';
 import { orderTasks, withStart, withStar } from '../data/kelsFavorites.js';
 import { getKelsFavorites, setKelsFavorites, getKelsTaskUse, setKelsTaskUse, getKelsNoPromote, setKelsNoPromote, getGuidedPeopleDraft, clearGuidedPeopleDraft, getGuidedFormDraft, clearGuidedFormDraft, anyKelsSetupComplete, retireDraft, takeKelsDraftNotice } from '../data/settings.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { isTourMode } from '../data/demoMode.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 
@@ -398,6 +399,12 @@ async function handoff(taskId, opts = {}) {
 }
 
 async function startTask(task, opts = {}) {
+  // The tour's sample kennel is read-only (Load Performance plan Phase 2): a task
+  // would fail at its first save, so it doesn't start, and Kels says why.
+  if (isTourMode()) {
+    await chat.say('We\'re in the tour\'s sample kennel, so I can\'t build anything here: nothing in it is saved. Finish or leave the tour (the button under the menu bar) and set up your own kennel, and I\'ll help you with this there.', { typing: 900 });
+    return menu({ again: true });
+  }
   const redirect = await task.beforeStart?.(opts);
   if (redirect) task = taskById(redirect.taskId);
   // Each start counts toward "You use this often" (data/kelsFavorites.js); a

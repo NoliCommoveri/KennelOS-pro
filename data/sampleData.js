@@ -29,26 +29,24 @@ import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { editionFlags } from './editionConfig.js';
 import { monthsFromToday, daysFromToday } from './dateUtils.js';
-import {
-  findBlockingReferences, DOG_REFERENCES, PAIRING_REFERENCES, LITTER_REFERENCES,
-  SALE_REFERENCES, STUD_SERVICE_REFERENCES, KENNEL_REFERENCES, ACCOUNT_REFERENCES
-} from './referenceRegistry.js';
+import { planDetach, removeDetaching } from './recordDetach.js';
 import {
   getSampleDataManifest,
+  hasSampleData,
   setSampleDataManifest,
   removeSampleDataManifest,
   wasSampleDataCleared,
   markSampleDataCleared,
   setCompanionSettings,
   COMPANION_TYPES,
-  clearGuidedDrafts
+  clearGuidedDrafts,
+  getMyKennelId,
+  setNavKennels
 } from './settings.js';
 
 export { getSampleDataManifest };
 
-export function hasSampleData() {
-  return getSampleDataManifest() != null;
-}
+export { hasSampleData }; // one localStorage read, in settings.js
 
 // First-run gate (brief §4): only offer the choice when there are no rows in
 // any Stage 1-2 table yet AND the manifest/cleared flag haven't been set —
@@ -1232,223 +1230,109 @@ function resetCompanionSettings() {
 }
 
 // --- Clearing -----------------------------------------------------------
+//
+// Every sample record is deleted (Load Performance plan D4). The tour is
+// read-only now (demoMode.assertWritable), so a new seed has nothing pointing at
+// it. A seed from before that may: a real dog filed under Thornfield, a real
+// litter whose dam is a sample dog. Those links are dealt with by
+// recordDetach.js: a link to a sample KENNEL moves to the breeder's own kennel
+// (and when she has none yet, nothing is cleared until kennel setup saves one:
+// reason 'needs-kennel'); any other link to a sample record is cleared. What
+// changed comes back as `detached`, one line each, for the one-time notice.
 
-// `kennel` joins this set with the multi-kennel scope (Multi-Kennel Scope Spec
-// §3.2.6). Every owned dog now carries a required kennel_id, so a user who starts
-// entering real dogs mid-tour points them at the SEEDED Thornfield kennel — and
-// clearing the seed would delete the kennel out from under them. Listing kennel
-// here routes that through the same contamination guard as everything else: the
-// clear reports the conflict, and archiveConflicting archives the sample kennel
-// instead of deleting it, so the real dog's kennel_id keeps resolving.
-const ENTITY_REPOS = {
-  dog: dogRepo, pairing: pairingRepo, litter: litterRepo,
-  sale: saleRepo, stud_service: studServiceRepo, kennel: kennelRepo, account: accountRepo
-};
-const ENTITY_REGISTRIES = {
-  dog: DOG_REFERENCES, pairing: PAIRING_REFERENCES, litter: LITTER_REFERENCES,
-  sale: SALE_REFERENCES, stud_service: STUD_SERVICE_REFERENCES,
-  kennel: KENNEL_REFERENCES, account: ACCOUNT_REFERENCES
+// Manifest key → table. Every id the seed made is in one of these.
+const MANIFEST_TABLES = {
+  dogs: 'dogs', events: 'events', contacts: 'contacts', kennels: 'kennels', pairings: 'pairings',
+  litters: 'litters', sales: 'sales', contracts: 'contracts', stud_services: 'stud_services',
+  expenses: 'expenses', waitlist_programs: 'waitlist_programs', waitlist_entries: 'waitlist_entries',
+  waitlist_offers: 'waitlist_offers', accounts: 'accounts', documents: 'documents'
 };
 
-// Human-readable label for a conflict message. Dogs already have a name; a
-// pairing/litter/sale/stud-service doesn't, so build one from its own fields
-// the same way the UI's own title does.
-async function labelFor(entityType, id) {
-  if (entityType === 'dog') {
-    const d = await db.dogs.get(id);
-    return d ? d.call_name : id;
+export function manifestRemoval(manifest) {
+  const out = {};
+  for (const [key, table] of Object.entries(MANIFEST_TABLES)) {
+    const ids = Array.isArray(manifest?.[key]) ? manifest[key] : [];
+    if (ids.length) out[table] = ids;
   }
-  if (entityType === 'sale') {
-    const s = await db.sales.get(id);
-    if (!s) return id;
-    const [dog, buyer] = await Promise.all([db.dogs.get(s.dog_id), db.contacts.get(s.buyer_contact_id)]);
-    return `Sale (${dog?.call_name || '—'} → ${buyer?.name || '—'})`;
-  }
-  if (entityType === 'kennel') {
-    const k = await db.kennels.get(id);
-    return k ? (k.kennel_name || id) : id;
-  }
-  if (entityType === 'account') {
-    const a = await db.accounts.get(id);
-    return a ? `Account (${a.name})` : id;
-  }
-  if (entityType === 'stud_service') {
-    const s = await db.stud_services.get(id);
-    if (!s) return id;
-    const [ours, partner] = await Promise.all([db.dogs.get(s.our_dog_id), db.dogs.get(s.partner_dog_id)]);
-    return `StudService (${ours?.call_name || '—'} × ${partner?.call_name || '—'})`;
-  }
-  const row = await db.table(entityType === 'pairing' ? 'pairings' : 'litters').get(id);
-  if (!row) return id;
-  const [sire, dam] = await Promise.all([db.dogs.get(row.sire_id), db.dogs.get(row.dam_id)]);
-  const label = `${sire?.call_name || '—'} × ${dam?.call_name || '—'}`;
-  return entityType === 'pairing' ? `Pairing (${label})` : `Litter (${label})`;
+  return out;
 }
 
-// Contamination check (brief §5.2): find any real (non-manifest) record that
-// now points at a manifest Dog/Pairing/Litter/Sale/StudService via one of the
-// reference registries. Reuses the same registries the live hard-delete guard
-// uses, so this stays accurate as more reference kinds are added. Contract is
-// never checked here — CONTRACT_REFERENCES is empty (a leaf), so a manifest
-// contract can never be contaminated.
-async function findContaminatingReferences(manifest) {
-  const manifestSets = {
-    dogs: new Set(manifest.dogs),
-    events: new Set(manifest.events || []),
-    pairings: new Set(manifest.pairings || []),
-    litters: new Set(manifest.litters || []),
-    sales: new Set(manifest.sales || []),
-    stud_services: new Set(manifest.stud_services || []),
-    contracts: new Set(manifest.contracts || []),
-    // Sample expenses point at manifest dogs/litters/pairings/kennels via
-    // subject_id — list them here so the demo's OWN expenses aren't mistaken for
-    // real (contaminating) references during clear.
-    expenses: new Set(manifest.expenses || []),
-    // Needed once kennel joined the checked entities: the seed's own contacts and
-    // documents point at the sample kennel, and without these sets every one of
-    // them would read as a real, contaminating reference and block every clear.
-    contacts: new Set(manifest.contacts || []),
-    documents: new Set(manifest.documents || []),
-    // The seed's own waitlist rows point at the sample kennel, litters, a sale and
-    // pups — they're the demo's own references, not contamination.
-    waitlist_entries: new Set(manifest.waitlist_entries || []),
-    waitlist_offers: new Set(manifest.waitlist_offers || []),
-    waitlist_programs: new Set(manifest.waitlist_programs || [])
-  };
-
-  // conflicts: Map key `${entityType}:${id}` -> { entityType, id, refs: [{label, row}] }
-  const conflicts = new Map();
-
-  for (const [entityType, ids] of [
-    ['dog', manifest.dogs], ['pairing', manifest.pairings || []], ['litter', manifest.litters || []],
-    ['sale', manifest.sales || []], ['stud_service', manifest.stud_services || []],
-    ['kennel', manifest.kennels || []], ['account', manifest.accounts || []]
-  ]) {
-    const registry = ENTITY_REGISTRIES[entityType];
-    for (const id of ids) {
-      const blockers = await findBlockingReferences(registry, id);
-      if (blockers.length === 0) continue;
-      const real = [];
-      for (const ref of registry) {
-        const table = db.table(ref.table);
-        const rows = ref.compoundIndex
-          ? await table.where(ref.compoundIndex).equals([ref.discriminatorValue, id]).toArray()
-          : await table.where(ref.field).equals(id).toArray();
-        const manifestSet = manifestSets[ref.table] || new Set();
-        for (const row of rows) {
-          if (!manifestSet.has(row.id)) real.push({ label: ref.label, row });
-        }
-      }
-      if (real.length) conflicts.set(`${entityType}:${id}`, { entityType, id, refs: real });
-    }
-  }
-  return conflicts;
+// The breeder's own kennel, for links to a sample kennel to move to: "My kennel"
+// when it's a live own kennel outside the seed, else the oldest such own kennel.
+async function ownKennelOutside(sampleKennelIds) {
+  const outside = (k) => k && k.is_own_kennel && !k.is_archived && !sampleKennelIds.has(k.id);
+  const mine = getMyKennelId() ? await db.kennels.get(getMyKennelId()) : null;
+  if (outside(mine)) return mine;
+  const own = (await db.kennels.toArray()).filter(outside)
+    .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  return own[0] || null;
 }
 
-// clearSampleData({ archiveConflicting }):
-//   - dry run (default): reports what's blocking, deletes nothing if blocked.
-//   - archiveConflicting: true archives the conflicting sample records instead
-//     of deleting them, then proceeds to delete everything else in the manifest.
-export async function clearSampleData({ archiveConflicting = false } = {}) {
+// "Juniper", "Thornfield Kennels", "a litter (Rex × Juniper)": for the notice.
+async function recordLabel(table, row) {
+  if (!row) return 'a record';
+  const dogName = async (id) => (id ? (await db.dogs.get(id))?.call_name : null) || '—';
+  switch (table) {
+    case 'dogs': return row.call_name || row.registered_name || 'a dog';
+    case 'contacts': return row.name || 'a contact';
+    case 'kennels': return row.kennel_name || 'a kennel';
+    case 'litters': return `a litter (${await dogName(row.sire_id)} × ${await dogName(row.dam_id)})`;
+    case 'pairings': return `a pairing (${await dogName(row.sire_id)} × ${await dogName(row.dam_id)})`;
+    case 'sales': return `a sale of ${await dogName(row.dog_id)}`;
+    case 'stud_services': return `a stud service (${await dogName(row.our_dog_id)})`;
+    case 'events': return row.title ? `the event “${row.title}”` : 'an event';
+    case 'expenses': return row.description ? `the expense “${row.description}”` : 'an expense';
+    case 'accounts': return row.name ? `the account “${row.name}”` : 'an account';
+    case 'contracts': return 'a contract';
+    case 'documents': return 'a document';
+    case 'waitlist_entries': return `${row.application?.name || 'a family'} on your waitlist`;
+    case 'waitlist_programs': return 'a waitlist';
+    case 'waitlist_offers': return 'a waitlist offer';
+    default: return 'a record';
+  }
+}
+
+async function detachLines(edits, target) {
+  const lines = [];
+  for (const e of edits) {
+    const [sample, outside] = await Promise.all([
+      db.table(e.fromTable).get(e.id).then((r) => recordLabel(e.fromTable, r)),
+      db.table(e.table).get(e.rowId).then((r) => recordLabel(e.table, r))
+    ]);
+    lines.push(e.fromTable === 'kennels'
+      ? `${outside}: moved from ${sample} (from the tour; ${e.ref.label}) to ${target ? target.kennel_name || 'your kennel' : 'your kennel'}.`
+      : `${outside}: its link to ${sample} (from the tour; ${e.ref.label}) is cleared.`);
+  }
+  return [...new Set(lines)];
+}
+
+// clearSampleData({ kennelTarget, dropKennelLinks }):
+//   → { cleared: true, counts, detached: [line] }
+//   → { cleared: false, reason: 'none' } (no seed)
+//   → { cleared: false, reason: 'needs-kennel', detached } (an old seed's real
+//     records point at the sample kennel and she has no kennel of her own yet:
+//     nothing changed; save one in kennel setup and call again with its id)
+// `dropKennelLinks`: clear kennel links too instead of waiting (a restore, which
+// brings her own kennel with it).
+export async function clearSampleData({ kennelTarget = null, dropKennelLinks = false } = {}) {
   const manifest = getSampleDataManifest();
   if (!manifest) return { cleared: false, reason: 'none', counts: {} };
-  // Defensive: treat any missing array key as empty, in case of a future
-  // partial-seed failure or a manifest written by an older app version.
-  manifest.pairings = manifest.pairings || [];
-  manifest.litters = manifest.litters || [];
-  manifest.sales = manifest.sales || [];
-  manifest.contracts = manifest.contracts || [];
-  manifest.stud_services = manifest.stud_services || [];
-  manifest.expenses = manifest.expenses || [];
-  manifest.waitlist_entries = manifest.waitlist_entries || [];
-  manifest.waitlist_offers = manifest.waitlist_offers || [];
-  manifest.waitlist_programs = manifest.waitlist_programs || [];
-  manifest.accounts = manifest.accounts || [];
+  const remove = manifestRemoval(manifest);
+  const target = kennelTarget
+    ? await db.kennels.get(kennelTarget)
+    : await ownKennelOutside(new Set(manifest.kennels || []));
+  const plan = await planDetach(remove, { kennelTarget: target?.id || null, dropKennelLinks });
+  const detached = await detachLines(plan.edits, target);
+  if (plan.needsKennel) return { cleared: false, reason: 'needs-kennel', detached, counts: {} };
+  await removeDetaching(remove, { kennelTarget: target?.id || null, dropKennelLinks });
 
-  const conflicts = await findContaminatingReferences(manifest);
-
-  if (conflicts.size > 0 && !archiveConflicting) {
-    const details = [];
-    for (const { entityType, id, refs } of conflicts.values()) {
-      const label = await labelFor(entityType, id);
-      for (const r of refs) details.push(`${label} is ${r.label}`);
-    }
-    return { cleared: false, reason: 'contaminated', conflicts: details, counts: {} };
-  }
-
-  // Archive conflicting records (grouped by entity type), tracking which ids
-  // to exclude from the bulk delete below.
-  const archivedIds = { dog: [], pairing: [], litter: [], sale: [], stud_service: [], kennel: [], account: [] };
-  if (conflicts.size > 0) {
-    for (const { entityType, id } of conflicts.values()) {
-      await ENTITY_REPOS[entityType].archive(id);
-      archivedIds[entityType].push(id);
-    }
-  }
-
-  const dogIdsToDelete = manifest.dogs.filter((id) => !archivedIds.dog.includes(id));
-  const pairingIdsToDelete = manifest.pairings.filter((id) => !archivedIds.pairing.includes(id));
-  const litterIdsToDelete = manifest.litters.filter((id) => !archivedIds.litter.includes(id));
-  const saleIdsToDelete = manifest.sales.filter((id) => !archivedIds.sale.includes(id));
-  const studServiceIdsToDelete = manifest.stud_services.filter((id) => !archivedIds.stud_service.includes(id));
-  const kennelIdsToDelete = manifest.kennels.filter((id) => !archivedIds.kennel.includes(id));
-
-  const counts = {
-    expenses: manifest.expenses.length,
-    events: manifest.events.length,
-    litters: litterIdsToDelete.length,
-    pairings: pairingIdsToDelete.length,
-    stud_services: studServiceIdsToDelete.length,
-    sales: saleIdsToDelete.length,
-    contracts: manifest.contracts.length,
-    dogs: dogIdsToDelete.length,
-    contacts: manifest.contacts.length,
-    kennels: kennelIdsToDelete.length,
-    waitlist_entries: manifest.waitlist_entries.length,
-    accounts: manifest.accounts.length - archivedIds.account.length,
-    archived: archivedIds.dog.length + archivedIds.pairing.length + archivedIds.litter.length
-      + archivedIds.sale.length + archivedIds.stud_service.length + archivedIds.kennel.length
-      + archivedIds.account.length
-  };
-
-  // Dependency order: events -> contracts -> litters -> stud_services ->
-  // pairings -> sales -> dogs -> contacts -> kennels. Contract references
-  // sales/stud_services so it must clear first (it's a leaf itself — nothing
-  // ever references a Contract, so it's never in archivedIds). Litters and
-  // stud_services reference pairings/dogs, sales reference dogs/contacts, so
-  // all of those clear before dogs/contacts. This is a known, self-contained,
-  // unreferenced set, so it bypasses the single-record hardDelete guard (which
-  // exists to protect one record at a time, not to bulk-clear a whole known
-  // set — brief §5).
-  await db.transaction('rw', [db.expenses, db.events, db.contracts, db.litters, db.stud_services, db.pairings, db.sales, db.dogs, db.contacts, db.kennels, db.waitlist_offers, db.waitlist_entries, db.waitlist_programs, db.accounts], async () => {
-    // Sample accounts: the sample expenses naming them go in this same transaction;
-    // a real expense naming one archived it instead (findContaminatingReferences).
-    const accountIdsToDelete = manifest.accounts.filter((id) => !archivedIds.account.includes(id));
-    if (accountIdsToDelete.length) await db.accounts.bulkDelete(accountIdsToDelete);
-    // Waitlist rows first: offers point at entries/litters/pups, entries at
-    // contacts/sales/litters/programs, programs at the kennel.
-    if (manifest.waitlist_offers.length) await db.waitlist_offers.bulkDelete(manifest.waitlist_offers);
-    if (manifest.waitlist_entries.length) await db.waitlist_entries.bulkDelete(manifest.waitlist_entries);
-    if (manifest.waitlist_programs.length) await db.waitlist_programs.bulkDelete(manifest.waitlist_programs);
-    // Expenses first: they point at events AND dogs/litters/pairings/kennels, so
-    // they must clear before any of those (same dependency discipline as below).
-    if (manifest.expenses.length) await db.expenses.bulkDelete(manifest.expenses);
-    if (manifest.events.length) await db.events.bulkDelete(manifest.events);
-    if (manifest.contracts.length) await db.contracts.bulkDelete(manifest.contracts);
-    if (litterIdsToDelete.length) await db.litters.bulkDelete(litterIdsToDelete);
-    if (studServiceIdsToDelete.length) await db.stud_services.bulkDelete(studServiceIdsToDelete);
-    if (pairingIdsToDelete.length) await db.pairings.bulkDelete(pairingIdsToDelete);
-    if (saleIdsToDelete.length) await db.sales.bulkDelete(saleIdsToDelete);
-    if (dogIdsToDelete.length) await db.dogs.bulkDelete(dogIdsToDelete);
-    if (manifest.contacts.length) await db.contacts.bulkDelete(manifest.contacts);
-    if (kennelIdsToDelete.length) await db.kennels.bulkDelete(kennelIdsToDelete);
-  });
-
+  const counts = Object.fromEntries(Object.keys(MANIFEST_TABLES).map((k) => [k, (manifest[k] || []).length]));
   removeSampleDataManifest();
   resetCompanionSettings();
   markSampleDataCleared();
   // A Kels draft started on the sample would build on dogs that are gone (K11-2).
   clearGuidedDrafts();
-
-  return { cleared: true, counts };
+  // The nav's stored kennel name and switcher held the sample kennel.
+  setNavKennels(null);
+  return { cleared: true, counts, detached };
 }

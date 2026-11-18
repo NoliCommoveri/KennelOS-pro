@@ -30,8 +30,11 @@
     <!-- Website changes not sent yet (Pro with a linked KennelPort website). -->
     <section id="today-website" hidden></section>
     <section id="today-install"></section>
+    <!-- Shown by today.js once the cards above are drawn, and removed in the frame
+         the cards below paint together, so no card is pushed down by another. -->
+    <div class="card empty-state" id="today-loading" hidden>Loading…</div>
     <section id="today-nudges"></section>
-    <section id="today-reminders"><div class="card empty-state">Loading…</div></section>
+    <section id="today-reminders"></section>
     <section id="today-available"></section>
     <!-- Upcoming shows (Show Tracking Spec §5.3, Pro-only; empty in Lite) -->
     <section id="today-shows"></section>

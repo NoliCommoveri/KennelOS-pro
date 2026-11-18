@@ -10,7 +10,8 @@ import { fetchBundledSeedGroups, applySeedToKennel } from '../data/seedImport.js
 import { esc } from './ui.js';
 import { renderBreedPicker } from './breedTestPicker.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
-import { setMeetKelsPending } from '../data/settings.js';
+import { setMeetKelsPending, getNavKennels, setNavKennels } from '../data/settings.js';
+import { withSeedAllowed } from '../data/demoMode.js';
 
 // The mandatory first-run gate (Multi-Kennel Scope Spec §3.2), called from
 // app.js's boot on every page. Async because the gate's condition is a db read
@@ -35,13 +36,20 @@ export async function maybeShowKennelSetupPrompt() {
 // owner picker need the fresh kennel/contact, same as the sample-data flow
 // reloads after seeding. onDone(false) only fires on cancel, where nothing
 // changed and a reload would be pointless.
-export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
+//
+// The tour's cleanup of an old seed (assets/sampleDataUI.js, Load Performance
+// plan D4) opens it with `duringTour`: the seed is still loaded, so the tour's
+// read-only guard lets this one save through (demoMode.withSeedAllowed), and
+// `afterSave(kennel)` runs instead of the reload (it clears the seed and reloads).
+// `lead` replaces the opening line.
+export async function showKennelSetupModal({ mode = 'required', onDone, lead = null, duringTour = false, afterSave = null } = {}) {
   const required = mode !== 'cancellable';
   const initial = await getKennelSetupState();
   // First run with a cloud server: an optional email turns on free cloud backup
   // in the same step (decided 2026-10-10; it replaced the separate offer card).
-  // Filling it in is the opt-in; left blank, nothing talks to the server.
-  const askEmail = required && isCloudAvailable() && !(await signedInToCloud());
+  // Filling it in is the opt-in; left blank, nothing talks to the server. Not
+  // while the tour's seed is still being cleared.
+  const askEmail = required && !duringTour && isCloudAvailable() && !(await signedInToCloud());
 
   // The optional breed+test prefill (Test Planning Addendum §8–9). Populated
   // async from the bundled starter file after the modal is on screen; if the
@@ -55,7 +63,7 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
   overlay.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true" style="max-width:460px;">
       <h2 style="margin-top:0;">🏡 Set up your kennel</h2>
-      <p class="muted">${required
+      <p class="muted">${lead ? esc(lead) : required
         ? 'Every dog you add belongs to a kennel, so KennelOS needs yours before you start. This also names it in the header and lets new dogs prefill their owner automatically.'
         : 'This names your kennel in the header and lets new dogs prefill their owner automatically.'}</p>
       <div class="form-grid">
@@ -72,7 +80,7 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
       <div class="form-actions">
         <button class="btn btn-primary" data-act="save">Save</button>
         ${required ? '' : '<button class="btn" data-act="cancel">Cancel</button>'}
-        ${required && isCloudAvailable() ? '<button class="btn" data-act="signin">Sign in to existing account</button>' : ''}
+        ${required && !duringTour && isCloudAvailable() ? '<button class="btn" data-act="signin">Sign in to existing account</button>' : ''}
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -108,8 +116,15 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
       return;
     }
     try {
-      const { kennel } = await completeKennelSetup({ kennelName, ownerName });
-      if (selectedBreeds.size) await applySeedToKennel(kennel.id, seedGroups, selectedBreeds);
+      const save = async () => {
+        const out = await completeKennelSetup({ kennelName, ownerName });
+        if (selectedBreeds.size) await applySeedToKennel(out.kennel.id, seedGroups, selectedBreeds);
+        return out;
+      };
+      const { kennel } = duringTour ? await withSeedAllowed(save) : await save();
+      // The page that loads next draws the nav's kennel name from this copy.
+      const nav = getNavKennels() || { own: [] };
+      setNavKennels({ name: kennel.kennel_name, own: [...nav.own.filter((k) => k.id !== kennel.id), { id: kennel.id, kennel_name: kennel.kennel_name }] });
       // The kennel is saved either way; an email then signs in (its code is sent
       // at once) and turns backup on. Backing out keeps the kennel, and Today's
       // card still offers backup later.
@@ -121,6 +136,7 @@ export async function showKennelSetupModal({ mode = 'required', onDone } = {}) {
       // First run (after the tour, or Start my kennel): the page that loads next
       // introduces Kels (onboardingUI.maybeMeetKels). Not on a reopen from Settings.
       if (required) setMeetKelsPending(true);
+      if (afterSave) { overlay.remove(); await afterSave(kennel); return; }
       location.reload();
     } catch (e) {
       errorBox.innerHTML = `<div class="inline-error">${esc(e.message || String(e))}</div>`;
@@ -169,20 +185,34 @@ async function signedInToCloud() {
   } catch { return false; }
 }
 
-// Adds the kennel name as a second line under "KennelOS" in the nav brand, once
-// looked up — stacked rather than beside it, so a long name never crowds the
-// phone menu button. No-op if no kennel has been set up yet.
+// Adds the kennel name as a second line under "KennelOS" in the nav brand —
+// stacked rather than beside it, so a long name never crowds the phone menu
+// button. Drawn first from the stored copy (settings.getNavKennels), so the nav's
+// first paint already has it (Load Performance plan Phase 1), then corrected from
+// the database, which also refreshes the copy. No line when no kennel is set up.
 export async function renderKennelBanner() {
   // Every page runs this, so it's also where a broken owner-contact setting gets
   // repaired before the sync readers (dog form owner prefill, stud partner list)
   // need it. A failure here must never cost the banner.
   resolveMyContactId().catch(() => {});
-  const name = await getMyKennelName();
-  if (!name) return;
-  const text = document.querySelector('.nav-brand .nav-brand-text');
+  const text = () => document.querySelector('.nav-brand .nav-brand-text');
+  const cached = getNavKennels();
+  if (cached?.name) drawKennelName(text(), cached.name);
+  let name;
+  try { name = (await getMyKennelName()) || null; } catch { return; }
+  const now = getNavKennels() || { name: null, own: [] };
+  if (now.name !== name) setNavKennels({ ...now, name });
+  drawKennelName(text(), name);
+}
+
+function drawKennelName(text, name) {
   if (!text) return;
-  const span = document.createElement('span');
-  span.className = 'nav-kennel';
-  span.textContent = name;
-  text.appendChild(span);
+  let span = text.querySelector('.nav-kennel');
+  if (!name) { span?.remove(); return; }
+  if (!span) {
+    span = document.createElement('span');
+    span.className = 'nav-kennel';
+    text.appendChild(span);
+  }
+  if (span.textContent !== name) span.textContent = name;
 }

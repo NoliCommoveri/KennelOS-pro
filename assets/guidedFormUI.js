@@ -21,7 +21,7 @@ import { waitlistConfig, kennelBreeds } from '../data/waitlistRules.js';
 import { isLocked, isChoice, formQuestions, LOCKED_TYPE_LABEL } from '../data/waitlistForm.js';
 import { WAITLIST_QUESTION_TYPE, descriptor } from '../data/vocab.js';
 import { getGuidedFormDraft, setGuidedFormDraft, clearGuidedFormDraft } from '../data/settings.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly } from '../data/demoMode.js';
 import * as G from '../data/guidedForm.js';
 import { applicationFields } from './waitlistApplicationForm.js';
 import { offerSensitiveRecords, offerCloudBackup, CLOUD_OFF_FORM } from './kelsBackupSteps.js';
@@ -259,7 +259,7 @@ async function askAboutSavedForm(chat, draft, kennel) {
     G.keepDraftOverSaved(draft, kennel);
     await chat.say('Okay, we\'ll keep going with your draft.');
   }
-  if (!isDemo()) setGuidedFormDraft(draft);
+  if (!isReadOnly()) setGuidedFormDraft(draft);
   return true;
 }
 
@@ -272,7 +272,7 @@ class FormConversation extends StepConversation {
   persist() {
     this.draft.updatedAt = new Date().toISOString();
     // The Demo keeps no draft (K11-5).
-    if (!this.draft.done && !isDemo()) setGuidedFormDraft(this.draft);
+    if (!this.draft.done && !isReadOnly()) setGuidedFormDraft(this.draft);
   }
 
   dropDraft() { clearGuidedFormDraft(); }

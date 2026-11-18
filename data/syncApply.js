@@ -16,7 +16,7 @@
 //   3. SYNC_APPLIED_EVENT with the tables and ids touched (§5.3), which pages
 //      use for "updated elsewhere"; never CLOUD_DATA_CHANGED_EVENT.
 import { db } from './db.js';
-import { markDataChanged } from './settings.js';
+import { markDataChanged, noteDataChanged } from './settings.js';
 import {
   DOG_REFERENCES, LITTER_REFERENCES, PAIRING_REFERENCES, CONTACT_REFERENCES, KENNEL_REFERENCES,
   SALE_REFERENCES, STUD_SERVICE_REFERENCES, CONTRACT_REFERENCES, EVENT_REFERENCES,
@@ -228,8 +228,11 @@ export async function applyPulledRecords(records, { vault, fetchFile, now = new 
   });
   out.applied = plans.filter((p) => p.kind !== 'keep').length;
 
-  // 3. Tell the pages; an archive-instead is a local change to push.
+  // 3. Tell the pages; an archive-instead is a local change to push. Records that
+  // came in still count as changed here (noteDataChanged, without the push flag),
+  // so a kept answer that read them (the website strip) is worked out again.
   if (out.archivedInstead.length) markDataChanged();
+  else if (out.applied) noteDataChanged();
   const touched = {};
   for (const p of plans) if (p.kind !== 'keep') (touched[p.r.tbl] ||= []).push(p.r.id);
   announce(touched);

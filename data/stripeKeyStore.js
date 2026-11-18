@@ -9,6 +9,7 @@
 // kennel data, so writing it doesn't mark the cloud backup dirty
 // (tests/cloudDirty.test.js).
 import { db } from './db.js';
+import { assertWritable } from './demoMode.js';
 
 const rowId = (accountId) => `stripe:${accountId}`;
 
@@ -20,6 +21,7 @@ export async function getStripeKey(accountId) {
 }
 
 export async function setStripeKey(accountId, { api_key, currency }) {
+  assertWritable(); // never on the tour's sample accounts (Load Performance plan Phase 2)
   await db.device_secrets.put({ id: rowId(accountId), account_id: accountId, api_key, currency, connected_at: new Date().toISOString() });
 }
 

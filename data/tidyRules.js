@@ -36,7 +36,8 @@ export const TIDY_KINDS = [
   'no-vet',              // nobody in her contacts is a vet (Pro)
   'duplicate-dogs',      // two dog records for one dog
   'duplicate-contacts',  // two contact records for one person (Pro)
-  'duplicate-applications' // one family on one waitlist twice (Pro, waitlist)
+  'duplicate-applications', // one family on one waitlist twice (Pro, waitlist)
+  'tour-leftovers'       // archived records an old guided tour left behind
 ];
 
 const blank = (v) => v == null || (typeof v === 'string' && v.trim() === '');
@@ -507,11 +508,58 @@ export function duplicateApplicationFindings(entries, contacts = []) {
 // Every finding, in TIDY_KINDS order. `flags` are the edition's (editionFlags):
 // contactsSection gates the contact and kennel checks, studServices the stud one,
 // waitlist the duplicate applications (`waitlistEntries`, in kennel scope).
+// --- Leftover tour records (Load Performance plan D5) ----------------------------
+// Before the tour was read-only, leaving it after her own records came to point at
+// sample ones archived those sample records and forgot which were sample. They
+// are found again by the seed's fixed names (sampleData.js and Lite's
+// editionTour.js), ARCHIVED ones only, and she confirms each before anything
+// goes. Never removed by itself.
+export const TOUR_KENNEL_NAMES = ['Thornfield Kennels', 'Meadow Ridge Kennels', 'Briar Hollow Kennels'];
+export const TOUR_DOG_NAMES = ['Ash', 'Aster', 'Birch', 'Bramble', 'Cassius', 'Cedar', 'Clover', 'Dahlia', 'Daisy',
+  'Diesel', 'Fern', 'Gunnar', 'Hazel', 'Ivy', 'Juniper', 'Juno', 'Maple', 'Marigold', 'Nell', 'Opal', 'Percy',
+  'Poppy', 'Sage', 'Sorrel', 'Titan', 'Willow', 'Wren'];
+export const TOUR_DOG_REGISTERED_NAMES = ['Briar Hollow Cassius', 'Briar Hollow Opal', 'Meadow Ridge Marigold',
+  'Meadow Ridge Maximus Gunnar', 'Thornfield Daisy Mae', 'Thornfield Diesel Engine', 'Thornfield Maximus Gunnar',
+  'Thornfield Midnight Juniper', 'Thornfield Wild Ivy'];
+export const TOUR_CONTACT_NAMES = ['Dana Ruiz', 'Dr. Patricia Nguyen', 'Ellen Brooks', 'Grace Halloran', 'Hugo Marsh',
+  'Jamal Reed', 'Lauren Pike', 'Marcus Webb', 'Nora Kim', 'Owen Farrow', 'Priya Shah', 'Renee Coleman',
+  'Rex Regional Pet Transport', 'Sam Okafor', 'Tessa Lin'];
+
+// One finding listing them all, or none. A dog counts only with a seed name AND
+// something tying it to the seed: its registered name, or a kennel that is a
+// leftover or no longer exists. A contact needs a seed name and the seed's
+// 555-01xx phone (or none). Archived litters and breedings whose parents are
+// both leftover dogs go with them.
+export function tourLeftoverFindings({ kennels = [], dogs = [], contacts = [], litters = [], pairings = [] }) {
+  const archived = (r) => r && r.is_archived;
+  const kennelIds = new Set(kennels.map((k) => k.id));
+  const leftKennels = kennels.filter((k) => archived(k) && TOUR_KENNEL_NAMES.includes(k.kennel_name));
+  const leftKennelIds = new Set(leftKennels.map((k) => k.id));
+  const tied = (id) => id && (leftKennelIds.has(id) || !kennelIds.has(id));
+  const leftDogs = dogs.filter((d) => archived(d) && TOUR_DOG_NAMES.includes(d.call_name)
+    && (TOUR_DOG_REGISTERED_NAMES.includes(d.registered_name) || tied(d.kennel_id) || tied(d.breeder_kennel_id)));
+  const dogIds = new Set(leftDogs.map((d) => d.id));
+  const leftContacts = contacts.filter((c) => archived(c) && TOUR_CONTACT_NAMES.includes(c.name)
+    && (!c.phone || /^555-01\d\d$/.test(String(c.phone).trim())));
+  const parentsLeft = (r) => archived(r) && dogIds.has(r.sire_id) && dogIds.has(r.dam_id);
+  const leftLitters = litters.filter(parentsLeft);
+  const leftPairings = pairings.filter(parentsLeft);
+  const n = leftKennels.length + leftDogs.length + leftContacts.length;
+  if (!n) return [];
+  const ids = [...leftKennels, ...leftDogs, ...leftContacts].map((r) => r.id).sort();
+  return [{
+    key: `tour-leftovers:${ids.join(',')}`.slice(0, 300), kind: 'tour-leftovers',
+    kennels: leftKennels, dogs: leftDogs, contacts: leftContacts, litters: leftLitters, pairings: leftPairings
+  }];
+}
+
 // `scoped` rows (litters, sales, studServices, dogs) are already in kennel scope;
 // `allDogs` is every dog (archived and pedigree-only included) for counting
 // litters and matching duplicates; contacts and kennels are program-wide.
 // `titleEvents`: title_earned events, so a title already logged isn't asked about.
-export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], vetEvents = [], titleEvents = [], waitlistEntries = [], flags = {}, today }) {
+// `leftovers`: { kennels, dogs, contacts, litters, pairings }, archived ones
+// included (tourLeftoverFindings), or null to skip that check.
+export function tidyFindings({ litters, pairings, sales, studServices = [], dogs, allDogs, contacts = [], kennels = [], vetEvents = [], titleEvents = [], waitlistEntries = [], leftovers = null, flags = {}, today }) {
   const littersById = new Map(litters.map((l) => [l.id, l]));
   const all = [
     ...litterCountFindings(litters, allDogs),
@@ -531,7 +579,8 @@ export function tidyFindings({ litters, pairings, sales, studServices = [], dogs
     ...(flags.contactsSection ? noVetFindings(contacts, dogs) : []),
     ...duplicateDogFindings(allDogs),
     ...(flags.contactsSection ? duplicateContactFindings(contacts) : []),
-    ...(flags.waitlist ? duplicateApplicationFindings(waitlistEntries, contacts) : [])
+    ...(flags.waitlist ? duplicateApplicationFindings(waitlistEntries, contacts) : []),
+    ...(leftovers ? tourLeftoverFindings(leftovers) : [])
   ];
   return all.sort((a, b) => TIDY_KINDS.indexOf(a.kind) - TIDY_KINDS.indexOf(b.kind));
 }

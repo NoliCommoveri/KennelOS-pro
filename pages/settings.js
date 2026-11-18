@@ -10,6 +10,9 @@ import { isProOnlyPage } from '../data/proPages.js';
 import { showKennelSetupModal } from '../assets/kennelSetupUI.js';
 import { isTourAvailable, restartWizard } from '../data/wizardState.js';
 import { runWizardStep } from '../assets/wizardUI.js';
+import { leaveTour } from '../assets/sampleDataUI.js';
+import { tourUrl } from '../data/editionConfig.js';
+import { isDemo } from '../data/demoMode.js';
 import { esc } from '../assets/ui.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -43,19 +46,35 @@ if (websiteLinkOffered()) {
     .catch(() => document.getElementById('website-section')?.remove());
 } else document.getElementById('website-section')?.remove();
 
-// Guided tour — the tour anchors to specific sample records, so it's only
-// offerable while the "Thornfield Kennels" sample data is loaded (same gate as
-// the nav "more" menu's tour entry). The button restarts it from the top; the
-// opening card is a page-agnostic intro, so it just appears right here.
+// Guided tour — the tour anchors to specific sample records, so it runs only
+// while the "Thornfield Kennels" sample data is loaded (same gate as the nav
+// "more" menu's tour entry), in the session that loaded it. Restart starts it
+// from the top; Leave ends it and clears the seed. Once this device has a program
+// of its own, the tour is never seeded beside it (Load Performance plan D3):
+// the section links to the Demo instead.
 function renderTourStatus() {
   const status = document.getElementById('tour-status');
   const btn = document.getElementById('btn-tour');
+  const leave = document.getElementById('btn-tour-leave');
+  const demo = document.getElementById('link-tour-demo');
   if (isTourAvailable()) {
-    status.textContent = 'Walk through KennelOS’s major features using the sample data. Starts from the beginning.';
+    status.textContent = 'Walk through KennelOS’s major features using the sample kennel. Nothing in it is saved.';
     btn.style.display = '';
+    leave.style.display = isDemo() ? 'none' : '';
+    demo.hidden = true;
+  } else if (tourUrl && !isDemo()) {
+    status.textContent = edition === 'lite'
+      ? 'The tour runs in the KennelOS demo, with its own sample kennel, so it never mixes with your records. The demo shows KennelOS Pro, so it has more than Lite.'
+      : 'The tour runs in the KennelOS demo, with its own sample kennel, so it never mixes with your records.';
+    btn.style.display = 'none';
+    leave.style.display = 'none';
+    demo.href = tourUrl;
+    demo.hidden = false;
   } else {
     status.textContent = 'Available only while the “Thornfield Kennels” sample data is loaded.';
     btn.style.display = 'none';
+    leave.style.display = 'none';
+    demo.hidden = true;
   }
 }
 
@@ -63,6 +82,7 @@ document.getElementById('btn-tour').addEventListener('click', () => {
   restartWizard();
   runWizardStep();
 });
+document.getElementById('btn-tour-leave').addEventListener('click', () => leaveTour());
 
 renderTourStatus();
 

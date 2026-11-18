@@ -15,7 +15,7 @@
 import { esc } from './ui.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { findContactMatches } from '../data/contactSearch.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly, isDemo } from '../data/demoMode.js';
 
 // --- Little HTML helpers the screens share -------------------------------------
 
@@ -284,7 +284,7 @@ export class StepConversation {
     on('back', () => this.back());
     on('next', () => this.advance());
     on('to-review', () => this.advance({ toReview: true }));
-    on('save', () => (isDemo() ? this.demoEnd() : this.save()));
+    on('save', () => (isReadOnly() ? this.demoEnd() : this.save()));
   }
 
   // The Demo saves nothing, so a task ends at its review: she sees everything it
@@ -297,7 +297,9 @@ export class StepConversation {
     this.dropDraft?.();
     this.panel.closest('.kels-row')?.remove();
     this.chat.you('Yes, build it');
-    await this.chat.say('This is where I\'d build it. In your own KennelOS, I would! This is the demo, so nothing is saved.', { typing: 900 });
+    await this.chat.say(isDemo()
+      ? 'This is where I\'d build it. In your own KennelOS, I would! This is the demo, so nothing is saved.'
+      : 'This is where I\'d build it. In your own kennel, I would! This is the tour\'s sample kennel, so nothing is saved.', { typing: 900 });
     this.busy = false;
     this.onExit?.('done');
   }

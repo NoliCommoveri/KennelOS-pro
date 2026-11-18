@@ -17,7 +17,7 @@ import { editionFlags, dogCapStatus } from '../data/editionConfig.js';
 import { anyWebsiteLink } from '../data/kennelportLinkStore.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { getGuidedDogsDraft, setGuidedDogsDraft, clearGuidedDogsDraft, retireDraft } from '../data/settings.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly } from '../data/demoMode.js';
 import { DOG_STATUS, OWNERSHIP_TYPE, DISPOSITION, REGISTRATION_TYPE, DOC_TYPES, VACCINE_CHECKLIST, VACCINE_GOOD_FOR, documentFieldsFor, descriptor } from '../data/vocab.js';
 import { SCOPED_OWNERSHIP } from '../data/kennelScope.js';
 import * as G from '../data/guidedDogs.js';
@@ -516,7 +516,7 @@ class DogsConversation extends StepConversation {
     d.updatedAt = new Date().toISOString();
     d.label = draftLabel(d);
     // The Demo keeps no draft (K11-5).
-    if (!d.done && !isDemo()) setGuidedDogsDraft(d);
+    if (!d.done && !isReadOnly()) setGuidedDogsDraft(d);
   }
 
   dropDraft() { clearGuidedDogsDraft(); }

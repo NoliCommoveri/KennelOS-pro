@@ -37,7 +37,10 @@ body {
 }
 
 /* --- Top navigation ----------------------------------------------------- */
-#app-nav { background: var(--accent-dark); color: #fff; box-shadow: var(--shadow); }
+/* min-height: the nav's space is reserved before app.js fills it (renderNav), so
+   the page under it doesn't drop when it does. Matches .nav-inner's min-height,
+   which is the same at every width. */
+#app-nav { background: var(--accent-dark); color: #fff; box-shadow: var(--shadow); min-height: 52px; }
 .nav-inner {
   max-width: var(--maxw);
   margin: 0 auto;
@@ -522,6 +525,10 @@ button.title-chip-readonly { cursor: pointer; }
 .inline-warn { color: var(--warn); background: var(--warn-soft); border: 1px solid #e6d5ad; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
 .inline-error { color: var(--danger); background: var(--danger-soft); border: 1px solid #e6c3c3; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
 .inline-notice { color: var(--accent-dark); background: var(--accent-soft); border: 1px solid var(--border); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 10px; }
+/* The KennelPort website strip under the nav (assets/websiteBanner.js; drawn from
+   the last compare by app.js). Full width, like the sample-data strip. */
+.website-banner-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0; border-radius: 0; border-width: 0 0 1px; padding: 8px 16px; }
+.website-banner-strip[hidden] { display: none; }
 
 /* Lite cap upgrade nudge (cap spec §6) — a friendly prompt, not an error. */
 .upgrade-nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--accent-soft); border: 1px solid #bfe0cd; color: var(--accent-dark); padding: 12px 14px; border-radius: var(--radius-sm); margin-top: 10px; }

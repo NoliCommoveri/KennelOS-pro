@@ -22,7 +22,7 @@ import { editionFlags } from '../data/editionConfig.js';
 import { waitlistIsSetUp, waitlistConfig, feeForEntry, isFeeWaived, compareEntries, overallPositions, chosenOrderChanges } from '../data/waitlistRules.js';
 import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { getGuidedPeopleDraft, setGuidedPeopleDraft, clearGuidedPeopleDraft } from '../data/settings.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly } from '../data/demoMode.js';
 import { isDismissed, dismiss } from '../data/nudgeState.js';
 import { CONTACT_TYPE, descriptor } from '../data/vocab.js';
 import * as G from '../data/guidedPeople.js';
@@ -111,7 +111,7 @@ function screens(draft, data) {
         onTile: (value) => {
           v.answer = value;
           // Remembered for Tidy up too (K11-15); the Demo keeps nothing.
-          if (value === 'never' && !isDemo()) dismiss(G.NO_VET_KEY);
+          if (value === 'never' && !isReadOnly()) dismiss(G.NO_VET_KEY);
           return value === 'no' || value === 'never' ? true : 'redraw';
         },
         read: (root) => {
@@ -301,7 +301,7 @@ class PeopleConversation extends StepConversation {
     d.updatedAt = new Date().toISOString();
     d.label = G.draftLabel(d);
     // The Demo keeps no draft (K11-5).
-    if (!d.done && !isDemo()) setGuidedPeopleDraft(d);
+    if (!d.done && !isReadOnly()) setGuidedPeopleDraft(d);
   }
 
   dropDraft() { clearGuidedPeopleDraft(); }

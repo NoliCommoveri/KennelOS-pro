@@ -14,10 +14,11 @@ import {
 } from '../data/wizardState.js';
 import { WIZARD_STEPS } from '../data/editionTour.js';
 import { getSampleDataManifest } from '../data/settings.js';
-import { clearSampleData } from '../data/sampleData.js';
-import { showKennelSetupModal } from './kennelSetupUI.js';
+import { clearTourSeedAndReload } from './sampleDataUI.js';
 import { alertModal, esc } from './ui.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { isDemo } from '../data/demoMode.js';
+import { tourUrl, edition } from '../data/editionConfig.js';
 
 function rootPrefix() {
   return location.pathname.includes('/pages/') ? '../' : '';
@@ -71,10 +72,24 @@ function goToStep(step) {
 }
 
 // --- Nav menu entry ------------------------------------------------------
+// While the seed is loaded: take, resume or retake the tour here. Once this
+// device has a program of its own the tour is never seeded again beside it
+// (Load Performance plan D3): "Take the tour" opens the Demo in a new tab.
 export function renderWizardMenuEntry() {
-  if (!isTourAvailable()) return;
   const menu = document.querySelector('.nav-more-menu');
   if (!menu) return;
+  if (!isTourAvailable()) {
+    if (isDemo() || !tourUrl) return;
+    const link = document.createElement('a');
+    link.href = tourUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.className = 'nav-link';
+    link.textContent = '🧭 Take the tour ↗';
+    link.title = edition === 'lite' ? 'Opens the KennelOS demo in a new tab. The demo shows Pro.' : 'Opens the KennelOS demo in a new tab';
+    menu.appendChild(link);
+    return;
+  }
 
   const status = getWizardStatus();
   const label = status === 'completed' ? '🧭 Retake the tour'
@@ -164,33 +179,15 @@ const SKIPPED_MESSAGE = 'No problem — you can take the tour any time from the 
   'We’ll clear the sample data now so you’re starting from a clean slate, and get you set up ' +
   'with your kennel name next.';
 
-// Drop the Thornfield seed on the way out of the tour. clearSampleData only ever
-// removes the seeded records, but it REFUSES when one of the user's own records
-// has come to reference a sample one ("contaminated") — which is easy to do
-// mid-tour. Retrying with archiveConflicting archives just those referenced
-// sample records instead of deleting them, so the user's record keeps resolving
-// and nothing is left dangling. Without this, the tour's closing copy promises a
-// clear that silently doesn't happen.
-async function clearSeedForHandoff() {
-  try {
-    const result = await clearSampleData();
-    if (!result.cleared && result.reason === 'contaminated') {
-      await clearSampleData({ archiveConflicting: true });
-    }
-  } catch {
-    /* leave the seed in place if the clear fails outright */
-  }
-}
-
-// Both ways out of the tour land here: acknowledge, clear the seed, and hand off
-// to the kennel-setup gate. The handoff is `required` (Multi-Kennel Scope Spec
-// §3.2) — clearing the seed just removed the only own kennel that existed, so
-// there is nothing left to file a dog under until the user names theirs.
+// Both ways out of the tour land here: acknowledge, then clear the seed and
+// reload (sampleDataUI.clearTourSeedAndReload). The page that loads next has no
+// seed and no own kennel, so the kennel-setup gate asks for hers (Multi-Kennel
+// Scope Spec §3.2). The tour is read-only, so nothing of hers points at the
+// seed and the clear always goes through; a failure says so (never silent).
 async function endTour({ title, message, okLabel }) {
   teardown();
   await alertModal({ title, message, okLabel });
-  await clearSeedForHandoff();
-  await showKennelSetupModal({ mode: 'required' });
+  await clearTourSeedAndReload();
 }
 
 function finishTour() {
@@ -217,10 +214,8 @@ function goBack() {
 
 // "Skip tour" ends the tour the same way finishing it does, rather than just
 // hiding the overlay: the seed is cleared immediately and the kennel-setup gate
-// follows. Leaving Thornfield in place would hand the user a kennel full of
-// someone else's dogs, and — because sample data satisfies the setup gate — would
-// let them start filing real dogs into a sample kennel that a later "Clear sample
-// data" then has to fight over.
+// follows. (Leaving the tour any other way clears it on the next page load in
+// another session or once the tour isn't active: sampleDataUI.autoClearTourSeed.)
 function skip() {
   dismissWizard();
   return endTour({ title: 'Tour skipped', message: SKIPPED_MESSAGE, okLabel: 'Set up my kennel →' });

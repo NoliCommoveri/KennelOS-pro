@@ -19,7 +19,7 @@ import * as actions from '../data/waitlistActions.js';
 import { previewPicks } from '../data/picksPreview.js';
 import { entryName, waitlistConfigProblem, openDays, closedDates, liveClosedDates } from '../data/waitlistRules.js';
 import { SEX, DISPOSITION, REGISTRATION_TYPE, SALE_STATUS, WAITLIST_PREF_SEX, WAITLIST_AUTO_OFFER_TRIGGER, PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly, readOnlyWhy } from '../data/demoMode.js';
 import { esc, fmtDate, todayYMD, confirmModal } from './ui.js';
 
 const PARAM = 'preview';
@@ -229,7 +229,7 @@ function render(p, data, state) {
   const target = data.litters.find((l) => l.id === p.litter_id);
   const draftMark = state.draft ? ' <span class="badge badge-amber">Unsaved settings</span>' : '';
   const btn = (attr, val, cur, text) => `<button type="button" class="btn btn-sm${val === cur ? ' btn-primary' : ''}" ${attr}="${esc(val)}">${esc(text)}</button>`;
-  const demo = isDemo();
+  const demo = isReadOnly();
   return `
     <h2 style="margin-top:0;">${p.already_open ? 'Who\'s in line' : 'Before you open picks'}: ${esc(n.litter(target))}${draftMark}</h2>
     ${state.notice ? `<div class="inline-notice" style="margin:0 0 8px;">${esc(state.notice)}</div>` : ''}
@@ -262,7 +262,7 @@ function render(p, data, state) {
            <button class="btn" data-pp="close">Cancel</button>`}
     </div>
     ${!p.already_open && state.draft ? '<p class="field-hint">Save or discard your settings changes before opening picks.</p>' : ''}
-    ${demo ? '<p class="field-hint">This is the demo: nothing can be saved or opened.</p>' : ''}`;
+    ${demo ? `<p class="field-hint">${readOnlyWhy()}: nothing can be saved or opened.</p>` : ''}`;
 }
 
 // Names and labels from the loaded records.
@@ -360,7 +360,7 @@ function blockerText(b, n) {
 }
 
 function pupsHtml(p, data, n, state) {
-  const demo = isDemo();
+  const demo = isReadOnly();
   return p.pupsByLitter.map((L) => {
     const sexLine = (sex, text) => {
       const s = L.by_sex[sex];
@@ -460,7 +460,7 @@ function checksHtml(p, data, n) {
 
 function settingsHtml(p, data, state) {
   const c = p.config;
-  const demo = isDemo();
+  const demo = isReadOnly();
   const dis = demo ? ' disabled' : '';
   const programs = [...data.programsById.values()].filter((x) => !x.is_archived);
   const programLines = programs.filter((x) => x.priority === 'ahead' || x.passes_count === false || (x.respond_days_override != null && x.respond_days_override !== ''))

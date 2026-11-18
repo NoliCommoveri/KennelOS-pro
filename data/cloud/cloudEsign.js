@@ -26,7 +26,7 @@ import { isCloudAvailable, cloudBaseUrl } from './cloudConfig.js';
 import { sessionToken, currentAccount } from './cloudAuth.js';
 import { refreshConnections } from './cloudIntegrations.js';
 import { editionFlags } from '../editionConfig.js';
-import { isDemo } from '../demoMode.js';
+import { isReadOnly } from '../demoMode.js';
 import { contractRepo } from '../contractRepo.js';
 import { PREFILL_FIELDS, FIRMA_LABELS, prefillValues, splitName, fieldGroupsFor } from '../contractForms.js';
 import { todayYMD } from '../dateUtils.js';
@@ -37,7 +37,7 @@ import { CONTRACT_FORM_TYPE, descriptor } from '../vocab.js';
 export const TEMPLATE_MAX_BYTES = 4_500_000;
 const FIELDS_PER_CALL = 40;
 
-export const esignOffered = () => isCloudAvailable() && Boolean(editionFlags.accounts) && !isDemo();
+export const esignOffered = () => isCloudAvailable() && Boolean(editionFlags.accounts) && !isReadOnly(); // never in the Demo or over the tour's sample records
 export const esignSignedIn = () => esignOffered() && Boolean(sessionToken());
 
 function requireSession() {

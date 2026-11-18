@@ -30,7 +30,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { feeRate, rateLabel } from '../data/processingFees.js';
 import { sharedReferrals, sharedTransport, referralLinkInput } from '../data/referralShare.js';
 import { paymentLink } from '../data/paymentLinks.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly } from '../data/demoMode.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { websiteProducts } from '../data/siteExport.js';
@@ -416,7 +416,7 @@ function openForm(existing = null) {
   const accountId = existing?.id || null;
   const stBox = $('#af-stripe');
   async function drawStripe() {
-    if (isDemo()) { stBox.innerHTML = ''; return; }
+    if (isReadOnly()) { stBox.innerHTML = ''; return; }
     if (!accountId) {
       stBox.innerHTML = '<p class="field-hint">On Stripe? Save this account, then Edit it to connect Stripe for one-time links for the exact amount owed, which KennelOS marks paid when they pay.</p>';
       return;
@@ -564,7 +564,7 @@ function openForm(existing = null) {
 
 els.add.addEventListener('click', () => openForm());
 // Kels's Set up my accounts (never in the Demo, which saves nothing).
-document.getElementById('btn-kels').hidden = isDemo();
+document.getElementById('btn-kels').hidden = isReadOnly();
 els.search.addEventListener('input', render);
 els.typeFilter.addEventListener('change', render);
 els.showArchived.addEventListener('change', render);

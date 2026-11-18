@@ -23,14 +23,15 @@ import { contactRepo } from '../data/contactRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
 import { EVENT_TYPES, DOG_STATUS, DISPOSITION, SHOW_ENTRY_STATUS } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { isDemo } from '../data/demoMode.js';
+import { isReadOnly } from '../data/demoMode.js';
 import { esc, badge, fmtDate, cardShell, alertModal, confirmModal } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/editionLinks.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { todayYMD, daysFromToday, addDaysToYMD } from '../data/dateUtils.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
-import { CLOUD_DATA_CHANGED_EVENT } from '../data/settings.js';
+import { CLOUD_DATA_CHANGED_EVENT, getWebsiteStripCache, getWebsiteLaterFor } from '../data/settings.js';
+import { renderTodayCloudCard } from '../assets/todayCloudCard.js';
 
 const DUE_SOON_DAYS = 30; // shared window with the reminder buckets (§3.3)
 
@@ -114,7 +115,15 @@ function reminderBucket(title, rows, bucketBadge) {
 }
 
 async function renderReminders() {
+  (await prepareReminders())();
+}
+
+async function prepareReminders() {
   const reminders = (await eventRepo.getReminders()).filter(eventInScope);
+  return () => paintReminders(reminders);
+}
+
+function paintReminders(reminders) {
   const isEmpty = !reminders.length;
   const title = `Reminders${reminders.length ? ` <span class="muted" style="font-size:14px;">(${reminders.length})</span>` : ''}`;
   let body;
@@ -167,8 +176,18 @@ function openSnooze(id) {
 
 // --- 0. Nudges (derived, dismissible — Data Integrity Brief §2) -------------
 
+// Computes, then returns the function that paints: main() paints Today's cards
+// together, in one frame (Load Performance plan Phase 1), and a redraw paints at once.
 async function renderNudges() {
+  (await prepareNudges())();
+}
+
+async function prepareNudges() {
   const all = await computeNudges();
+  return () => paintNudges(all);
+}
+
+function paintNudges(all) {
   const rows = all.filter((n) => !isDismissed(n.key));
   if (!rows.length) { nudgesEl.innerHTML = ''; return; }
   const title = `Nudges <span class="muted" style="font-size:14px;">(${rows.length})</span>`;
@@ -526,18 +545,31 @@ function renderInstallTip() {
   installEl.querySelector('[data-act="install-ok"]').addEventListener('click', () => { dismiss(INSTALL_TIP_KEY); renderInstallTip(); });
 }
 
+// Her website's changes not sent yet, drawn from the last compare so the card is
+// in the first paint (assets/websiteBanner.js adopts it, Load Performance plan D7).
+function drawCachedWebsiteCard(el) {
+  const cache = getWebsiteStripCache();
+  if (!el || !cache?.html || !cache.waiting?.length || getWebsiteLaterFor() === cache.signature) return;
+  // Built by websiteBanner.waitingHtml, which escapes every value.
+  el.innerHTML = `<div class="card inline-notice" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${cache.html}</div>`;
+  el.hidden = false;
+}
+
 async function main() {
   renderEditionFooter();
   renderInstallTip();
-  // "Turn on free cloud backup" / "backup is paused" — only with a server, and
-  // only then is the cloud UI loaded at all (plan §7).
-  if (isCloudAvailable()) {
-    import('../assets/cloudBackupUI.js').then((m) => m.renderTodayCloudNudge(cloudEl)).catch(() => {});
-  }
+  // "Turn on free cloud backup" / "backup is paused" — only with a server. Decided
+  // from settings, so it's in the first paint; the cloud UI loads on a button press.
+  if (isCloudAvailable()) renderTodayCloudCard(cloudEl);
   // Her website's changes not sent yet, with Send now (assets/websiteBanner.js).
-  if (editionFlags.websiteLink && !isDemo()) {
-    import('../assets/websiteBanner.js').then((m) => m.startWebsiteBanner({ el: document.getElementById('today-website') })).catch(() => {});
+  if (editionFlags.websiteLink && !isReadOnly()) {
+    const websiteEl = document.getElementById('today-website');
+    drawCachedWebsiteCard(websiteEl);
+    import('../assets/websiteBanner.js').then((m) => m.startWebsiteBanner({ el: websiteEl })).catch(() => {});
   }
+  // Under the top cards just drawn, so they don't push it down (Load Performance plan Phase 1).
+  const loading = document.getElementById('today-loading');
+  if (loading) loading.hidden = false;
 
   const [allDogs, litters, pairings, sales, contacts, upcoming, boardRows] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
@@ -562,11 +594,14 @@ async function main() {
   const scopedPairings = inScopeOnly(pairings);
   const scopedSales = inScopeOnly(sales);
 
-  // Nudges and reminders each do their own async read; they're independent, so
-  // run them concurrently rather than one-then-the-other (halves the critical
-  // path for the two top cards). The remaining sections render synchronously
-  // from the data main() already loaded.
-  const asyncCards = Promise.all([renderNudges(), renderReminders()]);
+  // Nudges and reminders each do their own async read, run concurrently. Every
+  // card then paints in the same frame, in page order (Load Performance plan
+  // Phase 1): painting the lower cards first and the two top ones when ready
+  // pushed the page down under her finger.
+  const [paintNudgesCard, paintRemindersCard] = await Promise.all([prepareNudges(), prepareReminders()]);
+  document.getElementById('today-loading')?.remove();
+  paintNudgesCard();
+  paintRemindersCard();
   watchForNudgeChanges();
   renderAvailable(scopedDogs, scopedLitters);
   const scopedUpcoming = upcoming.filter(eventInScope);
@@ -584,7 +619,6 @@ async function main() {
   // today.js, and dashboard.js can't disagree about who is away.
   renderBoard(boardRows);
   renderOverview({ allDogs: scopedDogs, litters: scopedLitters, pairings: scopedPairings, sales: scopedSales });
-  await asyncCards;
 }
 
 main().catch((e) => showError(e.message || String(e)));

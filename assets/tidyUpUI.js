@@ -42,6 +42,9 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { entryName } from '../data/waitlistRules.js';
 import { duplicateDismissKeys, matchReasonText } from '../data/applicationDuplicates.js';
 import { isDismissed, dismiss } from '../data/nudgeState.js';
+import { removeDetaching } from '../data/recordDetach.js';
+import { resolveMyKennelId } from '../data/kennelSetup.js';
+import { isTourMode } from '../data/demoMode.js';
 
 const ROLE = { sire: { field: 'sire_id', sex: 'male', word: 'sire' }, dam: { field: 'dam_id', sex: 'female', word: 'dam' } };
 const label = (vocab, v) => descriptor(vocab, v).label;
@@ -65,7 +68,8 @@ const KIND_WORDS = {
   'no-vet': ['missing vet contact', 'missing vet contacts'],
   'duplicate-dogs': ['possible duplicate dog', 'possible duplicate dogs'],
   'duplicate-contacts': ['possible duplicate contact', 'possible duplicate contacts'],
-  'duplicate-applications': ['family who may have applied twice', 'families who may have applied twice']
+  'duplicate-applications': ['family who may have applied twice', 'families who may have applied twice'],
+  'tour-leftovers': ['set of leftover tour records', 'sets of leftover tour records']
 };
 
 export async function runTidyTask(chat, { onExit = () => {} } = {}) {
@@ -82,7 +86,7 @@ class Tidy extends FindingsTask {
 
   async load() {
     const flags = editionFlags;
-    const [litters, pairings, sales, allDogs, studServices, contacts, kennels, vetEvents, waitlistEntries, titleEvents] = await Promise.all([
+    const [litters, pairings, sales, allDogs, studServices, contacts, kennels, vetEvents, waitlistEntries, titleEvents, allLitters, allPairings] = await Promise.all([
       litterRepo.getAll(), pairingRepo.getAll(), saleRepo.getAll(),
       dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true }),
       flags.studServices ? studServiceRepo.getAll() : [],
@@ -90,7 +94,9 @@ class Tidy extends FindingsTask {
       kennelRepo.getAll({ includeArchived: true }),
       flags.contactsSection ? Promise.all(T.VET_EVENT_TYPES.map((t) => eventRepo.getByType(t))).then((l) => l.flat()) : [],
       flags.waitlist ? waitlistEntryRepo.getAll() : [],
-      eventRepo.getByType('title_earned')
+      eventRepo.getByType('title_earned'),
+      // Archived ones too, for the leftover tour records (Load Performance plan D5).
+      litterRepo.getAll({ includeArchived: true }), pairingRepo.getAll({ includeArchived: true })
     ]);
     this.dogsById = new Map(allDogs.map((d) => [d.id, d]));
     this.littersById = new Map(litters.map((l) => [l.id, l]));
@@ -106,6 +112,8 @@ class Tidy extends FindingsTask {
       dogs: dogsInScope(allDogs.filter((d) => !d.is_archived && !d.pedigree_only)),
       allDogs, contacts: this.contacts, kennels: this.kennels, vetEvents, titleEvents,
       waitlistEntries: inScopeOnly(waitlistEntries),
+      // Archived records the old tour left (D5); never while a tour is loaded.
+      leftovers: isTourMode() ? null : { kennels, dogs: allDogs, contacts, litters: allLitters, pairings: allPairings },
       flags: { contactsSection: flags.contactsSection, studServices: flags.studServices, waitlist: flags.waitlist },
       today: this.today
     });
@@ -159,6 +167,7 @@ class Tidy extends FindingsTask {
       case 'duplicate-dogs': return this.duplicate(f, 'dog');
       case 'duplicate-contacts': return this.duplicate(f, 'contact');
       case 'duplicate-applications': return this.duplicateApplication(f);
+      case 'tour-leftovers': return this.tourLeftovers(f);
       default: return null;
     }
   }
@@ -618,6 +627,56 @@ class Tidy extends FindingsTask {
     if (!c) return null;
     this.contactsById.set(c.id, c);
     return c.id;
+  }
+
+  // --- Leftover tour records (Load Performance plan D5) -----------------------------
+
+  // Archived records an old guided tour left behind, found by the seed's names.
+  // She unticks any that are really hers; the rest are removed (recordDetach.js),
+  // and her own records that point at them keep going: a link to a sample kennel
+  // moves to her kennel, any other link is cleared. Never done without her yes.
+  async tourLeftovers(f) {
+    const rows = [
+      ...f.kennels.map((r) => ({ table: 'kennels', r, label: r.kennel_name, what: 'kennel' })),
+      ...f.dogs.map((r) => ({ table: 'dogs', r, label: dogName(r) || r.call_name, what: 'dog' })),
+      ...f.contacts.map((r) => ({ table: 'contacts', r, label: r.name, what: 'contact' }))
+    ];
+    await this.chat.say(`I found ${plural(rows.length, 'archived record')} that look left over from the guided tour's sample kennel (Thornfield Kennels), from before the tour cleaned up after itself. They're archived, so they don't show in your lists. Untick any that are really yours, and I'll remove the rest. Anything of yours that points at them stays: a link to a sample kennel moves to your kennel, and other links to them are cleared.`);
+    const res = await this.chat.form({
+      html: `<span class="kels-lead">Untick anything that's yours.</span>${rows.map((x, i) => `<label class="check-inline" style="display:block;margin:4px 0;"><input type="checkbox" data-left="${i}" checked> <strong>${esc(x.label || 'Unnamed')}</strong> <span class="faint">(${esc(x.what)})</span></label>`).join('')}`,
+      submitLabel: 'Remove them',
+      cancelLabel: 'Skip',
+      typing: 0,
+      submit: async (root) => {
+        const picked = rows.filter((_, i) => root.querySelector(`[data-left="${i}"]`).checked);
+        if (!picked.length) return { removed: 0, moved: 0 };
+        const ids = (table) => picked.filter((x) => x.table === table).map((x) => x.r.id);
+        const dogIds = new Set(ids('dogs'));
+        const parentsGo = (x) => dogIds.has(x.sire_id) && dogIds.has(x.dam_id);
+        const kennelTarget = await resolveMyKennelId();
+        const out = await removeDetaching({
+          kennels: ids('kennels'), dogs: [...dogIds], contacts: ids('contacts'),
+          litters: f.litters.filter(parentsGo).map((x) => x.id), pairings: f.pairings.filter(parentsGo).map((x) => x.id)
+        }, { kennelTarget, dropKennelLinks: !kennelTarget, markChanged: true });
+        return { removed: picked.length, moved: out.edits.length };
+      },
+      reply: () => 'Remove them'
+    });
+    if (!res.done) {
+      const pick = await this.chat.choose([
+        { label: 'Not now', value: 'later' },
+        { label: 'Don\'t ask me again', value: 'never' },
+        { label: 'Stop for now', value: 'stop' }
+      ], { stagger: 120 });
+      if (pick === 'never') {
+        dismiss(this.dismissKey(f));
+        await this.chat.say('Got it. I won\'t bring that one up again.', { typing: 400 });
+      }
+      return pick;
+    }
+    const { removed, moved } = res.result;
+    if (!removed) { await this.chat.say('Nothing ticked, so I left them as they are.'); return null; }
+    return this.done(`Done. I removed ${plural(removed, 'leftover record')}${moved ? `, and ${plural(moved, 'link')} from your own records moved to your kennel or were cleared` : ''}.`);
   }
 
   // --- Titles (Dog Titles Field Plan §5) ------------------------------------------

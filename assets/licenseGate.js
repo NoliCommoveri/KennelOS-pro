@@ -12,10 +12,11 @@
 // This is a GATE, not a vault (see the honest caveat in license.js) — a blocking
 // overlay is the right weight: it keeps honest buyers honest without pretending to
 // be uncrackable. ensureLicensed() returns false once a wall is painted, so
-// app.js's boot() stops before rendering the app.
+// app.js's boot() stops before the rest of the app starts (the nav is already
+// drawn under the overlay).
 import { esc } from './ui.js';
 import { licenseConfig } from '../data/editionConfig.js';
-import { activate, validate, resetLicense, evaluateLicense } from '../data/license.js';
+import { activate, validate, resetLicense, cachedLicense, licenseCheckDue, askLicenseStore } from '../data/license.js';
 import { getProLicense } from '../data/settings.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 
@@ -272,12 +273,32 @@ function renderGraceBanner(record) {
   document.body.insertBefore(bar, document.body.firstChild);
 }
 
-// The gate entry point, called from app.js boot() in the Pro edition. Returns
-// true when the app may render, false when a blocking wall has been painted (boot
-// then stops). In the 'grace' state it returns true but drops a dismissible-looking
-// banner so the owner knows to reconnect/renew.
+// The gate entry point, called from app.js boot() in the Pro edition, after the
+// nav is drawn. Returns true when the app may carry on, false when a blocking wall
+// has been painted (boot then stops). In the 'grace' state it returns true but
+// drops a banner so the owner knows to reconnect/renew.
+//
+// When to ask the store (D6 of the Load Performance plan, data/license.js): the
+// stored verdict decides at once, and the store is asked at most once per
+// browsing session and again after 6 hours, in the background. A stored verdict
+// that walls is the exception: the store is always asked before walling (with
+// its 5 s timeout), so a renewal made elsewhere unlocks on the next load.
+// A background answer that walls paints the wall over the page then.
 export async function ensureLicensed() {
-  const { state, record } = await evaluateLicense();
+  const cached = cachedLicense();
+  const walls = cached.state === 'wall' || cached.state === 'unactivated';
+  if (walls && cached.record) return applyVerdict(await askLicenseStore());
+  if (walls) return applyVerdict(cached); // no key on this device: nothing to ask
+  applyVerdict(cached);
+  if (licenseCheckDue()) {
+    askLicenseStore().then((live) => {
+      if (live.state !== cached.state) applyVerdict(live);
+    }).catch((e) => console.warn('KennelOS: license check', e));
+  }
+  return true;
+}
+
+function applyVerdict({ state, record }) {
   if (state === 'valid') return true;
   if (state === 'grace') { renderGraceBanner(record); return true; }
   if (state === 'unactivated') { renderActivationWall(); return false; }
