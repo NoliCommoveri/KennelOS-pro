@@ -24,6 +24,7 @@ import {
 import { isLicenseGated, deactivate } from '../license.js';
 import { eraseThisDevice as wipeThisDevice } from '../appReset.js';
 import { forgetAllPasskeys } from './vaultPasskey.js';
+import { forgetAlertsHere } from './cloudNotify.js';
 import { getVaultKey } from './vaultKeyStore.js';
 import { accountCheck } from './vaultCrypto.js';
 
@@ -138,6 +139,9 @@ export function eraseThisDevice(token = sessionToken(), { endHelpToken = null } 
 
 async function doErase(token, endHelpToken = null) {
   const license = getProLicense();
+  // No alerts for the account once its records are gone (review K12-8): an erase
+  // and support's hand-back both come through here.
+  await forgetAlertsHere(token);
   await wipeThisDevice();
   if (token) setPendingEraseAck(token);
   if (endHelpToken) setPendingAssistEnd(endHelpToken);

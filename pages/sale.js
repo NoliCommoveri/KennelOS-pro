@@ -22,6 +22,8 @@ import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, alertModa
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { earlyPortalState } from '../data/portalFeed.js';
+import { startPortalEarly } from '../assets/portalEarlyUI.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
@@ -715,7 +717,16 @@ async function renderHeaderActions() {
   const famBtn = famPage?.entry
     ? `<a class="btn btn-sm" href="waitlist-entry.html?id=${encodeURIComponent(famPage.entry.id)}">${famPage.entry.off_list ? 'Family page' : 'Waitlist family'}</a>`
     : famPage?.can ? '<button class="btn btn-sm" id="btn-family-page" title="Their own status page (pickup times, extras, the puppy portal link, your messages) without being on the waitlist">Give this family a status page</button>' : '';
+  // Her puppy portal before the contract is signed (Pro with a KennelPort website
+  // whose portal is on): Start it now, or say it was started.
+  const early = editionFlags.websiteLink
+    ? earlyPortalState({ kennel: await kennelRepo.getById(s.kennel_id), sale: s, contracts: await contractRepo.getBySale(s.id) })
+    : null;
+  const earlyBtn = early === 'offer'
+    ? '<button class="btn btn-sm" id="btn-portal-early" title="Their puppy portal before the contract is signed; its signed date fills in once it is">Start puppy portal now</button>'
+    : early === 'started' ? `<span class="badge badge-blue" title="Started ${esc(fmtDate(s.portal_early_on))}. The contract's signed date fills in once it's signed.">Puppy portal started early</span>` : '';
   els.headerActions.innerHTML = `
+    ${earlyBtn}
     ${famBtn}
     ${payBtn}
     ${invoiceBtn}
@@ -740,6 +751,18 @@ async function renderHeaderActions() {
         const { openPaymentRequest } = await import('../assets/paymentRequestUI.js');
         // Paying through an account fills an empty Sold / paid through: show it.
         if (await openPaymentRequest({ saleId: s.id }) && ctx.mode === 'view') {
+          ctx.original = await saleRepo.getById(s.id);
+          renderAll();
+        }
+      } catch (err) { showError(err.message || String(err)); }
+    };
+  }
+  const earlyEl = document.getElementById('btn-portal-early');
+  if (earlyEl) {
+    earlyEl.onclick = async () => {
+      clearError();
+      try {
+        if (await startPortalEarly(s, { buyer: contactName(s.buyer_contact_id), pup: ctx.dogsById.get(s.dog_id)?.call_name })) {
           ctx.original = await saleRepo.getById(s.id);
           renderAll();
         }

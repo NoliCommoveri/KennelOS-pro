@@ -23,6 +23,16 @@ export function safeLink(raw) {
   return /^https?:\/\/[^\s"'<>]+$/i.test(t) ? t : '';
 }
 
+// What she typed in the Referral link box (review K12-12): a web address as it is,
+// one typed without https:// ("chewy.com/r/abc") with it added, blank as blank.
+// → the link to save, or null when it can't be a web address.
+export function referralLinkInput(raw) {
+  const t = text(raw);
+  if (!t) return '';
+  if (/^[a-z][\w+.-]*:/i.test(t)) return safeLink(t) || null;
+  return /^[\w-]+(\.[\w-]+)+(\/[^\s"'<>]*)?$/i.test(t) ? `https://${t}` : null;
+}
+
 const isTransport = (a) => a.account_type === 'transport';
 const shared = (a) => a && a.share_with_families === true && !a.is_archived;
 

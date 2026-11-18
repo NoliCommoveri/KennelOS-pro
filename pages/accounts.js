@@ -28,7 +28,7 @@ import { extraChoices, formKindOptionsHtml, readFormKind } from '../data/contrac
 import { kennelChargeList } from '../data/extraCharges.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { feeRate, rateLabel } from '../data/processingFees.js';
-import { sharedReferrals, sharedTransport } from '../data/referralShare.js';
+import { sharedReferrals, sharedTransport, referralLinkInput } from '../data/referralShare.js';
 import { paymentLink } from '../data/paymentLinks.js';
 import { isDemo } from '../data/demoMode.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -338,7 +338,7 @@ function openForm(existing = null) {
     ${fieldNamesHtml()}
     </div>
     <h3 style="font-size:15px; margin:14px 0 4px;">Your login</h3>
-    <p class="field-hint" style="margin-top:0;">Just for you. These never go to cloud backup unencrypted — only inside your private vault, if you've turned it on.</p>
+    <p class="field-hint" style="margin-top:0;">Just for you. Kept on this device and in the backup files you save or push to your Dropbox, so keep those safe. Never sent to KennelOS's cloud backup unless your private vault is on, and then only encrypted.</p>
     <div class="form-grid">
       ${field('Username / login email', `<input id="af-username" type="text" autocomplete="off" value="${esc(a.username)}">`)}
       ${field('Password', `<div style="display:flex; gap:6px;"><input id="af-password" type="password" autocomplete="new-password" value="${esc(a.password)}" style="flex:1;"><button type="button" class="btn btn-sm" id="af-pw-toggle">Show</button></div>`)}
@@ -531,6 +531,13 @@ function openForm(existing = null) {
       return;
     }
     if (data.payment_link) data.payment_link = paymentLink(data.payment_link);
+    // A referral link families can open (review K12-12): never saved as one they won't get.
+    const refLink = referralLinkInput(data.referral_link);
+    if (refLink === null) {
+      $('#af-error').innerHTML = `<div class="inline-error">The referral link should be a web address, like https://www.chewy.com/… (leave it blank to share only the code).</div>`;
+      return;
+    }
+    data.referral_link = refLink;
     // Another type leaves any saved forms as they are (hidden, never offered), so
     // switching the type back brings them back.
     if (isFormService()) {

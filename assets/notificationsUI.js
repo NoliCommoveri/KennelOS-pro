@@ -5,7 +5,7 @@
 // data/cloud/cloudNotify.js.
 import {
   NOTIFY_KIND_LABELS, pushSupport, getSettings, saveSettings, enableAlertsHere, disableAlertsHere,
-  sendTestAlert, startDigest, verifyDigest, stopDigest
+  sendTestAlert, startDigest, verifyDigest, stopDigest, takeInHere, takeInHereText, alertsLiveHere
 } from '../data/cloud/cloudNotify.js';
 import { currentAccount } from '../data/cloud/cloudAuth.js';
 import { esc, confirmModal } from './ui.js';
@@ -31,6 +31,8 @@ export function mountNotificationsCard(el) {
   let state = null;
   let note = '';
   let pendingCode = false;
+  let whereText = ''; // review K12-4: alerts on a device that doesn't take family events in
+  let liveHere = 'ok'; // review K12-7: the server says on; can this browser show them?
 
   const say = (text) => { note = text; render(); };
   const run = async (fn) => {
@@ -49,12 +51,25 @@ export function mountNotificationsCard(el) {
       el.innerHTML = `<h2 style="margin-top:0;">Notifications</h2><p class="muted">${esc(note || 'Loading…')}</p>`;
       return;
     }
+    // Support's helper session (review K12-8): her alerts and digest are hers to set.
+    if (account.role === 'helper') {
+      el.innerHTML = `<h2 style="margin-top:0;">Notifications</h2>
+        <p class="muted">Alerts and the email digest are the breeder's own choice: she turns them on from her device. This device never gets her families' alerts.</p>`;
+      return;
+    }
     const { push, digest } = state;
     const support = pushSupport();
     const pushBody = !push.available
       ? '<p class="muted">Alerts aren\'t available yet.</p>'
+      : push.thisDevice && liveHere === 'blocked'
+        ? `<p class="inline-warn">Alerts are turned on for this device, but ${esc(SUPPORT_TEXT.denied.charAt(0).toLowerCase() + SUPPORT_TEXT.denied.slice(1))}</p>
+           <div class="form-actions"><button class="btn btn-sm" data-act="push-off">Turn off on this device</button></div>`
+      : push.thisDevice && liveHere === 'lost'
+        ? `<p class="inline-warn">Alerts are turned on for this device, but this browser dropped its alert subscription, so none can arrive.</p>
+           <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="push-on">Turn alerts on again</button><button class="btn btn-sm" data-act="push-off">Turn off on this device</button></div>`
       : push.thisDevice
         ? `<p>Alerts are <strong>on</strong> for this device.${push.devices > 1 ? ` <span class="faint">(${push.devices} devices in all)</span>` : ''}</p>
+           ${whereText ? `<div class="inline-notice">${esc(whereText)}</div>` : ''}
            <div class="form-actions"><button class="btn btn-sm" data-act="test">Send a test</button><button class="btn btn-sm" data-act="push-off">Turn off on this device</button></div>`
         : support !== 'ok'
           ? `<p class="field-hint">${esc(SUPPORT_TEXT[support])}</p>`
@@ -98,13 +113,21 @@ export function mountNotificationsCard(el) {
   });
 
   function wire() {
-    const on = (act, fn) => el.querySelector(`[data-act="${act}"]`)?.addEventListener('click', () => run(fn));
+    const on = (act, fn) => el.querySelector(`[data-act="${act}"]`)?.addEventListener('click', () => {
+      // The permission prompt from the tap itself, before any await (review K12-13).
+      const asked = act === 'push-on' && pushSupport() === 'ok' ? Notification.requestPermission().catch(() => 'default') : null;
+      run(() => fn(asked));
+    });
     on('save', async () => { state = await saveSettings(choices()); note = 'Saved.'; });
-    on('push-on', async () => {
+    on('push-on', async (asked) => {
+      // iPhone counts the permission prompt only straight from her tap (review K12-13):
+      // it's asked before anything is awaited (enableAlertsHere then finds it granted).
+      await asked;
       say('Turning on…');
       await saveSettings(choices());
       state = await enableAlertsHere(state.push.publicKey);
       note = 'Alerts are on. Send a test to check.';
+      await checkWhere();
     });
     on('push-off', async () => { state = await disableAlertsHere(); note = 'Alerts are off for this device.'; });
     on('test', async () => {
@@ -131,6 +154,15 @@ export function mountNotificationsCard(el) {
     });
   }
 
+  // Where what families do lands, for the note under "Alerts are on" (review K12-4).
+  const checkWhere = async () => {
+    if (!state?.push?.thisDevice) { whereText = ''; liveHere = 'ok'; return; }
+    liveHere = await alertsLiveHere();
+    try { whereText = takeInHereText(await takeInHere()); } catch { whereText = ''; }
+  };
+
   render();
-  if (currentAccount()?.signedIn) getSettings().then((s) => { state = s; render(); }, (e) => say(errText(e)));
+  if (currentAccount()?.signedIn) {
+    getSettings().then(async (s) => { state = s; render(); await checkWhere(); render(); }, (e) => say(errText(e)));
+  }
 }

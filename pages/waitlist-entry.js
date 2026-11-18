@@ -26,6 +26,8 @@ import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
+import { contractRepo } from '../data/contractRepo.js';
+import { earlyPortalState } from '../data/portalFeed.js';
 import * as actions from '../data/waitlistActions.js';
 import { kennelChargeList, kennelChargeGroups, chargeRules, planText, groupedChargeList, saleExtraCharges } from '../data/extraCharges.js';
 import { pendingExtraRequests, familySale, pupBirthDate } from '../data/familyExtras.js';
@@ -73,6 +75,9 @@ import { creditsOf, carriedCreditsOf } from '../data/receivedCredits.js';
 import { CREDIT_USES } from '../data/vocab.js';
 import { applicationFields, answerField, prefField as prefFieldHtml, privateField, readAnswers, readPrefs } from '../assets/waitlistApplicationForm.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { CLOUD_DATA_CHANGED_EVENT } from '../data/settings.js';
+import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
+import { sessionToken } from '../data/cloud/cloudAuth.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
@@ -95,7 +100,8 @@ const els = {
   editTitle: document.getElementById('edit-title'),
   profileActions: document.getElementById('profile-actions'),
   body: document.getElementById('profile-body'),
-  error: document.getElementById('page-error')
+  error: document.getElementById('page-error'),
+  note: document.getElementById('page-note')
 };
 
 // The family's sales and dogs, for their number (a family with a pup selected keeps theirs).
@@ -165,6 +171,9 @@ async function reload() {
   // or their pick's while its deposit is pending.
   const sale = familySale(ctx.entry, ctx.sales, ctx.kennelOffers, ctx.kennelEntries);
   ctx.payments = sale ? await getSaleStatement(sale) : null;
+  // Their puppy portal before the contract (Pro with a KennelPort website, portal on).
+  const early = sale && editionFlags.websiteLink ? earlyPortalState({ kennel: ctx.kennel, sale, contracts: await contractRepo.getBySale(sale.id) }) : null;
+  ctx.portalEarly = early ? { state: early, sale } : null;
   ctx.paymentAccounts = editionFlags.accounts ? (await accountRepo.getAll({ includeArchived: true })).filter((a) => a.account_type === 'payment_service') : [];
   // Their money across the fee and the sale, for the Documents card (Payment Schedule plan §6.2).
   ctx.family = editionFlags.invoicing ? await loadFamilyAccount({ entryId: ctx.entry.id }) : null;
@@ -972,6 +981,16 @@ function wireDuplicates(root) {
 
 // Merge a duplicate application (picked, or `otherId` suggested). When this page's
 // entry is the one deleted, the kept one's page opens.
+async function onPortalEarly() {
+  const { startPortalEarly } = await import('../assets/portalEarlyUI.js');
+  const sale = ctx.portalEarly?.sale;
+  if (!sale) return;
+  if (await startPortalEarly(sale, { buyer: ctx.contact?.name || '', pup: ctx.dogsById.get(sale.dog_id)?.call_name || '' })) {
+    await reload();
+    renderAll();
+  }
+}
+
 async function onSameFamily(otherId = null) {
   const res = await sameFamilyDialog({ entryId: ctx.entry.id, otherId });
   if (!res) return;
@@ -2330,7 +2349,9 @@ function interactButtons(e) {
   const charges = !lost && endableSale(e) ? b('charges', 'Add charges…') : '';
   // Their live status page, as they see it signed in (only once it's online).
   const page = statusLinkFor(e, ctx.kennel) ? b('viewpage', 'View their page ↗') : '';
-  return lost + main + charges + end + b('communicate', 'Communicate…') + page;
+  // Their puppy portal before the contract is signed (assets/portalEarlyUI.js).
+  const early = ctx.portalEarly?.state === 'offer' ? b('portalearly', 'Start puppy portal now…') : '';
+  return lost + main + charges + end + early + b('communicate', 'Communicate…') + page;
 }
 
 function renderInteract() {
@@ -2348,6 +2369,7 @@ function renderInteract() {
     <section class="card">
       <h2 style="margin-top:0;">Do something</h2>
       <div class="pill-row">${interactButtons(e)}</div>
+      ${ctx.portalEarly?.state === 'started' ? `<p class="field-hint">Their puppy portal was started early, on ${esc(fmtDate(ctx.portalEarly.sale.portal_early_on))}. The contract's signed date fills in once it's signed.</p>` : ''}
       ${statusLinkFor(e, ctx.kennel) ? '<p class="field-hint" style="margin-bottom:0;"><strong>View their page</strong> publishes your latest changes, then opens their status page as they see it signed in. Its buttons work there, but nothing is sent.</p>' : ''}
     </section>`;
   wireRequests(pane);
@@ -2355,7 +2377,7 @@ function renderInteract() {
   wireSideSale(pane);
   wireSuggestions(pane);
   wireDuplicates(pane);
-  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, charges: () => onAddCharges(), communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel) };
+  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, charges: () => onAddCharges(), communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel), portalearly: onPortalEarly };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });
@@ -2392,6 +2414,59 @@ function renderAll() {
   }
 }
 
+// --- Kept current, and opened from an alert (review K12-4) ------------------------
+// What families do arrives by the waitlist scheduler a moment after the page draws
+// (cloudWaitlist.js), and an alert is tapped exactly then. The page redraws when the
+// records change, but never under her hands: while she edits, a dialog is open or a
+// field has focus, it waits.
+const fromAlert = () => param('from') === 'alert';
+const TAKE_IN_WAIT_MS = 5000;
+const REDRAW_DELAY_MS = 600;
+
+const busy = () => ctx.mode !== 'view' || Boolean(document.querySelector('.modal-overlay'))
+  || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+
+function keepCurrent() {
+  let timer = null;
+  const redraw = async () => {
+    timer = null;
+    if (busy()) { timer = setTimeout(redraw, 3000); return; }
+    const fresh = await waitlistEntryRepo.getById(ctx.entry.id);
+    if (!fresh) return; // deleted elsewhere: leave the page as it is
+    await reload();
+    if (!busy()) renderAll();
+  };
+  window.addEventListener(CLOUD_DATA_CHANGED_EVENT, () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(redraw, REDRAW_DELAY_MS);
+  });
+}
+
+const signedInToCloud = () => isCloudAvailable() && Boolean(sessionToken());
+
+// Opened from an alert: take in what the family did before drawing (at most 5 s).
+async function takeInFirst() {
+  if (!fromAlert() || !signedInToCloud()) return;
+  els.note.innerHTML = '<p class="field-hint">Checking for anything new…</p>';
+  try {
+    const { syncWaitlistOnline } = await import('../data/cloud/cloudWaitlist.js');
+    await Promise.race([syncWaitlistOnline({ asked: true }).catch(() => {}), new Promise((r) => setTimeout(r, TAKE_IN_WAIT_MS))]);
+  } catch { /* drawn from what's here */ }
+  els.note.innerHTML = '';
+}
+
+// Opened from an alert on a device that doesn't take family events in: say where
+// they land, so a missing message isn't a mystery. → whether it said so.
+async function sayWhereEventsLand() {
+  if (!fromAlert() || !signedInToCloud()) return false;
+  try {
+    const { takeInHere, takeInHereText } = await import('../data/cloud/cloudNotify.js');
+    const text = takeInHereText(await takeInHere());
+    if (text) els.note.innerHTML = `<div class="inline-notice">${esc(text)}</div>`;
+    return Boolean(text);
+  } catch { return false; }
+}
+
 async function main() {
   if (param('new')) {
     const { kennel } = await resolveWaitlistKennel(param('kennel'));
@@ -2404,12 +2479,20 @@ async function main() {
   }
   const id = param('id');
   if (!id) { showError('No waitlist entry id provided.'); return; }
+  await takeInFirst();
   const entry = await waitlistEntryRepo.getById(id);
-  if (!entry) { showError('Waitlist entry not found.'); return; }
+  if (!entry) {
+    // From an alert, the family may be on another device's records only.
+    showError(fromAlert() && signedInToCloud() ? 'This family isn’t on this device yet.' : 'Waitlist entry not found.');
+    await sayWhereEventsLand();
+    return;
+  }
   ctx.entry = entry;
   await reload();
   ctx.mode = 'view';
   renderAll();
+  keepCurrent();
+  sayWhereEventsLand();
   // A tab in the address (#interact…), from a link or Back, switches to it.
   window.addEventListener('hashchange', () => {
     const tab = location.hash.slice(1);

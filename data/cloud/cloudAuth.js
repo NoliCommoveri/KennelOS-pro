@@ -171,6 +171,9 @@ export function markSessionExpired() {
 // forgets both positions. The cloud copy stays.
 export async function signOut() {
   const token = sessionToken();
+  // Alerts end with the sign-in (review K12-8). Loaded here, not at the top:
+  // cloudNotify imports this module.
+  try { const { forgetAlertsHere } = await import('./cloudNotify.js'); await forgetAlertsHere(token && isCloudAvailable() ? token : null); } catch { /* best effort */ }
   if (token && isCloudAvailable()) {
     try { await api.signOut(token); } catch { /* offline or already revoked */ }
   }

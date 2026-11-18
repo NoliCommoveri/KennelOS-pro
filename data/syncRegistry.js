@@ -203,6 +203,10 @@ export const SYNC_REGISTRY = Object.freeze({
     cloud: [
       'kennel_id', 'dog_id', 'buyer_contact_id', 'status', 'registration_type',
       'sale_date', 'deposit_date', 'balance_due_date', 'balance_paid_date',
+      // The day she started this family's puppy portal before the contract was
+      // signed (portalFeed.startedEarly): a date she chose, so whichever device sends
+      // the portal feed sends them too.
+      'portal_early_on',
       // Which channel it went through, and whether its fee was passed on
       // (Integrations plan §5, D9). The fee itself is money, private like price.
       'sales_channel_account_id', 'fee_passed_to_buyer',

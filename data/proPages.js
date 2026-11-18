@@ -156,7 +156,7 @@ export const PRO_ONLY_STANDALONE = [
   // Kels's "Update my website", each imported only when websiteLinkOffered() (Pro
   // with a KennelPort address). The data layer (siteExport, kennelportApi,
   // kennelportLink, kennelportLinkStore) stays shared, like every repo.
-  'assets/websiteCard.js', 'assets/websiteUpdateUI.js'
+  'assets/websiteCard.js', 'assets/websiteUpdateUI.js', 'assets/websiteBanner.js'
 ];
 
 // True when a link target (an href like "contact-import.html" or with a query string)

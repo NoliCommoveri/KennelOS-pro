@@ -12,6 +12,7 @@ import {
   pendingWebsiteOffer, useSiteAsKennelWebsite, keepKennelWebsite
 } from '../data/kennelportLink.js';
 import { SiteExportError } from '../data/siteExport.js';
+import { getWebsitePublishOnSend, setWebsitePublishOnSend } from '../data/settings.js';
 
 // A name for this device, to tell it apart in KennelPort ("Her phone — last
 // update 3 November"). She can change it before connecting.
@@ -33,7 +34,9 @@ export async function pressUpdateWebsite(kennel) {
   try {
     const out = await updateWebsite(kennel);
     const filled = out.filled ? ` ${plural(out.filled, 'photos link')} filled in from your website.` : '';
-    return { ok: true, text: `${out.summary?.text || 'Sent to your website.'}${filled}` };
+    const live = !out.published ? ' It\'s in your website\'s draft: press Publish in KennelPort Site Manager.'
+      : out.published.ok ? ' Published: it\'s live on your website now.' : ` ${out.published.text}`;
+    return { ok: true, text: `${out.summary?.text || 'Sent to your website.'}${filled}${live}`, published: Boolean(out.published?.ok) };
   } catch (err) {
     return { ok: false, text: errorText(err), notLinked: err instanceof KennelportError && err.kind === 'not_linked' };
   }
@@ -87,7 +90,8 @@ export async function mountWebsiteCard(el) {
         <p>Connected to <a href="${esc(site.website || '#')}" target="_blank" rel="noopener noreferrer">${esc(site.name || site.website || 'your website')}</a> on this device${link.device_label ? ` (“${esc(link.device_label)}”)` : ''}.</p>
         <p class="muted">Marked Show on website: ${esc(marked)}. ${site.kennelos_prices ? 'Your litter and extras prices go too (Use my KennelOS prices is on in KennelPort).' : 'Your prices stay here: Use my KennelOS prices is off in KennelPort.'}</p>
         <p class="muted">${last}</p>
-        <p class="muted">What you send lands in your website's draft: check it in KennelPort Site Manager, then press Publish there.</p>
+        <label class="check-inline" style="margin:6px 0 10px;"><input type="checkbox" id="web-publish"${getWebsitePublishOnSend() ? ' checked' : ''}> Publish what I send straight away</label>
+        <p class="field-hint" style="margin-top:0;">${getWebsitePublishOnSend() ? 'Each update goes live at once, along with any changes you made in KennelPort Site Manager that weren\'t published yet. Undo publish in Site Manager steps it back.' : 'What you send lands in your website\'s draft: check it in KennelPort Site Manager, then press Publish there.'}</p>
         <div class="pill-row">
           <button class="btn btn-primary" id="web-update">Update website</button>
           <button class="btn" id="web-disconnect">Disconnect this device…</button>
@@ -108,6 +112,7 @@ export async function mountWebsiteCard(el) {
       } catch (err) { note = { ok: false, text: errorText(err) }; }
       render();
     });
+    el.querySelector('#web-publish')?.addEventListener('change', (ev) => { setWebsitePublishOnSend(ev.target.checked); note = null; render(); });
     el.querySelector('#web-update')?.addEventListener('click', async (ev) => {
       ev.target.disabled = true;
       ev.target.textContent = 'Sending…';

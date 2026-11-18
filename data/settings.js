@@ -14,6 +14,8 @@ const KEYS = {
   invoiceDefaults: 'kennelOS.invoiceDefaults',
   mileageDefaults: 'kennelOS.mileageDefaults',
   expensesMigrated: 'kennelOS.expensesMigrated',
+  websiteDraftOnly: 'kennelOS.websiteDraftOnly',
+  websiteLaterFor: 'kennelOS.websiteLaterFor',
   wizardStatus: 'kennelOS.wizardStatus',
   wizardStepIndex: 'kennelOS.wizardStepIndex',
   wizardStepId: 'kennelOS.wizardStepId',
@@ -395,6 +397,29 @@ export function setMileageDefaults(values) {
   const merged = { ...getMileageDefaults(), ...values };
   localStorage.setItem(KEYS.mileageDefaults, JSON.stringify(merged));
   return merged;
+}
+
+// Her website (KennelPort): what she sends from KennelOS is published at once
+// unless she turned that off on this device (Settings' Your website card), so it
+// lands only in the draft for Site Manager's Publish.
+export function getWebsitePublishOnSend() {
+  return localStorage.getItem(KEYS.websiteDraftOnly) !== '1';
+}
+
+export function setWebsitePublishOnSend(on) {
+  if (on) localStorage.removeItem(KEYS.websiteDraftOnly);
+  else localStorage.setItem(KEYS.websiteDraftOnly, '1');
+}
+
+// "Later" on the website banner: the unsent changes she put off, as a short
+// signature, so the banner comes back only when something else changes.
+export function getWebsiteLaterFor() {
+  return localStorage.getItem(KEYS.websiteLaterFor) || null;
+}
+
+export function setWebsiteLaterFor(signature) {
+  if (signature) localStorage.setItem(KEYS.websiteLaterFor, String(signature).slice(0, 200));
+  else localStorage.removeItem(KEYS.websiteLaterFor);
 }
 
 // Financials migration flag — set once the one-time Event.cost → Expense fold

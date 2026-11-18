@@ -4,7 +4,8 @@
 // pass `today`).
 //
 // For a kennel whose KennelPort website has the portal on (the site's facts say
-// `portal_feed: 1`), each family from their signed contract on: who they are,
+// `portal_feed: 1`), each family from their signed contract on (or from the day she
+// started their portal early, Sale.portal_early_on): who they are,
 // their sale's puppy, its go-home and pickup time, microchip and registration
 // number, the contract's signed date, a voided sale's reason, the puppy's shots,
 // deworming and vet visits, and the extras on the sale; her vet; and what has gone
@@ -130,6 +131,10 @@ export function pickupEventFor(sale, events, today) {
   return mine.find((e) => e.event_date >= today) || mine[mine.length - 1] || null;
 }
 
+// She started this family's puppy portal before their contract was signed
+// (Sale.portal_early_on, the day she did).
+export const startedEarly = (sale) => Boolean(ymd(sale?.portal_early_on));
+
 // The sales a kennel's feed carries, each with its contract: her kennel's, not
 // archived, with a puppy and a buyer, from the signed contract on. A sale the feed
 // sent before (`known`) whose contract is no longer signed stays while the sale
@@ -143,6 +148,10 @@ export function portalSales({ kennel, sales = [], contracts = [], dogsById, cont
     if (!dogsById.get(sale.dog_id) || !contactsById.get(sale.buyer_contact_id)) continue;
     const contract = signedContractFor(sale, contracts);
     if (contract) out.push({ sale, contract });
+    // Started early (the owner's request, 2026-11-18): she opened this family's portal
+    // before the contract was signed. It goes while the sale is open (or once sent),
+    // with no contract date; the date fills in once it's signed.
+    else if (startedEarly(sale) && (isOpenSale(sale) || sent.has(sale.id))) out.push({ sale, contract: null, early: true });
     else if (sent.has(sale.id) && RELEASED_SALE_STATUSES.includes(sale.status)) out.push({ sale, contract: null });
   }
   return out;
@@ -250,7 +259,7 @@ export function buildPortalFeed({
 
   const byFamily = new Map();
   const now = [];
-  for (const { sale, contract } of live) {
+  for (const { sale, contract, early = false } of live) {
     const pup = dogsById.get(sale.dog_id);
     const litter = litters.find((l) => l.id === pup.litter_id) || null;
     const pickup = pickupEventFor(sale, events, today);
@@ -271,7 +280,8 @@ export function buildPortalFeed({
       puppy_id: String(pup.id),
       puppy_name: line(pup.call_name, 60) || line(pup.registered_name, 60) || 'Puppy',
       // A sale the feed sent whose contract has since gone: the date it was sent with.
-      contract_signed_on: contract?.signed_date || known.find((k) => k.type === 'placement' && k.id === sale.id)?.signed_on || dayOf(sale.created_at) || today,
+      // Started early: none yet.
+      contract_signed_on: contract?.signed_date || (early ? null : known.find((k) => k.type === 'placement' && k.id === sale.id)?.signed_on || dayOf(sale.created_at) || today),
       go_home_on: ymd(goHome),
       pickup_at: pickup && clock ? zonedIso(pickup.event_date, clock, tz) : null,
       microchip: line(pup.microchip_id, 40),
@@ -281,9 +291,10 @@ export function buildPortalFeed({
       extras: extrasOf(sale)
     }, PLACEMENT_KEYS, 'placement');
     const fam = byFamily.get(sale.buyer_contact_id) || { placements: [], keep: false, newest: '' };
-    fam.placements.push({ placement, keep, at: contract?.signed_date || placement.contract_signed_on });
+    const since = placement.contract_signed_on || sale.portal_early_on;
+    fam.placements.push({ placement, keep, at: contract?.signed_date || since });
     fam.keep = fam.keep || keep;
-    if (placement.contract_signed_on > fam.newest) fam.newest = placement.contract_signed_on;
+    if (since > fam.newest) fam.newest = since;
     byFamily.set(sale.buyer_contact_id, fam);
   }
 
@@ -345,6 +356,17 @@ export function portalEntryView(entry, { sale, contracts = [] }) {
   if (!entry?.contact_id || !sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) return null;
   if (sale.buyer_contact_id !== entry.contact_id || !signedContractFor(sale, contracts)) return null;
   return { family_id: entry.contact_id, only: !isOpenSale(sale) };
+}
+
+// Starting a family's puppy portal before their contract is signed (Sale.portal_early_on,
+// the owner's request of 2026-11-18): → 'offer' (she can), 'started' (she did; the
+// contract isn't signed yet), or null (the portal is off for this kennel, the sale is
+// closed or lacks its pup or buyer, or the contract is already signed, which starts
+// it anyway).
+export function earlyPortalState({ kennel, sale, contracts = [] }) {
+  if (!portalOn(kennel) || !sale || sale.kennel_id !== kennel.id || !isOpenSale(sale) || !sale.dog_id || !sale.buyer_contact_id) return null;
+  if (signedContractFor(sale, contracts)) return null;
+  return startedEarly(sale) ? 'started' : 'offer';
 }
 
 // Is her portal on for this kennel (Kennel.kennelport_portal, from the site's last

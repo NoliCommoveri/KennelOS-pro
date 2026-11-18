@@ -28,9 +28,9 @@ import { waitlistConfig, embedOrigin, EMBED_ORIGINS_MAX } from './waitlistRules.
 import { todayYMD } from './dateUtils.js';
 import { isLicenseGated, evaluateLicense } from './license.js';
 import { editionFlags } from './editionConfig.js';
-import { getCloudSession } from './settings.js';
+import { getCloudSession, getWebsitePublishOnSend } from './settings.js';
 import { buildSiteBundle, websiteCounts, websiteGaps, bundleChanges } from './siteExport.js';
-import { redeemLinkCode, linkStatus, stopLink, sendBundle, setSiteSettings, websiteLinkOffered, KennelportError } from './kennelportApi.js';
+import { redeemLinkCode, linkStatus, stopLink, sendBundle, setSiteSettings, publishSite, websiteLinkOffered, KennelportError } from './kennelportApi.js';
 import { getWebsiteLink, setWebsiteLink, noteWebsiteAnswer, clearWebsiteLink, anyWebsiteLink } from './kennelportLinkStore.js';
 import { isWebsiteAddress, originOf } from './websiteAddress.js';
 
@@ -294,7 +294,7 @@ export async function websiteSnapshot(kennel, { today = todayYMD() } = {}) {
 // KennelPort's summary ({ text, updated, created, … }), how many photos links were
 // filled or cleared here, and the site's facts. A stopped link (Unlink in
 // KennelPort) forgets the token and throws KennelportError 'not_linked'.
-export async function updateWebsite(kennel, { bundleId = crypto.randomUUID(), today = todayYMD() } = {}) {
+export async function updateWebsite(kennel, { bundleId = crypto.randomUUID(), today = todayYMD(), publish = getWebsitePublishOnSend() } = {}) {
   const link = await getWebsiteLink(kennel?.id);
   if (!link) throw new KennelportError('not_linked', 'Connect your website first.', 'not_linked');
   if (!(await licenseOk())) throw new LicenseLapsedError();
@@ -326,5 +326,18 @@ export async function updateWebsite(kennel, { bundleId = crypto.randomUUID(), to
   }
   const fresh = await kennelRepo.getById(kennel.id);
   await applyKennelFacts(fresh || kennel, after, link.site);
-  return { summary: answer.summary || null, filled: changes.length, site: after };
+
+  // Live at once (the owner's choice, 2026-11-18), unless she keeps sends in the
+  // draft on this device. A KennelPort without /v1/publish, or one that refuses,
+  // leaves it in the draft and says so; the send itself already landed.
+  let published = null;
+  if (publish) {
+    try {
+      await publishSite(link.token);
+      published = { ok: true };
+    } catch (err) {
+      published = { ok: false, text: err?.code === 'cannot_publish' && err.message ? err.message : 'It\'s in your website\'s draft: press Publish in KennelPort Site Manager.' };
+    }
+  }
+  return { summary: answer.summary || null, filled: changes.length, site: after, published };
 }

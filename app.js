@@ -221,6 +221,11 @@ async function boot() {
   // a request without a link.
   if (editionFlags.websiteLink && !isDemo()) {
     import('./data/portalFeedSync.js').then((m) => m.startPortalFeed()).catch(() => {});
+    // Changes her website shows, not sent yet: a strip under the nav with Send now
+    // (Today shows it as a card of its own, today.js).
+    if (!/\/today\.html$|\/pages\/$/.test(globalThis.location?.pathname || '')) {
+      import('./assets/websiteBanner.js').then((m) => m.startWebsiteBanner()).catch(() => {});
+    }
   }
   // Her waitlist closed dates more than 7 days past drop off by themselves. And a
   // family's turn left with no pup in it (she kept the pup, it went on Health hold,

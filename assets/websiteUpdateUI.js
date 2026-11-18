@@ -65,7 +65,7 @@ export async function runWebsiteTask(chat, { onExit = () => {} } = {}) {
   if (pick !== 'send') return onExit('nevermind');
   await chat.say('Sending…', { typing: 400 });
   const out = await pressUpdateWebsite(kennel);
-  if (out.ok) await chat.say(`Done! ${esc(out.text)} It's in your website's draft: open KennelPort Site Manager to check it and press Publish.`);
+  if (out.ok) await chat.say(`Done! ${esc(out.text)}`);
   else await chat.say(`That didn't go: ${esc(out.text)}${out.notLinked ? ' You can connect again in Settings, under Your website.' : ''}`);
   return onExit('done');
 }
@@ -382,7 +382,7 @@ export async function offerWebsiteCheck(chat) {
     await chat.say('Sending…', { typing: 400 });
     const out = await pressUpdateWebsite(kennel);
     await chat.say(out.ok
-      ? `Done! ${esc(out.text)} It's in your website's draft: open KennelPort Site Manager to check it and press Publish.`
+      ? `Done! ${esc(out.text)}`
       : `That didn't go: ${esc(out.text)}${out.notLinked ? ' You can connect again in Settings, under Your website.' : ''}`);
   }
 }

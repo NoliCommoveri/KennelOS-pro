@@ -23,6 +23,7 @@ import { contactRepo } from '../data/contactRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
 import { EVENT_TYPES, DOG_STATUS, DISPOSITION, SHOW_ENTRY_STATUS } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { isDemo } from '../data/demoMode.js';
 import { esc, badge, fmtDate, cardShell, alertModal, confirmModal } from '../assets/ui.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { hasEditionLinks, editionLinksHtml, wireEditionLinks } from '../assets/editionLinks.js';
@@ -532,6 +533,10 @@ async function main() {
   // only then is the cloud UI loaded at all (plan §7).
   if (isCloudAvailable()) {
     import('../assets/cloudBackupUI.js').then((m) => m.renderTodayCloudNudge(cloudEl)).catch(() => {});
+  }
+  // Her website's changes not sent yet, with Send now (assets/websiteBanner.js).
+  if (editionFlags.websiteLink && !isDemo()) {
+    import('../assets/websiteBanner.js').then((m) => m.startWebsiteBanner({ el: document.getElementById('today-website') })).catch(() => {});
   }
 
   const [allDogs, litters, pairings, sales, contacts, upcoming, boardRows] = await Promise.all([

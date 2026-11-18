@@ -95,6 +95,10 @@ export const sendFamilyFeed = (token, feed) => call('POST', '/v1/portal', { toke
 
 // Her settings on the website that KennelOS may change (Kels's Update my website):
 // `{ kennelos_prices }`, only to a site whose facts list it under `settings`.
+// Publish now (KennelPort's POST /v1/publish): the site's draft goes live, as
+// Publish in Site Manager does. → { published: { id, at } }.
+export const publishSite = (token) => call('POST', '/v1/publish', { token, body: {} });
+
 export const setSiteSettings = (token, settings) => call('POST', '/v1/settings', { token, body: settings });
 
 // KennelPort Site Manager's "get a link code" page, for Kels's linking steps: the
