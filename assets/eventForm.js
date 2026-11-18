@@ -78,7 +78,7 @@ function showSoftIssues(details, eventDate) {
 // Event per checked target (no cascade record, no stored link between them).
 // `subjectId` is unused in this mode. The single-subject path is unchanged.
 // `cascadeSelected` (ids) ticks only those at first (default: all);
-// `cascadeTitle` heads the form (the Dogs page's "Log for several dogs").
+// `cascadeTitle` heads the form (the Dogs page's "Log events for several dogs").
 
 // --- Weight-check regression guard ---------------------------------------
 // A weight_check whose value is below the dog's previous weight is a soft

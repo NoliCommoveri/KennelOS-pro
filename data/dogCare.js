@@ -23,7 +23,7 @@ export const breedingDogs = (dogs, sex = null) => (dogs || [])
   .filter((d) => isCareDog(d) && d.status === 'active_breeding' && (!sex || d.sex === sex));
 
 // The dogs she looks after, the only ones routine care (heats, preventatives,
-// Check in on my dogs, Log for several dogs, Today's reminders) ever looks at:
+// Check in on my dogs, Log events for several dogs, Today's reminders) ever looks at:
 // owned, co-owned, leased in or leased out (never External), and never an
 // External reference, Deceased or Pet home dog, archived or pedigree-only.
 export const CARE_OWNERSHIP = Object.freeze(['owned', 'co_owned', 'leased_in', 'leased_out']);

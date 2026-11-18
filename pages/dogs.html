@@ -22,13 +22,21 @@
         <p class="page-subtitle">Breeding stock, puppies, and external dogs.</p>
       </div>
       <div class="pill-row">
+        <!-- At most three buttons in view: Kels, the primary action, and More ▾ for the rest. -->
         <a class="btn" href="kels.html?task=add-dogs">✨ Add your dogs with Kels</a>
-        <a class="btn" href="kels.html?task=dog-checkin">✨ Check in on my dogs</a>
-        <button class="btn" id="btn-log-several" type="button">Log for several dogs</button>
-        <a class="btn" href="pedigree.html?view=kennel">Family tree</a>
-        <a class="btn" href="pedigree-import.html">Import pedigrees</a>
-        <a class="btn" href="dog-cards.html#receive" id="btn-dog-card" hidden>Add dogs from a card</a>
         <a class="btn btn-primary" href="dog.html?new=1">+ Add Dog</a>
+        <div class="action-menu" id="dogs-more">
+          <button class="btn" type="button" aria-haspopup="menu" aria-expanded="false">More ▾</button>
+          <div class="action-menu-list" role="menu" hidden>
+            <button type="button" role="menuitem" id="btn-log-several">Log events for several dogs</button>
+            <a role="menuitem" href="kels.html?task=dog-checkin">✨ Check in on my dogs</a>
+            <hr>
+            <a role="menuitem" href="pedigree.html?view=kennel">Family tree</a>
+            <hr>
+            <a role="menuitem" href="dog-cards.html#receive" id="btn-dog-card" hidden>Add dogs from a card</a>
+            <a role="menuitem" href="pedigree-import.html">Import pedigrees</a>
+          </div>
+        </div>
       </div>
     </div>
     <nav class="seg-tabs" id="dogs-bucket-tabs" aria-label="Dog buckets">

@@ -175,7 +175,9 @@ export function createListView(opts) {
       const isSorted = state.sortColIdx === idx;
       const sortIndicator = isSorted ? (state.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
       const sortable = c.sortable && c.sortFn;
+      // A column's className goes on its header too, so alignment matches the cells.
       const className = [
+        c.className || '',
         c.collapse ? 'col-collapse' : '',
         sortable ? 'sortable' : ''
       ].filter(Boolean).join(' ');

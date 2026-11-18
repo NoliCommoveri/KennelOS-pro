@@ -284,7 +284,13 @@ export function wireActionMenu(root) {
   const btn = root?.querySelector('button[aria-haspopup]');
   const list = root?.querySelector('.action-menu-list');
   if (!btn || !list) return;
-  const set = (open) => { list.hidden = !open; btn.setAttribute('aria-expanded', String(open)); };
+  // The list opens right-aligned under its button; when that would run off the left
+  // edge (the button wrapped to the left on a phone) it opens left-aligned instead.
+  const place = () => {
+    list.style.left = ''; list.style.right = '';
+    if (list.getBoundingClientRect().left < 8) { list.style.left = '0'; list.style.right = 'auto'; }
+  };
+  const set = (open) => { list.hidden = !open; btn.setAttribute('aria-expanded', String(open)); if (open) place(); };
   btn.addEventListener('click', (ev) => { ev.stopPropagation(); set(list.hidden); });
   list.addEventListener('click', () => set(false));
   document.addEventListener('click', (ev) => { if (!root.contains(ev.target)) set(false); });

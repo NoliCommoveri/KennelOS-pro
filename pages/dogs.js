@@ -5,7 +5,8 @@ import { editionFlags } from '../data/editionConfig.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createListView } from '../assets/listView.js';
 import { dogInScope } from '../data/kennelScope.js';
-import { badge, fmtDate, esc, param } from '../assets/ui.js';
+import { badge, fmtDate, esc, param, wireActionMenu } from '../assets/ui.js';
+import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { descriptor, SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, EVENT_TYPES, dogListOrder, dogStatusOrder, dogSexOrder } from '../data/vocab.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { openEventForm } from '../assets/eventForm.js';
@@ -31,16 +32,27 @@ function dobAscUndatedLast(a, b) {
   if (!b.date_of_birth) return -1;
   return a.date_of_birth.localeCompare(b.date_of_birth);
 }
-const dobDesc = (a, b) => (b.date_of_birth || '').localeCompare(a.date_of_birth || '');
 const nameAsc = (a, b) => (a.call_name || '').localeCompare(b.call_name || '');
 const registeredNameAsc = (a, b) => (a.registered_name || '').localeCompare(b.registered_name || '');
 const breedAsc = (a, b) => (a.breed || '').localeCompare(b.breed || '');
+const websiteFirst = (a, b) => Number(Boolean(b.show_on_website)) - Number(Boolean(a.show_on_website));
 const dispositionAsc = (a, b) => (a.disposition || '').localeCompare(b.disposition || '');
+
+// Puppies tab sections: who can still go first, then who's spoken for, the
+// open questions, the ones not sellable right now, and the keepers last. An
+// unset disposition reads as `undecided` (same as the Disposition filter).
+const PUPPY_DISPOSITION_ORDER = ['available', 'placed', 'undecided', 'health_hold', 'keeping'];
 
 const NOT_BREEDING_STATUSES = ['retired_breeding', 'pet_home', 'deceased'];
 
 const BUCKETS = {
-  puppies: { baseFilter: (d) => d.status === 'puppy', sort: dobDesc },
+  // Within each disposition section: sex, then name A→Z (dogListOrder — status is
+  // the same for every puppy).
+  puppies: {
+    baseFilter: (d) => d.status === 'puppy',
+    sort: dogListOrder,
+    groupBy: { key: (d) => d.disposition || 'undecided', groups: PUPPY_DISPOSITION_ORDER.map((v) => ({ value: v, label: descriptor(DISPOSITION, v).label })) }
+  },
   breeding: {
     baseFilter: (d) => d.status === 'active_breeding',
     sort: dobAscUndatedLast,
@@ -100,9 +112,11 @@ async function init() {
       { id: 'ownership', label: 'Ownership', options: OWNERSHIP_TYPE, match: (d, v) => d.ownership_type === v },
       { id: 'breed', label: 'Breed', options: breeds.map((b) => ({ value: b, label: b })), match: (d, v) => d.breed === v }
     ],
-    // Call name, Sex, Status, and Disposition stay visible at every width;
-    // Registered name, Breed, and DOB collapse behind the row's "more details"
-    // toggle on phones so the table never forces horizontal scroll.
+    // Call name, Sex, Status, and Website stay visible at every width;
+    // Registered name, Breed, DOB, and Disposition collapse behind the row's
+    // "more details" toggle on phones so the table never forces horizontal scroll.
+    // Website (a ✓ when the dog shows on her KennelPort website) only where the
+    // website link is offered, as on the dog page.
     columns: [
       { header: 'Call name', sortable: true, sortFn: nameAsc, cell: (d) => `<strong>${esc(d.call_name)}</strong>` },
       { header: 'Registered name', sortable: true, sortFn: registeredNameAsc, collapse: true, cell: (d) => d.registered_name ? esc(d.registered_name) : '<span class="faint">—</span>' },
@@ -111,7 +125,8 @@ async function init() {
       { header: 'Breed', sortable: true, sortFn: breedAsc, collapse: true, cell: (d) => esc(d.breed || '—') },
       { header: 'DOB', sortable: true, sortFn: dobAscUndatedLast, collapse: true, cell: (d) => d.date_of_birth ? esc(fmtDate(d.date_of_birth)) : '<span class="faint">—</span>' },
       { header: 'Status', sortable: true, sortFn: dogStatusOrder, cell: (d) => badge(DOG_STATUS, d.status) },
-      { header: 'Disposition', sortable: true, sortFn: dispositionAsc, cell: (d) => d.disposition ? badge(DISPOSITION, d.disposition) : '<span class="faint">—</span>' }
+      { header: 'Disposition', sortable: true, sortFn: dispositionAsc, collapse: true, cell: (d) => d.disposition ? esc(descriptor(DISPOSITION, d.disposition).label) : '<span class="faint">—</span>' },
+      ...(websiteLinkOffered() ? [{ header: 'Website', className: 'col-center', sortable: true, sortFn: websiteFirst, cell: (d) => d.show_on_website ? '<span title="Shown on website" aria-label="Shown on website">✓</span>' : '' }] : [])
     ],
     onRowClick: (d) => { location.href = `dog.html?id=${encodeURIComponent(d.id)}`; },
     load: (o) => dogRepo.getAll(o),
@@ -136,7 +151,7 @@ async function init() {
   });
 }
 
-// "Log for several dogs": one event form listing the dogs at home (dogCare.homeDogs),
+// "Log events for several dogs" (More ▾): one event form listing the dogs at home (dogCare.homeDogs),
 // one event saved per ticked dog (eventForm's cascade, as a litter's "Log event for
 // whole litter"). Only active breeding dogs start ticked. Today's preventatives
 // nudge opens it with ?logEvent=preventative, ticking only the active breeding
@@ -152,13 +167,14 @@ async function openLogSeveral(type = null) {
   const label = (d) => `${d.call_name || 'Unnamed'}${d.sex ? ` (${descriptor(SEX, d.sex).label[0]})` : ''}${d.status !== 'active_breeding' ? ` · ${descriptor(DOG_STATUS, d.status).label}` : ''}`;
   openEventForm({
     subjectType: 'dog',
-    cascadeTitle: 'Log for several dogs',
+    cascadeTitle: 'Log events for several dogs',
     cascadeTargets: dogs.map((d) => ({ id: d.id, label: label(d) })),
     cascadeSelected: selected,
     prefill: known ? { event_type: known } : null,
     onSaved: back
   });
 }
+wireActionMenu(document.getElementById('dogs-more'));
 document.getElementById('btn-log-several')?.addEventListener('click', () => openLogSeveral());
 // Dog Cards (Shared Dogs Plan §3): Pro only; the page itself is dropped from Lite.
 const dogCardBtn = document.getElementById('btn-dog-card');

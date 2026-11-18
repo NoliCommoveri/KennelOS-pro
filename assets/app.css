@@ -445,7 +445,7 @@ table.data tr.row-detail .dl-meta { margin: 0; }
 }
 @media (max-width: 640px) {
   table.data th.col-collapse, table.data td.col-collapse { display: none; }
-  /* Four always-visible dog-list columns (call name, sex, status, disposition)
+  /* Four always-visible dog-list columns (call name, sex, status, website)
      need tighter spacing than the desktop table, and badges need to be able
      to wrap to a second line (e.g. "External reference"), so the row never
      forces horizontal scroll. */
@@ -903,9 +903,11 @@ a.kt-loner:hover { color: var(--accent); }
   display: block; width: 100%; text-align: left; padding: 8px 10px;
   background: none; border: 0; border-radius: var(--radius-sm);
   font: inherit; color: var(--text); text-decoration: none; cursor: pointer;
+  white-space: nowrap;
 }
 .action-menu-list > a:hover, .action-menu-list > button:hover { background: var(--accent-soft); }
 .action-menu-list > hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
+.action-menu-list > [hidden] { display: none; }
 
 /* One-card-at-a-time pages (the Kennel page): a section dropdown above them. */
 .section-picker { max-width: 320px; margin-bottom: 14px; }
@@ -1091,6 +1093,7 @@ a.kt-loner:hover { color: var(--accent); }
 .range-custom[hidden] { display: none; }
 .range-custom input { padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 14px; }
 table.data td.num { white-space: nowrap; }
+table.data th.col-center, table.data td.col-center { text-align: center; }
 table.data tfoot .total-row td { font-weight: 700; background: var(--surface-2); border-top: 2px solid var(--border-strong); border-bottom: 0; }
 .print-header { display: none; }
 
