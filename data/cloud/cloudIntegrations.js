@@ -7,10 +7,12 @@
 // Only the device doing the program's server work applies (serverWork.js: the
 // BACKING device, or on a syncing program the lease holder), checked before the
 // first write, like the waitlist's family events, so two devices never apply one event twice;
-// the cursor lives on this device (settings, outside KEYS). Nothing is asked of the
-// server until the account has a connection (`connections` in the state, set by a
-// vendor's connect flow, steps 6 and 8, or by refreshConnections): an account with
-// none makes no request at all. Every entry point checks isCloudAvailable() and the
+// the cursor lives on this device (settings, outside KEYS). Events are read only
+// while the account has a connection (`connections` in the state, set by a vendor's
+// connect flow, steps 6 and 8, or by refreshConnections). A device that knows of none
+// asks once per app open (syncOnOpen), because a connection made on another device
+// (another of hers, or support's helper during an assist) never reaches this one's
+// state otherwise. Every entry point checks isCloudAvailable() and the
 // session first, so `cloudUrl: null` makes no request. Network only through cloudApi.
 import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
@@ -98,16 +100,26 @@ async function run(force) {
   return counts;
 }
 
-// Started once per page (cloudBackupUI.bootCloud): shortly after load, then every
-// INTEGRATIONS_POLL_MS while the app is in front, and when back online. Does
-// nothing at all while the account has no connection.
+// The first read on an app open: a device that knows of no connection asks the
+// server for the account's connections first (one request; none when signed out),
+// then reads events as usual. → what syncIntegrationEvents returns.
+export async function syncOnOpen() {
+  if (!offered() || !sessionToken()) return null;
+  if (!(getIntegrationsState().connections > 0)) await refreshConnections().catch(() => {});
+  return syncIntegrationEvents();
+}
+
+// Started once per page (cloudBackupUI.bootCloud): shortly after load (syncOnOpen),
+// then every INTEGRATIONS_POLL_MS while the app is in front, and when back online.
+// Past the open's one check, nothing is asked while the account has no connection.
 export function startIntegrationsScheduler({ win = globalThis } = {}) {
   if (!offered()) return () => {};
+  const visible = () => win.document?.visibilityState !== 'hidden';
   const tick = () => {
-    if (win.document?.visibilityState === 'hidden') return;
+    if (!visible()) return;
     syncIntegrationEvents().catch(() => {});
   };
-  const first = setTimeout(tick, 3000);
+  const first = setTimeout(() => { if (visible()) syncOnOpen().catch(() => {}); }, 3000);
   const every = setInterval(tick, INTEGRATIONS_POLL_MS);
   win.addEventListener?.('online', tick);
   return () => { clearTimeout(first); clearInterval(every); win.removeEventListener?.('online', tick); };

@@ -26,7 +26,8 @@ export const NOTIFY_KIND_LABELS = [
   { value: 'turn', label: 'A family picks a pup or passes on their turn' },
   { value: 'request', label: 'A family asks for something or leaves the list' },
   { value: 'ready', label: 'A family answers "Ready now?"' },
-  { value: 'server_move', label: 'A turn moves on while your phone is off' }
+  { value: 'server_move', label: 'A turn moves on while your phone is off' },
+  { value: 'contract', label: 'A contract sent for e-signature is signed, declined or expires' }
 ];
 
 const token = () => {
