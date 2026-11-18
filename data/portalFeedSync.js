@@ -125,7 +125,8 @@ export async function applyPortalFacts(kennel, portal, facts = [], { known = nul
     const born = pup?.date_of_birth || null;
     const prev = out.facts[sale.id] || {};
     const next = { ...prev };
-    // Handed over: their status page shows only Your puppy portal.
+    // Handed over: kept, but their status page goes to only Your puppy portal when
+    // the sale closes (Delivered), not on this, so pickup, extras and payments stay.
     if (f.portal_only === true && typeof f.family_id === 'string' && !out.home.includes(f.family_id)) {
       if (f.family_id === sale.buyer_contact_id && !ended) out.home.push(f.family_id);
       else refused.push({ sale_id: sale.id, what: 'portal_only', why: 'not_theirs' });

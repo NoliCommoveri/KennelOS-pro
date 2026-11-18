@@ -19,7 +19,7 @@ import { pickupFor } from './goHome.js';
 import { pickupFrom } from './familyPickup.js';
 import { saleExtraCharges } from './extraCharges.js';
 import { addDaysToYMD } from './dateUtils.js';
-import { RELEASED_SALE_STATUSES } from './vocab.js';
+import { RELEASED_SALE_STATUSES, isOpenSale } from './vocab.js';
 
 export const PORTAL_FEED_FORMAT = 1;
 // KennelPort's caps (feed.js MAX): over them it refuses the whole feed, so the
@@ -336,17 +336,15 @@ export const feedCopy = ({ feed_id: _id, sent_at: _at, ...rest }) => rest;
 
 // For one family record on her list, while her portal is on: whether their status
 // page offers the one-tap link to the portal, and whether it shows only that.
-// Their record's own sale (placed, else open), signed and not ended. → null, or
-// { family_id (their contact: the portal knows them by it), only, pickup_on }.
-// `only`: the portal took over (she marked the pup picked up: `home`), the sale is
-// Delivered, or the pickup day has passed; the server also switches on its own
-// once `pickup_on` passes.
-export function portalEntryView(entry, { sale, contracts = [], events = [], home = [], today }) {
+// Their record's own sale (placed, else open), signed and not released. → null, or
+// { family_id (their contact: the portal knows them by it), only }. `only` once
+// the sale is closed (Delivered): while it's open their page keeps its pickup,
+// extras and payments beside the portal link, even once the portal has taken them
+// over (`home`) or the pickup day has passed.
+export function portalEntryView(entry, { sale, contracts = [] }) {
   if (!entry?.contact_id || !sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) return null;
   if (sale.buyer_contact_id !== entry.contact_id || !signedContractFor(sale, contracts)) return null;
-  const pickupOn = pickupEventFor(sale, events, today)?.event_date || null;
-  const only = home.includes(entry.contact_id) || sale.status === 'delivered' || Boolean(pickupOn && pickupOn < today);
-  return { family_id: entry.contact_id, only, pickup_on: pickupOn };
+  return { family_id: entry.contact_id, only: !isOpenSale(sale) };
 }
 
 // Is her portal on for this kennel (Kennel.kennelport_portal, from the site's last

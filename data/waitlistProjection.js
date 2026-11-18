@@ -185,8 +185,8 @@ function entryView(entry, ctx) {
   const companion = companionView(entry, ctx);
   if (companion) view.companion = companion; // absent without an open sale
   // Her puppy portal (KennelPort portal plan 3.4): from their signed contract on,
-  // Open your puppy portal; once the portal has taken over, only that. Absent
-  // while her portal is off, or without a signed, live sale on this record.
+  // Open your puppy portal beside the rest; once the sale is Delivered, only that.
+  // Absent while her portal is off, or without a signed, live sale on this record.
   const portal = ctx.portalFor(entry);
   if (portal) view.portal = portal;
   // Extras they may ask for or cancel (Family Requests plan §3): names only, never
@@ -630,7 +630,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     portalFor: (entry) => {
       if (!portalOn(kennel)) return null;
       const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || familySale(entry, sales, familyOffers, live);
-      return portalEntryView(entry, { sale, contracts, events: pickupEvents, home: kennel.kennelport_portal.home || [], today });
+      return portalEntryView(entry, { sale, contracts });
     },
     pickupFor: (entry) => familyPickupView({ entry, sales, offers: familyOffers, dogsById, litters, kennel, config, entries: live, events: pickupEvents, today }),
     extrasFor: (entry) => {
