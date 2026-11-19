@@ -28,7 +28,7 @@ import { waitlistConfig, embedOrigin, EMBED_ORIGINS_MAX } from './waitlistRules.
 import { todayYMD } from './dateUtils.js';
 import { isLicenseGated, evaluateLicense } from './license.js';
 import { editionFlags } from './editionConfig.js';
-import { getCloudSession, getWebsitePublishOnSend } from './settings.js';
+import { isConfirmedHelperSession, getWebsitePublishOnSend } from './settings.js';
 import { assertWritable } from './demoMode.js';
 import { buildSiteBundle, websiteCounts, websiteGaps, bundleChanges } from './siteExport.js';
 import { redeemLinkCode, linkStatus, stopLink, sendBundle, setSiteSettings, publishSite, websiteLinkOffered, KennelportError } from './kennelportApi.js';
@@ -250,10 +250,11 @@ export class LicenseLapsedError extends Error {
 
 // Support's helper device (docs/KennelOS_Assisted_Setup_Plan.md §3) has no license
 // of its own: like the app's license gate (app.js), it runs on hers, so support can
-// Update website (and send the puppy portal's feed) while setting her up.
+// Update website (and send the puppy portal's feed) while setting her up. Only a
+// helper session the server confirmed, as at the gate (review K05-11).
 export async function licenseOk() {
   if (!isLicenseGated()) return true;
-  if (getCloudSession()?.role === 'helper') return true;
+  if (isConfirmedHelperSession()) return true;
   const { state } = await evaluateLicense();
   return state === 'valid' || state === 'grace';
 }

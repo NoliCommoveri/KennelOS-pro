@@ -6,7 +6,7 @@ import { makeRepo, nowIso, newId } from './repoBase.js';
 import { DOG_REFERENCES } from './referenceRegistry.js';
 import { todayYMD } from './dateUtils.js';
 import { enforceDogCap } from './editionConfig.js';
-import { SCOPED_OWNERSHIP, assertOwnKennel } from './kennelScope.js';
+import { SCOPED_OWNERSHIP, assertOwnKennel, PICK_KENNEL_MESSAGE } from './kennelScope.js';
 import { splitTitles } from './pedigreeParse.js';
 import { normalizeTitles } from './dogTitles.js';
 
@@ -143,7 +143,7 @@ async function validateDog(candidate, existingId = null) {
   // outside dog used by two of the user's kennels belongs to neither.
   if (SCOPED_OWNERSHIP.has(candidate.ownership_type)) {
     if (!candidate.kennel_id) {
-      throw new Error('Dog: "kennel_id" is required for a dog you own or co-own.');
+      throw new Error(PICK_KENNEL_MESSAGE);
     }
     await assertOwnKennel(candidate.kennel_id, 'Dog');
   }

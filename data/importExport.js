@@ -177,6 +177,24 @@ export function inspectBackup(obj) {
 
 // How many records this device holds now, in the tables a backup carries: what a
 // Replace would wipe (the Replace confirm names it).
+// When her newest record here was last changed (the greatest `updated_at` over
+// every data table), or null. The restore preview compares a backup's
+// `exported_at` with it (review K2-13).
+export async function newestRecordAt() {
+  let newest = null;
+  for (const table of dataTables()) {
+    for (const r of await table.toArray()) {
+      const at = typeof r.updated_at === 'string' ? r.updated_at : null;
+      if (at && (!newest || at > newest)) newest = at;
+    }
+  }
+  return newest;
+}
+
+// A backup made before her newest change here: restoring it (Replace above all)
+// would lose that change.
+export const backupIsBehind = (exportedAt, newestAt) => Boolean(exportedAt && newestAt && String(exportedAt) < String(newestAt));
+
 export async function countRecords() {
   let n = 0;
   for (const table of dataTables()) n += await table.count();

@@ -60,6 +60,32 @@ export const fileRepo = {
     return rows.map(({ blob, ...meta }) => meta);
   },
 
+  // Files nothing uses (review K2-8): no document and no expense receipt, archived
+  // ones included, names them. Left by a save that failed before the fix, or a
+  // receipt whose expense didn't save. → [{ id, filename, size, created_at }],
+  // largest first. Metadata only.
+  async unused() {
+    const used = new Set([
+      ...(await db.documents.toArray()).map((d) => d.file_id),
+      ...(await db.expenses.toArray()).map((e) => e.receipt_file_id)
+    ].filter(Boolean));
+    const rows = await fileRepo.getAllMeta();
+    return rows.filter((f) => !used.has(f.id))
+      .map(({ id, filename, size, created_at }) => ({ id, filename, size: size || 0, created_at }))
+      .sort((a, b) => b.size - a.size);
+  },
+
+  // Removes one of `unused()`'s files, after checking again that nothing names
+  // it. → true when removed.
+  async removeUnused(id) {
+    assertWritable();
+    const named = (await db.documents.filter((d) => d.file_id === id).count())
+      + (await db.expenses.filter((e) => e.receipt_file_id === id).count());
+    if (named) return false;
+    await fileRepo.remove(id);
+    return true;
+  },
+
   // Restore only — upserts a full row as-is (id, blob, mime, filename, size,
   // thumbnail, created_at).
   async putRaw(record) {

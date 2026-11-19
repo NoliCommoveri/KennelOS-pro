@@ -225,6 +225,7 @@ async function openExpenseForm({ subjectType, subjectId, expense = null, onSaved
       const saved = isEdit
         ? await expenseRepo.update(expense.id, payload)
         : await expenseRepo.create(payload);
+      await receipt.afterSave(expense?.receipt_file_id || null, receipt_file_id);
       close();
       onSaved?.(saved);
     } catch (e) {

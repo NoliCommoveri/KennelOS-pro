@@ -14,7 +14,7 @@
 // side, while the program's state allows it, approves by itself (autoApproveOnce).
 import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
-import { currentAccount, sessionToken, setHelperSession, clearAssisted, defaultDeviceLabel } from './cloudAuth.js';
+import { currentAccount, sessionToken, setHelperSession, clearAssisted, defaultDeviceLabel, isConfirmedHelper, markHelperConfirmed } from './cloudAuth.js';
 import { getCloudDeviceId } from '../settings.js';
 import { dataTables } from '../db.js';
 import { requestDeviceUnlock, pendingDeviceUnlock, waitForDeviceUnlock, listUnlockRequests, approveDeviceUnlock, cancelDeviceUnlock } from './cloudVault.js';
@@ -89,9 +89,28 @@ function requireToken() {
 }
 
 // → { role, state, label }; null when signed out or offline. Never throws.
+// A 'helper' answer is cached with the session (markHelperConfirmed) for the
+// licence gate below.
 export async function assistState() {
   if (!isCloudAvailable() || !sessionToken()) return null;
-  try { return await api.getAssistState(sessionToken()); } catch { return null; }
+  const programId = currentAccount()?.programId;
+  try {
+    const st = await api.getAssistState(sessionToken());
+    if (st?.role === 'helper') markHelperConfirmed(programId);
+    return st;
+  } catch { return null; }
+}
+
+// May the Pro licence gate let this device through as support's helper (review
+// K05-11)? Only on the server's word: a confirmed helper session is let through at
+// once; a session that only says 'helper' (one stored before the answer was kept)
+// asks GET /assist/state now. Signed out, offline, or any other answer → false,
+// and the ordinary gate decides. Never throws.
+export async function helperSkipsLicenseGate() {
+  if (!isCloudAvailable() || currentAccount()?.role !== 'helper' || !sessionToken()) return false;
+  if (isConfirmedHelper()) return true;
+  await assistState();
+  return isConfirmedHelper();
 }
 
 // Her Get help, and either side's End help.

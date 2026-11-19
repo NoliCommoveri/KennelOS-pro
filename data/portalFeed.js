@@ -33,7 +33,7 @@ export const PORTAL_KEEP_DAYS = 60;
 
 export const FEED_KEYS = ['format', 'feed_id', 'kennel_id', 'sent_at', 'families', 'vet', 'removed'];
 export const FAMILY_KEYS = ['id', 'name', 'emails', 'status_url', 'placements'];
-export const PLACEMENT_KEYS = ['id', 'puppy_id', 'puppy_name', 'contract_signed_on', 'go_home_on', 'pickup_at', 'microchip', 'registration_no', 'voided', 'health', 'extras'];
+export const PLACEMENT_KEYS = ['id', 'puppy_id', 'puppy_name', 'contract_signed_on', 'go_home_on', 'pickup_at', 'microchip', 'registration_no', 'voided', 'health', 'extras', 'vet'];
 export const VOIDED_KEYS = ['reason', 'on'];
 export const HEALTH_KEYS = ['id', 'type', 'given_on', 'name', 'notes'];
 export const EXTRA_KEYS = ['id', 'extra_id'];
@@ -139,13 +139,20 @@ export const startedEarly = (sale) => Boolean(ymd(sale?.portal_early_on));
 // archived, with a puppy and a buyer, from the signed contract on. A sale the feed
 // sent before (`known`) whose contract is no longer signed stays while the sale
 // ended (voided, cancelled, returned), so the portal hears why; otherwise it goes
-// (a contract marked signed by mistake).
+// (a contract marked signed by mistake). A Delivered sale the feed sent and she
+// has since archived **rests** (`resting`: kept, never sent again, never
+// `removed`): the family's pup went home, and tidying her sales away doesn't take
+// it from their portal (KennelPort's portal-kept-pups review).
 export function portalSales({ kennel, sales = [], contracts = [], dogsById, contactsById, known = [] }) {
   const sent = new Set(known.filter((k) => k.type === 'placement').map((k) => k.id));
   const out = [];
   for (const sale of sales) {
-    if (!sale || sale.is_archived || sale.kennel_id !== kennel.id || !sale.dog_id || !sale.buyer_contact_id) continue;
+    if (!sale || sale.kennel_id !== kennel.id || !sale.dog_id || !sale.buyer_contact_id) continue;
     if (!dogsById.get(sale.dog_id) || !contactsById.get(sale.buyer_contact_id)) continue;
+    if (sale.is_archived) {
+      if (sale.status === 'delivered' && sent.has(sale.id)) out.push({ sale, contract: signedContractFor(sale, contracts), resting: true });
+      continue;
+    }
     const contract = signedContractFor(sale, contracts);
     if (contract) out.push({ sale, contract });
     // Started early (the owner's request, 2026-11-18): she opened this family's portal
@@ -221,6 +228,25 @@ export function herVet({ kennel, contacts = [], events = [], dogsById }) {
   return Object.values(out).some(Boolean) ? assertOnlyKeys(out, VET_KEYS, 'vet') : null;
 }
 
+// The pup's own vet, for its placement (KennelPort's `placements[].vet`): the vet
+// on the pup's newest vet visit up to `until` (its Vet contact's name, phone and
+// address, else the vet typed on the visit), otherwise her vet (`fallback`,
+// herVet). → null when there's neither: the key is left out, and KennelPort keeps
+// the vet the placement already has. Never a visit's findings.
+export function placementVet(dogId, { events = [], contactsById, until, fallback = null }) {
+  const visits = events.filter((e) => e && !e.is_archived && e.subject_type === 'dog' && e.subject_id === dogId
+    && e.event_type === 'vet_visit' && ymd(e.event_date) && (!until || e.event_date <= until))
+    .sort((a, b) => newestFirst(a.event_date, b.event_date) || String(b.id).localeCompare(String(a.id)));
+  for (const e of visits) {
+    const c = e.related_contact_id ? contactsById.get(e.related_contact_id) : null;
+    const out = c && !c.is_archived
+      ? { clinic: line(c.name, 120), doctor: null, phone: line(c.phone, 40), address: line(c.address, 200) }
+      : { clinic: line(e.details?.vet, 120), doctor: null, phone: null, address: null };
+    if (Object.values(out).some(Boolean)) return assertOnlyKeys(out, VET_KEYS, 'placement vet');
+  }
+  return fallback ? assertOnlyKeys({ ...fallback }, VET_KEYS, 'placement vet') : null;
+}
+
 // A family's address, lower case: their current one only (their contact's), so
 // an address she has changed stops getting them in. Only while their contact has
 // none, the one they last applied with on her waitlist. [] when neither is one.
@@ -260,9 +286,10 @@ export function buildPortalFeed({
   const tz = kennel.time_zone || null;
   const live = portalSales({ kennel, sales, contracts, dogsById, contactsById, known });
 
+  const kennelVet = herVet({ kennel, contacts, events, dogsById });
   const byFamily = new Map();
   const now = [];
-  for (const { sale, contract, early = false } of live) {
+  for (const { sale, contract, early = false, resting = false } of live) {
     const pup = dogsById.get(sale.dog_id);
     const litter = litters.find((l) => l.id === pup.litter_id) || null;
     const pickup = pickupEventFor(sale, events, today);
@@ -272,8 +299,9 @@ export function buildPortalFeed({
     // A released sale's health stops at its end (K7-1): a returned pup's next home's
     // vet visits never reach this family.
     const health = healthOf(pup.id, events, released ? saleEndDay(sale, today) : today);
-    const keep = (!released && sale.status !== 'delivered')
-      || addDaysToYMD(lastDay(sale, contract, goHome) || today, PORTAL_KEEP_DAYS) >= today;
+    // Resting (an archived Delivered sale): stands in `now` and is never sent.
+    const keep = !resting && ((!released && sale.status !== 'delivered')
+      || addDaysToYMD(lastDay(sale, contract, goHome) || today, PORTAL_KEEP_DAYS) >= today);
     // A released placement that has aged out isn't left in the portal: it stops being
     // `now`, so it goes in `removed` (K7-1).
     if (released && !keep) continue;
@@ -291,8 +319,10 @@ export function buildPortalFeed({
       registration_no: line(pup.registration_number, 40),
       voided: voidedOf(sale, today) ? assertOnlyKeys(voidedOf(sale, today), VOIDED_KEYS, 'voided') : null,
       health,
-      extras: extrasOf(sale)
+      extras: extrasOf(sale),
+      vet: placementVet(pup.id, { events, contactsById, until: released ? saleEndDay(sale, today) : today, fallback: kennelVet })
     }, PLACEMENT_KEYS, 'placement');
+    if (!placement.vet) delete placement.vet;
     const fam = byFamily.get(sale.buyer_contact_id) || { placements: [], keep: false, newest: '' };
     const since = placement.contract_signed_on || sale.portal_early_on;
     fam.placements.push({ placement, keep, at: contract?.signed_date || since });
@@ -325,7 +355,7 @@ export function buildPortalFeed({
   const removed = known.filter((k) => !here.has(`${k.type}:${k.id}`)).slice(0, PORTAL_MAX.removed)
     .map((k) => assertOnlyKeys({ type: k.type, id: String(k.id) }, REMOVED_KEYS, 'removed'));
 
-  const vet = herVet({ kennel, contacts, events, dogsById });
+  const vet = kennelVet;
   const feed = assertOnlyKeys({
     format: PORTAL_FEED_FORMAT,
     feed_id: String(feedId || ''),

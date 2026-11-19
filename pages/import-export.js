@@ -1,7 +1,8 @@
 // import-export.js — wires the Import/Export page to the backup engine: Backup &
 // restore, Duplicates (assets/duplicateScanUI.js), CSV import, and the Danger zone. Account, kennel setup, the guided tour
 // and this device's license are on the Settings page (pages/settings.js).
-import { downloadBackup, readBackupFile, inspectBackup, restoreBackup, planFileMerge, countRecords } from '../data/importExport.js';
+import { downloadBackup, readBackupFile, inspectBackup, restoreBackup, planFileMerge, countRecords, newestRecordAt, backupIsBehind } from '../data/importExport.js';
+import { EXPORT_MAX_DAYS } from '../data/accountHealth.js';
 import { getLastBackupDate } from '../data/settings.js';
 import { getResetCounts, resetApp } from '../data/appReset.js';
 import { esc, confirmModal, selectModal } from '../assets/ui.js';
@@ -9,7 +10,7 @@ import { editionFlags, edition } from '../data/editionConfig.js';
 import { isProOnlyPage } from '../data/proPages.js';
 import { isDropboxConnected } from '../data/dropbox.js';
 import { mountDropboxConnect } from '../assets/dropboxConnectUI.js';
-import { pushToDropbox, fetchDropboxBackup } from '../data/assistantSync.js';
+import { pushToDropbox, fetchDropboxBackup, noteDropboxRestored } from '../data/assistantSync.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { downloadImportTemplate } from '../assets/importHelp.js';
 import { askSame, askClashes } from '../assets/mergeQuestions.js';
@@ -25,10 +26,16 @@ function flash(text, kind = 'ok') {
   msg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+// Older than account health's window (EXPORT_MAX_DAYS), it says so (review K2-9).
+export function lastBackupText(iso, now = Date.now()) {
+  if (!iso) return 'Never';
+  const when = new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const days = Math.floor((now - Date.parse(iso)) / 86400000);
+  return days > EXPORT_MAX_DAYS ? `${when}, ${days} days ago. Back up again.` : when;
+}
+
 function renderLastBackup() {
-  const iso = getLastBackupDate();
-  const el = document.getElementById('last-backup');
-  el.textContent = iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Never';
+  document.getElementById('last-backup').textContent = lastBackupText(getLastBackupDate());
 }
 
 // --- Backup & restore -------------------------------------------------------
@@ -56,6 +63,7 @@ const fetchBtn = document.getElementById('btn-dbx-fetch');
 const backupBtn = document.getElementById('btn-backup');
 const preview = document.getElementById('restore-preview');
 let pendingBackup = null;
+let pendingRev = null; // the Dropbox file's revision, when the preview came from Dropbox
 const cloudPane = document.getElementById('br-cloud');
 const dropboxConnect = document.getElementById('dropbox-connect');
 let mode = 'backup';                  // 'backup' | 'restore'
@@ -74,6 +82,7 @@ const BLURBS = {
 // selection it is about to read.
 function clearPending() {
   pendingBackup = null;
+  pendingRev = null;
   preview.innerHTML = '';
 }
 
@@ -117,9 +126,14 @@ function renderBackupRestore() {
 
 // The single dry-run preview, whatever the backup came from. Nothing is written
 // until Merge or Replace.
-function showRestorePreview(obj) {
+async function showRestorePreview(obj) {
   const info = inspectBackup(obj);
   pendingBackup = obj;
+  // Made before her newest change here (review K2-13): say so before she picks.
+  const newest = await newestRecordAt().catch(() => null);
+  const warnOlder = backupIsBehind(info.exported_at, newest)
+    ? `<div class="inline-warn">This backup is older than your records here: you changed something on ${esc(new Date(newest).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}, after it was made. Merge keeps your newer edits; Replace loses them.</div>`
+    : '';
   const rows = Object.entries(info.counts)
     .map(([name, n]) => `<tr><td>${esc(name)}</td><td>${n}</td></tr>`).join('');
   // A newer KennelOS may add tables; they're skipped here, never mistaken for hers.
@@ -130,6 +144,7 @@ function showRestorePreview(obj) {
     <p class="muted">Exported ${info.exported_at ? esc(new Date(info.exported_at).toLocaleString()) : 'unknown date'} (schema v${esc(info.schema_version ?? '?')}).</p>
     <table class="data" style="max-width:320px;"><thead><tr><th>Table</th><th>Rows</th></tr></thead><tbody>${rows}</tbody></table>
     ${warnUnknown}
+    ${warnOlder}
     <div class="form-actions">
       <button class="btn" id="btn-merge">Merge into current data</button>
       <button class="btn btn-danger" id="btn-replace">Replace all data</button>
@@ -157,7 +172,32 @@ async function doLocalBackup() {
 }
 
 async function doDropboxPush() {
-  const result = await pushToDropbox();
+  let result;
+  try {
+    result = await pushToDropbox();
+  } catch (e) {
+    if (e?.code !== 'dropbox_conflict') throw e;
+    // Another phone pushed since this one last pushed or restored (review K2-13).
+    const choice = await selectModal({
+      title: 'A newer backup is in Dropbox',
+      message: 'Another phone pushed a backup since this one last pushed or pulled. Pull it first to bring its changes here, or push anyway to replace it with this phone’s records.',
+      label: 'What should I do?',
+      options: [
+        { value: 'pull', label: 'Pull it first' },
+        { value: 'push', label: 'Push anyway (replace it)' }
+      ],
+      defaultValue: 'pull',
+      confirmLabel: 'Go on'
+    });
+    if (choice === 'pull') {
+      mode = 'restore';
+      document.querySelectorAll('#br-tabs .seg-tab').forEach((t) => t.classList.toggle('active', t.dataset.mode === 'restore'));
+      renderBackupRestore();
+      return doDropboxFetch();
+    }
+    if (choice !== 'push') return;
+    result = await pushToDropbox({ force: true });
+  }
   renderLastBackup(); // a push counts as a backup
   flash(`Pushed to Dropbox — full backup (${result.records} record(s)) and assistant feed (${result.dogs} dog(s), ${result.events} event(s)).`);
 }
@@ -168,7 +208,8 @@ async function doDropboxFetch() {
     flash('No backup in Dropbox yet — push from your other phone first.', 'err');
     return;
   }
-  showRestorePreview(fetched.backup);
+  await showRestorePreview(fetched.backup);
+  pendingRev = fetched.rev || null;
 }
 
 fileInput.addEventListener('change', async () => {
@@ -176,7 +217,7 @@ fileInput.addEventListener('change', async () => {
   const file = fileInput.files?.[0];
   if (!file) return;
   try {
-    showRestorePreview(await readBackupFile(file));
+    await showRestorePreview(await readBackupFile(file));
   } catch (e) {
     flash(e.message || String(e), 'err');
   }
@@ -264,6 +305,8 @@ async function doRestore(mode) {
   }
   try {
     const result = await restoreBackup(pendingBackup, mode, opts);
+    // Restored from Dropbox: this phone has seen that file, so its next push may replace it.
+    if (pendingRev) noteDropboxRestored(pendingRev);
     const total = result.reduce((n, r) => n + r.count, 0);
     flash(`Restore complete (${mode}) — ${total} record(s) loaded. Reloading…`);
     setTimeout(() => location.reload(), 1200);

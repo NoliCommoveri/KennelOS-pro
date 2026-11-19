@@ -1073,6 +1073,11 @@ export function getCachedCloudNotices() {
   } catch { return null; }
 }
 
+// A helper session the server confirmed (review K05-11; cloudAuth).
+export function isConfirmedHelperSession(s = getCloudSession()) {
+  return Boolean(s?.token && s.role === 'helper' && s.programId && s.helperConfirmedFor === s.programId);
+}
+
 export function setCloudSession(session) {
   localStorage.setItem(CLOUD_SESSION_KEY, JSON.stringify(session));
   return session;

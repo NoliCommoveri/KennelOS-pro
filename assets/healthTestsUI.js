@@ -191,9 +191,8 @@ async function testForm(chat, dog, name, tests) {
       await eventRepo.create(testEvent({ dogId: dog.id, name: n, type: t, date, result, lab, outcome: root.querySelector('#ht-outcome').value }));
       const doc = pickedDoc();
       if (doc) {
-        const { storeDocumentFile, createDocument } = await import('./documentModal.js');
-        const fileId = await storeDocumentFile(doc, { title: n });
-        await createDocument({ dog_id: dog.id, doc_type: 'health_test', title: n, doc_date: date, issuer_or_lab: lab, result, notes: '', file_id: fileId });
+        const { fileDocument } = await import('./documentModal.js');
+        await fileDocument({ dog_id: dog.id, doc_type: 'health_test', title: n, doc_date: date, issuer_or_lab: lab, result, notes: '' }, doc);
       }
       return { name: n, date, result, filed: Boolean(doc), planned: plannedKeys.has(n.toLowerCase()) };
     },

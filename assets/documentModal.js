@@ -48,22 +48,24 @@ function extraFieldsHtml(docType, existing) {
   }).join('');
 }
 
-// Store the picked file(s): a PDF as-is, photo(s) built into one small PDF.
-// `pending`: { kind: 'pdf' | 'photo', files: File[] }. → the stored file's id.
-export async function storeDocumentFile(pending, { title = '' } = {}) {
+// The picked file(s), ready to store: a PDF as-is, photo(s) built into one small
+// PDF. `pending`: { kind: 'pdf' | 'photo', files: File[] } → { blob, filename, thumbnail }.
+export async function buildDocumentFile(pending, { title = '' } = {}) {
   if (pending.kind === 'pdf') {
     const f = pending.files[0];
-    return fileRepo.create(f, { filename: f.name, thumbnail: '' });
+    return { blob: f, filename: f.name, thumbnail: '' };
   }
-  const built = await photosToPdf(pending.files, { title });
-  return fileRepo.create(built.blob, { filename: built.filename, thumbnail: built.thumbnail });
+  return photosToPdf(pending.files, { title });
 }
 
-// File a new document. Kennel scope (Multi-Kennel Scope Spec §6): it files under
-// the kennel of the dog it belongs to. Also Kels's Add dogs (guidedDogsUI.js).
-export async function createDocument(payload) {
+// File a new document with its picked file(s), in one write: nothing is stored
+// when it can't be filed (review K2-8). Kennel scope (Multi-Kennel Scope Spec §6):
+// it files under the kennel of the dog it belongs to. Also Kels's Add dogs
+// (guidedDogsUI.js) and the vet visit form (careVisitUI.js).
+export async function fileDocument(payload, pending) {
+  const file = await buildDocumentFile(pending, { title: payload.title || payload.doc_type });
   const kennel_id = await resolveKennelIdForWrite({ inheritFrom: await dogRepo.getById(payload.dog_id) });
-  return documentRepo.create({ ...payload, kennel_id });
+  return documentRepo.createWithFile({ ...payload, kennel_id }, file);
 }
 
 // Open the add/edit document modal.
@@ -228,16 +230,9 @@ export function openDocumentModal({
       try {
         if (!dogId) throw new Error('Choose a dog first.');
 
-        let fileId = existing?.file_id || null;
-        if (pendingFiles) {
-          fileId = await storeDocumentFile(pendingFiles, { title: title || docType });
-          if (isEdit && existing.file_id && existing.file_id !== fileId) {
-            await fileRepo.remove(existing.file_id);
-          }
-        }
-        if (!fileId) throw new Error('Choose a PDF or photo(s) first.');
+        if (!pendingFiles && !existing?.file_id) throw new Error('Choose a PDF or photo(s) first.');
 
-        const payload = { dog_id: dogId, doc_type: docType, title, doc_date: docDate, notes, file_id: fileId, ...extras };
+        const payload = { dog_id: dogId, doc_type: docType, title, doc_date: docDate, notes, ...extras };
         const shareBox = modal.querySelector('#doc-furever');
         if (shareBox) payload.furever_shareable = shareBox.checked;
         // Stamp the contract back-link only when this modal was opened FROM a
@@ -246,9 +241,12 @@ export function openDocumentModal({
         // had, so re-editing a linked document never drops its link.
         if (contractId != null) payload.contract_id = contractId;
 
+        // The file is stored with the document, in one write (review K2-8).
         let doc;
-        if (isEdit) doc = await documentRepo.update(existing.id, payload);
-        else doc = await createDocument(payload);
+        if (isEdit) {
+          const file = pendingFiles ? await buildDocumentFile(pendingFiles, { title: title || docType }) : null;
+          doc = await documentRepo.updateWithFile(existing.id, payload, file);
+        } else doc = await fileDocument(payload, pendingFiles);
 
         close();
         onSaved?.({ isEdit, doc });

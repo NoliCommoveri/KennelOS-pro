@@ -25,7 +25,6 @@ import { db } from './db.js';
 import { dogRepo, dogName } from './dogRepo.js';
 import { contactRepo } from './contactRepo.js';
 import { documentRepo } from './documentRepo.js';
-import { fileRepo } from './fileRepo.js';
 import { resolveKennelIdForWrite } from './kennelScope.js';
 import { normReg, nameKey, dogRegKeys, dogNameKeys, registrationsConflict, dogRegistrationNumbers } from './dogSearch.js';
 import { originSuggestions } from './pedigreeParse.js';
@@ -434,9 +433,9 @@ export async function commitImport(plan, { storeFiles = [], breeders = [] } = {}
       const subject = plan.rows.find((r) => r.subjectOf.includes(sf.fileId));
       const kennel_id = await resolveKennelIdForWrite({ inheritFrom: await dogRepo.getById(dogId) }) || sf.kennelId || null;
       if (!kennel_id) throw new Error('choose which of your kennels to file it under');
-      const fileId = await fileRepo.create(sf.blob, { filename: sf.filename });
-      await documentRepo.create({ dog_id: dogId, doc_type: 'pedigree', title: 'Pedigree', file_id: fileId, kennel_id,
-        registry: subject?.registry || '', registration_number: subject?.registration_number || '' });
+      // The file and its document in one write: a refused one stores nothing (review K2-8).
+      await documentRepo.createWithFile({ dog_id: dogId, doc_type: 'pedigree', title: 'Pedigree', kennel_id,
+        registry: subject?.registry || '', registration_number: subject?.registration_number || '' }, { blob: sf.blob, filename: sf.filename });
     } catch (e) {
       fileErrors.push(`${sf.filename}: ${e.message || e}`);
     }

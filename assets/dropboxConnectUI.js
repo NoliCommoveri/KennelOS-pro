@@ -17,7 +17,7 @@
 // app** (a one-time developer step; see the End-State guide §26).
 import { esc, confirmModal } from './ui.js';
 import {
-  isDropboxConnected, beginDropboxAuth, completeDropboxAuth, disconnectDropbox
+  isDropboxConnected, beginDropboxAuth, completeDropboxAuth, disconnectDropbox, DROPBOX_CHANGED_EVENT
 } from '../data/dropbox.js';
 
 // Mount the control into `host` and finish any in-flight OAuth redirect.
@@ -76,6 +76,9 @@ export async function mountDropboxConnect(host, { onChange, onError } = {}) {
   }
   render();
   if (justConnected) onChange?.(true);
+  // An expired or revoked connection forgets itself (dropbox.js, review K2-9):
+  // the control says not connected and offers Connect again.
+  globalThis.addEventListener?.(DROPBOX_CHANGED_EVENT, () => { render(); onChange?.(isDropboxConnected()); });
   return render;
 }
 

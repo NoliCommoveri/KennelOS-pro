@@ -21,7 +21,7 @@
 // the cross-table work; pages call these functions, never the pieces.
 import { db } from './db.js';
 import { exportAll, inspectBackup } from './importExport.js';
-import { dropboxUploadJson, dropboxDownloadJson, DROPBOX_PATHS } from './dropbox.js';
+import { dropboxUploadJson, dropboxDownloadJson, dropboxDownloadWithRev, rememberRev, DROPBOX_PATHS } from './dropbox.js';
 import { setLastBackupDate, setAssistantFeedPushedAt, markDataChanged, getAssistantImportedIds, addAssistantImportedIds } from './settings.js';
 import { assertWritable } from './demoMode.js';
 import { EVENT_TYPES, ASSISTANT_EVENT_TYPES, descriptor } from './vocab.js';
@@ -93,9 +93,12 @@ export async function pushAssistantFeed() {
 // Push both owner-written files in one act: the full backup (for the second
 // phone) and the freshly rebuilt assistant feed (so the kid's app is never
 // stale relative to the last push). Counts as a backup for the reminder date.
-export async function pushToDropbox() {
+// The backup is guarded (review K2-13): when another phone pushed since this one
+// last pushed or restored, it throws DropboxConflictError and nothing is sent;
+// `{ force: true }` (her "Push anyway") replaces it.
+export async function pushToDropbox({ force = false } = {}) {
   const backup = await exportAll();
-  await dropboxUploadJson(DROPBOX_PATHS.backup, backup);
+  await dropboxUploadJson(DROPBOX_PATHS.backup, backup, { guard: true, force });
   const feed = await pushAssistantFeed();
   setLastBackupDate(backup.exported_at);
   const records = Object.values(backup.collections).reduce((n, rows) => n + rows.length, 0);
@@ -106,10 +109,16 @@ export async function pushToDropbox() {
 // to show in its restore preview (the same dry-run a file restore gets — the
 // page then calls restoreBackup() itself in merge or replace mode), or null when
 // nothing has ever been pushed.
+// `rev` is the file's revision: once she restores from it, noteDropboxRestored
+// lets this phone's next push replace it.
 export async function fetchDropboxBackup() {
-  const backup = await dropboxDownloadJson(DROPBOX_PATHS.backup);
-  if (!backup) return null;
-  return { backup, info: inspectBackup(backup) };
+  const got = await dropboxDownloadWithRev(DROPBOX_PATHS.backup);
+  if (!got?.obj) return null;
+  return { backup: got.obj, info: inspectBackup(got.obj), rev: got.rev };
+}
+
+export function noteDropboxRestored(rev) {
+  rememberRev(DROPBOX_PATHS.backup, rev);
 }
 
 // --- Assistant outbox ------------------------------------------------------

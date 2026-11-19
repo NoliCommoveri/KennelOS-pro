@@ -10,7 +10,7 @@ import * as api from './cloudApi.js';
 import { isCloudAvailable } from './cloudConfig.js';
 import {
   getCloudSession, setCloudSession, clearCloudSession, getCloudDeviceId, setCloudDeviceId,
-  updateCloudBackupState, updateCloudSyncState
+  updateCloudBackupState, updateCloudSyncState, isConfirmedHelperSession
 } from '../settings.js';
 import { clearSyncMeta } from './syncState.js';
 import { clearLostVersions } from './syncLost.js';
@@ -68,14 +68,23 @@ export async function verifySignIn(email, code, { deviceLabel = defaultDeviceLab
 }
 
 // Support's device, signed in to her account through an assist link (cloudAssist.js).
-// The session shows her label in place of an email.
+// The session shows her label in place of an email. `helperConfirmedFor`: the
+// program the server said this session helps (review K05-11).
 export function setHelperSession(res, { deviceLabel = null } = {}) {
   setCloudDeviceId(res.deviceId);
   updateCloudBackupState({ enabled: false, lastSnapshotId: null, lastCounts: null, lastContentHash: null, lastError: null, vault: null });
   return setCloudSession({
     token: res.token, email: null, programId: res.programId, deviceId: res.deviceId, deviceLabel,
-    role: 'helper', helperLabel: res.label || null
+    role: 'helper', helperLabel: res.label || null, helperConfirmedFor: res.programId
   });
+}
+
+export const isConfirmedHelper = () => isConfirmedHelperSession();
+
+// The server answered that this session is a helper on `programId`.
+export function markHelperConfirmed(programId) {
+  const s = getCloudSession();
+  if (s?.role === 'helper' && programId && s.programId === programId) setCloudSession({ ...s, helperConfirmedFor: programId });
 }
 
 // Her takeover is done: her later sign-ins are ordinary.

@@ -49,10 +49,10 @@ export function isFureverShareable(doc, publishedIds = new Set()) {
   return publishedIds.has(doc.id);
 }
 
-function validateDocument(candidate) {
+function validateDocument(candidate, { needFile = true } = {}) {
   if (!candidate.dog_id) throw new Error('Document: a dog is required.');
   if (!candidate.doc_type) throw new Error('Document: a document type is required.');
-  if (!candidate.file_id) throw new Error('Document: a file is required.');
+  if (needFile && !candidate.file_id) throw new Error('Document: a file is required.');
 }
 
 function normalize(data) {
@@ -97,6 +97,34 @@ export const documentRepo = {
     const merged = normalize({ ...existing, ...changes });
     validateDocument(merged);
     return base.update(id, merged);
+  },
+
+  // A new document with its file ({ blob, filename, thumbnail }, built first):
+  // checked, then both written in one transaction, so a failure stores no file (K2-8).
+  async createWithFile(data, file) {
+    const norm = normalize(data);
+    validateDocument(norm, { needFile: false });
+    if (!file?.blob) throw new Error('Choose a PDF or photo(s) first.');
+    await assertOwnKennel(norm.kennel_id, 'Document');
+    return db.transaction('rw', db.files, db.documents, async () => {
+      const file_id = await fileRepo.create(file.blob, { filename: file.filename, thumbnail: file.thumbnail });
+      return base.create({ ...norm, file_id });
+    });
+  },
+
+  // An edit, with a new file when given: new file, update and the old file's
+  // removal in one transaction.
+  async updateWithFile(id, changes, file = null) {
+    if (!file?.blob) return documentRepo.update(id, changes);
+    const existing = await db.documents.get(id);
+    if (!existing) throw new Error(`documents: no record with id ${id}`);
+    validateDocument(normalize({ ...existing, ...changes }), { needFile: false });
+    return db.transaction('rw', db.files, db.documents, async () => {
+      const file_id = await fileRepo.create(file.blob, { filename: file.filename, thumbnail: file.thumbnail });
+      const doc = await documentRepo.update(id, { ...changes, file_id });
+      if (existing.file_id && existing.file_id !== file_id) await fileRepo.remove(existing.file_id);
+      return doc;
+    });
   },
 
   // The reverse query powering the grouped list and the dog detail panel.

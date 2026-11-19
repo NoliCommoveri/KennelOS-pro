@@ -7,7 +7,10 @@
 // and the other is deleted. "Not the same" is remembered on this device (nudge ledger, `dup:`;
 // for dogs and contacts the tidy-up's key too). Nothing changes until she merges.
 // Two waitlist families open the waitlist's own merge (assets/applicationMergeUI.js).
-import { esc, fmtDate } from './ui.js';
+// The same scan lists **Files nothing uses** (fileRepo.unused, review K2-8): stored
+// PDFs no document or receipt names, each with its size and a Remove.
+import { esc, fmtDate, confirmModal } from './ui.js';
+import { fileRepo } from '../data/fileRepo.js';
 import { renderUpgradeNudge } from './upgradeNudge.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { scanTables, RECORD_WORDS, dismissKeys } from '../data/duplicateScan.js';
@@ -19,6 +22,21 @@ const plural = (n, [one, many]) => `${n} ${n === 1 ? one : many}`;
 const listWords = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 const pretty = (s) => { const t = String(s).replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
 const isDismissedPair = (f) => dismissKeys(f).some((k) => isDismissed(k));
+export const fileSize = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+
+// The "Files nothing uses" part of the results. `files`: fileRepo.unused().
+export function unusedFilesHtml(files) {
+  if (!files.length) return '';
+  const total = files.reduce((n, f) => n + f.size, 0);
+  return `<div class="dup-files" style="border-top:1px solid var(--border); padding-top:10px; margin-top:10px;">
+    <p style="margin:0 0 4px;"><strong>${plural(files.length, ['file nothing uses', 'files nothing uses'])}</strong> (${esc(fileSize(total))})</p>
+    <p class="muted" style="margin:0 0 6px;">Stored PDFs that no document or receipt points at, left by a save that didn’t finish. They take space on this device and in every backup.</p>
+    ${files.map((f) => `<div class="row-between" style="padding:4px 0; gap:8px;">
+      <span>${esc(f.filename || 'Unnamed file')} · ${esc(fileSize(f.size))}${f.created_at ? ` · stored ${esc(fmtDate(String(f.created_at).slice(0, 10)))}` : ''}</span>
+      <button class="btn btn-sm" type="button" data-unused-file="${esc(f.id)}">Remove</button>
+    </div>`).join('')}
+  </div>`;
+}
 
 // What the card says it looks through, from the tables this edition has.
 export function duplicatesBlurb(flags = editionFlags) {
@@ -53,6 +71,7 @@ export function mountDuplicateScan(root, { flash = () => {} } = {}) {
   let names = namer({});
   let rows = {};
   let findings = [];
+  let unusedFiles = [];
 
   const describe = (table, r) => {
     const text = describeRecord(table, r, names.nameOf) || 'No details';
@@ -77,7 +96,11 @@ export function mountDuplicateScan(root, { flash = () => {} } = {}) {
     btn.disabled = true;
     btn.textContent = 'Scanning…';
     try {
-      const res = await scanForDuplicates({ flags: editionFlags, dismissed: isDismissedPair });
+      const [res, files] = await Promise.all([
+        scanForDuplicates({ flags: editionFlags, dismissed: isDismissedPair }),
+        fileRepo.unused()
+      ]);
+      unusedFiles = files;
       rows = res.rows;
       names = namer(rows);
       findings = res.findings;
@@ -92,7 +115,7 @@ export function mountDuplicateScan(root, { flash = () => {} } = {}) {
 
   function render() {
     if (!findings.length) {
-      out.innerHTML = '<p class="muted">No duplicates found. Your records are nice and tidy.</p>';
+      out.innerHTML = `<p class="muted">No duplicates found. Your records are nice and tidy.</p>${unusedFilesHtml(unusedFiles)}`;
       return;
     }
     const counts = new Map();
@@ -111,10 +134,24 @@ export function mountDuplicateScan(root, { flash = () => {} } = {}) {
           <button class="btn btn-primary" type="button" data-merge="${i}">Merge…</button>
           <button class="btn" type="button" data-notsame="${i}">Not the same</button>
         </div>`;
-      }).join('')}`;
+      }).join('')}${unusedFilesHtml(unusedFiles)}`;
   }
 
   out.addEventListener('click', async (e) => {
+    const uf = e.target.closest('[data-unused-file]');
+    if (uf) {
+      const f = unusedFiles.find((x) => x.id === uf.dataset.unusedFile);
+      if (!f || !(await confirmModal({ title: 'Remove this file?', message: `${f.filename || 'This file'} (${fileSize(f.size)}) is deleted from this device. Nothing points at it. This can’t be undone.`, confirmLabel: 'Remove', danger: true }))) return;
+      try {
+        const removed = await fileRepo.removeUnused(f.id);
+        unusedFiles = unusedFiles.filter((x) => x !== f);
+        render();
+        flash(removed ? 'Removed.' : 'Something uses that file now, so I kept it.');
+      } catch (err) {
+        flash(`I couldn't remove it: ${err.message || String(err)}`, 'err');
+      }
+      return;
+    }
     const m = e.target.closest('[data-merge]');
     const n = e.target.closest('[data-notsame]');
     if (n) {

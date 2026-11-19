@@ -118,7 +118,7 @@ export const readContactFields = (root, prefix) => ({
 // Why her vet belongs in her contacts, and how to name one: the tidy-up's "no vet"
 // finding and Add people's vet question say it the same way.
 // A document's file in a chat form: a PDF, or photos of the pages (taken or
-// chosen; documentModal.storeDocumentFile turns them into one PDF). Add dogs'
+// chosen; documentModal.buildDocumentFile turns them into one PDF). Add dogs'
 // documents and Log health test results' certificate. `wireFilePicker` returns a
 // getter for what she picked: { kind: 'pdf' | 'photo', files } or null.
 export const filePicker = (prefix, { label = 'The file', hint = 'Nothing chosen yet.' } = {}) => `

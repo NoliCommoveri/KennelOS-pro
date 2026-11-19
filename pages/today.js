@@ -565,7 +565,8 @@ async function main() {
   if (editionFlags.websiteLink && !isReadOnly()) {
     const websiteEl = document.getElementById('today-website');
     drawCachedWebsiteCard(websiteEl);
-    import('../assets/websiteBanner.js').then((m) => m.startWebsiteBanner({ el: websiteEl })).catch(() => {});
+    import('../assets/websiteBanner.js').then((m) => m.startWebsiteBanner({ el: websiteEl }))
+      .catch((e) => import('../assets/appShell.js').then((m) => m.moduleFailed(e)).catch(() => {}));
   }
   // Under the top cards just drawn, so they don't push it down (Load Performance plan Phase 1).
   const loading = document.getElementById('today-loading');

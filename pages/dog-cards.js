@@ -172,6 +172,24 @@ async function makeCard() {
 
 // --- Receive -------------------------------------------------------------------
 
+// Ancestors that may be ones she typed in by hand (review K2-10): each with the
+// same picker the dogs sent get. Left on "Add as new", it's added like the rest.
+function ancestorLookalikesHtml(ancestors) {
+  if (!ancestors?.candidates?.length) return '';
+  const n = ancestors.candidates.length;
+  return `<div class="card" style="margin-top:10px;">
+    <p style="margin-top:0;"><strong>${n} ancestor${n === 1 ? ' looks' : 's look'} like ${n === 1 ? 'one' : 'ones'} you already have</strong></p>
+    <p class="field-hint" style="margin-top:0;">Same name, but yours has no registration number, so I can't be sure. Pick yours to link them, or add as new.</p>
+    ${ancestors.candidates.map(({ cardDog, candidates }) => `<div class="row-between" style="padding:4px 0;">
+      <span>${esc(cardDog.registeredName)}${cardDog.registrationNumber ? ` <span class="faint">${esc([cardDog.registry, cardDog.registrationNumber].filter(Boolean).join(' '))}</span>` : ''}</span>
+      <select data-ancestor="${esc(cardDog.publicId)}">
+        <option value="">Add as new</option>
+        ${candidates.map((c) => `<option value="link:${esc(c.id)}">Same as my ${esc(c.registered_name || dogName(c))}</option>`).join('')}
+      </select>
+    </div>`).join('')}
+  </div>`;
+}
+
 function renderPaste(prefill = '') {
   receiveEl.innerHTML = `
     <p class="field-hint" style="margin-top:0;">Paste the card link or code another breeder sent you, or open the file. Nothing is saved until you've seen exactly what it would do.</p>
@@ -282,7 +300,8 @@ async function preview(raw) {
         <td>${esc(d.problem ? 'Left out' : ACTION_TEXT[d.action])}${changeText(d) ? `<br><span class="faint">${esc(changeText(d))}</span>` : ''}${d.candidates.length ? '<br><span class="faint">You may already have this dog: pick it to link them.</span>' : ''}</td>
         <td>${rowChoice(d)}</td>
       </tr>`).join('')}</tbody></table></div>
-    <p class="field-hint">${p.ancestors.total ? `${p.ancestors.total} ancestor${p.ancestors.total === 1 ? '' : 's'}: ${p.ancestors.added} added for pedigrees, ${p.ancestors.matched} you already have.` : 'No ancestors on this card.'} An update sets only what the card carries: names, sex, breed, dates, colour, registrations, microchip, photos link, COI, titles, country, and tests and titles. Your notes, plans, ownership, kennel, co-owners and who a dog lives with are never changed.</p>
+    ${ancestorLookalikesHtml(p.ancestors)}
+    <p class="field-hint">${p.ancestors.total ? `${p.ancestors.total} ancestor${p.ancestors.total === 1 ? '' : 's'}: ${p.ancestors.added} added for pedigrees, ${p.ancestors.matched} you already have${p.ancestors.lookalike ? `, ${p.ancestors.lookalike} ${p.ancestors.lookalike === 1 ? 'looks' : 'look'} like one you already have (above)` : ''}.` : 'No ancestors on this card.'} An update sets only what the card carries: names, sex, breed, dates, colour, registrations, microchip, photos link, COI, titles, country, and tests and titles. Your notes, plans, ownership, kennel, co-owners and who a dog lives with are never changed.</p>
     <div id="r-error"></div>
     <div class="form-actions">
       <button class="btn btn-primary" type="button" id="r-apply">${anyNew ? 'Add the dogs' : 'Update the dogs'}</button>
@@ -316,8 +335,13 @@ async function preview(raw) {
         livesWith: receiveEl.querySelector(`select[data-lives="${CSS.escape(pid)}"]`)?.value || 'them'
       };
     }
+    const ancestorPicks = {};
+    for (const s of receiveEl.querySelectorAll('select[data-ancestor]')) {
+      if (s.value.startsWith('link:')) ancestorPicks[s.dataset.ancestor] = { linkToId: s.value.slice(5) };
+    }
     try {
       const r = await applyDogCard(card, {
+        ancestors: ancestorPicks,
         fromLinkToId: receiveEl.querySelector('input[name="r-kennel-link"]:checked')?.value || null,
         holding: receiveEl.querySelector('input[name="r-holding"]:checked')?.value || 'co_owned',
         contactId: contactSel?.value || null,
@@ -328,6 +352,7 @@ async function preview(raw) {
       const parts = [
         r.created && `${r.created} added`, r.linked && `${r.linked} linked to yours`, r.updated && `${r.updated} updated`, r.kept && `${r.kept} kept as yours`,
         r.unchanged && `${r.unchanged} already up to date`, r.ancestorsAdded && `${r.ancestorsAdded} ancestor${r.ancestorsAdded === 1 ? '' : 's'} added`,
+        r.ancestorsLinked && `${r.ancestorsLinked} ancestor${r.ancestorsLinked === 1 ? '' : 's'} linked to yours`,
         (r.eventsAdded || r.eventsUpdated) && `${r.eventsAdded + r.eventsUpdated} tests and titles`
       ].filter(Boolean);
       receiveEl.innerHTML = `<div class="card"><p style="margin-top:0;"><strong>Done.</strong> From ${esc(r.kennel.kennel_name)}: ${esc(parts.join(', ') || 'nothing to change')}.</p>

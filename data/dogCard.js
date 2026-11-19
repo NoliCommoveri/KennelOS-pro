@@ -34,6 +34,7 @@ import { normalizeTitles } from './dogTitles.js';
 import { descriptor, EVENT_TYPES } from './vocab.js';
 import { db, dataTables } from './db.js';
 import { todayYMD } from './dateUtils.js';
+import { nameKey } from './dogSearch.js';
 
 export const DOG_CARD_VERSION = 1;
 export const DOG_CARD_PARAM = 'dogcard';
@@ -225,8 +226,10 @@ export function normalizeDogCardInput(input) {
   return at === -1 ? raw : raw.slice(at + DOG_CARD_PARAM.length + 2);
 }
 
-// Decompress → parse → rebuild by name. Unknown keys are dropped (a later version's
-// card still reads), anything malformed throws a DogCardError, never half-applies.
+// Decompress → parse → rebuild by name. Unknown keys are dropped (an additive
+// change still reads), anything malformed throws a DogCardError, never half-applies.
+// A card from a newer card version is refused, the way a newer backup is
+// (inspectBackup): it may mean something this build would read wrongly (review K2-14).
 export function decodeDogCard(input) {
   const payload = normalizeDogCardInput(input);
   if (!payload) throw new DogCardError(BAD_CARD);
@@ -235,6 +238,10 @@ export function decodeDogCard(input) {
     parsed = JSON.parse(decompressFromEncodedURIComponent(payload) || '');
   } catch {
     throw new DogCardError(BAD_CARD);
+  }
+  const version = Number(parsed?.cardVersion);
+  if (Number.isFinite(version) && version > DOG_CARD_VERSION) {
+    throw new DogCardError(`This Dog Card was made by a newer version of KennelOS (card v${version}; this app understands up to v${DOG_CARD_VERSION}). Update the app, then open the card again.`);
   }
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.kennels) || !Array.isArray(parsed.dogs)) {
     throw new DogCardError(isPublicId(parsed?.publicId)
@@ -337,6 +344,16 @@ function lookalikes(cardDog, all) {
   return call ? free.filter((d) => lower(d.call_name) === call && d.sex === cardDog.sex && lower(d.breed) === lower(cardDog.breed)) : [];
 }
 
+// An ancestor that may be one she typed in by hand (review K2-10): a dog of hers
+// with no public id and no registration number whose registered name is the
+// card's once titles, case and spacing are set aside ("Ashvale  Granite" for
+// "CH Ashvale Granite"). Offered for her to link, never matched automatically.
+function ancestorLookalikes(cardDog, all) {
+  const key = nameKey(cardDog.registeredName);
+  if (!key) return [];
+  return all.filter((d) => !d.public_id && !d.is_archived && !text(d.registration_number) && nameKey(d.registered_name) === key);
+}
+
 // An ancestor's automatic match: the same registry and registration number, both given.
 const sameRegistration = (cardDog, d) => !d.public_id && text(cardDog.registry) && text(cardDog.registrationNumber)
   && lower(d.registry) === lower(cardDog.registry) && lower(d.registration_number) === lower(cardDog.registrationNumber);
@@ -376,7 +393,10 @@ function eventPatch(e, have) {
 //     problem (cardDogProblem: left out), mineNewer (update rows: start on Keep mine) }
 //     action 'create' | 'update' | 'unchanged' | 'adopt' (she has it as a pedigree-only
 //     ancestor, from an earlier card; it becomes one of her dogs).
-//   ancestors: { total, added, matched }.
+//   ancestors: { total, added, matched, lookalike, candidates }: `lookalike` counts
+//     ancestors that may be one of hers (ancestorLookalikes), apart from `added`;
+//     `candidates` lists them, [{ cardDog, candidates }], for her to link
+//     (choices.ancestors). Unlinked, each is added like any other.
 export async function previewDogCard(card) {
   const from = await previewKennelCard(asKennelCard(fromKennelOf(card)));
   const all = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
@@ -404,11 +424,12 @@ export async function previewDogCard(card) {
     dogs.push({ cardDog, action, existing, changes, candidates: [], events, problem, mineNewer: action === 'update' && mineIsNewer(existing, card) });
   }
 
-  const ancestors = { total: 0, added: 0, matched: 0 };
+  const ancestors = { total: 0, added: 0, matched: 0, lookalike: 0, candidates: [] };
   for (const cardDog of card.dogs.filter((d) => !d.sent)) {
     ancestors.total++;
-    if (byPublicId.has(cardDog.publicId) || all.some((d) => sameRegistration(cardDog, d))) ancestors.matched++;
-    else ancestors.added++;
+    if (byPublicId.has(cardDog.publicId) || all.some((d) => sameRegistration(cardDog, d))) { ancestors.matched++; continue; }
+    const candidates = cardDogProblem(cardDog) ? [] : ancestorLookalikes(cardDog, all);
+    if (candidates.length) { ancestors.lookalike++; ancestors.candidates.push({ cardDog, candidates }); } else ancestors.added++;
   }
   return { from, dogs, ancestors };
 }
@@ -424,8 +445,10 @@ export async function previewDogCard(card) {
 //   kennelId      — her own kennel the co-owned dogs go in
 //   dogs          — { [publicId]: { linkToId, livesWith: 'them' | 'me', skip } }; `skip`
 //                   leaves a dog out, a new one or an update ("Keep mine", K2-6)
+//   ancestors     — { [publicId]: { linkToId } }: an ancestor she says is one of the
+//                   lookalikes the preview offered (K2-10); it fills only her blanks
 // → { kennel, contact, created, updated, linked, unchanged, kept, ancestorsAdded,
-//     eventsAdded, eventsUpdated, leftOut: [problem] }
+//     ancestorsLinked, eventsAdded, eventsUpdated, leftOut: [problem] }
 // Every write is in one transaction (K2-5): a failure part-way leaves nothing, so a
 // retry never adds a second contact or half the dogs. A dog the repo would refuse
 // (cardDogProblem) is left out and named, and the rest goes in.
@@ -475,7 +498,7 @@ async function applyPreview(card, preview, choices) {
   const all = await dogRepo.getAll({ includeArchived: true, includePedigreeOnly: true });
   const local = new Map(); // public id → local dog id
   for (const d of all) if (d.public_id) local.set(d.public_id, d.id);
-  const result = { kennel: fromKennel, contact, created: 0, updated: 0, linked: 0, unchanged: 0, kept: 0, ancestorsAdded: 0, eventsAdded: 0, eventsUpdated: 0, leftOut: [] };
+  const result = { kennel: fromKennel, contact, created: 0, updated: 0, linked: 0, unchanged: 0, kept: 0, ancestorsAdded: 0, ancestorsLinked: 0, eventsAdded: 0, eventsUpdated: 0, leftOut: [] };
 
   const cardFields = (cardDog) => {
     const out = {};
@@ -499,12 +522,19 @@ async function applyPreview(card, preview, choices) {
 
   // Ancestors first, so the dogs sent find their parents; each as its own pedigree-only
   // dog unless she has it already (by public id, or the same registry and number).
+  const offered = new Map(preview.ancestors.candidates.map((a) => [a.cardDog.publicId, a.candidates]));
   for (const cardDog of card.dogs.filter((d) => !d.sent)) {
     const byId = local.get(cardDog.publicId);
-    const existing = byId ? all.find((d) => d.id === byId) : all.find((d) => sameRegistration(cardDog, d));
+    const linkTo = choices.ancestors?.[cardDog.publicId]?.linkToId || null;
+    // Only to a lookalike the preview offered, still unlinked here.
+    const picked = !byId && linkTo && (offered.get(cardDog.publicId) || []).some((d) => d.id === linkTo)
+      ? all.find((d) => d.id === linkTo && !d.public_id) : null;
+    if (linkTo && !byId && !picked) throw new DogCardError('That dog is already linked to another card, or is no longer on this device.');
+    const existing = byId ? all.find((d) => d.id === byId) : picked || all.find((d) => sameRegistration(cardDog, d));
     if (existing) {
       await updateFrom(cardDog, existing, { onlyBlank: !byId });
       local.set(cardDog.publicId, existing.id);
+      if (picked) result.ancestorsLinked++;
     } else if (cardDogProblem(cardDog)) {
       // An ancestor the repo would refuse: not added (its pup just has no parent here).
       continue;

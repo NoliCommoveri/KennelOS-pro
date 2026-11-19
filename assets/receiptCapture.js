@@ -52,8 +52,12 @@ export function buildReceiptField(p, { currentFile } = {}) {
 
 // Wires the field built above inside `modal`. Returns:
 //   resolveFileId(existingFileId) — call at save time; returns the file_id to
-//     store (unchanged, newly built, or null if removed), cleaning up any
-//     replaced/removed file in fileRepo as it goes.
+//     store (unchanged, newly built, or null if removed). Removes nothing.
+//   afterSave(existingFileId, savedFileId) — call once the expense is saved:
+//     removes the replaced or removed file. Called only after the save, so a
+//     failed save never leaves the expense pointing at a file that's gone
+//     (review K2-8); a new file from a failed save is listed by Import / Export's
+//     Files nothing uses.
 export function wireReceiptField(modal, p, { currentFile } = {}) {
   // Camera and library are two SEPARATE inputs (not one input with `capture`)
   // because `capture` forces a direct camera launch with no gallery option on
@@ -161,10 +165,7 @@ export function wireReceiptField(modal, p, { currentFile } = {}) {
 
   return {
     async resolveFileId(existingFileId) {
-      if (removeCurrent) {
-        if (existingFileId) await fileRepo.remove(existingFileId);
-        return null;
-      }
+      if (removeCurrent) return null;
       if (!pending) return existingFileId || null;
       let fileId;
       if (pending.kind === 'pdf') {
@@ -174,8 +175,10 @@ export function wireReceiptField(modal, p, { currentFile } = {}) {
         const built = await photosToPdf(pending.files, { title: 'receipt' });
         fileId = await fileRepo.create(built.blob, { filename: built.filename, thumbnail: built.thumbnail });
       }
-      if (existingFileId && existingFileId !== fileId) await fileRepo.remove(existingFileId);
       return fileId;
+    },
+    async afterSave(existingFileId, savedFileId) {
+      if (existingFileId && existingFileId !== savedFileId) await fileRepo.remove(existingFileId);
     }
   };
 }

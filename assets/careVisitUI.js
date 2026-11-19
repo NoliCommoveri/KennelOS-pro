@@ -128,10 +128,9 @@ async function stepsForm(chat, dogs, ticked, today, who, docType) {
         const doc = docType ? pickedDoc() : null;
         if (doc) {
           const vet = vetId ? (await contactRepo.getById(vetId))?.name || '' : '';
-          const { storeDocumentFile, createDocument } = await import('./documentModal.js');
+          const { fileDocument } = await import('./documentModal.js');
           for (const e of events) {
-            const fileId = await storeDocumentFile(doc, { title: e.title });
-            await createDocument({ dog_id: e.subject_id, doc_type: docType, title: e.title, doc_date: e.event_date, issuer_or_lab: vet, notes: '', file_id: fileId });
+            await fileDocument({ dog_id: e.subject_id, doc_type: docType, title: e.title, doc_date: e.event_date, issuer_or_lab: vet, notes: '' }, doc);
           }
           filed = true;
         }

@@ -128,9 +128,10 @@ export { isUnplacedExpenseOf };
 // the rule — and its wording — can only be changed in one place.
 //
 // `entity` is the human label used in the thrown message ('Litter', 'Sale', …),
-// matching each repo's existing validation style.
+// matching each repo's existing validation style. No kennel says what to do (K2-8).
+export const PICK_KENNEL_MESSAGE = 'Pick one of your kennels at the top first, then save again.';
 export async function assertOwnKennel(kennelId, entity) {
-  if (!kennelId) throw new Error(`${entity}: "kennel_id" is required.`);
+  if (!kennelId) throw new Error(PICK_KENNEL_MESSAGE);
   const kennel = await kennelRepo.getById(kennelId);
   if (!kennel) throw new Error(`${entity}: kennel_id does not match any kennel.`);
   if (!kennel.is_own_kennel) {

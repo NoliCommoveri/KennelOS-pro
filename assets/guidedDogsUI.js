@@ -693,7 +693,7 @@ class DogsConversation extends StepConversation {
       { label: 'Not now', value: 'no' }
     ]);
     if (go !== 'yes') return;
-    const { storeDocumentFile, createDocument } = await import('./documentModal.js');
+    const { fileDocument } = await import('./documentModal.js');
     let dog = dogs.length === 1 ? dogs[0] : null;
     for (;;) {
       if (!dog) {
@@ -705,7 +705,7 @@ class DogsConversation extends StepConversation {
         if (!id) return;
         dog = dogs.find((d) => d.id === id);
       }
-      const filed = await this.documentForm(dog, { storeDocumentFile, createDocument });
+      const filed = await this.documentForm(dog, { fileDocument });
       if (filed) await this.chat.say(`Filed on ${esc(dogName(dog))}'s page. ✓`, { typing: 500 });
       const next = await this.chat.choose([
         { label: `Another for ${dogName(dog)}`, value: 'same', primary: true },
@@ -717,7 +717,7 @@ class DogsConversation extends StepConversation {
     }
   }
 
-  async documentForm(dog, { storeDocumentFile, createDocument }) {
+  async documentForm(dog, { fileDocument }) {
     let pending = () => null;
     const extraField = { issuer_or_lab: 'Registry, vet or lab', result: 'Result', registry: 'Registry', registration_number: 'Registration number' };
     const extrasHtml = (type) => documentFieldsFor(type).map((f) => field(`${extraField[f]} (optional)`, input(`gd-doc-${f}`, f === 'registration_number' && type === 'registration' ? dog.registration_number : ''))).join('');
@@ -741,8 +741,7 @@ class DogsConversation extends StepConversation {
         const docType = val(root, 'gd-doc-type');
         const title = val(root, 'gd-doc-title');
         const extras = Object.fromEntries(documentFieldsFor(docType).map((f) => [f, val(root, `gd-doc-${f}`)]));
-        const fileId = await storeDocumentFile(pending(), { title: title || docType });
-        await createDocument({ dog_id: dog.id, doc_type: docType, title, doc_date: val(root, 'gd-doc-date'), notes: '', file_id: fileId, ...extras });
+        await fileDocument({ dog_id: dog.id, doc_type: docType, title, doc_date: val(root, 'gd-doc-date'), notes: '', ...extras }, pending());
         return { docType, title };
       },
       reply: (r) => `${descriptor(DOC_TYPES, r.docType).label}${r.title ? `: ${r.title}` : ''}`

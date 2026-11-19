@@ -49,6 +49,31 @@ function dropboxRedirectUri() {
   return location.origin + location.pathname;
 }
 
+// Fired on the window when the connection ends by itself (an expired or revoked
+// grant), so every Dropbox control on the page redraws as not connected.
+export const DROPBOX_CHANGED_EVENT = 'kennelos:dropboxchanged';
+
+// Her Dropbox connection was revoked or expired (review K2-9): the tokens are
+// forgotten, and she connects again.
+export class DropboxExpiredError extends Error {
+  constructor() {
+    super('Your Dropbox connection has expired. Connect again.');
+    this.name = 'DropboxExpiredError';
+    this.code = 'dropbox_expired';
+  }
+}
+
+// A guarded upload found a different file than the one this device last pushed
+// or pulled (review K2-13): another phone pushed since.
+export class DropboxConflictError extends Error {
+  constructor(path) {
+    super('A newer backup is already in Dropbox. Pull it first, or push anyway.');
+    this.name = 'DropboxConflictError';
+    this.code = 'dropbox_conflict';
+    this.path = path;
+  }
+}
+
 export function isDropboxConnected() {
   const s = getDropboxSettings();
   return Boolean(s.refreshToken);
@@ -139,10 +164,17 @@ async function tokenRequest(fields) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = body.error_description || body.error || `HTTP ${res.status}`;
-    throw new Error(`Dropbox sign-in failed: ${detail}`);
+    const err = new Error(`Dropbox sign-in failed: ${detail}`);
+    err.status = res.status;
+    err.oauthError = body.error || null;
+    throw err;
   }
   return body;
 }
+
+// A refresh grant Dropbox won't honour any more: the app was removed from her
+// Dropbox's connected apps, or the grant expired.
+export const isExpiredGrant = (e) => e?.oauthError === 'invalid_grant' || e?.status === 400 || e?.status === 401;
 
 // A valid short-lived access token, minting a fresh one from the refresh token
 // when the cached one is missing/expired.
@@ -154,11 +186,19 @@ async function getAccessToken({ force = false } = {}) {
   if (!force && s.accessToken && s.accessTokenExpiresAt && Date.now() < s.accessTokenExpiresAt) {
     return s.accessToken;
   }
-  const tokens = await tokenRequest({
-    grant_type: 'refresh_token',
-    refresh_token: s.refreshToken,
-    client_id: APP_KEY
-  });
+  let tokens;
+  try {
+    tokens = await tokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: s.refreshToken,
+      client_id: APP_KEY
+    });
+  } catch (e) {
+    if (!isExpiredGrant(e)) throw e;
+    disconnectDropbox();
+    try { globalThis.dispatchEvent?.(new Event(DROPBOX_CHANGED_EVENT)); } catch { /* no window */ }
+    throw new DropboxExpiredError();
+  }
   setDropboxSettings({
     accessToken: tokens.access_token,
     accessTokenExpiresAt: Date.now() + (tokens.expires_in - 60) * 1000
@@ -191,22 +231,51 @@ async function contentCall(endpoint, apiArg, body) {
   return res;
 }
 
+// The file's revision as this device last pushed it or restored from it, per path
+// (settings `revs`). A guarded upload sends it, so Dropbox refuses to replace a
+// file another phone pushed since (review K2-13). A pull counts only once she
+// restores from it (assistantSync.noteDropboxRestored), not on a preview.
+export const knownRev = (path) => getDropboxSettings().revs?.[path] || null;
+export function rememberRev(path, rev) {
+  if (!rev) return;
+  setDropboxSettings({ revs: { ...(getDropboxSettings().revs || {}), [path]: rev } });
+}
+
+// The upload mode: overwrite unless `guard`; guarded, an update of the known
+// revision, or an add when this device has never seen the file (both fail with
+// a conflict when the file there is a different one). `force` overwrites.
+export function uploadMode(path, { guard = false, force = false } = {}) {
+  if (!guard || force) return 'overwrite';
+  const rev = knownRev(path);
+  return rev ? { '.tag': 'update', update: rev } : 'add';
+}
+
 // Store `obj` as pretty-printed JSON at `path` (relative to the app folder,
-// e.g. '/kennelos-backup.json'), overwriting whatever is there.
-export async function dropboxUploadJson(path, obj) {
+// e.g. '/kennelos-backup.json'). Unguarded it overwrites whatever is there;
+// `{ guard: true }` throws DropboxConflictError when another device replaced the
+// file since this one last saw it (`force: true` overwrites anyway).
+export async function dropboxUploadJson(path, obj, { guard = false, force = false } = {}) {
   const res = await contentCall('upload',
-    { path, mode: 'overwrite', mute: true },
+    { path, mode: uploadMode(path, { guard, force }), autorename: false, mute: true },
     JSON.stringify(obj, null, 2));
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (res.status === 409 && text.includes('conflict')) throw new DropboxConflictError(path);
     throw new Error(`Dropbox upload of ${path} failed: ${summarize(res, text)}`);
   }
-  return res.json();
+  const meta = await res.json();
+  rememberRev(path, meta?.rev);
+  return meta;
 }
 
 // Fetch and parse the JSON file at `path`. Returns null when the file simply
 // doesn't exist yet (nothing has been pushed) — every other failure throws.
 export async function dropboxDownloadJson(path) {
+  return (await dropboxDownloadWithRev(path))?.obj ?? null;
+}
+
+// The same, with the file's revision: → { obj, rev } | null.
+export async function dropboxDownloadWithRev(path) {
   const res = await contentCall('download', { path });
   if (res.status === 409) {
     const text = await res.text().catch(() => '');
@@ -218,8 +287,12 @@ export async function dropboxDownloadJson(path) {
     throw new Error(`Dropbox download of ${path} failed: ${summarize(res, text)}`);
   }
   const text = await res.text();
+  let rev = null;
   try {
-    return JSON.parse(text);
+    rev = JSON.parse(res.headers?.get?.('Dropbox-API-Result') || 'null')?.rev || null;
+  } catch { /* no metadata header: the next guarded push asks */ }
+  try {
+    return { obj: JSON.parse(text), rev };
   } catch {
     throw new Error(`The file at ${path} in Dropbox is not valid JSON.`);
   }

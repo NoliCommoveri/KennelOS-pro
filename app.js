@@ -8,7 +8,7 @@ import {
   db, requestPersistentStorage, isDbUpgradeBlocked,
   DB_BLOCKED_EVENT, DB_READY_EVENT, DB_VERSIONCHANGE_EVENT
 } from './data/db.js';
-import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft, getGuidedDogsDraft, getGuidedPeopleDraft, getGuidedFormDraft, getCloudSession, getWebsiteStripCache, getWebsiteLaterFor, getCachedCloudNotices } from './data/settings.js';
+import { wasPersistRequested, markPersistRequested, getGuidedLitterDraft, getGuidedDogsDraft, getGuidedPeopleDraft, getGuidedFormDraft, getCloudSession, getWebsiteStripCache, getWebsiteLaterFor, getCachedCloudNotices, CLOUD_DATA_CHANGED_EVENT } from './data/settings.js';
 import { renderAssistButton } from './assets/kelsChat.js';
 import { expenseRepo } from './data/expenseRepo.js';
 import { studServiceRepo } from './data/studServiceRepo.js';
@@ -30,10 +30,18 @@ function renderKelsButton() {
   renderAssistButton({ pending });
 }
 
-async function firstRunPersistence() {
-  if (wasPersistRequested()) return;
-  markPersistRequested(); // record the attempt so we only prompt once
-  await requestPersistentStorage();
+// The shell's watchers (assets/appShell.js), loaded lazily.
+const appShell = () => import('./assets/appShell.js');
+const moduleFailed = (e) => { appShell().then((m) => m.moduleFailed(e)).catch(() => {}); };
+
+// Durable storage, once there's something to keep; not in the Demo or the tour.
+function firstRunPersistence() {
+  if (isReadOnly()) return;
+  appShell().then((m) => m.askPersistenceWhenKept({
+    asked: wasPersistRequested, markAsked: markPersistRequested, request: requestPersistentStorage,
+    hasRecords: async () => (await db.kennels.count()) > 0 || (await db.dogs.count()) > 0,
+    eventName: CLOUD_DATA_CHANGED_EVENT
+  })).catch(() => {});
 }
 
 // Registered against this module's own URL (not the page's) so it resolves to
@@ -44,6 +52,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const swUrl = new URL('./sw.js', import.meta.url);
   navigator.serviceWorker.register(swUrl, { scope: new URL('./', import.meta.url) });
+  appShell().then((m) => m.watchForUpdates()).catch(() => {});
 }
 
 // First run shows the onboarding Welcome card (Start my kennel → New Kennel, Take
@@ -176,6 +185,18 @@ window.addEventListener(DB_VERSIONCHANGE_EVENT, () => {
 const isHelperDevice = () => getCloudSession()?.role === 'helper';
 const assistUI = () => import('./assets/cloudAssistUI.js');
 
+// The license gate skips only for a helper the server confirmed (review K05-11);
+// anything else fails closed to the ordinary gate.
+async function helperSkipsGate() {
+  if (!isCloudAvailable() || !isHelperDevice()) return false;
+  try {
+    return await (await import('./data/cloud/cloudAssist.js')).helperSkipsLicenseGate();
+  } catch (e) {
+    console.warn('KennelOS: helper check', e);
+    return false;
+  }
+}
+
 async function boot() {
   // The nav first, in every edition and before any wait (Load Performance plan
   // Phase 1): its space is reserved in app.css, so drawing it moves nothing, and
@@ -209,7 +230,7 @@ async function boot() {
   // lapsed past the grace window) returns false and boot stops. Active only in
   // the Pro edition (isLicenseGated) — Lite is free and Demo is a public
   // showcase, so this is a no-op there.
-  if (isLicenseGated() && !isHelperDevice()) {
+  if (isLicenseGated() && !(await helperSkipsGate())) {
     let licensed = false;
     try {
       licensed = await ensureLicensed();
@@ -273,22 +294,22 @@ async function boot() {
   // Her own Stripe links (Integrations plan §4): her device asks Stripe whether an
   // open one-use link was paid, at most every 15 minutes. Pro (Accounts) only.
   if (editionFlags.accounts) {
-    import('./data/stripeLinks.js').then((m) => m.bootStripeCheck()).catch(() => {});
+    import('./data/stripeLinks.js').then((m) => m.bootStripeCheck()).catch(moduleFailed);
     // Connect Jotform is retired (Integrations plan D27): any Jotform API key this
     // device still holds is deleted.
-    import('./data/jotformKeyStore.js').then((m) => m.forgetJotformKeys()).catch(() => {});
+    import('./data/jotformKeyStore.js').then((m) => m.forgetJotformKeys()).catch(moduleFailed);
   }
   // Her puppy portal on KennelPort (End-State guide §35.1): the family feed goes by
   // itself from a device linked to a website whose portal is on. Nothing loads
   // a request without a link.
   if (editionFlags.websiteLink && !isReadOnly()) {
-    import('./data/portalFeedSync.js').then((m) => m.startPortalFeed()).catch(() => {});
+    import('./data/portalFeedSync.js').then((m) => m.startPortalFeed()).catch(moduleFailed);
     // Changes her website shows, not sent yet: a strip under the nav with Send now
     // (Today shows it as a card of its own, today.js). Drawn above from the last
     // compare; loaded now so its buttons work, and it compares again only when
     // records changed (D7).
     if (!isTodayPage()) {
-      import('./assets/websiteBanner.js').then((m) => m.startWebsiteBanner()).catch(() => {});
+      import('./assets/websiteBanner.js').then((m) => m.startWebsiteBanner()).catch(moduleFailed);
     }
   }
   // Her waitlist closed dates more than 7 days past drop off by themselves. And a
@@ -303,7 +324,7 @@ async function boot() {
         busy: () => Boolean(document.querySelector('.modal-overlay')),
         onEnded: (r) => import('./assets/waitlistUI.js').then((ui) => ui.reportEmptiedTurns(r))
       });
-    }).catch(() => {});
+    }).catch(moduleFailed);
   }
   firstRunFlow().finally(() => {
     if (!isCloudAvailable()) return;
