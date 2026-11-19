@@ -45,7 +45,7 @@ import { pickupFor, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE } from './goHome
 import { eventRepo } from './eventRepo.js';
 import { kennelChargeList, kennelChargeGroups, chargeFromPriceList, saleExtraCharges } from './extraCharges.js';
 import { expectedPricing } from './saleDefaults.js';
-import { todayYMD, kennelToday, kennelNow } from './dateUtils.js';
+import { todayYMD, kennelToday, kennelNow, addDaysToYMD } from './dateUtils.js';
 import { applicationMergeBlocker, applicationMergeChanges } from './applicationDuplicates.js';
 import { replaceAndDelete, mergeDuplicate, mergeBlocker } from './recordMerge.js';
 import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
@@ -372,7 +372,8 @@ export const withdraw = atomic(async function withdraw(entryId, { date, moveOn =
 // "Ready now?" (Spec §16.7). Yes: the hold is over. No: a new date and a required
 // reason, which becomes a pause request she approves or declines (the reason
 // rides it, like a pause note). `by`: 'family' (their status page) or 'breeder'.
-export const recordReadyAnswer = atomic(async function recordReadyAnswer(entryId, { answer, until = null, reason = '', date, by = 'breeder' } = {}) {
+// `free` (her Free Changes setting allowed the pause): paused at once, no request.
+export const recordReadyAnswer = atomic(async function recordReadyAnswer(entryId, { answer, until = null, reason = '', date, by = 'breeder', free = false } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   requireStatus(entry, ['active'], 'answer the ready check for');
@@ -381,6 +382,11 @@ export const recordReadyAnswer = atomic(async function recordReadyAnswer(entryId
   const why = String(reason || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(until || '')) || until <= date) throw new Error('Not ready yet needs a date after today.');
   if (!why) throw new Error('Not ready yet needs a reason.');
+  if (free) {
+    return waitlistEntryRepo.update(entryId, {
+      ready_check: { answer: 'no', answered_date: date, until, reason: why, by }, paused_until: until, pause_reason: why
+    });
+  }
   return waitlistEntryRepo.update(entryId, {
     ready_check: { answer: 'no', answered_date: date, until, reason: why, by },
     pause_request: { requested_date: date, until, note: why, from_ready_check: true }
@@ -1634,16 +1640,21 @@ export const applyFamilyPlan = atomic(async function applyFamilyPlan(entryId, pl
       case 'unprepass': await removePrepass(entryId, plan.target); break;
       case 'withdraw': result = await withdraw(entryId, { date, moveOn: plan.moveOn !== false }); break;
       case 'pause_request': await waitlistEntryRepo.update(entryId, { pause_request: plan.request }); break;
-      case 'ready': await recordReadyAnswer(entryId, { answer: plan.answer, until: plan.until, reason: plan.reason, date, by: 'family' }); break;
+      case 'ready': await recordReadyAnswer(entryId, { answer: plan.answer, until: plan.until, reason: plan.reason, date, by: 'family', free: plan.free === true }); break;
       case 'listen_request': await waitlistEntryRepo.update(entryId, { listen_change_request: plan.request }); break;
       case 'pref_request': await waitlistEntryRepo.update(entryId, { pref_change_request: plan.request }); break;
+      // Free changes (Free Changes plan §4): her settings let these apply without her OK.
+      case 'pause_apply': await applyFreePause(entryId, { until: plan.until, note: plan.note }); break;
+      case 'unpause_request': await waitlistEntryRepo.update(entryId, { unpause_request: plan.request }); break;
+      case 'unpause_apply': await endPauseEarly(entryId, { date }); break;
+      case 'listen_apply': await waitlistEntryRepo.update(entryId, plan.changes); break;
+      case 'pref_apply': await applyFreePrefChange(entryId, { changes: plan.changes, request: plan.request, date }); break;
       case 'companion_request': await waitlistEntryRepo.update(entryId, { companion_request: plan.request }); break;
       case 'extra_request': await addExtraRequest(entryId, plan.request); break;
       case 'pickup_request': await addPickupRequest(entryId, plan.request); break;
       // Unmeasured (the map service was down): left for her device to measure (K8-5).
       case 'home_location': await setHomeLocation(entryId, { place: plan.place, miles: plan.miles, date: Number.isFinite(plan.miles) ? date : null }); break;
       case 'back_out_request': await waitlistEntryRepo.update(entryId, { back_out_request: plan.request }); break;
-      case 'listen_apply': await waitlistEntryRepo.update(entryId, plan.changes); break;
       case 'note': case 'skip': break;
       default: throw new Error(`Unknown plan "${plan.op}".`);
     }
@@ -1672,6 +1683,50 @@ export const declinePauseRequest = atomic(async function declinePauseRequest(ent
   return waitlistEntryRepo.update(entryId, { pause_request: decided(loadPending(entry, 'pause_request', 'pause'), 'declined', date) });
 });
 
+// Free changes (Free Changes plan §4, §5): what a family changed on their status
+// page that her settings let apply without her OK.
+async function applyFreePause(entryId, { until, note = '' }) {
+  const entry = await load(entryId);
+  requireStatus(entry, ['active'], 'pause');
+  return waitlistEntryRepo.update(entryId, { paused_until: until, pause_reason: note || entry.pause_reason || '' });
+}
+
+// Their own pause ends: paused until yesterday, so today they're back in line.
+async function endPauseEarly(entryId, { date }) {
+  const entry = await load(entryId);
+  requireStatus(entry, ['active'], 'end the pause of');
+  if (!entry.paused_until || entry.paused_until < date) return entry;
+  return waitlistEntryRepo.update(entryId, { paused_until: addDaysToYMD(date, -1) });
+}
+
+// Their answers that apply now, logged as theirs (`by: 'family'`); the rest, if
+// any, become their one waiting request (it replaces an older one, as a new
+// request from their page always does).
+async function applyFreePrefChange(entryId, { changes, request = null, date }) {
+  const entry = await load(entryId);
+  const lines = prefChangeLines(entry, changes, { date, by: 'family' });
+  return waitlistEntryRepo.update(entryId, {
+    ...changes,
+    pref_change_log: [...(entry.pref_change_log || []), ...lines],
+    ...(request ? { pref_change_request: request } : {})
+  });
+}
+
+// Ending a pause early, asked for (Free Changes plan §5): approving ends it today.
+export const approveUnpauseRequest = atomic(async function approveUnpauseRequest(entryId, { date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  const req = loadPending(entry, 'unpause_request', 'end-pause');
+  const still = entry.paused_until && entry.paused_until >= date;
+  return waitlistEntryRepo.update(entryId, { ...(still ? { paused_until: addDaysToYMD(date, -1) } : {}), unpause_request: decided(req, 'approved', date) });
+});
+
+export const declineUnpauseRequest = atomic(async function declineUnpauseRequest(entryId, { date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  return waitlistEntryRepo.update(entryId, { unpause_request: decided(loadPending(entry, 'unpause_request', 'end-pause'), 'declined', date) });
+});
+
 // A change to their matching answers (Spec §15.9). Approving applies it and logs
 // it `by: 'request'`; declining logs what they asked for with `declined: true`.
 // Neither closes an open offer.
@@ -1698,7 +1753,8 @@ export const declinePrefChange = atomic(async function declinePrefChange(entryId
   });
 });
 
-// A narrower listen-only change they asked for (Spec §15.7 item 6).
+// A listen-only change they asked for, wider or narrower (Spec §15.7 item 6).
+// Back to All keeps their earlier picks on the entry.
 export const approveListenChange = atomic(async function approveListenChange(entryId, { date } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);

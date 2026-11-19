@@ -61,6 +61,8 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   pass_reasons: null, // her reasons for a pass (Spec §16.5); null = DEFAULT_PASS_REASONS
   pass_other: true, // also offer "Other" with a short text box (Q33)
   show_upcoming: null, // pairings and early litters online (Spec §16.4); null = all off, see showUpcoming
+  family_changes: null, // which status-page changes apply without her OK, before / after pups are born (Free Changes plan); null = none, see familyChanges
+  unpause_allowed: false, // families may ask to end their pause early (Free Changes plan §5)
   online_since: null, // the day her list last went online (set by the Online list card); the ready check starts there
   ready_no_answer: 'keep_paused', // "Ready now?" unanswered (Spec §16.7): WAITLIST_READY_NO_ANSWER
   ready_answer_days: 14, // remove_after: days to answer; keep_paused: when Today flags them
@@ -251,6 +253,56 @@ export function showUpcoming(config) {
   return Object.fromEntries(UPCOMING_STAGES.map(({ value }) => [value, {
     public: stored[value]?.public === true, family: stored[value]?.family === true
   }]));
+}
+
+// --- Free changes (docs/KennelOS_Family_Free_Changes_Plan.md) --------------------
+
+// The changes a family makes on their status page that she can let apply without
+// her OK, each set apart for before pups are born and after.
+export const FAMILY_CHANGE_KINDS = Object.freeze([
+  { value: 'pref_sex', label: 'Sex' },
+  { value: 'pref_breed', label: 'Breed' },
+  { value: 'pref_purposes', label: 'Looking for' },
+  { value: 'pref_colors', label: 'Colors' },
+  { value: 'ready_timing', label: 'Ready to buy' },
+  { value: 'listen', label: 'Parents' },
+  { value: 'pause', label: 'Pausing their place' },
+  { value: 'unpause', label: 'Ending a pause early' }
+]);
+
+// → { pref_sex: { before, after }, …, unpause: {…} }, all booleans (true = applies
+// without her OK in that phase). Anything but `true` is false, today's behaviour.
+export function familyChanges(config) {
+  const stored = config && typeof config.family_changes === 'object' && config.family_changes ? config.family_changes : {};
+  return Object.fromEntries(FAMILY_CHANGE_KINDS.map(({ value }) => [value, {
+    before: stored[value]?.before === true, after: stored[value]?.after === true
+  }]));
+}
+
+// The litter statuses that mean pups are on the ground: born and not yet closed.
+export const PUPS_ON_GROUND_STATUSES = Object.freeze(['whelped', 'weaning', 'ready', 'sold']);
+
+// Pups on the ground for this kennel: any live litter of it born and not yet
+// closed. A litter kept off the waitlist (waitlist_off) doesn't count: nothing on
+// it is offered through the list (plan Q2). `litters`: an array or a Map.
+export function pupsOnGround(litters, kennelId) {
+  const list = litters instanceof Map ? [...litters.values()] : (litters || []);
+  return list.some((l) => l && !l.is_archived && !l.waitlist_off && l.kennel_id === kennelId && PUPS_ON_GROUND_STATUSES.includes(l.status));
+}
+// 'before' (no pups on the ground) or 'after'.
+export const changePhase = (litters, kennelId) => (pupsOnGround(litters, kennelId) ? 'after' : 'before');
+
+// Which changes this family may make without her OK right now: her settings for
+// the phase, `after` whatever the litters say while they hold an open turn (the
+// safety net), and ending a pause early only where she offers it at all.
+// → { pref_sex: bool, …, listen, pause, unpause }
+export function freeChanges(entry, { config = WAITLIST_CONFIG_DEFAULTS, phase = 'after', offers = [] } = {}) {
+  const openTurn = offers.some((o) => !o.is_archived && o.entry_id === entry.id && o.outcome === 'open');
+  const at = openTurn ? 'after' : phase;
+  const grid = familyChanges(config);
+  const out = Object.fromEntries(FAMILY_CHANGE_KINDS.map(({ value }) => [value, grid[value][at]]));
+  if (!config.unpause_allowed) out.unpause = false;
+  return out;
 }
 
 // The effective config for a kennel record (or null/undefined → all defaults).

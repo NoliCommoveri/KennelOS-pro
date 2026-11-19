@@ -38,7 +38,7 @@ import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
 import { MILEAGE_BASIS } from '../data/transportFee.js';
 import { backOutReasons, backOutPolicy, BACK_OUT_OUTCOMES, BACK_OUT_POLICY_TEXT_DEFAULT } from '../data/backOut.js';
-import { waitlistConfig, waitlistConfigProblem, openDays, closedDates, liveClosedDates, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, EXTRAS_INTRO_OLD_DEFAULT, FEATURED_LABEL_DEFAULT, FEATURED_LABEL_MAX, passReasons, showUpcoming, UPCOMING_STAGES, TURN_HOURS_MAX, timeLabel, HALF_HOURS, STATUS_POPUP_DEFAULTS, STATUS_POPUP_MAX, statusPopupTexts } from '../data/waitlistRules.js';
+import { waitlistConfig, waitlistConfigProblem, openDays, closedDates, liveClosedDates, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, EXTRAS_INTRO_OLD_DEFAULT, FEATURED_LABEL_DEFAULT, FEATURED_LABEL_MAX, passReasons, showUpcoming, UPCOMING_STAGES, TURN_HOURS_MAX, timeLabel, HALF_HOURS, STATUS_POPUP_DEFAULTS, STATUS_POPUP_MAX, statusPopupTexts, FAMILY_CHANGE_KINDS, familyChanges, changePhase } from '../data/waitlistRules.js';
 import { waitlistPolicies, validatePolicies, newPolicy, POLICY_LIMITS } from '../data/waitlistForm.js';
 import { policyStarters, policyHint, basisChanges } from '../data/waitlistPolicies.js';
 import { qaListHtml, wireQaList } from '../assets/qaListEditor.js';
@@ -543,6 +543,7 @@ ${group('passing', 'Passing & readiness', online ? 'Reasons families give, and "
           <label class="check-inline" style="margin-top:6px;"><input id="wl-pass-other" type="checkbox"${c.pass_other !== false ? ' checked' : ''}> Also offer "Other", with a box for their own words</label>
         </div>
 ${online ? readySettings(c) : ''}`)}
+${online ? group('changes', 'Family changes', 'Changes families make on their status page without your OK', familyChangesSettings(c)) : ''}
       ${group('public', 'Public list & family pages', online ? 'Paused families, program icons, upcoming litters, parents\' health tests, Facebook, extras' : 'Paused families and program icons on the public list', `
         <div class="field field-wide">
           <label class="check-inline"><input id="wl-show-paused" type="checkbox"${c.public_show_paused ? ' checked' : ''}> Show paused families on the public list</label>
@@ -561,6 +562,27 @@ ${online ? statusPopupSettings(c) + emailTemplateSettings(c) : ''}`)}
       ${online ? group('backout', 'Backing out', 'Reasons, your deposit policy, what families read', backOutSettings(c)) : ''}
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
     </section>`;
+}
+
+// Which status-page changes apply without her OK (docs/KennelOS_Family_Free_Changes_Plan.md):
+// one checkbox per change for before pups are born and after. The phase line is
+// filled in once her litters are read (wireConfig).
+function familyChangesSettings(c) {
+  const grid = familyChanges(c);
+  const kinds = FAMILY_CHANGE_KINDS.filter((k) => k.value !== 'pref_colors' || c.color_matching);
+  const when = { before: 'before pups are born', after: 'after pups are born' };
+  const box = (kind, phase) => `<input type="checkbox" data-wl-change="${esc(kind.value)}:${phase}"${grid[kind.value][phase] ? ' checked' : ''}${kind.value === 'unpause' && !c.unpause_allowed ? ' disabled' : ''} aria-label="Auto-approve ${esc(kind.label.toLowerCase())} ${when[phase]}">`;
+  return `<div class="field field-wide">
+      <label>Allow auto-approval of changes to the following preferences:</label>
+      <table class="table" style="width:auto;">
+        <thead><tr><th></th><th style="text-align:center;">Before pups are born</th><th style="text-align:center;">After pups are born</th></tr></thead>
+        <tbody>${kinds.map((k) => `<tr${k.value === 'unpause' ? ' data-wl-unpause-row' : ''}><td>${esc(k.label)}</td><td style="text-align:center;">${box(k, 'before')}</td><td style="text-align:center;">${box(k, 'after')}</td></tr>`).join('')}</tbody>
+      </table>
+      <label class="check-inline" style="margin-top:6px;"><input id="wl-unpause-allowed" type="checkbox"${c.unpause_allowed ? ' checked' : ''}> Let families ask to end a pause early</label>
+      <span class="field-hint">Ticked: the change applies as soon as your device next updates, and shows in the family's activity and answer history; your email digest lists it, with no app alert. Unticked: it waits for your Approve, as now. Pups are born while any litter is Whelped, Weaning, Ready or Sold (litters kept off the waitlist don't count); a family whose turn is open always follows the After column.</span>
+      <div class="inline-warn" data-wl-change-warn${Object.values(grid).some((g) => g.after) ? '' : ' hidden'}>After pups are born, a family could change an answer to skip their turn without it counting as a pass.</div>
+      <p class="field-hint" id="wl-change-phase"></p>
+    </div>`;
 }
 
 // What shows online before picks open (Waitlist Spec §16.4): three stages, each
@@ -831,6 +853,16 @@ async function onSaveWaitlist() {
   }
   if (q('#wl-parent-tests')) waitlist_config.parent_tests = q('#wl-parent-tests').value;
   if (q('#wl-parent-pedigree')) waitlist_config.parent_pedigree = q('#wl-parent-pedigree').checked;
+  if (els.config.querySelector('[data-wl-change]')) {
+    // Every row is stored, so a row hidden here (colors without color matching) keeps its boxes.
+    const grid = familyChanges(kennel.waitlist_config || {});
+    for (const b of els.config.querySelectorAll('[data-wl-change]')) {
+      const [kind, phase] = b.dataset.wlChange.split(':');
+      grid[kind][phase] = b.checked;
+    }
+    waitlist_config.family_changes = grid;
+    waitlist_config.unpause_allowed = q('#wl-unpause-allowed').checked;
+  }
   if (els.config.querySelector('[data-wl-show]')) {
     const show = showUpcoming({});
     for (const b of els.config.querySelectorAll('[data-wl-show]')) {
@@ -1200,6 +1232,23 @@ function wireConfig() {
   if (saveWaitlist) saveWaitlist.addEventListener('click', onSaveWaitlist);
   // Closed dates: added and removed here, saved with the rest.
   const closedList = () => [...els.config.querySelectorAll('[data-closed]')].map((x) => x.dataset.closed);
+  // Family changes: the warning follows the After column; the pause-ending row
+  // works only while she lets families ask at all.
+  const changeWarn = els.config.querySelector('[data-wl-change-warn]');
+  els.config.querySelectorAll('[data-wl-change$=":after"]').forEach((b) => b.addEventListener('change', () => {
+    changeWarn.hidden = ![...els.config.querySelectorAll('[data-wl-change$=":after"]')].some((x) => x.checked);
+  }));
+  els.config.querySelector('#wl-unpause-allowed')?.addEventListener('change', (e) => {
+    els.config.querySelectorAll('[data-wl-unpause-row] input').forEach((b) => { b.disabled = !e.target.checked; });
+  });
+  const phaseLine = els.config.querySelector('#wl-change-phase');
+  if (phaseLine) {
+    litterRepo.getAll().then((litters) => {
+      phaseLine.textContent = changePhase(litters, kennel.id) === 'before'
+        ? 'Right now: before pups are born (no litter is whelped), so the Before column applies.'
+        : 'Right now: pups are on the ground, so the After column applies.';
+    }).catch(() => {});
+  }
   // Days or hours: show the fields for the one she picked.
   els.config.querySelector('#wl-turn-unit')?.addEventListener('change', (e) => {
     for (const el of els.config.querySelectorAll('[data-turn-unit]')) el.hidden = el.dataset.turnUnit !== e.target.value;

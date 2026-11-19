@@ -6,7 +6,7 @@
 // or blank is left out, so nothing says what her list doesn't do. Each row keeps its
 // `topic` and the settings it quoted (`basis`), so the Policies editor can say when one
 // of them has changed since (basisChanges). Her words are never rewritten.
-import { openDays } from './waitlistRules.js';
+import { openDays, familyChanges } from './waitlistRules.js';
 import { formQuestions } from './waitlistForm.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -44,13 +44,30 @@ function zoneWords(timeZone) {
   } catch { return ''; }
 }
 
+// Which answers she lets families change themselves (Free Changes plan §6), per
+// phase: 'all', 'some' or 'none' of them.
+const PREF_KINDS = (c) => ['pref_sex', 'pref_breed', 'pref_purposes', ...(c.color_matching ? ['pref_colors'] : []), 'ready_timing', 'listen'];
+function freeShare(c, phase) {
+  const grid = familyChanges(c);
+  const n = PREF_KINDS(c).filter((kind) => grid[kind][phase]).length;
+  return n === 0 ? 'none' : n === PREF_KINDS(c).length ? 'all' : 'some';
+}
+function prefChangeWords(c, k) {
+  const before = freeShare(c, 'before');
+  const after = freeShare(c, 'after');
+  if (before === 'none' && after === 'none') return 'You can ask to change them from your status page.';
+  if (before === 'all' && after === 'all') return 'You can change them yourself from your status page.';
+  if (before === 'all' && after === 'none') return `Until puppies are born you can change them yourself from your status page; once a litter is born, you can ask to change them and ${k} approves each change.`;
+  return `You can change some of them yourself from your status page, depending on whether puppies have been born; your status page shows which. You can ask to change the rest, and ${k} approves each change.`;
+}
+
 // What each topic quotes from her settings. Its basis is these values at the time.
 const BASIS = {
   applications: (c) => ({ fee_amount: Number(c.fee_amount) > 0 ? Number(c.fee_amount) : null, fee_due_days: c.fee_due_days ?? null }),
-  preferences: (c) => ({ color_matching: Boolean(c.color_matching) }),
+  preferences: (c) => ({ color_matching: Boolean(c.color_matching), free_before: freeShare(c, 'before'), free_after: freeShare(c, 'after') }),
   passes: (c) => ({ max_passes: Number(c.max_passes), no_response_counts_as_pass: c.no_response_counts_as_pass !== false, fee_credit_policy: c.fee_credit_policy || null }),
   picking: (c) => ({ respond_days: Number(c.respond_days), no_response_counts_as_pass: c.no_response_counts_as_pass !== false, open_days: openDays(c).join(',') }),
-  pausing: () => ({}),
+  pausing: (c) => ({ unpause_allowed: c.unpause_allowed === true }),
   days: (c) => ({ open_days: openDays(c).join(',') })
 };
 
@@ -71,10 +88,10 @@ export const POLICY_TOPICS = Object.freeze([
   },
   {
     id: 'preferences', heading: 'Preferences',
-    body: (c) => [
+    body: (c, k) => [
       'So that every family on our list gets their offer as quickly as possible, a family whose preferences don\'t match any available puppy in a litter is skipped for that litter. You won\'t be offered a puppy from it, and being skipped this way never counts as a pass.',
       c.color_matching ? 'Color preferences count too.' : '',
-      'Please choose your preferences carefully: a preference that rules out most puppies can mean a long wait. You can ask to change them from your status page.'
+      `Please choose your preferences carefully: a preference that rules out most puppies can mean a long wait. ${prefChangeWords(c, k)}`
     ].filter(Boolean).join(' '),
     hint: 'Families ask why a litter went by without them.'
   },
@@ -110,7 +127,9 @@ export const POLICY_TOPICS = Object.freeze([
       const ready = formQuestions(c).find((q) => q.key === 'ready_timing');
       return [
         'You can pause from your status page when you\'re not ready for a puppy. While you\'re paused you will not be offered puppies: every litter that comes up during your pause skips you, and you keep your place.',
-        `If you change your mind, you must let ${k} know and have your pause ended before your turn comes up. A litter that has already skipped you won't be offered to you afterwards.`,
+        c.unpause_allowed === true
+          ? `If you change your mind, you can end your pause early from your status page before your turn comes up. A litter that has already skipped you won't be offered to you afterwards.`
+          : `If you change your mind, you must let ${k} know and have your pause ended before your turn comes up. A litter that has already skipped you won't be offered to you afterwards.`,
         ready ? `Your answer to "${ready.label}" works the same way: anything but "ASAP" pauses you until then.` : ''
       ].filter(Boolean).join(' ');
     },

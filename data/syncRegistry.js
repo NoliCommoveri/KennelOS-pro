@@ -431,7 +431,7 @@ export const SYNC_REGISTRY = Object.freeze({
       // came before she approved them. Money, private like fee_amount.
       'fee_paid_amount', 'fee_processing_amount', 'fee_paid_online',
       'fee_credit_policy', 'pause_reason', 'notes', 'pref_change_log', 'pref_change_request',
-      'pause_request', 'listen_change_request', 'messages',
+      'pause_request', 'unpause_request', 'listen_change_request', 'messages',
       // "Not this litter" with the family's reason (Spec §16.2): private like a pass reason.
       'prepasses',
       // The programs she said No to when their answers suggested one (programSuggest.js).

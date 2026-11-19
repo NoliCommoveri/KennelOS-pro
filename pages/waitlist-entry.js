@@ -51,7 +51,7 @@ import { offerSpecs, retryEmail, dropEmail, isHeldEmail, kennelEmailsOn, familyE
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
   entryName, publicSourceName, holdsPlace, waitlistLitters, isWaitlistLitter, LISTEN_LIVE_PAIRING, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, isPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
-  eligiblePupsFor, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly,
+  eligiblePupsFor, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, listenChangeKind,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
@@ -411,6 +411,11 @@ function pendingRequests(e) {
     out.push({ kind: 'pause', text: `Asked ${esc(fmtDate(r.requested_date))} to pause their place until <strong>${esc(fmtDate(r.until))}</strong>.`, note: r.note,
       hint: 'They keep their place and aren\'t offered pups until then. A pause never counts as a pass.' });
   }
+  if (actions.hasPendingRequest(e, 'unpause_request')) {
+    const r = e.unpause_request;
+    out.push({ kind: 'unpause', text: `Asked ${esc(fmtDate(r.requested_date))} to <strong>end their pause early</strong>${e.paused_until ? ` (paused until ${esc(fmtDate(e.paused_until))})` : ''}.`, note: r.note,
+      hint: 'Approving puts them back in line today. They keep their place either way.' });
+  }
   if (actions.hasPendingRequest(e, 'pref_change_request')) {
     const r = e.pref_change_request;
     out.push({ kind: 'pref', text: `Asked ${esc(fmtDate(r.requested_date))} to change: <strong>${esc(prefChangeSummary(e, r.changes)) || 'nothing that differs now'}</strong>.`, note: r.note,
@@ -419,8 +424,10 @@ function pendingRequests(e) {
   if (actions.hasPendingRequest(e, 'listen_change_request')) {
     const r = e.listen_change_request;
     const except = r.listen_mode === 'except';
-    out.push({ kind: 'listen', text: `Asked ${esc(fmtDate(r.requested_date))} to ${except ? 'wait for' : 'wait only for'}: <strong>${esc(listenText(r))}</strong> <span class="faint">(now: ${esc(listenText(e))})</span>.`, note: '',
-      hint: `Narrower, so it needs you: they wouldn't be offered ${except ? 'those' : 'other'} litters. An open offer stays open.` });
+    const wider = listenChangeKind(e, r) === 'wider';
+    out.push({ kind: 'listen', text: `Asked ${esc(fmtDate(r.requested_date))} to ${except || !isListenOnly(r) ? 'wait for' : 'wait only for'}: <strong>${esc(listenText(r))}</strong> <span class="faint">(now: ${esc(listenText(e))})</span>.`, note: '',
+      hint: wider ? 'Wider: they\'d be offered litters they skip now. An open offer stays open.'
+        : `Narrower: they wouldn't be offered ${except ? 'those' : 'other'} litters. An open offer stays open.` });
   }
   if (actions.hasPendingRequest(e, 'companion_request')) {
     const r = e.companion_request;
@@ -545,6 +552,7 @@ function wireRequests(root) {
   };
   const handlers = {
     'pause:approve': decide('pause_request', actions.approvePauseRequest, true), 'pause:decline': decide('pause_request', actions.declinePauseRequest, false),
+    'unpause:approve': decide('unpause_request', actions.approveUnpauseRequest, true), 'unpause:decline': decide('unpause_request', actions.declineUnpauseRequest, false),
     'pref:approve': decide('pref_change_request', actions.approvePrefChange, true), 'pref:decline': decide('pref_change_request', actions.declinePrefChange, false),
     'listen:approve': decide('listen_change_request', actions.approveListenChange, true), 'listen:decline': decide('listen_change_request', actions.declineListenChange, false),
     'companion:sent': () => actions.markCompanionLinkSent(e.id), 'companion:decline': () => actions.declineCompanionRequest(e.id)
@@ -1951,6 +1959,7 @@ function requestTimeline(e) {
   };
   const one = (r, asked, what) => { if (!r?.requested_date) return; out.push([r.requested_date, asked]); decision(r, what); };
   one(e.pause_request, e.pause_request?.until ? `Asked to pause until ${fmtDate(e.pause_request.until)}` : 'Asked to pause', 'their pause');
+  one(e.unpause_request, 'Asked to end their pause early', 'ending their pause early');
   one(e.listen_change_request, 'Asked to change which litters they wait for', 'their litters change');
   one(e.companion_request, 'Asked for their Companion link', 'their Companion link');
   if (e.pref_change_request?.requested_date) out.push([e.pref_change_request.requested_date, 'Asked to change their answers']);
@@ -1986,7 +1995,7 @@ function timelineHtml() {
     ...offerTimeline(e),
     ...requestTimeline(e),
     ...(e.merged_applications || []).map((x) => [x.date, `Merged a duplicate application${x.name ? ` from ${x.name}` : ''}${x.applied_date ? ` (applied ${fmtDate(x.applied_date)})` : ''}; it was deleted${x.fee_credit ? `, and its ${fmtMoney(x.fee_credit)} fee became a credit` : ''}`]),
-    ...(e.pref_change_log || []).map((x) => [x.date, `${PREF_FIELD_LABEL[x.field] || x.field}: ${prefValueText(x.field, x.from)} → ${prefValueText(x.field, x.to)}${x.declined ? ' (they asked; you declined)' : x.by === 'request' ? ' (they asked)' : ''}`])
+    ...(e.pref_change_log || []).map((x) => [x.date, `${PREF_FIELD_LABEL[x.field] || x.field}: ${prefValueText(x.field, x.from)} → ${prefValueText(x.field, x.to)}${x.declined ? ' (they asked; you declined)' : x.by === 'request' ? ' (they asked)' : x.by === 'family' ? ' (they changed it)' : ''}`])
   ].filter(([d]) => d)
     // Newest first, and within a day the later step first (items are listed in order).
     .map((x, i) => [...x, i]).sort((a, b) => String(b[0]).localeCompare(String(a[0])) || b[2] - a[2]);

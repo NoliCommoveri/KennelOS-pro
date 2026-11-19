@@ -25,7 +25,7 @@ import {
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, isPicksOpen, isFamilyPageOnly, LISTEN_LIVE_LITTER,
-  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening, statusPopupTexts
+  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening, statusPopupTexts, changePhase, freeChanges
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
@@ -80,6 +80,7 @@ function requestView(req, today, fields) {
 function requestsView(entry, today) {
   return {
     pause: requestView(entry.pause_request, today, (r) => ({ until: r.until })),
+    unpause: requestView(entry.unpause_request, today, () => ({})),
     pref_change: requestView(entry.pref_change_request, today, (r) => ({ changes: { ...(r.changes || {}) } })),
     listen: requestView(entry.listen_change_request, today, (r) => ({
       mode: r.listen_mode || 'all', sire_ids: [...(r.listen_sire_ids || [])], dam_ids: [...(r.listen_dam_ids || [])]
@@ -253,6 +254,10 @@ function entryView(entry, ctx) {
     },
     passes: { used: passesUsed(entry, ctx.offers), max: Number(ctx.config.max_passes) },
     requests: requestsView(entry, ctx.today),
+    // Which of their changes apply without her OK right now (Free Changes plan §4),
+    // and the phase that decides it ('before' / 'after' pups are born). Her device
+    // checks again when it applies the change, so this is what their page offers.
+    changes: { free: freeChanges(entry, { config: ctx.config, phase: ctx.phase, offers: ctx.offers }), phase: ctx.phase, unpause_offered: ctx.config.unpause_allowed === true },
     // How their name shows on the public list (Spec §15.3): private ("A***** K") or
     // not, and their request to list privately as their page shows it (no expiry:
     // it's the answer to a question on their application).
@@ -627,7 +632,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today });
   const creditMemo = new Map();
   const ctx = {
-    config, contactsById, programsById, offers: familyOffers, today, upcoming,
+    config, contactsById, programsById, offers: familyOffers, today, upcoming, phase: changePhase(litters, kennel.id),
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
     positions: overallPositions(live, kennel.id, programsById, { sales, dogs: dogsById }), prefPlaces: prefPlaces(live, kennel.id, programsById, config, { sales, dogs: dogsById }), matches, litterLabels, hidden, notes,
     // Each record's own pup's sale (familySale): a family back on the list for a

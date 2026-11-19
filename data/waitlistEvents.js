@@ -36,11 +36,11 @@
 import { familySale } from './familyExtras.js';
 import { carriedCreditsOf } from './receivedCredits.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
-import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, turnIdOf, turnSpent, passReasonOf, sideSaleOf } from './waitlistRules.js';
+import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, PREF_FIELD_LABEL, prefValueText, turnIdOf, turnSpent, passReasonOf, sideSaleOf, changePhase, freeChanges } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
 import { backOutReasons, BACK_OUT_OTHER } from './backOut.js';
 
-export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready', 'companion_request', 'extra_request', 'extra_cancel',
+export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'unpause', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready', 'companion_request', 'extra_request', 'extra_cancel',
   'pickup_book', 'pickup_cancel', 'pickup_address', 'home_location', 'back_out'];
 export const NOTE_MAX = 500;
 
@@ -62,12 +62,17 @@ export const activityId = (event) => `event-${event.seq}`;
 //   op 'pass'           { offerId }
 //   op 'withdraw'
 //   op 'pause_request'  { request }  → entry.pause_request
-//   op 'listen_apply'   { changes }  → the entry's listen fields
+//   op 'pause_apply'    { until, note } → paused until then (a free change)
+//   op 'unpause_request' { request } → entry.unpause_request
+//   op 'unpause_apply'  → their pause ends today (a free change)
+//   op 'listen_apply'   { changes }  → the entry's listen fields (a free change)
+//   op 'pref_apply'     { changes, request } → the free answers applied, the rest
+//                        (if any) → entry.pref_change_request
 //   op 'listen_request' { request }  → entry.listen_change_request
 //   op 'pref_request'   { request }  → entry.pref_change_request
 //   op 'prepass'        { prepass }  → "Not this litter" on the entry (§16.2)
 //   op 'unprepass'      { target }   → taken back
-//   op 'ready'          { answer, until, reason } → "Ready now?" answered (§16.7)
+//   op 'ready'          { answer, until, reason, free } → "Ready now?" answered (§16.7)
 //   op 'companion_request' { request } → entry.companion_request
 //   op 'extra_request'  { request }  → added to entry.extra_requests (familyExtras.js)
 //   op 'pickup_request' { request }  → added to entry.pickup_requests (familyPickup.js)
@@ -75,6 +80,9 @@ export const activityId = (event) => `event-${event.seq}`;
 //   op 'back_out_request' { request } → entry.back_out_request (backOut.js)
 // `date` is the day the family acted, in the kennel's time zone; `activity` the
 // line for their entry's activity ({ id, at, body }), or null.
+// Free changes (Free Changes plan §4) are decided HERE, against her records now
+// (`ctx.litters`, her settings in `ctx.config`), never by the server's `free` mark:
+// a litter whelped since the family's tap turns the change into a request.
 export function planFamilyEvent(event, ctx) {
   const { entry = null, offers = [], pups = [], sales = [], litterLabel = () => 'the litter', pupName = () => 'a pup', timeZone = null, config = null } = ctx;
   // This record's own pup's open sale (a family back on the list for a second pup
@@ -95,6 +103,9 @@ export function planFamilyEvent(event, ctx) {
   const open = WAITLIST_OPEN_STATUSES.includes(entry.status);
   const active = entry.status === 'active';
   const gone = `they're no longer on the list (${entry.status})`;
+  const phase = changePhase(ctx.litters || [], entry.kennel_id);
+  const free = config ? freeChanges(entry, { config, phase, offers }) : {};
+  const when = phase === 'before' ? 'before pups were born' : 'with pups on the ground';
 
   switch (event.kind) {
     case 'pick': {
@@ -161,29 +172,38 @@ export function planFamilyEvent(event, ctx) {
       if (p.answer === 'yes') return { op: 'ready', answer: 'yes', date, activity: line('Said they\'re ready now, on their status page.') };
       const reason = clean(p.reason);
       if (p.answer !== 'no' || !/^\d{4}-\d{2}-\d{2}$/.test(String(p.until ?? '')) || !reason) return skip('bad_payload');
-      // Their "not yet" is a pause request (the request is what she sees and decides).
+      // Their "not yet" is a pause request (the request is what she sees and decides),
+      // or, where she lets pauses apply by themselves, their pause.
+      if (free.pause) return { op: 'ready', answer: 'no', until: p.until, reason, free: true, date, activity: line(`Said they're not ready yet, on their status page, and paused their place until ${p.until} (${when}, so no OK was needed).`) };
       return { op: 'ready', answer: 'no', until: p.until, reason, date, activity: null };
     }
     case 'pause_request': {
       if (!active) return note(`Asked to pause their place until ${p.until}, but ${gone}.`);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.until ?? ''))) return skip('bad_payload');
+      if (free.pause) return { op: 'pause_apply', date, until: p.until, note: clean(p.note), activity: line(`Paused their place until ${p.until} on their status page (${when}, so no OK was needed).`) };
       return { op: 'pause_request', date, activity: null, request: { requested_date: date, until: p.until, note: clean(p.note) } };
+    }
+    case 'unpause': {
+      if (!active) return note(`Asked to end their pause early, but ${gone}.`);
+      if (!entry.paused_until || entry.paused_until < date) return note('Asked to end their pause early, but their pause had already ended.');
+      if (!config?.unpause_allowed) return note('Asked to end their pause early, but you no longer offer that, so nothing changed.');
+      if (free.unpause) return { op: 'unpause_apply', date, activity: line(`Ended their pause early on their status page (${when}, so no OK was needed).`) };
+      return { op: 'unpause_request', date, activity: null, request: { requested_date: date, note: clean(p.note) } };
     }
     case 'listen': {
       if (!active) return note(`Asked to change which litters they're waiting for, but ${gone}.`);
       const next = p.mode === 'selected' || p.mode === 'except'
         ? { listen_mode: p.mode, listen_sire_ids: ids(p.sire_ids), listen_dam_ids: ids(p.dam_ids) }
         : { listen_mode: 'all', listen_sire_ids: [], listen_dam_ids: [] };
-      const kind = listenChangeKind(entry, next);
-      if (kind === 'same') return skip('no_change');
-      if (kind === 'wider') {
-        // Back to All litters keeps their earlier picks on the entry (Spec §15.7 item 3).
+      // Every change waits for her, wider or narrower (owner, 2026-11-19), unless she
+      // lets parents changes apply by themselves now (Free Changes plan).
+      if (listenChangeKind(entry, next) === 'same') return skip('no_change');
+      if (free.listen) {
+        // Back to All keeps their earlier picks on the entry (Spec §15.7 item 3).
         const toAll = !isListenOnly(next);
-        return { op: 'listen_apply', date, changes: toAll ? { listen_mode: 'all' } : next, activity: line(toAll
-          ? 'Went back to waiting for all litters, on their status page.'
-          : next.listen_mode === 'except'
-            ? 'Took parents off the litters they skip, on their status page.'
-            : 'Added parents to the litters they\'re waiting for, on their status page.') };
+        return { op: 'listen_apply', date, changes: toAll ? { listen_mode: 'all' } : next, activity: line(`${toAll
+          ? 'Went back to waiting for all litters'
+          : next.listen_mode === 'except' ? 'Changed the parents whose litters they skip' : 'Changed the parents whose litters they wait for'}, on their status page (${when}, so no OK was needed).`) };
       }
       return { op: 'listen_request', date, activity: null, request: { requested_date: date, ...next } };
     }
@@ -262,7 +282,16 @@ export function planFamilyEvent(event, ctx) {
       const changes = {};
       for (const f of PREF_CHANGE_FIELDS) if (asked[f] !== undefined) changes[f] = asked[f];
       if (!prefChangeLines(entry, changes, { date }).length) return skip('no_change');
-      return { op: 'pref_request', date, activity: null, request: { requested_date: date, changes, note: clean(p.note) } };
+      // The answers she lets change by themselves now apply; the rest are one request.
+      const now = {};
+      const ask = {};
+      for (const [f, v] of Object.entries(changes)) (free[f] ? now : ask)[f] = v;
+      const applied = prefChangeLines(entry, now, { date });
+      if (!applied.length) return { op: 'pref_request', date, activity: null, request: { requested_date: date, changes, note: clean(p.note) } };
+      const rest = prefChangeLines(entry, ask, { date }).length ? { requested_date: date, changes: ask, note: clean(p.note) } : null;
+      const what = applied.map((l) => `${PREF_FIELD_LABEL[l.field]}: ${prefValueText(l.field, l.from)} → ${prefValueText(l.field, l.to)}`).join('; ');
+      return { op: 'pref_apply', date, changes: now, request: rest,
+        activity: line(`Changed their answers on their status page (${when}, so no OK was needed): ${what}.${rest ? ' The rest waits for you.' : ''}`) };
     }
     default:
       return skip('unknown_kind');

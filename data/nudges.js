@@ -66,11 +66,11 @@ import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import {
   overdueTurns, overdueFees, deadlineLabel, timeLabel, plannedOpening, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, businessDays, autoOffers, closingTrigger,
   prefChangeSummary, prefChangeEffect, PREF_FIELD_LABEL, depositsDueLitters,
-  readyCheck, readyCheckOverdue, isSideSalePending, pupClaims, waitlistLitters
+  readyCheck, readyCheckOverdue, isSideSalePending, pupClaims, waitlistLitters, listenChangeKind, isListenOnly, changePhase, familyChanges
 } from './waitlistRules.js';
 import {
   recordOutcome, markFeeExpired, recordReadyAnswer, undoRemoval, cancelSideSale, hasPendingRequest, markMessagesRead,
-  approvePauseRequest, declinePauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange,
+  approvePauseRequest, declinePauseRequest, approveUnpauseRequest, declineUnpauseRequest, approvePrefChange, declinePrefChange, approveListenChange, declineListenChange,
   markCompanionLinkSent, declineCompanionRequest, approveExtraRequest, declineExtraRequest, approvePickupRequest, declinePickupRequest,
   pickupWishesFor
 } from './waitlistActions.js';
@@ -1367,6 +1367,24 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
       }]
     });
   }
+  // Free changes are back (Free Changes plan Q5): her last born litter closed, and
+  // she lets some changes apply by themselves before pups are born. Once per
+  // closing (the key carries the litter), for two weeks after it.
+  for (const kennelId of listed) {
+    const cfg = waitlistConfig(kennelsById.get(kennelId) || null);
+    if (!cfg.online || changePhase(litters, kennelId) !== 'before') continue;
+    if (!Object.values(familyChanges(cfg)).some((c) => c.before)) continue;
+    const closed = litters.filter((l) => !l.is_archived && !l.waitlist_off && l.kennel_id === kennelId && l.status === 'closed' && l.updated_at)
+      .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];
+    if (!closed || String(closed.updated_at).slice(0, 10) < addDaysToYMD(today, -14)) continue;
+    out.push({
+      key: `waitlist-free-changes-open:${kennelId}:${closed.id}`,
+      title: 'No pups on the ground: families can change their answers themselves again',
+      detail: 'Your Family changes setting lets the changes you ticked under "Before pups are born" apply without your OK until your next litter is whelped. Their changes show in each family\'s activity and answer history.',
+      subjectHref: `kennel.html?id=${encodeURIComponent(kennelId)}&open=changes#waitlist-settings`,
+      actions: []
+    });
+  }
   out.push(...(await statusPageNudges(entries, offers, { today, litters, dogsById, kennelsById, name })));
   return out;
 }
@@ -1407,6 +1425,17 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
           `${name(e)} is paused until ${r.until}. Let them know.`, e, 'pause_request')
       });
     }
+    if (hasPendingRequest(e, 'unpause_request')) {
+      const r = e.unpause_request;
+      out.push({
+        key: `waitlist-unpause-request:${e.id}:${r.requested_date}`,
+        title: `${name(e)} asked to end their pause early${e.paused_until ? ` (paused until ${e.paused_until})` : ''}`,
+        detail: `Approving puts them back in line today; they keep their place either way.${said(r.note)}`,
+        subjectHref: href(e),
+        actions: decide(() => approveUnpauseRequest(e.id, { date: today }), () => declineUnpauseRequest(e.id, { date: today }),
+          `${name(e)} is back in line. Let them know.`, e, 'unpause_request')
+      });
+    }
     if (hasPendingRequest(e, 'pref_change_request')) {
       const r = e.pref_change_request;
       const kennel = kennelsById.get(e.kennel_id);
@@ -1438,15 +1467,18 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
     if (hasPendingRequest(e, 'listen_change_request')) {
       const r = e.listen_change_request;
       const parents = [...(r.listen_sire_ids || []), ...(r.listen_dam_ids || [])].map(dogName).join(', ');
+      const toAll = !isListenOnly(r);
+      const wider = listenChangeKind(e, r) === 'wider';
       out.push({
         key: `waitlist-listen-request:${e.id}:${r.requested_date}`,
-        title: r.listen_mode === 'selected' ? `${name(e)} asked to wait only for litters from ${parents || 'no parents'}`
-          : r.listen_mode === 'except' ? `${name(e)} asked to skip litters from ${parents || 'no parents'}`
-            : `${name(e)} asked to change which litters they wait for`,
-        detail: `Narrower, so it needs you: they wouldn't be offered ${r.listen_mode === 'except' ? 'those' : 'other'} litters, and nothing is counted as a pass for those.${openNote}`,
+        title: toAll ? `${name(e)} asked to wait for all litters again`
+          : r.listen_mode === 'selected' ? `${name(e)} asked to wait only for litters from ${parents || 'no parents'}`
+            : `${name(e)} asked to skip litters from ${parents || 'no parents'}`,
+        detail: wider ? `Wider: they'd be offered litters they skip now.${openNote}`
+          : `Narrower: they wouldn't be offered ${r.listen_mode === 'except' ? 'those' : 'other'} litters, and nothing is counted as a pass for those.${openNote}`,
         subjectHref: href(e),
         actions: decide(() => approveListenChange(e.id, { date: today }), () => declineListenChange(e.id, { date: today }),
-          `${name(e)} now ${r.listen_mode === 'except' ? 'skips' : 'waits only for'} those litters. Let them know.`, e, 'listen_change_request')
+          toAll ? `${name(e)} now waits for all litters. Let them know.` : `${name(e)} now ${r.listen_mode === 'except' ? 'skips' : 'waits only for'} those litters. Let them know.`, e, 'listen_change_request')
       });
     }
     if (hasPendingRequest(e, 'companion_request')) {
