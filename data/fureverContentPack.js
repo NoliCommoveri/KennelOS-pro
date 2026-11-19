@@ -13,6 +13,10 @@ import { fileRepo } from './fileRepo.js';
 const ROOT_FOLDER_NAME = 'KennelOS Furever';
 const KENNEL_FOLDER_NAME = 'Kennel-wide';
 const litterFolderName = (nickname) => `Litter — ${nickname || 'Untitled'}`;
+// A pup's own folder sits beside its litter's under the (unshared) root, never
+// inside it: a folder inherits its parent's "anyone with the link", so a pup
+// folder inside the litter's could be listed by anyone holding the litter's.
+const pupFolderName = (nickname, pupName) => `${litterFolderName(nickname)} — ${pupName || 'Pup'}`;
 
 // Doc types that typically carry buyer PII — the picker leaves these unchecked by
 // default and requires an explicit "this becomes public" confirmation to include
@@ -30,13 +34,13 @@ export function isSensitiveDocType(docType) {
 // accident (the same allow-list discipline fureverSeedExport.js's header
 // explains for the seed packet).
 //
-// `dogId` on each file (present only for a `scope:'litter'` publish — a
-// kennel-wide upload/document carries none, since that pack is deliberately
-// shared with every family) plus top-level `parentDogIds` are what let a family
-// app scope a litter pack DOWN to just its own pup's documents plus the
-// litter's sire/dam documents (shared with the whole litter), instead of every
-// pup's family seeing every other pup's filed documents — see
-// furever/data/contentPackFetch.js's per-pup filter.
+// Per-pup packs (K14-3, Review Remainder R6): a litter manifest lists only the
+// sire's and dam's documents (shared with every family in the litter). Each pup's
+// own documents are in that pup's own folder and manifest (scope 'pup'), whose
+// pointer is kept on the litter's furever_pack (`pupManifests`) and handed out
+// only in that pup's family seed (fureverSeedExport.js), so no family is ever
+// given another pup's file ids. `dogId` on each file and `parentDogIds` stay, so
+// Furever can still filter an older litter pack that held every pup's files.
 function buildManifest({ packKey, scope, kennelName, version, files, parentDogIds }) {
   return {
     packVersion: 1,
@@ -46,6 +50,7 @@ function buildManifest({ packKey, scope, kennelName, version, files, parentDogId
     version,
     updatedAt: new Date().toISOString(),
     ...(scope === 'litter' ? { parentDogIds: parentDogIds || [] } : {}),
+    ...(scope === 'pup' ? { pupId: parentDogIds?.pupId || null } : {}),
     files: files.map((f) => ({
       fileId: f.fileId,
       ...(f.resourceKey ? { resourceKey: f.resourceKey } : {}),
@@ -53,7 +58,7 @@ function buildManifest({ packKey, scope, kennelName, version, files, parentDogId
       docType: f.docType || 'other',
       mime: f.mime || '',
       size: f.size || 0,
-      ...(scope === 'litter' ? { dogId: f.dogId || null } : {})
+      ...(scope !== 'kennel' ? { dogId: f.dogId || null } : {})
     }))
   };
 }
@@ -110,7 +115,7 @@ function loadUploadSource(upload) {
 // Returns the new pointer to persist (settings.js's contentPack, or the litter's
 // furever_pack field) — this module never writes those itself, so it stays
 // agnostic to which scope it's publishing.
-export async function publishPack({ scope, kennelName, litterNickname, pointer = {}, documents = [], uploads = [], removedKeys = [], sireId = null, damId = null }) {
+export async function publishPack({ scope, kennelName, litterNickname, pointer = {}, documents = [], uploads = [], removedKeys = [], sireId = null, damId = null, pupNames = {} }) {
   const packKey = pointer.packKey || crypto.randomUUID();
   const driveFileIds = { ...((pointer.selection && pointer.selection.driveFileIds) || {}) };
 
@@ -127,10 +132,11 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
 
   // 1. Ensure folders (reuse the cached id — the common case on a republish).
   let folderId = pointer.folderId || null;
+  let rootId = null;
+  const root = async () => (rootId ||= await ensureFolder(ROOT_FOLDER_NAME));
   if (!folderId) {
-    const rootId = await ensureFolder(ROOT_FOLDER_NAME);
     const name = scope === 'litter' ? litterFolderName(litterNickname) : KENNEL_FOLDER_NAME;
-    folderId = await ensureFolder(name, rootId);
+    folderId = await ensureFolder(name, await root());
   }
 
   // 2. Load every chosen source's bytes. A kennel upload only carries a blob
@@ -143,22 +149,49 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
     if (upload.blob) sources.push(loadUploadSource(upload));
   }
 
+  // On a litter, a pup's own document goes to that pup's folder; the sire's and
+  // dam's (and any without a dog) to the litter's.
+  const parentIds = [sireId, damId].filter(Boolean);
+  const pupOf = (src) => (scope === 'litter' && src.dogId && !parentIds.includes(src.dogId) ? src.dogId : null);
+  const pupManifests = { ...(pointer.pupManifests || {}) };
+  const pupFolder = async (pupId) => {
+    if (!pupManifests[pupId]?.folderId) {
+      const id = await ensureFolder(pupFolderName(litterNickname, pupNames[pupId]), await root());
+      pupManifests[pupId] = { ...(pupManifests[pupId] || {}), folderId: id };
+    }
+    return pupManifests[pupId].folderId;
+  };
+
   // 3. Upload each — PATCHing the same Drive file id when we've published this
-  // exact source before (by its stable key), so a republish doesn't pile up
-  // duplicate files in the folder; a genuinely new/changed source gets created.
+  // exact source before (by its stable key) in the same folder, so a republish
+  // doesn't pile up duplicate files; a new/changed source gets created. A pup's
+  // document published before per-pup packs sits in the litter's folder: it is
+  // uploaded again into the pup's folder and the old copy trashed, so families
+  // holding the old litter pack can no longer open it.
+  let moved = 0;
   const files = [];
+  const pupFiles = {};
   for (const src of sources) {
-    const existing = driveFileIds[src.key];
+    const pupId = pupOf(src);
+    const target = pupId ? await pupFolder(pupId) : folderId;
+    let existing = driveFileIds[src.key];
+    if (existing && (existing.folderId || folderId) !== target) {
+      await trashFile(existing.fileId);
+      if (pupId) moved += 1;
+      existing = null;
+    }
     const uploaded = await uploadFile({
-      folderId, name: src.title, blob: src.blob,
+      folderId: target, name: src.title, blob: src.blob,
       existingFileId: existing ? existing.fileId : null
     });
-    driveFileIds[src.key] = { fileId: uploaded.id, resourceKey: uploaded.resourceKey || null };
-    files.push({
+    driveFileIds[src.key] = { fileId: uploaded.id, resourceKey: uploaded.resourceKey || null, ...(pupId ? { folderId: target } : {}) };
+    const file = {
       fileId: uploaded.id, resourceKey: uploaded.resourceKey || null,
       title: src.title, docType: src.docType, mime: src.mime, size: src.blob.size || 0,
       dogId: src.dogId || null
-    });
+    };
+    if (pupId) (pupFiles[pupId] ||= []).push(file);
+    else files.push(file);
   }
 
   // 3b. Carry forward kennel uploads that weren't re-sent this publish (no
@@ -177,24 +210,38 @@ export async function publishPack({ scope, kennelName, litterNickname, pointer =
   }
 
   // 4. Share the folder public-by-link once; children (files + the manifest)
-  // inherit, and re-granting on a republish is harmless.
+  // inherit, and re-granting on a republish is harmless. Each pup's folder is
+  // shared on its own.
   await shareFolderPublic(folderId);
 
-  // 5. Write the manifest, bumping the CONTENT version so Furever knows to refetch.
+  // 5. Write the manifests, bumping the CONTENT version so Furever knows to
+  // refetch. Every pup that has had a manifest gets one again at the same
+  // version (empty when nothing of its is ticked now), so one version check
+  // covers the litter's and the pup's.
   const version = (pointer.version || 0) + 1;
-  const parentDogIds = [sireId, damId].filter(Boolean);
-  const manifest = buildManifest({ packKey, scope, kennelName, version, files, parentDogIds });
+  const manifest = buildManifest({ packKey, scope, kennelName, version, files, parentDogIds: parentIds });
   const manifestResult = await writeManifestFile({
     folderId, manifest, existingFileId: pointer.manifestFileId || null
   });
+  for (const pupId of new Set([...Object.keys(pupManifests), ...Object.keys(pupFiles)])) {
+    const pupFolderId = await pupFolder(pupId);
+    await shareFolderPublic(pupFolderId);
+    const pupManifest = buildManifest({ packKey, scope: 'pup', kennelName, version, files: pupFiles[pupId] || [], parentDogIds: { pupId } });
+    const written = await writeManifestFile({ folderId: pupFolderId, manifest: pupManifest, existingFileId: pupManifests[pupId].manifestFileId || null });
+    pupManifests[pupId] = { folderId: pupFolderId, manifestFileId: written.id, manifestResourceKey: written.resourceKey || null };
+  }
 
-  // 6. The pointer for the caller to persist.
+  // 6. The pointer for the caller to persist. `moved`: pups' documents moved out
+  // of the litter's folder this publish (their families need the Furever link sent
+  // again to see them).
   return {
     packKey,
     folderId,
     manifestFileId: manifestResult.id,
     manifestResourceKey: manifestResult.resourceKey || null,
     version,
+    ...(scope === 'litter' ? { pupManifests } : {}),
+    moved,
     selection: {
       documentIds: documents.map((d) => d.id),
       uploads: uploads.map((u) => {

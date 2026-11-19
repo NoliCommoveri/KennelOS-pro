@@ -11,6 +11,7 @@
 // if it is NON-EMPTY. Keyless / partial-key rows are never auto-matched and
 // never silently created — they land in "needs review," where the user decides.
 import Papa from '../vendor/papaparse.min.mjs';
+import { db, dataTables } from './db.js';
 import { dogRepo } from './dogRepo.js';
 import { resolveKennelIdForWrite, SCOPED_OWNERSHIP, ownKennels } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
@@ -41,7 +42,29 @@ import {
 // --- Parsing --------------------------------------------------------------
 // Headers are normalized to lower_snake_case so "Registered Name", "registered
 // name", and "registered_name" all resolve to the same key. Values are trimmed.
-export function parseCsv(fileOrText) {
+// A file is read as bytes and decoded as UTF-8; a file that isn't (older Excel
+// saves Windows-1252, K2-12) is read as Windows-1252 instead, so "Zoë" stays
+// "Zoë", and `encoding` says which was used so the preview can say so.
+export async function decodeCsvFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), encoding: 'utf-8' };
+  } catch {
+    return { text: new TextDecoder('windows-1252').decode(bytes), encoding: 'windows-1252' };
+  }
+}
+
+export const NOT_UTF8_WARNING = "This file isn't UTF-8, so it was read as Windows-1252. Check the names below.";
+
+export async function parseCsv(fileOrText) {
+  let input = fileOrText;
+  let encoding = 'utf-8';
+  if (fileOrText && typeof fileOrText.arrayBuffer === 'function') ({ text: input, encoding } = await decodeCsvFile(fileOrText));
+  const parsed = await parseCsvText(input);
+  return { ...parsed, encoding };
+}
+
+function parseCsvText(fileOrText) {
   return new Promise((resolve, reject) => {
     Papa.parse(fileOrText, {
       header: true,
@@ -1906,7 +1929,10 @@ export function getMapping(entity) {
 // either way round; otherwise the file's own dates decide (detectDateOrder), and
 // month-first is the default. `dates`: { order, detected, ambiguous, ask } for the
 // preview (ask: no date told, and some could be read either way).
-export async function buildPlan(entity, rows, { dateOrder = null } = {}) {
+// `markUnchanged: false` leaves updates that change nothing as updates, for a
+// page with its own commit that writes `record` (expense-import: she can still
+// re-point a row's subject after the preview).
+export async function buildPlan(entity, rows, { dateOrder = null, markUnchanged: unchangedRows = true } = {}) {
   const mapping = getMapping(entity);
   const existing = await mapping.loadExisting();
   const index = mapping.buildIndex(existing);
@@ -1923,6 +1949,7 @@ export async function buildPlan(entity, rows, { dateOrder = null } = {}) {
   if (mapping.finishPlan) mapping.finishPlan(plan);
   if (mapping.batchKeys) markRepeatedRows(plan, mapping);
   if (needsKennelScope(entity)) flagMissingKennel(entity, plan, await resolveKennelIdForWrite());
+  if (unchangedRows) markUnchanged(plan);
   return { rows: plan, summary: summarize(plan), existing,
     dates: { order, detected: detected.order, ambiguous: detected.ambiguous, ask: !detected.order && detected.ambiguous > 0 } };
 }
@@ -1945,6 +1972,33 @@ export function markRepeatedRows(plan, mapping) {
     for (const k of keys) seen.set(k, r.index);
   }
   return plan;
+}
+
+// An update keeps only the fields that differ from the record it matched (K2-11),
+// and one that changes nothing becomes `unchanged`: shown as "40 unchanged" and
+// never written, so re-importing a file leaves every record's updated_at alone.
+// Left as updates: a row whose parent is another row of the file (linked after
+// the writes) and a row that creates a contact at commit (prepareRecord).
+const sameValue = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const createsAtCommit = (r) => Object.keys(r).some((k) => /^_.+ToCreate$/.test(k) && r[k]);
+export function markUnchanged(plan) {
+  for (const r of plan) {
+    if (r.status !== 'update' || !r.match) continue;
+    r.changes = Object.fromEntries(Object.entries(r.changes || {}).filter(([k, v]) => !sameValue(r.match[k], v)));
+    if (Object.keys(r.changes).length || r.batchParents || createsAtCommit(r)) continue;
+    r.status = 'unchanged';
+    r.decision = 'unchanged';
+  }
+  return plan;
+}
+
+// The preview draws this many rows, plus every row that needs review (K2-7): a
+// 10,000-row file drew 10,000 rows, each with its own list of every record.
+export const PREVIEW_ROWS = 200;
+
+// The rows the preview draws: the first PREVIEW_ROWS, then every review row after.
+export function previewRows(plan, limit = PREVIEW_ROWS) {
+  return plan.filter((r, i) => i < limit || r.status === 'review');
 }
 
 export function summarize(plan) {
@@ -1992,38 +2046,58 @@ async function stampKennelScope(entity, record) {
 }
 
 // --- Commit ---------------------------------------------------------------
-// Applies each row's *decision* (create / update / skip). Rows are independent:
-// one failure is recorded and the rest still import.
-export async function commitPlan(entity, plan) {
+// Applies each row's *decision* (create / update / skip; `unchanged` rows are
+// counted, never written). Rows are independent: one failure is recorded and the
+// rest still import. Rows are written COMMIT_CHUNK at a time, each chunk in one
+// transaction (K2-7: 10,000 rows one write at a time took minutes), and after
+// each chunk onProgress({ done, total, lastRow }) says how far it got, lastRow
+// being the file's row number (header = row 1) of the last row written.
+export const COMMIT_CHUNK = 200;
+
+export async function commitPlan(entity, plan, { onProgress = null } = {}) {
   const mapping = getMapping(entity);
-  const result = { created: 0, updated: 0, skipped: 0, failed: [], notes: [] };
+  const result = { created: 0, updated: 0, unchanged: 0, skipped: 0, failed: [], notes: [] };
   const written = new Map(); // row index -> saved record id
-  for (const r of plan) {
-    try {
-      // Optional per-mapping hook: mutate r.record/r.changes just before the
-      // write (Sale uses this to create an unmatched buyer as a Contact inline
-      // — the one place a relationship column isn't resolve-or-review).
-      if (mapping.prepareRecord) await mapping.prepareRecord(r);
-      if (r.decision === 'create') {
-        await stampKennelScope(entity, r.record);
-        const saved = await mapping.repo.create(mapping.seedRecord ? mapping.seedRecord(r.record) : r.record);
-        written.set(r.index, saved.id);
-        result.created++;
-      } else if (r.decision === 'update') {
-        const id = r.decisionTarget || r.match?.id;
-        if (!id) throw new Error('No target record to update.');
-        await mapping.repo.update(id, r.changes);
-        written.set(r.index, id);
-        result.updated++;
-      } else {
-        result.skipped++;
-      }
-    } catch (e) {
-      result.failed.push({ index: r.index, display: r.display, message: e.message || String(e) });
-    }
+  for (let at = 0; at < plan.length; at += COMMIT_CHUNK) {
+    const chunk = plan.slice(at, at + COMMIT_CHUNK);
+    await db.transaction('rw', dataTables(), async () => {
+      for (const r of chunk) await commitRow(entity, mapping, r, written, result);
+    });
+    const done = Math.min(at + COMMIT_CHUNK, plan.length);
+    if (onProgress) onProgress({ done, total: plan.length, lastRow: chunk[chunk.length - 1].index + 2 });
   }
   await linkBatchParents(plan, written, mapping.repo, result);
   return result;
+}
+
+async function commitRow(entity, mapping, r, written, result) {
+  try {
+    if (r.decision === 'unchanged') {
+      written.set(r.index, r.match.id);
+      result.unchanged++;
+      return;
+    }
+    // Optional per-mapping hook: mutate r.record/r.changes just before the
+    // write (Sale uses this to create an unmatched buyer as a Contact inline
+    // — the one place a relationship column isn't resolve-or-review).
+    if (mapping.prepareRecord) await mapping.prepareRecord(r);
+    if (r.decision === 'create') {
+      await stampKennelScope(entity, r.record);
+      const saved = await mapping.repo.create(mapping.seedRecord ? mapping.seedRecord(r.record) : r.record);
+      written.set(r.index, saved.id);
+      result.created++;
+    } else if (r.decision === 'update') {
+      const id = r.decisionTarget || r.match?.id;
+      if (!id) throw new Error('No target record to update.');
+      await mapping.repo.update(id, r.changes);
+      written.set(r.index, id);
+      result.updated++;
+    } else {
+      result.skipped++;
+    }
+  } catch (e) {
+    result.failed.push({ index: r.index, display: r.display, message: e.message || String(e) });
+  }
 }
 
 // The link pass (dogs): once every row is written, point each dog at a sire or

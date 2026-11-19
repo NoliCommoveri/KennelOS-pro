@@ -595,14 +595,14 @@ function pickerHtml({ prefix, rows, selectedIds, parentIds }) {
     </div>`;
 }
 
-// `pupDocs` (a litter publish, K14-3): one pup's own documents sit in the litter's
-// one folder, which every family in the litter can open, though each family's
-// app shows only its own pup's.
-function sensitiveConfirmHtml(sensitiveDocs, { pupDocs = false } = {}) {
+// `litterDocs`: some are the sire's or dam's, which every family in the litter
+// can open. A pup's own documents are in that pup's own pack (K14-3), public only
+// to whoever holds its link, so they're asked about only when sensitive.
+function sensitiveConfirmHtml(sensitiveDocs, { litterDocs = false } = {}) {
   const list = sensitiveDocs.map((d) => `<li>${esc(d.title || descriptor(DOC_TYPES, d.doc_type).label)}</li>`).join('');
-  const why = pupDocs
-    ? 'A pup’s own documents go in the litter’s one folder, so every family in the litter can open each pup’s files, not only their own (their app shows only theirs). A registration, vet record or contract can carry a family’s name and address. Only include them if you’re sure.'
-    : 'A contract often carries the buyer\'s name and address — only include it if you\'re sure.';
+  const why = litterDocs
+    ? 'The sire’s and dam’s documents go to every family in this litter, so every one of them can open these. A registration, vet record or contract can carry a name and address. Only include them if you’re sure.'
+    : 'A pup’s own documents are public to anyone with this pup’s link. A contract often carries the buyer\'s name and address — only include it if you\'re sure.';
   return `
     <div class="inline-warn">
       <strong>This will become publicly readable by anyone with the link:</strong>
@@ -765,7 +765,7 @@ async function doKennelPublish() {
   btn.disabled = true;
   statusEl.textContent = 'Publishing…';
   try {
-    const pointer = await publishPack({
+    const { moved: _moved, ...pointer } = await publishPack({
       scope: 'kennel',
       kennelName: settings.kennelName,
       pointer: settings.contentPack,
@@ -792,15 +792,16 @@ async function doLitterPublish(litter, rows) {
   const docsById = flattenDocs(rows);
   const selectedDocs = collectSelectedIds(root).map((id) => docsById.get(id))
     .filter((d) => d && isFureverShareable(d, publishedDocIds));
-  // Every pup's own document is public to the whole litter (K14-3), whatever its
-  // type; the sire's and dam's are meant for every family.
+  // The sire's and dam's documents go to every family in the litter, whatever
+  // their type; a pup's own go only to its family (its own pack, K14-3), so only a
+  // sensitive type of those is asked about.
   const parentIds = [litter.sire_id, litter.dam_id].filter(Boolean);
-  const pupDocs = selectedDocs.filter((d) => d.dog_id && !parentIds.includes(d.dog_id));
-  const sensitive = [...new Set([...selectedDocs.filter((d) => isSensitiveDocType(d.doc_type)), ...pupDocs])];
+  const litterWide = selectedDocs.filter((d) => !d.dog_id || parentIds.includes(d.dog_id));
+  const sensitive = [...new Set([...litterWide, ...selectedDocs.filter((d) => isSensitiveDocType(d.doc_type))])];
 
   const confirmBox = card.querySelector('.cp-litter-confirm');
   if (sensitive.length && !confirmBox.dataset.confirmed) {
-    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive, { pupDocs: pupDocs.length > 0 });
+    confirmBox.innerHTML = sensitiveConfirmHtml(sensitive, { litterDocs: litterWide.length > 0 });
     wireSensitiveConfirm(confirmBox, () => { confirmBox.dataset.confirmed = '1'; doLitterPublish(litter, rows); });
     return;
   }
@@ -821,7 +822,9 @@ async function doLitterPublish(litter, rows) {
     const prevSelectedIds = (litter.furever_pack && litter.furever_pack.selection && litter.furever_pack.selection.documentIds) || [];
     const nowSelectedIds = new Set(selectedDocs.map((d) => d.id));
     const removedKeys = prevSelectedIds.filter((id) => !nowSelectedIds.has(id)).map((id) => `doc:${id}`);
-    const pointer = await publishPack({
+    const pups = await dogRepo.getByLitter(litter.id);
+    const { moved, ...pointer } = await publishPack({
+      pupNames: Object.fromEntries(pups.map((p) => [p.id, p.call_name || p.registered_name || ''])),
       scope: 'litter',
       kennelName: settings.kennelName,
       litterNickname: litter.nickname,
@@ -836,7 +839,11 @@ async function doLitterPublish(litter, rows) {
       damId: litter.dam_id || null
     });
     await litterRepo.update(litter.id, { furever_pack: pointer });
-    statusEl.textContent = 'Published.';
+    // Pups' documents moved to their own packs (K14-3): a family sees its pup's
+    // only once its Furever link carries that pack, so it's sent again.
+    statusEl.textContent = moved
+      ? 'Published. Each pup\'s own documents are now in a pack only its family can open: send each family their Furever link again so they get them.'
+      : 'Published.';
     await renderContentPackages();
   } catch (e) {
     statusEl.textContent = '';
@@ -874,7 +881,7 @@ function litterSectionHtml(litter, rows) {
         </div>
       </div>
       <div class="r-body" style="display:none; margin-top:10px;">
-        <p class="muted" style="margin:0 0 8px; font-size:.85rem;">Sire/dam documents go to every family in this litter. A pup's own documents go only to that pup's family — check just that pup's box to send something to one family alone. Unchecking something that was already published trashes its Drive copy on the next publish — it isn't just removed from the list. Only documents marked shareable on the Documents page can be ticked.</p>
+        <p class="muted" style="margin:0 0 8px; font-size:.85rem;">Sire/dam documents go to every family in this litter. A pup's own documents go into a pack of its own that only that pup's family is sent — check just that pup's box to send something to one family alone. Unchecking something that was already published trashes its Drive copy on the next publish — it isn't just removed from the list. Only documents marked shareable on the Documents page can be ticked.</p>
         ${pickerHtml({ prefix: `litter-${litter.id}`, rows, selectedIds, parentIds: { sireId: litter.sire_id, damId: litter.dam_id } })}
         <div class="cp-litter-confirm"></div>
         <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">

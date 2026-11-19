@@ -4,6 +4,7 @@
 
 const KEYS = {
   lastBackupDate: 'kennelOS.lastBackupDate',
+  importProgress: 'kennelOS.importProgress',
   persistRequested: 'kennelOS.persistRequested',
   sampleDataManifest: 'kennelOS.sampleDataManifest',
   sampleDataCleared: 'kennelOS.sampleDataCleared',
@@ -80,6 +81,33 @@ export function getLastBackupDate() {
 export function setLastBackupDate(iso = new Date().toISOString()) {
   localStorage.setItem(KEYS.lastBackupDate, iso);
   return iso;
+}
+
+// How far the last CSV import got (importView, K2-7): { entity, fileName, lastRow,
+// done, total, at }, written after each committed chunk and cleared when the
+// import finishes, so an import cut off part-way says where it stopped.
+export function getImportProgress() {
+  try {
+    return JSON.parse(localStorage.getItem(KEYS.importProgress) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+export function setImportProgress(progress) {
+  try {
+    localStorage.setItem(KEYS.importProgress, JSON.stringify(progress));
+  } catch {
+    /* storage unavailable: the import itself is unaffected */
+  }
+}
+
+export function clearImportProgress() {
+  try {
+    localStorage.removeItem(KEYS.importProgress);
+  } catch {
+    /* nothing to clear */
+  }
 }
 
 export function wasPersistRequested() {

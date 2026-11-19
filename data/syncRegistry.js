@@ -64,6 +64,7 @@ export const SYNC_REGISTRY = Object.freeze({
       // id, like co_owner_contact_ids.
       'lives_with_contact_id',
       'pedigree_only', // without it a cloud restore would turn every ancestor into a kennel dog
+      'status_date', // when its status last changed: the other half of status, nothing personal (Review Remainder R1, owner decision 2026-11-19)
       'additional_registrations', // the dog's other registries and numbers; the same kind of data as registry/registration_number
       // Imported, and its Country of origin while ticked (Website Contract Plan C4): facts
       // about the dog like registry (owner decision 2026-11-13).
@@ -180,7 +181,13 @@ export const SYNC_REGISTRY = Object.freeze({
       'picks_opened_date', // a waitlist date: the auto-offer flow needs it after a restore
       'photos_url', // the litter's photos link: like a dog's url, and the publishing device shows it on waitlist pages
       'show_on_website', // this litter and its puppies show on her KennelPort website (KennelPort plan 5.3); a display choice
-      'waitlist_off' // kept off the waitlist (Waitlist Fixes Plan E3, D7: cloud): which litters the waitlist shows; a flag, nothing personal
+      'waitlist_off', // kept off the waitlist (Waitlist Fixes Plan E3, D7: cloud): which litters the waitlist shows; a flag, nothing personal
+      // Its Furever pack pointer: Drive folder, manifest and file ids, the selection, and
+      // each pup's own manifest (Review Remainder R1, owner decision 2026-11-19). The ids
+      // give access to files public by link, but without it a restore drops documents
+      // from her next publish and orphans the old pack; the server already holds the
+      // documents' furever_shareable flags.
+      'furever_pack'
     ],
     // Plan §5: "every price/deposit/foster-money field" — the foster comp model
     // and split basis are the terms of that money, so they stay with it.

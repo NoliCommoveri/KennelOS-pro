@@ -12,7 +12,8 @@
 //
 // `contentPackages` (Content Package Fetch Mechanism §3.2/§4.3) rides along the
 // same way: public Drive POINTERS only — packKey/manifestFileId/manifestResourceKey/
-// version — never an API key, never file bytes. Only packs that are actually
+// version, and on a litter pack this pup's own manifest — never an API key, never
+// file bytes. Only packs that are actually
 // published are included; an unpublished kennel or litter pack is simply absent,
 // so an unpublished pup carries no breeder docs until a later resend.
 //
@@ -38,18 +39,25 @@ export const FUREVER_APP_URL = 'https://furever.kennelos.app/';
 // One pointer entry, built by name from a persisted pack pointer (settings.js's
 // contentPack, or a litter's furever_pack) — never a spread, so an internal-only
 // pointer field (e.g. `selection`) never leaks into the packet.
-function packagePointer(pack, scope) {
+// On a litter pack, `pupId`'s own manifest (pupManifests, K14-3) rides along as
+// pupManifestFileId / pupManifestResourceKey: this pup's only, never another's.
+export function packagePointer(pack, scope, pupId = null) {
   if (!pack || !pack.packKey || !pack.manifestFileId) return null;
   const pointer = { packKey: pack.packKey, scope, manifestFileId: pack.manifestFileId, version: pack.version || 1 };
   if (pack.manifestResourceKey) pointer.manifestResourceKey = pack.manifestResourceKey;
+  const own = scope === 'litter' && pupId && pack.pupManifests && pack.pupManifests[pupId];
+  if (own && own.manifestFileId) {
+    pointer.pupManifestFileId = own.manifestFileId;
+    if (own.manifestResourceKey) pointer.pupManifestResourceKey = own.manifestResourceKey;
+  }
   return pointer;
 }
 
-function collectContentPackages(identity, litter) {
+function collectContentPackages(identity, litter, pupId) {
   const packages = [];
   const kennelPointer = packagePointer(identity.contentPack, 'kennel');
   if (kennelPointer) packages.push(kennelPointer);
-  const litterPointer = litter && packagePointer(litter.furever_pack, 'litter');
+  const litterPointer = litter && packagePointer(litter.furever_pack, 'litter', pupId);
   if (litterPointer) packages.push(litterPointer);
   return packages;
 }
@@ -126,7 +134,7 @@ export async function buildSeedPacket(dog, sale) {
     tagline: identity.tagline,
     breederContact: identity.breederContact,
     breederVet: identity.breederVet,
-    contentPackages: collectContentPackages(identity, litter),
+    contentPackages: collectContentPackages(identity, litter, dog.id),
     feedingSchedule: await resolveFeedingSchedule(dog, litter)
   };
 }

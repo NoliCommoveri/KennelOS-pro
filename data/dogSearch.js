@@ -84,9 +84,13 @@ export const sameRegisteredName = (a, b) => overlap(dogNameKeys(a), dogNameKeys(
 // or one not given). An AKC number on one and a UKC number on the other says
 // nothing — one dog holds both.
 export function registrationsConflict(a, b) {
-  const A = dogRegistrations(a);
-  const B = dogRegistrations(b);
-  if (!A.length || !B.length || sameRegistration(a, b)) return false;
+  return registrationListsConflict(dogRegistrations(a), dogRegistrations(b));
+}
+
+// The same rule over two dogs' `dogRegistrations`, for a scan that builds each
+// dog's list once instead of once per pair (tidyRules.dogIdentity).
+export function registrationListsConflict(A, B) {
+  if (!A.length || !B.length || A.some((x) => B.some((y) => x.number === y.number))) return false;
   return A.some((x) => B.some((y) => !x.registry || !y.registry || x.registry === y.registry));
 }
 

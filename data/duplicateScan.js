@@ -13,9 +13,9 @@
 //     her two dog records are merged; the card scans again after every merge.
 //   - Tables the edition doesn't have are skipped (SCAN_FLAGS).
 import { MATCH_RULES, dogNever } from './restoreMatch.js';
-import { dogRegKeys, dogNameKeys } from './dogSearch.js';
+import { dogRegKeys, dogNameKeys, registrationListsConflict } from './dogSearch.js';
 import { normName, normEmail, normPhone } from './contactSearch.js';
-import { duplicateDogFindings, duplicateContactFindings } from './tidyRules.js';
+import { duplicateContactFindings, dogIdentity, dogMatchKeys, eachDogPair, compareIdentities } from './tidyRules.js';
 import { duplicateApplicationPairs, duplicateDismissKeys } from './applicationDuplicates.js';
 
 // The tables scanned, in the order she sees them: parents before what hangs off
@@ -62,9 +62,7 @@ const BUCKETS = {
   contacts: (r) => [normName(r.name) && `n:${normName(r.name)}`, normEmail(r.email) && `e:${normEmail(r.email)}`, normPhone(r.phone) && `p:${normPhone(r.phone)}`],
   waitlist_programs: (r) => [r.kennel_id && `${r.kennel_id}|${normName(r.name)}`],
   breed_feeding_schedules: (r) => [normName(r.breed)],
-  dogs: (r) => [...dogNameKeys(r).map((k) => `r:${k}`), ...dogRegKeys(r).map((k) => `n:${k}`),
-    chip(r.microchip_id) && `m:${chip(r.microchip_id)}`, normName(r.call_name) && `c:${normName(r.call_name)}`,
-    r.public_id && `p:${r.public_id}`],
+  // dogs: eachDogPair's keys (tidyRules.dogMatchKeys, plus the microchip)
   pairings: (r) => [r.dam_id && r.sire_id && `${r.dam_id}|${r.sire_id}`],
   litters: (r) => [r.pairing_id && `p:${r.pairing_id}`, r.dam_id && `d:${r.dam_id}`],
   sales: (r) => [r.dog_id && r.buyer_contact_id && `${r.dog_id}|${r.buyer_contact_id}`],
@@ -141,7 +139,44 @@ function pairAllowed(table, a, b, flags) {
 // in SCAN_TABLES order, certain first, the older record of each pair as `a`.
 //   rows: { table: rows[] } (archived rows may be included; they're skipped).
 //   flags: the edition's (editionFlags). dismissed(finding) → true to leave it out.
-export function findDuplicates({ rows = {}, flags = {}, dismissed = () => false } = {}) {
+export function findDuplicates(opts = {}) {
+  const steps = scanSteps(opts);
+  let r = steps.next();
+  while (!r.done) r = steps.next();
+  return r.value;
+}
+
+// The same scan, giving the page a turn between tables so "Scanning…" paints and
+// the tab stays alive on a big program (K1-4).
+export async function findDuplicatesAsync(opts = {}) {
+  const steps = scanSteps(opts);
+  let r = steps.next();
+  while (!r.done) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    r = steps.next();
+  }
+  return r.value;
+}
+
+// What restoreMatch.dogNever rules out, from the identities' prebuilt lists, so a
+// pair it would drop never reaches the merge rules (which work the lists out again).
+// A shared Dog Card id is one dog whatever else differs, so it is never ruled out.
+const trimmed = (v) => String(v ?? '').trim();
+function dogsRuledOut(A, B) {
+  if (A.pub && A.pub === B.pub) return false;
+  if (A.sex && B.sex && A.sex !== B.sex) return true;
+  const dobA = trimmed(A.d.date_of_birth);
+  const dobB = trimmed(B.d.date_of_birth);
+  if (dobA && dobB && dobA !== dobB) return true;
+  const chipA = chip(A.d.microchip_id);
+  const chipB = chip(B.d.microchip_id);
+  if (chipA && chipB && chipA !== chipB) return true;
+  return registrationListsConflict(A.regs, B.regs);
+}
+
+const dogScanKeys = (I) => [...dogMatchKeys(I), chip(I.d.microchip_id) && `m:${chip(I.d.microchip_id)}`].filter(Boolean);
+
+function* scanSteps({ rows = {}, flags = {}, dismissed = () => false } = {}) {
   const tables = scanTables(flags);
   const live = Object.fromEntries(tables.map((t) => [t, (rows[t] || []).filter((r) => r && !r.is_archived)]));
   const ctx = { fk: (id) => id, local: live, incoming: live };
@@ -156,6 +191,17 @@ export function findDuplicates({ rows = {}, flags = {}, dismissed = () => false 
   };
 
   for (const table of tables) {
+    if (table === 'dogs') {
+      // One pass over dog pairs: a file Merge's rules and the tidy-up's (so
+      // nothing it would raise is missed here), each dog's keys built once.
+      eachDogPair(live.dogs.map(dogIdentity), dogScanKeys, (A, B) => {
+        if (!dogsRuledOut(A, B)) add('dogs', A.d, B.d, ruleLevel('dogs', A.d, B.d, ctx));
+        const m = compareIdentities(A, B);
+        if (m) add('dogs', A.d, B.d, m.strength === 'certain' ? 'same' : 'ask');
+      });
+      yield;
+      continue;
+    }
     const buckets = new Map();
     for (const r of live[table]) {
       for (const k of new Set(BUCKETS[table](r).filter(Boolean))) {
@@ -174,11 +220,9 @@ export function findDuplicates({ rows = {}, flags = {}, dismissed = () => false 
         }
       }
     }
+    yield;
   }
-  // The tidy-up's duplicates, so nothing it would raise is missed here.
-  if (tables.includes('dogs')) {
-    for (const f of duplicateDogFindings(live.dogs)) add('dogs', f.a, f.b, f.strength === 'certain' ? 'same' : 'ask');
-  }
+  // The tidy-up's duplicate contacts, so nothing it would raise is missed here.
   if (tables.includes('contacts')) {
     for (const f of duplicateContactFindings(live.contacts)) add('contacts', f.a, f.b, 'ask');
   }

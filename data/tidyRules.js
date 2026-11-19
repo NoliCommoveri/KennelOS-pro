@@ -13,7 +13,7 @@
 // the order she raises them in: TIDY_KINDS.
 import { RELEASED_SALE_STATUSES, EVENT_TYPES, WHELPED_OR_LATER } from './vocab.js';
 import { studParents } from './studRules.js';
-import { similarNamed, dogRegKeys, dogNameKeys, sameRegistration, sameRegisteredName, registrationsConflict } from './dogSearch.js';
+import { similarNamed, dogRegKeys, dogNameKeys, dogRegistrations, registrationListsConflict } from './dogSearch.js';
 import { normName, normEmail, normPhone, hasVet, isVet } from './contactSearch.js';
 import { duplicateApplicationPairs } from './applicationDuplicates.js';
 import { titlesOf, abbrKey, nameTitles, splitTitleInput } from './dogTitles.js';
@@ -439,59 +439,110 @@ export const DOG_CONTRADICTIONS = [
 ];
 const knownSex = (d) => (d.sex === 'male' || d.sex === 'female' ? d.sex : '');
 
-export function compareDogs(a, b) {
-  if (a.id === b.id) return null;
-  if (a.sire_id === b.id || a.dam_id === b.id || b.sire_id === a.id || b.dam_id === a.id) return null;
-  if (knownSex(a) && knownSex(b) && knownSex(a) !== knownSex(b)) return null;
-  const sameReg = sameRegistration(a, b);
-  const sameRegName = sameRegisteredName(a, b);
-  const cnA = normName(a.call_name);
-  const sameCall = cnA && cnA === normName(b.call_name) && normName(a.breed) === normName(b.breed);
-  const hasRegs = dogRegKeys(a).length && dogRegKeys(b).length;
-  const differs = [...(registrationsConflict(a, b) ? ['registration number'] : []),
-    ...DOG_CONTRADICTIONS.filter(([, f]) => f(a) && f(b) && f(a) !== f(b)).map(([label]) => label)];
-  const matches = [...(sameReg ? ['registration number'] : []),
-    ...DOG_CONTRADICTIONS.filter(([, f]) => f(a) && f(a) === f(b)).map(([label]) => label)];
-  const unknown = [...(hasRegs ? [] : ['registration number']),
-    ...DOG_CONTRADICTIONS.filter(([, f]) => !f(a) || !f(b)).map(([label]) => label)];
-  if (a.public_id && a.public_id === b.public_id) return { strength: 'certain', reasons: ['KennelOS ID'], matches, unknown: [] };
-  if (sameReg) return { strength: 'certain', reasons: ['registration number'], matches, unknown: [] };
+// What compareDogs reads of a dog, worked out once: a scan builds one per dog,
+// not one per pair (K1-4: 4,000 dogs under one call name froze the page).
+export function dogIdentity(d) {
+  return {
+    d, id: d.id, sex: knownSex(d), pub: d.public_id || '',
+    call: normName(d.call_name), breed: normName(d.breed),
+    regs: dogRegistrations(d), regKeys: dogRegKeys(d), nameKeys: dogNameKeys(d),
+    facts: DOG_CONTRADICTIONS.map(([, f]) => f(d))
+  };
+}
+const overlaps = (xs, ys) => xs.some((x) => ys.includes(x));
+
+// Two identities (dogIdentity): the cheap rule-outs first, and the labels built
+// only for a pair that is kept.
+export function compareIdentities(A, B) {
+  const a = A.d;
+  const b = B.d;
+  if (A.id === B.id) return null;
+  if (a.sire_id === B.id || a.dam_id === B.id || b.sire_id === A.id || b.dam_id === A.id) return null;
+  if (A.sex && B.sex && A.sex !== B.sex) return null;
+  const samePub = A.pub && A.pub === B.pub;
+  const sameReg = overlaps(A.regKeys, B.regKeys);
+  const sameRegName = overlaps(A.nameKeys, B.nameKeys);
+  const sameCall = A.call && A.call === B.call && A.breed === B.breed;
+  if (!samePub && !sameReg && !sameRegName && !sameCall) return null;
+  const differsAt = DOG_CONTRADICTIONS.map((_, i) => A.facts[i] && B.facts[i] && A.facts[i] !== B.facts[i]);
+  const contradicted = differsAt.some(Boolean) || registrationListsConflict(A.regs, B.regs);
+  if (!samePub && !sameReg && contradicted) return null;
   // Littermates share a birthday, breed and dam: a name alone never makes them certain (K1-1).
   const littermates = a.litter_id && a.litter_id === b.litter_id;
-  if (sameRegName && !differs.length) return { strength: littermates ? 'possible' : 'certain', reasons: ['registered name'], matches, unknown };
-  if (sameCall && !differs.length && !(a.litter_id && a.litter_id === b.litter_id)) {
-    return { strength: 'possible', reasons: ['call name', 'breed'], matches, unknown };
+  if (!samePub && !sameReg && !sameRegName && littermates) return null;
+  const matches = [...(sameReg ? ['registration number'] : []),
+    ...DOG_CONTRADICTIONS.filter((_, i) => A.facts[i] && A.facts[i] === B.facts[i]).map(([label]) => label)];
+  if (samePub) return { strength: 'certain', reasons: ['KennelOS ID'], matches, unknown: [] };
+  if (sameReg) return { strength: 'certain', reasons: ['registration number'], matches, unknown: [] };
+  const unknown = [...(A.regKeys.length && B.regKeys.length ? [] : ['registration number']),
+    ...DOG_CONTRADICTIONS.filter((_, i) => !A.facts[i] || !B.facts[i]).map(([label]) => label)];
+  if (sameRegName) return { strength: littermates ? 'possible' : 'certain', reasons: ['registered name'], matches, unknown };
+  return { strength: 'possible', reasons: ['call name', 'breed'], matches, unknown };
+}
+
+export function compareDogs(a, b) {
+  return compareIdentities(dogIdentity(a), dogIdentity(b));
+}
+
+// The keys only a pair that shares one can match on. A call name is keyed with
+// the birthday, since two different known birthdays rule a pair out; a dog with
+// no birthday is keyed under its call name alone, and those are compared with
+// every birthday of that name (dogCallPairs).
+export function dogMatchKeys(I) {
+  return [I.pub && `p:${I.pub}`, ...I.nameKeys.map((k) => `r:${k}`), ...I.regKeys.map((k) => `n:${k}`)].filter(Boolean);
+}
+
+// Every pair of identities that share a key, each once: fn(A, B). `keys(I)` gives
+// the plain keys; dogs are also paired by call name and birthday as above.
+export function eachDogPair(ids, keys, fn) {
+  const buckets = new Map();
+  const put = (k, I) => { if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(I); };
+  const byCall = new Map();
+  for (const I of ids) {
+    for (const k of new Set(keys(I))) put(k, I);
+    if (!I.call) continue;
+    if (!byCall.has(I.call)) byCall.set(I.call, { dated: new Map(), undated: [] });
+    const g = byCall.get(I.call);
+    // Trimmed: a birthday of only spaces is no birthday to a file Merge's rules.
+    const dob = String(I.d.date_of_birth ?? '').trim();
+    if (!dob) g.undated.push(I);
+    else { if (!g.dated.has(dob)) g.dated.set(dob, []); g.dated.get(dob).push(I); }
   }
-  return null;
+  // Each pair in list order, as a plain bucket gives it, so a tie on created_at
+  // keeps the earlier one first.
+  const pos = new Map(ids.map((I, i) => [I, i]));
+  const seen = new Set();
+  const visit = (A, B) => {
+    const k = pairKey(A.id, B.id);
+    if (seen.has(k)) return;
+    seen.add(k);
+    if (pos.get(A) < pos.get(B)) fn(A, B);
+    else fn(B, A);
+  };
+  const within = (group) => { for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) visit(group[i], group[j]); };
+  for (const group of buckets.values()) within(group);
+  for (const { dated, undated } of byCall.values()) {
+    within(undated);
+    for (const group of dated.values()) {
+      within(group);
+      for (const A of undated) for (const B of group) visit(A, B);
+    }
+  }
 }
 
 export function duplicateDogFindings(dogs) {
-  const live = dogs.filter((d) => !d.is_archived);
-  // Only pairs sharing a name or a registration number can match, so bucket by those.
-  const buckets = new Map();
-  const put = (k, d) => { if (!k) return; if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(d); };
-  for (const d of live) {
-    put(normName(d.call_name) && `c:${normName(d.call_name)}`, d);
-    for (const k of dogNameKeys(d)) put(`r:${k}`, d);
-    for (const k of dogRegKeys(d)) put(`n:${k}`, d);
-    put(d.public_id && `p:${d.public_id}`, d);
-  }
-  const seen = new Set();
+  const ids = dogs.filter((d) => !d.is_archived).map(dogIdentity);
   const out = [];
-  for (const group of buckets.values()) {
-    for (let i = 0; i < group.length; i++) {
-      for (let j = i + 1; j < group.length; j++) {
-        const k = pairKey(group[i].id, group[j].id);
-        if (seen.has(k)) continue;
-        seen.add(k);
-        const m = compareDogs(group[i], group[j]);
-        if (!m) continue;
-        const [a, b] = orderPair(group[i], group[j]);
-        out.push({ key: `dupdog:${k}`, kind: 'duplicate-dogs', a, b, ...m });
-      }
-    }
-  }
+  eachDogPair(ids, dogMatchKeys, (A, B) => {
+    const m = compareIdentities(A, B);
+    if (m) out.push(dogFinding(A.d, B.d, m));
+  });
   return out.sort((x, y) => (x.strength === y.strength ? 0 : x.strength === 'certain' ? -1 : 1));
+}
+
+export function dogFinding(x, y, m) {
+  const [a, b] = orderPair(x, y);
+  return { key: `dupdog:${pairKey(x.id, y.id)}`, kind: 'duplicate-dogs', a, b, ...m };
 }
 
 // One family who applied twice to the same waitlist: applicationDuplicates.js's

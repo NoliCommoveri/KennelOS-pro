@@ -40,7 +40,7 @@ import { markDataChanged, remapStoredIds } from './settings.js';
 import { nowIso, ReferenceBlockedError } from './repoBase.js';
 import { fileRepo } from './fileRepo.js';
 import { rekey } from './restoreMatch.js';
-import { findDuplicates } from './duplicateScan.js';
+import { findDuplicatesAsync } from './duplicateScan.js';
 import { normReg } from './dogSearch.js';
 
 const blank = (v) => v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && !v.length);
@@ -293,7 +293,7 @@ export function duplicateBlocker(table, keep, drop, ctx = {}) {
 export async function scanForDuplicates({ flags = {}, dismissed } = {}) {
   const rows = {};
   for (const t of Object.keys(REPOS)) rows[t] = await db.table(t).toArray();
-  return { findings: findDuplicates({ rows, flags, dismissed }), rows };
+  return { findings: await findDuplicatesAsync({ rows, flags, dismissed }), rows };
 }
 
 // Every id of `dropId` → `keepId`, in every field of every record but the

@@ -10,7 +10,7 @@
 // resolved (by kennel/dog name), and freely reassignable before commit. That's
 // how a receipt tagged "kennel overhead" gets pointed at a specific litter, or
 // an unresolved subject gets chosen by hand.
-import { parseCsv, buildPlan } from '../data/csvImport.js';
+import { parseCsv, buildPlan, NOT_UTF8_WARNING } from '../data/csvImport.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
@@ -201,8 +201,9 @@ mount.querySelector('#imp-file').addEventListener('change', async (ev) => {
   try {
     const parsed = await parseCsv(file);
     if (!parsed.rows.length) { flash('That file has no data rows.', 'err'); return; }
-    [subjects, plan] = await Promise.all([loadSubjects(), buildPlan('expense', parsed.rows).then((p) => p.rows)]);
+    [subjects, plan] = await Promise.all([loadSubjects(), buildPlan('expense', parsed.rows, { markUnchanged: false }).then((p) => p.rows)]);
     render();
+    if (parsed.encoding === 'windows-1252') flash(NOT_UTF8_WARNING, 'warn');
   } catch (e) {
     flash(e.message || String(e), 'err');
   }

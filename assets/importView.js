@@ -6,21 +6,23 @@
 // "Needs review" rows (keyless/partial-key or unresolved references — Data Model
 // §8) default to Skip; the user may explicitly create a new record or point the
 // row at an existing one, exactly as the spec requires.
-import { parseCsv, buildPlan, commitPlan, getMapping } from '../data/csvImport.js';
+import { parseCsv, buildPlan, commitPlan, getMapping, previewRows, PREVIEW_ROWS, NOT_UTF8_WARNING } from '../data/csvImport.js';
+import { getImportProgress, setImportProgress, clearImportProgress } from '../data/settings.js';
 import { esc, fmtDate } from './ui.js';
 import { importHelpHtml, wireImportHelp } from './importHelp.js';
 
 const STATUS_BADGE = {
   create: 'badge-green',
   update: 'badge-blue',
-  review: 'badge-amber'
+  review: 'badge-amber',
+  unchanged: 'badge-gray'
 };
 
 // The several-file import (pages/import-batch.js) passes `rows` already parsed
 // (with `fileName`) and `onNext(result | null)`: the file picker is replaced by
 // the file's name, Cancel becomes "Skip this file" (onNext(null)), and the
 // finished screen offers Next instead of the list link.
-export function createImportView({ mount, entity, listHref, listLabel, rows = null, fileName = '', onNext = null }) {
+export function createImportView({ mount, entity, listHref, listLabel, rows = null, fileName = '', encoding = 'utf-8', onNext = null }) {
   const mapping = getMapping(entity);
   let plan = null;      // array of classified rows (decisions are mutated in place)
   let existing = [];    // existing records, for the "match to existing" picker
@@ -40,6 +42,7 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
       ${importHelpHtml(entity)}
     </section>
     <div id="imp-msg"></div>
+    <div id="imp-stopped"></div>
     <section class="card" id="imp-preview-card" style="display:none; margin-top:16px;">
       <div class="row-between">
         <h2 style="margin:0;">2 · Preview (dry run)</h2>
@@ -66,6 +69,13 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
   const resultCard = mount.querySelector('#imp-result-card');
   const resultEl = mount.querySelector('#imp-result');
   const commitBtn = mount.querySelector('#imp-commit');
+  const fileLabel = fileName || '';
+
+  // An import cut off part-way (the tab closed, the device slept): say where it stopped.
+  const stopped = getImportProgress();
+  if (stopped && stopped.entity === entity) {
+    mount.querySelector('#imp-stopped').innerHTML = `<div class="inline-warn">Your last ${esc(mapping.label.toLowerCase())} import${stopped.fileName ? ` (${esc(stopped.fileName)})` : ''} stopped after row ${esc(stopped.lastRow)}: ${esc(stopped.done)} of ${esc(stopped.total)} rows were saved. Importing the same file again updates those rows instead of adding them twice.</div>`;
+  }
 
   function flash(text, kind = 'ok') {
     msg.innerHTML = `<div class="${kind === 'ok' ? 'inline-warn' : 'inline-error'}"${kind === 'ok' ? ' style="color:var(--accent-dark);background:var(--accent-soft);border-color:#bfe0cd;"' : ''}>${esc(text)}</div>`;
@@ -74,6 +84,8 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
 
   let lastRows = null;
   let dates = null;
+  let chosenName = fileLabel;
+  let encodingNote = encoding === 'windows-1252' ? NOT_UTF8_WARNING : '';
   async function loadRows(dataRows, { dateOrder = null } = {}) {
     if (!dataRows.length) { flash('That file has no data rows.', 'err'); return; }
     lastRows = dataRows;
@@ -95,8 +107,11 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
       plan = null;
       const file = fileInput.files?.[0];
       if (!file) return;
+      chosenName = file.name || '';
       try {
-        await loadRows((await parseCsv(file)).rows);
+        const parsed = await parseCsv(file);
+        encodingNote = parsed.encoding === 'windows-1252' ? NOT_UTF8_WARNING : '';
+        await loadRows(parsed.rows);
       } catch (e) {
         flash(e.message || String(e), 'err');
       }
@@ -104,23 +119,32 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
   }
 
   function renderSummary() {
-    const s = { create: 0, update: 0, skip: 0 };
+    const s = { create: 0, update: 0, unchanged: 0, skip: 0 };
     for (const r of plan) {
       if (r.decision === 'create') s.create++;
       else if (r.decision === 'update') s.update++;
+      else if (r.decision === 'unchanged') s.unchanged++;
       else s.skip++;
     }
     summaryEl.innerHTML =
       `<span class="badge badge-green">${s.create} create</span>` +
       `<span class="badge badge-blue">${s.update} update</span>` +
+      (s.unchanged ? `<span class="badge badge-gray">${s.unchanged} unchanged</span>` : '') +
       `<span class="badge badge-gray">${s.skip} skip</span>`;
   }
 
   // Options list of existing records, for the review-row "match to existing" picker.
+  // Drawn into a picker only when she uses it (fillTarget): with every record in
+  // every review row, a big file drew millions of options (K2-7).
   function existingOptions(selectedId) {
     return `<option value="">— pick a record —</option>` + existing
       .map((r) => `<option value="${esc(r.id)}"${r.id === selectedId ? ' selected' : ''}>${esc(mapping.describe(r))}</option>`)
       .join('');
+  }
+  function fillTarget(sel, selectedId) {
+    if (sel.dataset.filled) return;
+    sel.innerHTML = existingOptions(selectedId);
+    sel.dataset.filled = '1';
   }
 
   function actionCell(r) {
@@ -131,6 +155,7 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
         <option value="skip"${r.decision === 'skip' ? ' selected' : ''}>Skip</option>
       </select>`;
     }
+    if (r.status === 'unchanged') return '<span class="faint">Nothing to change</span>';
     if (r.status === 'update') {
       return `<select data-role="action" data-idx="${r.index}">
         <option value="update"${r.decision === 'update' ? ' selected' : ''}>Update match</option>
@@ -144,7 +169,7 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
         <option value="create"${r.decision === 'create' ? ' selected' : ''}>Create new</option>
         <option value="match"${matching ? ' selected' : ''}>Match existing…</option>
       </select>
-      <select data-role="target" data-idx="${r.index}" style="margin-top:6px;${matching ? '' : 'display:none;'}">${existingOptions(r.decisionTarget)}</select>`;
+      <select data-role="target" data-idx="${r.index}" style="margin-top:6px;${matching ? '' : 'display:none;'}"><option value="">— pick a record —</option></select>`;
   }
 
   // What an update changes, field by field (K2-4): "Status: Active breeding → Retired".
@@ -168,6 +193,7 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
     .map(([k, v]) => `${k.replace(/_/g, ' ')} ${fmtDate(v)}`).join(' · ');
 
   function noteCell(r) {
+    if (r.status === 'unchanged') return `<span class="muted">Matches existing: <strong>${esc(r.matchLabel || '')}</strong> · nothing changes</span>`;
     if (r.status === 'update' && r.matchLabel) {
       const lines = changeLines(r);
       const what = !lines.length ? ' · nothing changes'
@@ -182,11 +208,13 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
   }
 
   function renderPreview(_summary) {
-    const body = plan.map((r) => `
+    const drawn = previewRows(plan);
+    const hidden = plan.length - drawn.length;
+    const body = drawn.map((r) => `
       <tr class="${r.status === 'review' ? 'row-review' : ''}">
         <td class="faint">${r.index + 2}</td>
         <td><strong>${esc(r.display)}</strong>${datesRead(r) ? `<br><span class="faint">${esc(datesRead(r))}</span>` : ''}</td>
-        <td><span class="badge ${STATUS_BADGE[r.status]}">${r.status === 'review' ? 'needs review' : r.status}</span></td>
+        <td><span class="badge ${STATUS_BADGE[r.status]}">${r.status === 'review' ? 'needs review' : esc(r.status)}</span></td>
         <td>${actionCell(r)}</td>
         <td>${noteCell(r)}</td>
       </tr>`).join('');
@@ -199,20 +227,30 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
         Check a row's dates below before you commit.</div>`
       : dates?.detected === 'dmy' ? '<p class="field-hint" style="margin-top:0;">Dates are read day first, as this file writes them (it has a date like 25/01/2021).</p>'
         : dates?.detected === 'mixed' ? '<div class="inline-warn" style="margin-bottom:10px;">This file writes dates both ways round (25/01/2021 and 01/25/2021), so a date that could be either is left for review.</div>' : '';
-    tableEl.innerHTML = `${datesNote}
+    const shownNote = hidden > 0
+      ? `<p class="field-hint" style="margin-top:0;">Showing ${drawn.length.toLocaleString()} of ${plan.length.toLocaleString()} rows: the first ${PREVIEW_ROWS} and every row that needs review. The other ${hidden.toLocaleString()} import as classified.</p>`
+      : '';
+    const encodingWarn = encodingNote ? `<div class="inline-warn" style="margin-bottom:10px;">${esc(encodingNote)}</div>` : '';
+    tableEl.innerHTML = `${encodingWarn}${datesNote}${shownNote}
       <table class="data">
         <thead><tr><th>Row</th><th>${esc(mapping.entity.charAt(0).toUpperCase() + mapping.entity.slice(1))}</th><th>Classified</th><th>Action</th><th>Notes</th></tr></thead>
         <tbody>${body}</tbody>
       </table>`;
 
     // Wire the per-row controls to mutate decisions in place.
+    const byIndex = new Map(plan.map((p) => [p.index, p]));
+    tableEl.querySelectorAll('[data-role="target"]').forEach((sel) => {
+      const r = byIndex.get(Number(sel.dataset.idx));
+      if (r.decision === 'update') fillTarget(sel, r.decisionTarget);
+      else sel.addEventListener('focus', () => fillTarget(sel, r.decisionTarget), { once: true });
+    });
     tableEl.querySelectorAll('[data-role="action"]').forEach((sel) => {
       sel.addEventListener('change', () => {
-        const r = plan.find((p) => p.index === Number(sel.dataset.idx));
+        const r = byIndex.get(Number(sel.dataset.idx));
         const target = tableEl.querySelector(`[data-role="target"][data-idx="${sel.dataset.idx}"]`);
         if (sel.value === 'match') {
           r.decision = 'update';
-          if (target) { target.style.display = ''; r.decisionTarget = target.value || null; }
+          if (target) { fillTarget(target, r.decisionTarget); target.style.display = ''; r.decisionTarget = target.value || null; }
         } else {
           r.decision = sel.value; // 'create' | 'update' | 'skip'
           if (target) target.style.display = 'none';
@@ -222,7 +260,7 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
     });
     tableEl.querySelectorAll('[data-role="target"]').forEach((sel) => {
       sel.addEventListener('change', () => {
-        const r = plan.find((p) => p.index === Number(sel.dataset.idx));
+        const r = byIndex.get(Number(sel.dataset.idx));
         r.decisionTarget = sel.value || null;
       });
     });
@@ -244,8 +282,17 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
       return;
     }
     commitBtn.disabled = true;
+    const big = plan.length > 200;
     try {
-      const res = await commitPlan(entity, plan);
+      const res = await commitPlan(entity, plan, {
+        onProgress: ({ done, total, lastRow }) => {
+          setImportProgress({ entity, fileName: chosenName, lastRow, done, total, at: new Date().toISOString() });
+          if (big) flash(`Imported ${done.toLocaleString()} of ${total.toLocaleString()}…`);
+        }
+      });
+      clearImportProgress();
+      mount.querySelector('#imp-stopped').innerHTML = '';
+      clearFlash();
       previewCard.style.display = 'none';
       const failed = res.failed.length
         ? `<div class="inline-error" style="margin-top:10px;"><strong>${res.failed.length} row(s) failed:</strong><br>${res.failed.map((f) => `Row ${f.index + 2} (${esc(f.display)}): ${esc(f.message)}`).join('<br>')}</div>`
@@ -254,7 +301,7 @@ export function createImportView({ mount, entity, listHref, listLabel, rows = nu
         ? `<div class="muted" style="margin-top:10px;"><strong>${res.notes.length} note(s):</strong><br>${res.notes.map((f) => `Row ${f.index + 2} (${esc(f.display)}): ${esc(f.message)}`).join('<br>')}</div>`
         : '';
       resultEl.innerHTML = `
-        <p><strong>${res.created}</strong> created · <strong>${res.updated}</strong> updated · <strong>${res.skipped}</strong> skipped.</p>
+        <p><strong>${res.created}</strong> created · <strong>${res.updated}</strong> updated${res.unchanged ? ` · <strong>${res.unchanged}</strong> unchanged` : ''} · <strong>${res.skipped}</strong> skipped.</p>
         ${failed}
         ${notes}
         <div class="form-actions">${onNext

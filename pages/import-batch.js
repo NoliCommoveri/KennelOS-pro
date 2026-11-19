@@ -60,7 +60,7 @@ async function readFile(file) {
       ? `Looks like ${label(elsewhere.entity)}, which needs KennelOS Pro.`
       : 'Not recognized. Pick what it holds, or leave it out.';
   } else note = guess.sure ? 'Recognized from its columns.' : 'Best guess from its columns. Check it.';
-  return { name: file.name, rows: parsed.rows, fields: parsed.fields, entity: parsed.rows.length ? guess.entity : null, note };
+  return { name: file.name, rows: parsed.rows, fields: parsed.fields, encoding: parsed.encoding, entity: parsed.rows.length ? guess.entity : null, note };
 }
 
 function renderPlan() {
@@ -118,7 +118,7 @@ function runSteps(order) {
     }
     createImportView({
       mount, entity: f.entity, listHref: ENTITY_LIST[f.entity], listLabel: label(f.entity),
-      rows: f.rows, fileName: f.name, onNext: next
+      rows: f.rows, fileName: f.name, encoding: f.encoding, onNext: next
     });
     window.scrollTo(0, 0);
   };
