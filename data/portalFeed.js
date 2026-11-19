@@ -221,12 +221,15 @@ export function herVet({ kennel, contacts = [], events = [], dogsById }) {
   return Object.values(out).some(Boolean) ? assertOnlyKeys(out, VET_KEYS, 'vet') : null;
 }
 
-// A family's addresses: their contact's, then those they applied with on her
-// waitlist, lower case, at most PORTAL_MAX.emails.
+// A family's address, lower case: their current one only (their contact's), so
+// an address she has changed stops getting them in. Only while their contact has
+// none, the one they last applied with on her waitlist. [] when neither is one.
 const EMAIL = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
 function emailsOf(contact, entries) {
-  const all = [contact.email, ...entries.map((e) => e.application?.email)].map((e) => String(e ?? '').trim().toLowerCase()).filter((e) => e.length <= 254 && EMAIL.test(e));
-  return [...new Set(all)].slice(0, PORTAL_MAX.emails);
+  const ok = (e) => { const s = String(e ?? '').trim().toLowerCase(); return s.length <= 254 && EMAIL.test(s) ? s : ''; };
+  const applied = [...entries].sort((a, b) => newestFirst(a.applied_date || a.created_at, b.applied_date || b.created_at)).map((e) => ok(e.application?.email)).find(Boolean);
+  const current = String(contact.email ?? '').trim() ? ok(contact.email) : (applied || '');
+  return current ? [current] : [];
 }
 
 // Their status page: the newest of their records on her list with one.

@@ -32,7 +32,7 @@ import { contactRepo } from '../contactRepo.js';
 import { eventRepo } from '../eventRepo.js';
 import { accountRepo } from '../accountRepo.js';
 import { todayYMD, kennelToday } from '../dateUtils.js';
-import { waitlistConfig, kennelBreeds, readyCheckLapsed, onlineConfig } from '../waitlistRules.js';
+import { waitlistConfig, kennelBreeds, readyCheckLapsed, onlineConfig, contactForEmail } from '../waitlistRules.js';
 import { buildProjection } from '../waitlistProjection.js';
 import { TEST_TYPES } from '../healthTestLog.js';
 import { formQuestions } from '../waitlistForm.js';
@@ -182,6 +182,7 @@ export async function takeInApplications(token, kennels, { claim = serverWorkCla
   let messages = 0;
   let after = null;
   let dogs = null;
+  let contacts = null;
   do {
     const page = await api.readWaitlistInbox(token, { all, after });
     if (page.items.length) await claim(); // before anything is written here
@@ -208,7 +209,10 @@ export async function takeInApplications(token, kennels, { claim = serverWorkCla
         await waitlistEntryRepo.update(existing.id, { application: { ...fresh.application, ...existing.application }, application_questions: existing.application_questions || fresh.application_questions });
         filled++;
       } else {
-        await waitlistEntryRepo.create(fresh);
+        // Someone she already has (the same email): their application joins them.
+        contacts ??= await contactRepo.getAll();
+        const known = contactForEmail(fresh.application.email, contacts);
+        await waitlistEntryRepo.create(known ? { ...fresh, contact_id: known.id } : fresh);
         taken++;
       }
       if (!item.acked) done.push(item.id);

@@ -1702,6 +1702,29 @@ export function contactMatches(application, contacts) {
 
 export { contactMatchReason };
 
+// The contact an application's email already belongs to: the one live contact
+// with exactly that address (case and spaces aside). A new application with it
+// joins that person at once, online, typed in or imported, so one person keeps
+// one set of details. None, or two contacts sharing it → null (she picks at
+// approval, contactMatches).
+export function contactForEmail(email, contacts) {
+  const want = String(email ?? '').trim().toLowerCase();
+  if (!want) return null;
+  const hits = (contacts || []).filter((c) => c && !c.is_archived && String(c.email ?? '').trim().toLowerCase() === want);
+  return hits.length === 1 ? hits[0] : null;
+}
+
+// A family's details as every screen shows them: once they're linked to a
+// contact, that contact's name, email, phone and address, the only ones anything
+// reads; before that, what they applied with (City / state as the address).
+export const FAMILY_DETAIL_KEYS = ['name', 'email', 'phone', 'address'];
+export function familyDetails(entry, contact) {
+  const s = (v) => String(v ?? '').trim();
+  if (contact) return { name: s(contact.name), email: s(contact.email), phone: s(contact.phone), address: s(contact.address) };
+  const a = (entry && entry.application) || {};
+  return { name: s(a.name), email: s(a.email), phone: s(a.phone), address: s(a.location) };
+}
+
 // The family's display name: the linked contact's, else the applicant's own.
 export function entryName(entry, contact) {
   return (contact && contact.name) || (entry.application && entry.application.name) || 'Unnamed applicant';

@@ -55,7 +55,8 @@ import {
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
-  sideSaleOf, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow
+  sideSaleOf, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow,
+  familyDetails, contactForEmail
 } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import {
@@ -1404,12 +1405,15 @@ function detailsDlHtml() {
   const e = ctx.entry;
   const app = e.application || {};
   const program = ctx.programs.get(e.waitlist_program_id);
-  const contactHtml = ctx.contact
-    ? `<a href="contact.html?id=${encodeURIComponent(ctx.contact.id)}">${esc(ctx.contact.name)}</a>${ctx.contact.email ? ` <span class="faint">${esc(ctx.contact.email)}</span>` : ''}`
-    : '<span class="faint">Not linked yet — approving links or creates one</span>';
+  // Their details: one set, the same everywhere (Edit changes them everywhere).
+  const who = familyDetails(e, ctx.contact);
+  const nameHtml = ctx.contact ? `<a href="contact.html?id=${encodeURIComponent(ctx.contact.id)}">${esc(who.name)}</a>` : esc(who.name);
   return `
     <dl class="dl-meta" style="margin-top:14px;">
-      ${row('Contact', contactHtml)}
+      ${row('Name', who.name ? nameHtml : '')}
+      ${row('Email', esc(who.email))}
+      ${row('Phone', esc(who.phone))}
+      ${ctx.contact ? row('Address', multiline(who.address)) : ''}
       ${row('Program', program ? programRowHtml(program) : '')}
       ${row('Wants', prefsSummary(e) + (e.pref_breed && resolveBreed(e.pref_breed, ctx.breeds) === null ? ` <span class="badge badge-red" title="No pup will match this breed. Edit to pick one of your breeds.">Unknown breed</span>` : ''))}
       ${row('Ready to buy', readySummary(e))}
@@ -1427,7 +1431,7 @@ function detailsDlHtml() {
     <h3 style="margin:18px 0 6px;">Application</h3>
     <dl class="dl-meta">
       ${row('Applied', e.applied_date ? esc(fmtDate(e.applied_date)) : '')}
-      ${entryQuestions(e, ctx.form).map((q) => row(q.label, multiline(answerText(q, app[q.id])))).join('')}
+      ${entryQuestions(e, ctx.form).filter((q) => !(ctx.contact && isDetailQuestion(q))).map((q) => row(q.label, multiline(answerText(q, app[q.id])))).join('')}
     </dl>`;
 }
 
@@ -1444,6 +1448,32 @@ const prefField = (key, e, label) => prefFieldHtml(key, e, { label, breeds: ctx.
 // The questions a draft's answers are read from: her form for a new application,
 // else the entry's own questions (its saved wording plus anything added since).
 const draftQuestions = () => (ctx.mode === 'new' ? ctx.form.filter(isAnswerQuestion) : entryQuestions(ctx.draft, ctx.form));
+
+// Once they're linked, their name, email, phone and address are edited here, at
+// the top, and saving changes them everywhere (actions.saveEntryEdits). The
+// application's own name, email and phone answers aren't shown or offered again
+// (one person, one set of details on screen); what they first typed stays stored.
+const isDetailQuestion = (q) => q.key === 'name' || q.key === 'email' || q.id === 'phone';
+function detailFields() {
+  if (!ctx.draft.contact_id || !ctx.contact) return '';
+  const d = familyDetails(ctx.draft, ctx.contact);
+  return `<div class="field field-wide"><h3 style="margin:0;">Their details</h3></div>
+      <div class="field"><label>Name <span class="req">*</span></label><input id="f-d-name" type="text" autocomplete="off" value="${esc(d.name)}"></div>
+      <div class="field"><label>Email</label><input id="f-d-email" type="email" autocomplete="off" value="${esc(d.email)}">
+        <span class="field-hint">Every email and sign-in code goes here from now on.</span></div>
+      <div class="field"><label>Phone</label><input id="f-d-phone" type="tel" autocomplete="off" value="${esc(d.phone)}"></div>
+      <div class="field field-wide"><label>Address</label><textarea id="f-d-address" rows="2">${esc(d.address)}</textarea></div>`;
+}
+
+// Their details as typed on Edit; null when the form has none (not linked yet).
+function readDetails() {
+  if (!document.getElementById('f-d-name')) return null;
+  const v = (k) => document.getElementById(`f-d-${k}`).value.trim();
+  const out = { name: v('name'), email: v('email'), phone: v('phone'), address: v('address') };
+  if (!out.name) throw new Error('Please fill in: Name.');
+  if (out.email && !/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(out.email)) throw new Error('That email doesn\'t look right. Check it and save again.');
+  return out;
+}
 
 function renderEdit() {
   const e = ctx.draft;
@@ -1488,7 +1518,8 @@ function renderEdit() {
       <div class="field field-wide"><span class="field-hint">Change these questions on the <a href="waitlist-form.html?kennel=${encodeURIComponent(ctx.kennel.id)}">Application form</a> page.</span></div>
     </div>` : `
     <div class="form-grid" style="margin-top:14px;">
-      <div class="field field-wide"><h3 style="margin:0;">Preferences</h3></div>
+      ${detailFields()}
+      <div class="field field-wide"><h3 style="margin:${e.contact_id ? '8px' : '0'} 0 0;">Preferences</h3></div>
       ${['pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing'].map((k) => prefField(k, e, k === 'ready_timing' ? ctx.form.find((q) => q.key === 'ready_timing')?.label : undefined)).join('')}
       ${programField}
 
@@ -1514,9 +1545,9 @@ function renderEdit() {
           ? 'You moved this family yourself, so their place stays where you put it. This date still sets when a readiness hold ends and the day the fee counts as income.'
           : 'This date is their place in line: changing it can move them up or down the list. It also sets when a readiness hold ends and the day the fee counts as income.'}</span></div>` : ''}
 
-      <div class="field field-wide"><h3 style="margin:8px 0 0;">Application</h3>${e.contact_id ? '<span class="field-hint">Name, email and phone are what they applied with. The contact record holds the current ones.</span>' : ''}</div>
+      <div class="field field-wide"><h3 style="margin:8px 0 0;">Application</h3></div>
       <div class="field"><label>Applied</label><input id="f-applied_date" type="date" value="${esc(e.applied_date || '')}"></div>
-      ${draftQuestions().map((q) => answerField(q, app[q.id])).join('')}
+      ${draftQuestions().filter((q) => !(e.contact_id && isDetailQuestion(q))).map((q) => answerField(q, app[q.id])).join('')}
       <div class="field field-wide"><label>Your notes</label><textarea id="f-notes">${esc(e.notes || '')}</textarea></div>
     </div>`;
 
@@ -2063,13 +2094,16 @@ async function save() {
   clearError();
   try {
     const changes = readForm();
+    const details = ctx.mode === 'new' ? null : readDetails();
     if (ctx.mode === 'new') {
-      const saved = await waitlistEntryRepo.create({ ...changes, kennel_id: ctx.kennel.id, status: 'applied' });
+      // Someone she already has (the same email): the application joins them.
+      const known = contactForEmail(changes.application?.email, ctx.contacts);
+      const saved = await waitlistEntryRepo.create({ ...changes, kennel_id: ctx.kennel.id, status: 'applied', ...(known ? { contact_id: known.id } : {}) });
       location.href = `waitlist-entry.html?id=${encodeURIComponent(saved.id)}`;
       return;
     }
     if (!(await confirmNarrowing(changes))) return;
-    await waitlistEntryRepo.update(ctx.entry.id, changes);
+    await actions.saveEntryEdits(ctx.entry.id, changes, details);
     ctx.mode = 'view';
     await reload();
     renderAll();

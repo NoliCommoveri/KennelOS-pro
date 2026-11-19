@@ -56,7 +56,8 @@ import {
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
   splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit,
-  turnIsEmpty, emptiedTurns, turnRespondBy, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan
+  turnIsEmpty, emptiedTurns, turnRespondBy, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
+  FAMILY_DETAIL_KEYS
 } from './waitlistRules.js';
 
 // Every action here is one transaction over her data tables (K6-13): a deposit, a pass
@@ -116,6 +117,27 @@ async function feeContext(entry, programId) {
   ]);
   return { config: waitlistConfig(kennel), program };
 }
+
+// Save the family's page (Edit): the entry's own fields, and once they're linked,
+// their details (`details`: name, email, phone, address) on their one contact, so
+// a change reaches every email, sign-in code, contract, sale and portal at once.
+// Only what changed is written. One transaction: both or neither.
+export const saveEntryEdits = atomic(async function saveEntryEdits(entryId, changes, details = null) {
+  const entry = await load(entryId);
+  if (details && entry.contact_id) {
+    const contact = await contactRepo.getById(entry.contact_id);
+    if (!contact) throw new Error('Their details are missing. Reload the page and try again.');
+    const patch = {};
+    for (const k of FAMILY_DETAIL_KEYS) {
+      if (!(k in details)) continue;
+      const v = String(details[k] ?? '').trim();
+      if (v !== String(contact[k] ?? '').trim()) patch[k] = v;
+    }
+    if ('name' in patch && !patch.name) throw new Error('Please fill in: Name.');
+    if (Object.keys(patch).length) await contactRepo.update(contact.id, patch);
+  }
+  return waitlistEntryRepo.update(entryId, changes);
+});
 
 // A new Contact from the application answers (Spec §5.2 "creates or links").
 function contactFromApplication(app = {}) {

@@ -26,7 +26,7 @@ import { expenseRepo, mileageAmount } from './expenseRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { formQuestions, isAnswerQuestion, snapshotQuestions, columnsFor, IMPORT_ALIASES } from './waitlistForm.js';
-import { waitlistConfig, kennelBreeds, resolveBreed } from './waitlistRules.js';
+import { waitlistConfig, kennelBreeds, resolveBreed, contactForEmail } from './waitlistRules.js';
 import { todayYMD } from './dateUtils.js';
 import { normReg } from './pedigreeImport.js';
 import { normalizeTitles } from './dogTitles.js';
@@ -1882,6 +1882,11 @@ const WAITLIST_MAPPING = {
     }
     if (status_ === 'review') decision = 'skip';
     else decision = status_;
+    // Someone she already has (the same email): a new application joins them.
+    if (status_ === 'create') {
+      const known = contactForEmail(email, this._contactsById ? [...this._contactsById.values()] : []);
+      if (known) record.contact_id = known.id;
+    }
 
     // An update only refreshes the answers and preferences of an application
     // still under review — never its kennel, status or dates.
