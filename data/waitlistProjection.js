@@ -25,7 +25,7 @@ import {
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, isPicksOpen, isFamilyPageOnly, LISTEN_LIVE_LITTER,
-  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening
+  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening, statusPopupTexts
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
@@ -473,7 +473,7 @@ function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogs
   return [...litterItems, ...heatItems];
 }
 
-// At most this many planned openings are walked for the turn estimate.
+// At most this many planned openings are walked (serverMoves.turnReach).
 const OPENINGS_MAX = 6;
 
 const toUpcomingView = (u) => ({
@@ -583,13 +583,12 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     });
   }
 
-  // The turn order as each of her planned litters opens (Waitlist Timers plan Phase 3),
-  // soonest first: open litters share one turn order, and a litter that opens joins it,
-  // so each is turnQueue's walk with that litter and every one before it counted open.
-  // A family who's used their turn on the open litters (or said "Not this litter")
-  // waits for the first planned one they'd get a turn on: the server counts their
-  // estimate to that opening (serverMoves.turnEstimate). Only times reach a family's
-  // page, never anyone else's place.
+  // The turn order as each of her planned litters opens, soonest first: open litters
+  // share one turn order, and a litter that opens joins it, so each is turnQueue's walk
+  // with that litter and every one before it counted open. The server reads it to tell
+  // whether a pup a family wants should still be there when their turn on that litter
+  // comes (serverMoves.turnReach, for the status page's pop-up). Only that yes/no
+  // reaches a family's page, never anyone's place.
   const planned = litters
     .filter((l) => l.kennel_id === kennel.id && isWaitlistLitter(l, kennel) && !l.picks_opened_date && !l.waitlist_off)
     .map((l) => ({ l, at: plannedOpening(l, config) }))
@@ -603,8 +602,8 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     const queue = [];
     for (const e of rankedList(live, kennel.id, programsById)) {
       const { offer } = splitPrepassed(e, turnLittersFor(e, kennelOffers, countedOpen, dogs, sales, opts));
-      // The pups they'd pick from: the server walks the order with them, so a family whose
-      // pups would all be taken before their turn gets no estimate. `planned`: this
+      // The pups they'd pick from: the server walks the order with them, so it can tell a
+      // family whose pups would all be taken before their turn. `planned`: this
       // litter is in their turn (not only litters open before it).
       if (offer.length) queue.push({ entry_id: e.id, dog_ids: [...new Set(offer.flatMap((x) => x.eligibleDogs.map((d) => d.id)))].sort(), planned: offer.some((x) => x.litter.id === l.id) });
     }
@@ -756,6 +755,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       ...(familyLogo(kennel) ? { logo: familyLogo(kennel) } : {}),
       // The message under her public list's heading (publicIntroText).
       intro: publicIntroText(config, kennel.kennel_name || ''),
+      // Her words for the status page's pop-up, per kind ('' = none); the server picks
+      // which one a family sees (familyPages.statusPopup) and fills in [Kennel].
+      status_popups: statusPopupTexts(config),
       time_zone: orNull(kennel.time_zone),
       respond_days: Number(config.respond_days),
       // Turns in hours, kept in her families' waking hours (Waitlist Timers plan T1):

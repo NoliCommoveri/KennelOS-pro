@@ -52,6 +52,7 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   closed_dates: [], // her blackout dates (YYYY-MM-DD), skipped like a closed weekday; dropped 7 days after they pass
   checkin_months: 6,
   soon_notice_text: '', // blank = SOON_NOTICE_DEFAULT
+  status_popups: null, // { [kind]: her words } for the status page's pop-up; missing = default, '' = off
   public_intro_text: '', // blank = PUBLIC_INTRO_DEFAULT (the message under her public list's heading)
   public_show_paused: false, // paused families on the public list, "Skipped until …" in place of their preferences
   public_show_programs: false, // a program with an icon and a description for families shows its icon by the family's number on the public list (publicProgram)
@@ -1563,6 +1564,29 @@ export function soonNoticeText(config, kennelName = '') {
     .replace(/\[kennel name\]/gi, kennelName || 'Our kennel').trim();
   const [first, ...rest] = text.split('\n');
   return { subject: first.trim(), body: rest.join('\n').trim(), text };
+}
+
+// The pop-up a waiting family sees when they open their status page (owner,
+// 2026-11-19): one per visit, closed with "Got it". The server picks the kind
+// (familyPages.statusPopup): soon / soon_far (a born litter, picks not open yet, and a
+// pup they want should be left for them / may run out first), open / open_far (the
+// same with picks open), skipped (in line for none of it). The turn holder's
+// countdown pop-up has fixed words. [Kennel] becomes her kennel's name; in `skipped`,
+// [opening soon/open] becomes "opening soon" before picks open and "open" once they
+// have. Her own words: waitlist_config.status_popups (Waitlist settings → Messages).
+export const STATUS_POPUP_DEFAULTS = Object.freeze({
+  soon: 'Picks will be opening soon, so please be on the lookout for a communication from us in the upcoming days or weeks saying your turn has arrived, and check your status page frequently for updates.',
+  soon_far: "We'll be taking deposits soon and may be able to offer you a pup; please be on the lookout for a communication within the upcoming days or weeks.",
+  open: "The wait is nearly over! Another family is currently choosing their pup; we'll let you know when it's your turn, but please check back here daily for updates.",
+  open_far: 'We are taking deposits now and may be able to offer you a pup soon; please be on the lookout for a communication within the upcoming days or weeks.',
+  skipped: "Deposits are [opening soon/open], but you are not scheduled to be offered pups from it. Please reach out to [Kennel] if you've changed your mind and are interested in being offered a puppy from the upcoming litter."
+});
+export const STATUS_POPUP_MAX = 1000;
+// Her words for each kind ('' = off), as published.
+export function statusPopupTexts(config) {
+  const mine = config && config.status_popups && typeof config.status_popups === 'object' ? config.status_popups : {};
+  return Object.fromEntries(Object.keys(STATUS_POPUP_DEFAULTS).map((kind) => [kind,
+    (typeof mine[kind] === 'string' ? mine[kind].trim() : STATUS_POPUP_DEFAULTS[kind]).slice(0, STATUS_POPUP_MAX)]));
 }
 
 // The message under the heading of her public list page (decided 2026-10-08), with

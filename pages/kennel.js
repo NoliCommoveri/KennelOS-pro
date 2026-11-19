@@ -38,7 +38,7 @@ import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
 import { MILEAGE_BASIS } from '../data/transportFee.js';
 import { backOutReasons, backOutPolicy, BACK_OUT_OUTCOMES, BACK_OUT_POLICY_TEXT_DEFAULT } from '../data/backOut.js';
-import { waitlistConfig, waitlistConfigProblem, openDays, closedDates, liveClosedDates, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, EXTRAS_INTRO_OLD_DEFAULT, FEATURED_LABEL_DEFAULT, FEATURED_LABEL_MAX, passReasons, showUpcoming, UPCOMING_STAGES, TURN_HOURS_MAX, timeLabel, HALF_HOURS } from '../data/waitlistRules.js';
+import { waitlistConfig, waitlistConfigProblem, openDays, closedDates, liveClosedDates, SOON_NOTICE_DEFAULT, EXTRAS_INTRO_DEFAULT, EXTRAS_INTRO_OLD_DEFAULT, FEATURED_LABEL_DEFAULT, FEATURED_LABEL_MAX, passReasons, showUpcoming, UPCOMING_STAGES, TURN_HOURS_MAX, timeLabel, HALF_HOURS, STATUS_POPUP_DEFAULTS, STATUS_POPUP_MAX, statusPopupTexts } from '../data/waitlistRules.js';
 import { waitlistPolicies, validatePolicies, newPolicy, POLICY_LIMITS } from '../data/waitlistForm.js';
 import { policyStarters, policyHint, basisChanges } from '../data/waitlistPolicies.js';
 import { qaListHtml, wireQaList } from '../assets/qaListEditor.js';
@@ -553,11 +553,11 @@ ${online ? readySettings(c) : ''}`)}
           <span class="field-hint">A family in a program you gave an icon (Waitlist programs) shows that icon to the left of their number; tapping it shows the program's description for families, so others can see why they're ahead. The program's name never shows, and programs without an icon stay private. In the list copied as text, the icon is an emoji with its description below the list.</span>
         </div>
 ${online ? upcomingSwitches(c) + featuredSettings(c) + parentTestsSetting(c) + facebookSettings(c) + extrasSettings(c) : ''}`)}
-${group('messages', 'Messages to families', online ? '"Almost your turn" and the emails families get' : 'The "Almost your turn" message', `
+${group('messages', 'Messages to families', online ? '"Almost your turn", status page pop-ups and the emails families get' : 'The "Almost your turn" message', `
         <div class="field field-wide"><label for="wl-soon-text">"Almost your turn" message</label>
           <textarea id="wl-soon-text" style="min-height:130px;">${esc(c.soon_notice_text || SOON_NOTICE_DEFAULT)}</textarea>
           <span class="field-hint">Sent from the Almost your turn… button to families whose turn is coming up. The first line is the email subject. [Kennel Name] becomes ${esc(k.kennel_name)}. Clear it to go back to the default.</span></div>
-${online ? emailTemplateSettings(c) : ''}`)}
+${online ? statusPopupSettings(c) + emailTemplateSettings(c) : ''}`)}
       ${online ? group('backout', 'Backing out', 'Reasons, your deposit policy, what families read', backOutSettings(c)) : ''}
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-waitlist">Save</button></div>
     </section>`;
@@ -567,6 +567,27 @@ ${online ? emailTemplateSettings(c) : ''}`)}
 // on the public list and on family pages, all off until she ticks one. Shown
 // with the parents' call names and titles and her dates.
 // "Ready now?" unanswered (Waitlist Spec §16.7): her rule, and the days.
+// The pop-up a waiting family sees on opening their status page (owner, 2026-11-19):
+// her words for each moment. A box left as the default keeps following it; an empty
+// box turns that pop-up off. The turn holder's countdown pop-up isn't worded here.
+const STATUS_POPUP_KINDS = [
+  { kind: 'soon', label: 'Picks opening soon, and their turn should come', hint: 'A born litter they match, picks not open yet, and enough pups for them.' },
+  { kind: 'soon_far', label: 'Picks opening soon, but pups may run out first', hint: 'A born litter they match, picks not open yet, with more families ahead who\'d take their pups than pups.' },
+  { kind: 'open', label: 'Picks open, and their turn should come', hint: 'Shown whether another family is choosing right now or between turns, as long as a pup they want should be left for them.' },
+  { kind: 'open_far', label: 'Picks open, but pups may run out first', hint: 'More families ahead who\'d take their pups than pups left.' },
+  { kind: 'skipped', label: 'Not being offered this litter', hint: 'They said "Not this litter", used or passed their turn on it, chose other parents, or no pup matches what they asked for.' }
+];
+function statusPopupSettings(c) {
+  const texts = statusPopupTexts(c);
+  return `<div class="field field-wide"><label>Status page pop-ups</label>
+      <span class="field-hint">When a waiting family opens their status page, one of these pops up (closed with "Got it"), whichever fits them best. A family holding a turn sees the time they have left to pick and pay instead. <strong>[Kennel]</strong> becomes your kennel's name; <strong>[opening soon/open]</strong> becomes "opening soon" or "open". Empty a box to turn that pop-up off. Paused families see none.</span>
+      ${STATUS_POPUP_KINDS.map(({ kind, label, hint }) => `<details style="margin:6px 0;"><summary>${esc(label)}</summary>
+        <div class="field" style="margin-top:6px;"><textarea style="min-height:90px;" maxlength="${STATUS_POPUP_MAX}" data-popup="${esc(kind)}">${esc(texts[kind])}</textarea>
+          <span class="field-hint">${esc(hint)}${texts[kind] ? '' : ' Off: no pop-up for this.'}</span></div>
+      </details>`).join('')}
+    </div>`;
+}
+
 // Her wording for the emails families get once the list is online (W2 step 6;
 // data/waitlistEmails.js). One folded block per email; a field left as the
 // default (or cleared) keeps following the default.
@@ -756,6 +777,15 @@ async function onSaveWaitlist() {
     }
     waitlist_config.email_templates = Object.keys(templates).length ? templates : null;
     waitlist_config.email_reminders = q('#wl-reminders').checked;
+  }
+  if (els.config.querySelector('[data-popup]')) {
+    // Only what differs from the default is stored ('' = off), so a default stays the default.
+    const popups = {};
+    for (const el of els.config.querySelectorAll('[data-popup]')) {
+      const value = el.value.trim();
+      if (value !== STATUS_POPUP_DEFAULTS[el.dataset.popup]) popups[el.dataset.popup] = value;
+    }
+    waitlist_config.status_popups = Object.keys(popups).length ? popups : null;
   }
   if (q('#wl-fb-on')) {
     const page = q('#wl-fb-page').value.trim();
