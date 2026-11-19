@@ -3,6 +3,7 @@
 // Pairing" action), and a Timeline of pairing-subject events. Hard blocks come
 // from pairingRepo (required fields, sire≠dam); soft/interactive rules (sex
 // mismatch, due-date ordering) live here because they need the user.
+import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { pairingRepo, ReferenceBlockedError } from '../data/pairingRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
@@ -258,11 +259,16 @@ function renderProfileActions() {
 
 async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
+  showDeleteBlockers(els.headerActions, []);
   if (ctx.mode === 'new' || !ctx.original) return;
   const p = ctx.original;
   const blockers = await pairingRepo.getDeleteBlockers(p.id);
+  showDeleteBlockers(els.headerActions, blockers, {
+    linked: { table: 'pairings', id: p.id, onDone: () => { location.href = 'pairings.html'; } },
+    what: 'this pairing'
+  });
   const delTitle = blockers.length
-    ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
+    ? 'Still in use: see the note below'
     : 'Permanently delete this record.';
   // Archive control. Lite hides the archive machinery (cap spec §5/§7) — no
   // manual pairing-archive at all (pairings have no "departure" substitute).

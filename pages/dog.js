@@ -3,6 +3,7 @@
 // Build Brief B1 rules — hard blocks come from dogRepo (required fields, dates,
 // cycles), soft/interactive ones (sex mismatch warn, the deceased confirmations)
 // live here because they need the user.
+import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { dogRepo, ReferenceBlockedError, dogName as nameOf } from '../data/dogRepo.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { contactRepo } from '../data/contactRepo.js';
@@ -823,13 +824,11 @@ function renderProfileActions() {
 
 async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
+  showDeleteBlockers(els.headerActions, []);
   if (ctx.mode === 'new' || !ctx.original) return;
   const d = ctx.original;
   const blockers = await dogRepo.getDeleteBlockers(d.id);
-  const altAction = editionFlags.manualDogArchive ? 'archive instead.' : 'remove it from your program instead.';
-  const delTitle = blockers.length
-    ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — ' + altAction
-    : 'Permanently delete this record.';
+  const delTitle = blockers.length ? 'Still in use: see the note below' : 'Permanently delete this record.';
   const documentsBtn = editionFlags.documents
     ? `<a class="btn btn-sm" href="documents.html?dog=${encodeURIComponent(d.id)}" title="View this dog's filed documents">📄 Documents</a>`
     : '';
@@ -865,6 +864,13 @@ async function renderHeaderActions() {
   document.getElementById('btn-depart')?.addEventListener('click', departDog);
   const del = document.getElementById('btn-delete');
   if (!blockers.length) del.onclick = doDelete;
+  showDeleteBlockers(els.headerActions, blockers, {
+    linked: { table: 'dogs', id: d.id, onDone: () => { location.href = 'dogs.html'; } },
+    what: 'this dog',
+    alt: editionFlags.manualDogArchive
+      ? 'Archive it instead: it keeps its history and drops out of your lists.'
+      : 'Remove it from your program instead: it keeps its history.'
+  });
 }
 
 function showError(msg) {

@@ -1,6 +1,7 @@
 // sale.js — Sale Detail. Edit-in-place profile and a derived Contracts panel
 // (contracts.related_sale_id = this sale — canonical on Contract, never a
 // Sale.contract_id, Stage4 Revision v2 §5). Buyer is a Contact (no Buyer table).
+import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { saleRepo, ReferenceBlockedError } from '../data/saleRepo.js';
 import { expectedPricing, priceForRegistrationChange } from '../data/saleDefaults.js';
 import { contractRepo } from '../data/contractRepo.js';
@@ -732,12 +733,17 @@ function renderProfileActions() {
 
 async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
+  showDeleteBlockers(els.headerActions, []);
   if (ctx.mode === 'new' || !ctx.original) return;
   const s = ctx.original;
   const archiveLabel = s.is_archived ? 'Unarchive' : 'Archive';
   const blockers = await saleRepo.getDeleteBlockers(s.id);
+  showDeleteBlockers(els.headerActions, blockers, {
+    linked: { table: 'sales', id: s.id, onDone: () => { location.href = 'sales.html'; } },
+    what: 'this sale'
+  });
   const delTitle = blockers.length
-    ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
+    ? 'Still in use: see the note below'
     : 'Permanently delete this record.';
   const puppyRecordBtn = editionFlags.puppyRecord
     ? `<a class="btn btn-sm" id="btn-puppy-record" href="puppy-record.html?sale=${encodeURIComponent(s.id)}">Puppy Record (PDF)</a>`

@@ -6,7 +6,7 @@
 // pup" here is exactly who the waitlist would offer it to — minus the listen-only
 // parent choices, which are about litters, not pups.
 import { pupMatchesPrefs, isPupAvailable, prefColorTokens, isPlacedFamily, WAITLIST_CONFIG_DEFAULTS } from './waitlistRules.js';
-import { REGISTRATION_TYPE, WAITLIST_REMOVED_REASON, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, registrationsForPurposes, cleanPurposes, descriptor } from './vocab.js';
+import { REGISTRATION_TYPE, WAITLIST_OFFER_OUTCOME, WAITLIST_REMOVED_REASON, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, registrationsForPurposes, cleanPurposes, descriptor } from './vocab.js';
 import { daysBetween } from './breedingReports.js';
 
 // --- Funnel -----------------------------------------------------------------------------
@@ -78,7 +78,7 @@ export function offerOutcomes(offers) {
     if (o.outcome === 'open' || o.outcome === 'voided') continue;
     // An accepted offer the family later backed out of is its own outcome.
     const label = o.outcome === 'accepted' && o.backed_out_date ? 'Backed out'
-      : { accepted: 'Accepted', passed: 'Passed', no_response: 'No response' }[o.outcome] || o.outcome;
+      : descriptor(WAITLIST_OFFER_OUTCOME, o.outcome).label;
     outcomes.set(label, (outcomes.get(label) || 0) + 1);
     if (o.outcome === 'passed') {
       const r = o.pass_reason?.label || 'Recorded by you';

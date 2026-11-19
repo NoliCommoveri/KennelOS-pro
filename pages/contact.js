@@ -1,6 +1,7 @@
 // contact.js — Contact Detail (edit-in-place). Includes inline "add new kennel"
 // from the kennel field (Build Brief B1) and a read-only list of dogs owned or
 // co-owned by this contact (derived via owner_contact_id + the co-owner index).
+import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo, ReferenceBlockedError } from '../data/dogRepo.js';
@@ -288,11 +289,16 @@ function renderProfileActions() {
 
 async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
+  showDeleteBlockers(els.headerActions, []);
   if (ctx.mode === 'new' || !ctx.original) return;
   const c = ctx.original;
   const blockers = await contactRepo.getDeleteBlockers(c.id);
+  showDeleteBlockers(els.headerActions, blockers, {
+    linked: { table: 'contacts', id: c.id, onDone: () => { location.href = 'contacts.html'; } },
+    what: 'this contact'
+  });
   const delTitle = blockers.length
-    ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
+    ? 'Still in use: see the note below'
     : 'Permanently delete this contact.';
   // Their waitlist family page (Pro): the record entryForContact picks.
   const entry = editionFlags.waitlist && ctx.waitlistEntries.length ? entryForContact(ctx.waitlistEntries, await saleRepo.getByBuyer(c.id)) : null;

@@ -37,7 +37,7 @@ async function init() {
         { label: 'Sales', value: String(f.sales) },
         { label: 'Average price', value: f.avg == null ? '—' : money(f.avg) },
         { label: 'Vs the litter’s price', value: f.vsLitter == null ? '—' : `${f.vsLitter >= 0 ? '+' : ''}${money(f.vsLitter)}`, hint: f.vsCount ? `average over ${f.vsCount} with a litter price` : 'no litter prices set' },
-        { label: 'Full over Limited', value: f.full != null && f.limited != null ? money(f.full - f.limited) : '—', hint: 'average price difference' }
+        { label: `${descriptor(REGISTRATION_TYPE, 'full').label} over ${descriptor(REGISTRATION_TYPE, 'limited').label}`, value: f.full != null && f.limited != null ? money(f.full - f.limited) : '—', hint: 'average price difference' }
       ];
     },
     charts: (list, ctx) => {

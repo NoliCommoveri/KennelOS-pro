@@ -17,13 +17,31 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
+// What a record is called in a refused delete's message: the entity, never the
+// table name (review K1-7: "Cannot delete waitlist_entries" read as a bug).
+export const ENTITY_LABELS = Object.freeze({
+  accounts: 'this account', breed_feeding_schedules: 'this feeding schedule',
+  contacts: 'this contact', contracts: 'this contract', do_not_sell: 'this do-not-sell listing',
+  documents: 'this document', dogs: 'this dog', events: 'this entry', expenses: 'this expense',
+  files: 'this file', kennels: 'this kennel', litters: 'this litter', pairings: 'this pairing',
+  sales: 'this sale', stud_services: 'this stud service', waitlist_entries: 'this application',
+  waitlist_offers: 'this offer', waitlist_programs: 'this waitlist'
+});
+
+// The blockers as one line: "sire of another dog × 2, dam of a litter × 1".
+export function blockerList(blockers) {
+  return blockers.map((b) => `${b.label} × ${b.count}`).join(', ');
+}
+
 // Thrown by hardDelete when references still exist — carries the human-readable
 // blocker list so the UI can tell the user exactly what to fix/archive instead.
+// `entity` is a table name (turned into ENTITY_LABELS' words) or already words.
 export class ReferenceBlockedError extends Error {
   constructor(entity, blockers) {
-    const detail = blockers.map((b) => `${b.label} (${b.count})`).join(', ');
-    super(`Cannot delete ${entity}: still referenced as ${detail}. Archive it instead.`);
+    const what = ENTITY_LABELS[entity] || entity;
+    super(`Can't delete ${what}: it's still in use (${blockerList(blockers)}). Archive it instead.`);
     this.name = 'ReferenceBlockedError';
+    this.entity = entity;
     this.blockers = blockers;
   }
 }

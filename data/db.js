@@ -26,10 +26,16 @@ export const db = new Dexie('KennelOSBreedingApp');
 //  - dogs '*co_owner_contact_ids' is a MULTI-ENTRY index so "dogs co-owned by X"
 //    is a real query, not a full scan.
 //  - Every canonical FK (Stage 4: sales/contracts/stud_services; Stage 4.5:
-//    events.related_contact_id) is indexed, so every reverse lookup in
-//    referenceRegistry.js is an index probe, never a scan.
-//  - Only fields we actually query/filter on are indexed; all other fields still
-//    persist, they just aren't indexed. `events.event_end_date` (Stage 4.5) is a
+//    events.related_contact_id) is indexed, so its reverse lookup in
+//    referenceRegistry.js is an index probe. Fields added later that only a
+//    delete asks about (lists, dotted paths, `waitlist_offers.lost_dog_id`) are
+//    unindexed and marked `scan` there instead.
+//  - The rule for a NEW index: only a field something queries or sorts on by key
+//    (a `where`/`orderBy`, or a non-scan referenceRegistry probe). Some indexes
+//    below were declared in version(1) for a reader that never came, and stay
+//    because that block is frozen (dropping one would mean re-listing the table
+//    in a new block, a bigger risk than an unused index); the guide's list
+//    says which. All other fields still persist, they just aren't indexed. `events.event_end_date` (Stage 4.5) is a
 //    deliberate example: a plain nullable YYYY-MM-DD field, never queried/sorted
 //    on directly, so it carries no index (Stage4.5 Addendum §C1).
 //  - events '.reminder_date' IS indexed: the reminder engine's getReminders()
@@ -79,8 +85,9 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    `event_id` is the ONE canonical link between an event and its cost: a cost
 //    entered on the event form is written here carrying the event's id, and the
 //    event/timeline just query it back (expenseRepo.getByEvent) — Event no longer
-//    stores a `cost` field. Indexed on event_id (fast "cost for this event"),
-//    category (report filter), and expense_date (report range).
+//    stores a `cost` field. Indexed on event_id (fast "cost for this event").
+//    `category` and `expense_date` are indexed too but nothing reads them by key:
+//    the reports filter and sort in JS.
 //  - litters.`foster_partner_contact_id` is a per-litter foster fact (the same
 //    dam can have more than one foster litter, so it can't live on the Dog):
 //    indexed because the referential guard (CONTACT_REFERENCES) probes it so a
@@ -90,12 +97,13 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    (filtered in JS, like is_archived) and so are NOT listed.
 //  - `documents` is a filed document (pedigree/health test/registration/contract/
 //    other) belonging to exactly one dog and pointing at exactly one stored
-//    `files` row (documentRepo.js). Indexed on dog_id (a dog's document list),
-//    doc_type (the type filter chips), and doc_date (newest-first sort).
+//    `files` row (documentRepo.js). Indexed on dog_id (a dog's document list).
+//    `doc_type` and `doc_date` are indexed but unread: the type chips filter and
+//    the newest-first sort both happen in JS (documentRepo).
 //  - `files` is the blob archive backing `documents` AND `expenses.receipt_file_id`
 //    — the bytes of an uploaded PDF, or a photo/screenshot converted to a
 //    compressed PDF client-side (data/pdfBuild.js), never queried by anything
-//    but id, so only `created_at` (backup ordering) is indexed alongside it.
+//    but id. `created_at` is indexed alongside it, but nothing reads it by key.
 //  - `expenses.receipt_file_id` (assets/receiptCapture.js) is a plain,
 //    unindexed FK into `files` — same posture as `vendor`/`notes`, fetched by
 //    id only, never queried/filtered on.
@@ -104,8 +112,9 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    fed into a placed pup's Furever seed packet (fureverSeedExport.js). `breed`
 //    is a free-text lookup key (matched case-insensitively/trimmed against
 //    Dog.breed), not a stored FK, so it carries no referenceRegistry entry.
-//    Indexed on breed (breedFeedingScheduleRepo.getByBreed is a probe, not a
-//    scan). `litters.feeding_schedule_override` (a plain, unindexed free-text
+//    `breed` is indexed but unread: breedFeedingScheduleRepo.getByBreed reads
+//    every schedule and matches case-insensitively in JS, which an exact-key
+//    index can't do. `litters.feeding_schedule_override` (a plain, unindexed free-text
 //    field, filtered in JS like the foster fields) is the per-litter override
 //    that takes priority over the breed default in the seed packet — both are
 //    Pro-only (editionFlags.feedingSchedule).
@@ -126,6 +135,15 @@ export const db = new Dexie('KennelOSBreedingApp');
 //    cost was paid through — a Chewy order, an AKC fee). Indexed because the
 //    referenceRegistry probe (ACCOUNT_REFERENCES) and the per-account spend on
 //    the Accounts page look it up. `expenses.vendor` stays free text beside it.
+//
+// `is_archived` can't serve a read. It is on every table because version(1)
+// shipped that way, but a boolean isn't a valid IndexedDB key, so
+// `where('is_archived').equals(false)` throws (DataError). Archived rows are
+// filtered in JS (repoBase.getAll). Never query it by key; don't copy it into a
+// new table's index string.
+//
+// What reads each index, and which ones nothing reads: End-State guide, "Indexes
+// and their readers" (shared/data/db.js section).
 db.version(1).stores({
   dogs:          'id, sire_id, dam_id, litter_id, breeder_kennel_id, owner_contact_id, *co_owner_contact_ids, status, ownership_type, sex, breed, kennel_id, is_archived',
   events:        'id, [subject_type+subject_id], event_type, event_date, reminder_date, related_dog_id, related_contact_id, is_archived',
@@ -206,7 +224,7 @@ db.version(7).stores({
 // device lost to live sync (an edit waiting to be sent, or its own sent version,
 // replaced or deleted by another device's), kept 30 days so she can put it back:
 // id `<table>:<row id>:<seq of the version that replaced it>`, `at` (when it was
-// lost, ISO, indexed for the 30-day sweep), `tbl`, `row_id`, `row` (the whole
+// lost, ISO; indexed for the 30-day sweep, which filters in JS instead), `tbl`, `row_id`, `row` (the whole
 // local row as it was), `kind`, `by`, `op`. data/cloud/syncLost.js reads it;
 // data/syncApply.js writes it inside the page's transaction.
 db.version(8).stores({

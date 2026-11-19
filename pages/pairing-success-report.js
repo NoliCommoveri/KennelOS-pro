@@ -43,8 +43,8 @@ async function init() {
       const f = pairingFigures(list);
       return [
         { label: 'Bred', value: String(f.bred) },
-        { label: 'Took', value: String(f.took) },
-        { label: 'Missed', value: String(f.missed) },
+        { label: descriptor(OUTCOME, 'success').label, value: String(f.took) },
+        { label: descriptor(OUTCOME, 'failed').label, value: String(f.missed) },
         { label: 'Success rate', value: rateText(f), hint: f.waiting ? `${f.waiting} still waiting, not counted` : 'took ÷ (took + missed)' }
       ];
     },

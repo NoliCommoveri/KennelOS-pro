@@ -24,7 +24,8 @@
 //       only rows of the right subject_type via the [subject_type+subject_id]
 //       compound index,
 //     scan?: true when `field` is an unindexed dotted path (every row is read);
-//       `list[].key` matches any item of the list `list` whose `key` is the id }
+//       `list[].key` matches any item of the list `list` whose `key` is the id,
+//       and a field holding a list of ids matches when the id is in it }
 import { db, existingTableNames } from './db.js';
 
 // --- Dog: what can point at a Dog (Data Model v3 §10) -----------------------
@@ -53,7 +54,10 @@ export const DOG_REFERENCES = [
   { table: 'documents', field: 'dog_id', label: 'has a filed document' },
   { table: 'waitlist_offers', field: 'chosen_dog_id', label: 'pup chosen on a waitlist offer' },
   // Not indexed (only a delete asks), so it's a scan: an indexed probe would throw.
-  { table: 'waitlist_offers', field: 'lost_dog_id', label: 'pup a family lost, on a waitlist offer\'s history', scan: true }
+  { table: 'waitlist_offers', field: 'lost_dog_id', label: 'pup a family lost, on a waitlist offer\'s history', scan: true },
+  // The pups an offer put in front of a family (a list; cloud, so the family's page
+  // has it too). Not indexed, so a scan like lost_dog_id.
+  { table: 'waitlist_offers', field: 'eligible_dog_ids', label: 'a pup offered to a waitlist family', scan: true }
 ];
 
 // --- Litter: what can point at a Litter (Data Model v3 §10) -----------------
@@ -225,10 +229,8 @@ async function countReferences(ref, id) {
   }
   // An unindexed path (`scan`): every row is read. Only for rare deletes.
   if (ref.scan) {
-    const at = (obj, dotted) => dotted.split('.').reduce((v, k) => (v == null ? v : v[k]), obj);
-    const [list, item] = ref.field.split('[].');
-    if (item != null) return table.filter((row) => { const xs = at(row, list); return Array.isArray(xs) && xs.some((x) => at(x, item) === id); }).count();
-    return table.filter((row) => at(row, ref.field) === id).count();
+    // refIdsOf reads every shape: a dotted path, `list[].key`, or a plain list of ids.
+    return table.filter((row) => refIdsOf(row, ref).includes(id)).count();
   }
   // Both single-field and multi-entry (*) indexes answer .where(field).equals(id).
   return table.where(ref.field).equals(id).count();

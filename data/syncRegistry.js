@@ -92,7 +92,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // id>`, so a card sent again updates it (Shared Dogs Plan §3.5). Random ids only.
       'shared_ref'
     ],
-    private: ['notes'],
+    // `cost`: the money a pre-expenses event carried; expenseRepo.migrateEventCosts
+    // moves it to an expense and clears it here. Money stays private.
+    private: ['notes', 'cost'],
     pending: [],
     filtered: { details: (value, row) => filterEventDetails(row.event_type, value) }
   },

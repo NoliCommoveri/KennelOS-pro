@@ -23,6 +23,8 @@ const WHAT = [
   ...EXIT_GROUPS
 ];
 const whatLabel = (v) => WHAT.find((w) => w.value === v)?.label || v;
+// An outcome's own words, from the vocab (review K1-9), so the report says what the pages say.
+const outcome = (v) => descriptor(WAITLIST_OFFER_OUTCOME, v).label;
 
 async function init() {
   const src = await loadOffersRemovals();
@@ -50,9 +52,9 @@ async function init() {
       const rules = s.byGroup.find((g) => g.value === 'rules').count;
       return [
         { label: 'Offers closed', value: String(s.closed), hint: s.familiesOffered ? `to ${s.familiesOffered} famil${s.familiesOffered === 1 ? 'y' : 'ies'}` : '' },
-        { label: 'Accepted', value: pct(s.accepted, s.closed) || '—', hint: s.closed ? `${s.accepted} of ${s.closed} offers` : '' },
-        { label: 'Passed', value: pct(s.passed, s.closed) || '—', hint: s.closed ? `${s.passed} of ${s.closed}; ${s.countedPasses} counted as a pass` : '' },
-        { label: 'No response', value: pct(s.noResponse, s.closed) || '—', hint: s.closed ? `${s.noResponse} of ${s.closed} offers` : '' },
+        { label: outcome('accepted'), value: pct(s.accepted, s.closed) || '—', hint: s.closed ? `${s.accepted} of ${s.closed} offers` : '' },
+        { label: outcome('passed'), value: pct(s.passed, s.closed) || '—', hint: s.closed ? `${s.passed} of ${s.closed}; ${s.countedPasses} counted as a pass` : '' },
+        { label: outcome('no_response'), value: pct(s.noResponse, s.closed) || '—', hint: s.closed ? `${s.noResponse} of ${s.closed} offers` : '' },
         { label: 'Families who passed', value: pct(s.familiesPassed, s.familiesOffered) || '—', hint: s.familiesOffered ? `${s.familiesPassed} of ${s.familiesOffered} offered, at least once` : '' },
         { label: 'Didn’t follow the rules', value: String(rules), hint: s.left ? `${pct(rules, s.left)} of the ${s.left} who left` : '' }
       ];
@@ -65,13 +67,13 @@ async function init() {
       const count = (rs, label) => { const m = new Map(); for (const r of rs) { const k = label(r); m.set(k, (m.get(k) || 0) + 1); } return [...m].map(([l, value]) => ({ label: l, value })); };
       const dated = list.filter((r) => r.date);
       const p = periodSeries(dated, ctx.range, { date: (r) => r.date, series: [
-        { name: 'Passed', when: (r) => r.what === 'passed', color: SERIES_COLORS[1] },
-        { name: 'No response', when: (r) => r.what === 'no_response', color: SERIES_COLORS[3] },
+        { name: outcome('passed'), when: (r) => r.what === 'passed', color: SERIES_COLORS[1] },
+        { name: outcome('no_response'), when: (r) => r.what === 'no_response', color: SERIES_COLORS[3] },
         { name: 'Removed for the rules', when: (r) => r.what === 'rules', color: SERIES_COLORS[7] }
       ] });
       return [
         { type: 'hbar', title: 'How offers ended', sort: false, showZero: true, color: SERIES_COLORS[2], format: ofOffers,
-          rows: [{ label: 'Accepted', value: s.accepted }, { label: 'Accepted, then backed out', value: s.backedOut }, { label: 'Passed', value: s.passed }, { label: 'No response', value: s.noResponse }],
+          rows: [{ label: outcome('accepted'), value: s.accepted }, { label: `${outcome('accepted')}, then backed out`, value: s.backedOut }, { label: outcome('passed'), value: s.passed }, { label: outcome('no_response'), value: s.noResponse }],
           emptyText: 'No offers closed in this range.' },
         { type: 'hbar', title: 'Why families passed', color: SERIES_COLORS[6],
           rows: count(list.filter((r) => r.what === 'passed'), reason), emptyText: 'No passes in this range.' },

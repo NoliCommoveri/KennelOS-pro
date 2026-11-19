@@ -17,6 +17,7 @@
 // sit in the header's ⋯ menu. Application
 // answers follow her own form (Spec §15.1, data/waitlistForm.js). Every multi-step
 // write goes through data/waitlistActions.js. Pro-only page (proPages.js).
+import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { waitlistEntryRepo, ReferenceBlockedError } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
@@ -2136,11 +2137,16 @@ function reservationHref(e) {
 // Archive, Delete and New status link: rare, so behind one ⋯ menu (decided 2026-10-10).
 async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
+  showDeleteBlockers(els.headerActions, []);
   if (ctx.mode === 'new') return;
   const e = ctx.entry;
   const blockers = await waitlistEntryRepo.getDeleteBlockers(e.id);
+  showDeleteBlockers(els.headerActions, blockers, {
+    what: 'this application',
+    linked: { table: 'waitlist_entries', id: e.id, onDone: () => { location.href = `waitlist.html?kennel=${encodeURIComponent(e.kennel_id)}`; } }
+  });
   const delTitle = blockers.length
-    ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
+    ? 'Still in use: see the note under the header'
     : 'Permanently delete this entry (for a mistake).';
   const link = statusLinkFor(e, ctx.kennel);
   els.headerActions.innerHTML = `

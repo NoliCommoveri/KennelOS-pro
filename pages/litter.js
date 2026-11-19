@@ -3,6 +3,7 @@
 // panel (Dog records with this litter_id; Add Puppy / Add N Puppies), and a
 // Timeline of litter-subject events. Hard blocks come from litterRepo (required
 // fields); the sync/count/date checks are warn-only here per Stage 3 Brief §3.
+import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { litterPupsOnParent, moveLitterPups } from '../data/pedigreeEdit.js';
 import { litterRepo, ReferenceBlockedError } from '../data/litterRepo.js';
 import { CapExceededError } from '../data/repoBase.js';
@@ -492,11 +493,16 @@ function renderProfileActions() {
 
 async function renderHeaderActions() {
   els.headerActions.innerHTML = '';
+  showDeleteBlockers(els.headerActions, []);
   if (ctx.mode === 'new' || !ctx.original) return;
   const l = ctx.original;
   const blockers = await litterRepo.getDeleteBlockers(l.id);
+  showDeleteBlockers(els.headerActions, blockers, {
+    linked: { table: 'litters', id: l.id, onDone: () => { location.href = 'litters.html'; } },
+    what: 'this litter'
+  });
   const delTitle = blockers.length
-    ? 'Referenced as ' + blockers.map((b) => `${b.label} (${b.count})`).join(', ') + ' — archive instead.'
+    ? 'Still in use: see the note below'
     : 'Permanently delete this record.';
   // Archive control. Lite hides the archive machinery (cap spec §5/§7) — no
   // manual litter-archive at all (litters have no "departure" substitute).

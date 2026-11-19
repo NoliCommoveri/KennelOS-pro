@@ -14,6 +14,7 @@ import { litterRepo } from '../data/litterRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { getActiveKennelId, setActiveKennel } from '../data/kennelScope.js';
 import { esc, confirmModal } from '../assets/ui.js';
+import { blockedDeleteNoteHtml } from '../assets/deleteBlockers.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { mountKennelCardImport, maybeOpenCardFromHash } from '../assets/kennelCardUI.js';
 
@@ -37,9 +38,9 @@ function linkedBadge(k) {
 }
 
 function displayRow(k, blocked) {
-  const title = blocked.length ? 'Referenced by ' + blocked.map((b) => `${b.label} (${b.count})`).join(', ') : 'Delete kennel';
+  const title = blocked.length ? 'Still in use: see the note under its name' : 'Delete kennel';
   return `<tr class="${k.is_archived ? 'row-archived' : ''}">
-    <td><strong>${esc(k.kennel_name)}</strong>${k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : ''}${linkedBadge(k)}${!k.is_own_kennel && k.name_on_website ? ' <span class="badge badge-neutral">Named on website</span>' : ''}</td>
+    <td><strong>${esc(k.kennel_name)}</strong>${k.is_own_kennel ? ' <span class="badge badge-green">My kennel</span>' : ''}${linkedBadge(k)}${!k.is_own_kennel && k.name_on_website ? ' <span class="badge badge-neutral">Named on website</span>' : ''}${blockedDeleteNoteHtml(blocked, { what: 'this kennel' })}</td>
     <td class="col-collapse">${k.prefix ? esc(k.prefix) : '<span class="faint">—</span>'}</td>
     <td class="col-collapse">${k.location ? esc(k.location) : '<span class="faint">—</span>'}</td>
     <td class="pill-row" style="justify-content:flex-end;">
