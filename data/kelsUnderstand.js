@@ -154,7 +154,7 @@ export const ENTRIES = [
       + ' Until then it\'s expected, and expected money is never in your Net.' },
   { id: 'sale-ended', section: 'money', q: 'What happens to the money when a sale falls through?',
     keywords: ['cancelled', 'canceled', 'voided', 'void', 'returned', 'refund', 'fell through', 'backed out', 'deposit', 'keep'],
-    a: 'It depends how it ended. Cancelled (the family backed out) and Returned keep only payments that have a paid date, so enter the deposit date before you cancel. Voided (it fell through on your side), or a pup returned for a health problem, counts nothing: that money is taken as refunded or moved to another pup.' },
+    a: 'It depends how it ended. Cancelled (the family backed out) and Returned keep only payments that have a paid date, so enter the deposit date before you cancel. Voided (it fell through on your side), or a pup returned for a health problem, counts nothing: that money is taken as refunded or moved to another pup. Gave some back on a Returned or Cancelled sale? Put it in Refunded on the sale, with its date: it comes off that month\'s income.' },
   { id: 'expense-home', section: 'money', q: 'Where do general costs go?',
     keywords: ['expense', 'general', 'overhead', 'food', 'supplies', 'cost', 'bought', 'purchase', 'dog purchase'],
     href: 'financials.html?view=expenses', show: 'Show me my expenses',

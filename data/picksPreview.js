@@ -13,7 +13,7 @@ import {
   waitlistConfig, rankedList, overallPositions, isPupAvailable, pupMatchesPrefs,
   eligiblePupsFor, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, isListeningFor,
   turnSpent, turnLittersFor, openTurns, joinsOpenTurn, splitPrepassed, prepassFor,
-  respondByDate, joinRespondBy, countsAsPass, passesUsed, shouldRemoveForPasses, kennelBreeds, resolveBreed,
+  respondByDate, respondBy, joinRespondBy, countsAsPass, passesUsed, shouldRemoveForPasses, kennelBreeds, resolveBreed,
   WHELP_NOTE_FIELDS, isSideSalePending, sideSaleOf, pupClaims
 } from './waitlistRules.js';
 import { RELEASED_SALE_STATUSES, cleanPurposes } from './vocab.js';
@@ -126,7 +126,7 @@ function simulateOpen({ entries, offers, litters, pups, sales, programsById, con
   const [open] = openTurns(offers, kennelId);
   if (open) {
     const base = {
-      holder_id: open.entry_id, turn_id: open.id, holder_litter_ids: open.offers.map((o) => o.litter_id), respond_by: open.respond_by_date,
+      holder_id: open.entry_id, turn_id: open.id, holder_litter_ids: open.offers.map((o) => o.litter_id), respond_by: open.respond_by_date, respond_by_time: open.respond_by_time || null,
       next_after: nextAfterHolder(open.entry_id, { entries, offers, litters, pups, sales, opts })
     };
     if (alreadyOpen) return { kind: 'held', ...base };
@@ -135,7 +135,7 @@ function simulateOpen({ entries, offers, litters, pups, sales, programsById, con
     if (eligible.length && holder && prepassFor(holder, target)) return { kind: 'wait', ...base, prepass_blocked: true };
     if (!eligible.length) return { kind: 'wait', ...base };
     const program = holder ? programsById.get(holder.waitlist_program_id) || null : null;
-    return { kind: 'join', entry_id: open.entry_id, turn_id: open.id, dog_ids: eligible.map((d) => d.id), respond_by: joinRespondBy(open, today, config, program), was_respond_by: open.respond_by_date };
+    return { kind: 'join', entry_id: open.entry_id, turn_id: open.id, dog_ids: eligible.map((d) => d.id), ...(({ date, time }) => ({ respond_by: date, respond_by_time: time }))(joinRespondBy(open, today, config, program)), was_respond_by: open.respond_by_date, was_respond_by_time: open.respond_by_time || null };
   }
   // offerNextTurn's loop: a family whose whole turn is "Not this litter" is passed
   // at once (counting once), removed at the pass limit, and the list goes on.
@@ -151,7 +151,7 @@ function simulateOpen({ entries, offers, litters, pups, sales, programsById, con
       return {
         kind: 'offer', entry_id: next.entry.id,
         litters: offer.map((x) => ({ litter_id: x.litter.id, dog_ids: x.eligibleDogs.map((d) => d.id) })),
-        prepassed: prepassed.map((x) => x.litter.id), respond_by: respondByDate(today, config, program), auto_passed: autoPassed
+        prepassed: prepassed.map((x) => x.litter.id), ...(({ date, time }) => ({ respond_by: date, respond_by_time: time }))(respondBy(today, config, program)), auto_passed: autoPassed
       };
     }
     const counts = countsAsPass('passed', { config, program });

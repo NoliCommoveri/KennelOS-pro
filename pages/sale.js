@@ -10,11 +10,11 @@ import { litterRepo } from '../data/litterRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { saleExtraCharges, readExtraCharges, kennelChargeList, kennelChargeGroups, groupedChargeList, newExtraCharge, chargeFromPriceList, depositFeeChargeBack, cleanSteps, stepWithPaidDate } from '../data/extraCharges.js';
-import { depositPaid, getSaleStatement } from '../data/incomeView.js';
+import { depositPaid, getSaleStatement, getSaleNet } from '../data/incomeView.js';
 import { hasSchedule, savedSchedules, finalDueDate } from '../data/paymentSchedule.js';
 import { paymentsCardHtml, wirePaymentsCard, askAboutNewFees } from '../assets/paymentScheduleUI.js';
 import { feeRate, isUsableRate, processingFee, priceToNet, netOf, rateLabel, saleFeeEstimate } from '../data/processingFees.js';
-import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
+import { isOpenSale, REGISTRATION_TYPE, SALE_STATUS, RELEASED_SALE_STATUSES, TERMINAL_SALE_STATUSES, SALE_END_REASON, saleEndReasonsFor, canRecordRefund, CONTRACT_TYPE, CONTRACT_STATUS, BOARDING_FREQUENCY_OPTIONS, descriptor } from '../data/vocab.js';
 import { restoresFamily, businessDays, waitlistConfig } from '../data/waitlistRules.js';
 import { litterCloseDue, litterLabel } from '../data/litterCheckin.js';
 import { promptDisposition, promptReleasedPup, askRegistrationPrice } from '../assets/salePrompts.js';
@@ -52,7 +52,8 @@ const blankSale = () => ({
   transport_fee: '', deferred_boarding_amount: '', deferred_boarding_frequency: '',
   deferred_boarding_duration_days: '', end_reason: '', end_note: '',
   sales_channel_account_id: '', processing_fee_amount: '', fee_passed_to_buyer: false,
-  deposit_paid_via_account_id: '', balance_paid_via_account_id: '', extra_charges: []
+  deposit_paid_via_account_id: '', balance_paid_via_account_id: '', extra_charges: [],
+  refund_amount: '', refund_date: ''
 });
 
 const ctx = {
@@ -242,14 +243,16 @@ function feeFields(s) {
       </details>`;
 }
 
-// "You net $X" under the fee, live as the price or fee changes.
+// "Price after the fee" under the fee, live as the price or fee changes. Not "You
+// net": what she nets also counts extras, a fee charged back and a credited
+// application fee (the view's You net, from the ledger; review K10-10).
 function updateNetLine() {
   const el = document.getElementById('fee-net-line');
   if (!el) return;
   const price = document.getElementById('f-price')?.value ?? '';
   const fee = document.getElementById('f-processing_fee_amount')?.value ?? '';
   el.textContent = price !== '' && fee !== '' && Number(fee) > 0
-    ? `You net ${fmtMoney(netOf(price, fee))} of the ${fmtMoney(price)} price.`
+    ? `Price after the fee: ${fmtMoney(netOf(price, fee))} of the ${fmtMoney(price)} price.`
     : '';
 }
 
@@ -445,6 +448,22 @@ function money(v) {
   return v != null && v !== '' ? `$${Number(v).toFixed(2)}` : '';
 }
 
+// You net (review K10-10): shown with a processing fee or a refund, from the ledger
+// (incomeView.getSaleNet), so it's what Financials counts for this sale.
+function showsNet(s) {
+  return (s.processing_fee_amount != null && s.processing_fee_amount !== '') || (canRecordRefund(s) && Number(s.refund_amount) > 0);
+}
+let netDraw = 0;
+async function fillNet(s) {
+  const draw = ++netDraw;
+  const net = await getSaleNet(s.id).catch(() => null);
+  const el = document.getElementById('sale-net');
+  if (draw !== netDraw || !el) return;
+  el.className = '';
+  el.innerHTML = net == null ? '<span class="faint">—</span>'
+    : `${esc(fmtMoney(net))} <span class="faint">after fees and refunds, with extras and any application fee credited to it</span>`;
+}
+
 function renderView() {
   const s = ctx.original;
   els.body.innerHTML = `
@@ -457,6 +476,7 @@ function renderView() {
       ${row('Status', badge(SALE_STATUS, s.status))}
       ${s.end_reason ? row('Why it ended', esc(descriptor(SALE_END_REASON, s.end_reason).label)) : ''}
       ${s.end_note ? row('About it', esc(s.end_note).replace(/\n/g, '<br>')) : ''}
+      ${canRecordRefund(s) && Number(s.refund_amount) > 0 ? row('Refunded', `${esc(money(s.refund_amount))}${s.refund_date ? ` <span class="muted">on ${esc(fmtDate(s.refund_date))}</span>` : ''}`) : ''}
       ${row('Price', esc(money(s.price)))}
       ${editionFlags.accounts && s.sales_channel_account_id ? row('Sold through', esc(ctx.accountsById.get(s.sales_channel_account_id)?.name || '—')) : ''}
       ${editionFlags.accounts && s.deposit_paid_via_account_id ? row('Deposit paid via', esc(ctx.accountsById.get(s.deposit_paid_via_account_id)?.name || '—')) : ''}
@@ -465,7 +485,7 @@ function renderView() {
         <span class="muted">· ${esc(s.payment_link_component === 'deposit' ? 'deposit' : 'balance')}${s.payment_link_amount != null ? ` ${esc(fmtMoney(s.payment_link_amount))}` : ''}${s.payment_link_date ? ` · made ${esc(fmtDate(s.payment_link_date))}` : ''} · not paid yet</span>
         <button type="button" class="btn btn-sm" data-pl-copy>Copy</button> <button type="button" class="btn btn-sm" data-pl-check>Check now</button>`) : ''}
       ${s.processing_fee_amount != null && s.processing_fee_amount !== '' ? row('Processing fee', `${esc(money(s.processing_fee_amount))}${s.fee_passed_to_buyer ? ' <span class="muted">(passed to the buyer in the price)</span>' : ''}`) : ''}
-      ${s.processing_fee_amount != null && s.processing_fee_amount !== '' && s.price != null && s.price !== '' ? row('You net', esc(money(netOf(s.price, s.processing_fee_amount)))) : ''}
+      ${showsNet(s) ? row('You net', '<span id="sale-net" class="faint">…</span>') : ''}
       ${row('Deposit amount', esc(money(s.deposit_amount)))}
       ${row('Transport fee', esc(money(s.transport_fee)))}
       ${row('Deferred pickup boarding', s.deferred_boarding_amount != null && s.deferred_boarding_amount !== '' ? `${esc(money(s.deferred_boarding_amount))}${s.deferred_boarding_frequency ? ` per ${esc(s.deferred_boarding_frequency)}` : ''}${s.deferred_boarding_duration_days ? ` × ${esc(s.deferred_boarding_duration_days)}` : ''}` : '')}
@@ -482,6 +502,7 @@ function renderView() {
         : '') : ''}
       ${row('Notes', s.notes ? esc(s.notes).replace(/\n/g, '<br>') : '')}
     </dl>`;
+  if (showsNet(s)) fillNet(s);
 }
 
 // --- Edit form ---------------------------------------------------------
@@ -498,6 +519,16 @@ function endReasonFields(s) {
     : 'Returned: the pup came back after going home.';
   return `${field('Why it ended', `<select id="f-end_reason">${vocabOptions(reasons, s.end_reason, 'Select…')}</select>`, { required: true, hint })}
       ${field('About it', `<input id="f-end_note" type="text" value="${esc(s.end_note)}" placeholder="e.g. what the vet found">`)}`;
+}
+
+// A refund on a sale that ended and kept money (review K10-11; vocab.canRecordRefund):
+// Returned for the buyer's choice or another reason, or Cancelled. It comes off the
+// sale's income on its date. A voided sale or a health return counts nothing, so
+// there's nothing to refund from.
+function refundFields(s) {
+  if (!canRecordRefund(s)) return '';
+  return `${field('Refunded', `<input id="f-refund_amount" type="number" min="0" step="0.01" value="${esc(s.refund_amount ?? '')}">`, { hint: 'What you gave back of what they paid. It comes off this sale\'s income on the refund date.' })}
+      ${field('Refund date', `<input id="f-refund_date" type="date" value="${esc(s.refund_date ?? '')}">`)}`;
 }
 // The chosen buyer against her do-not-sell list (K7-9): only a warning, as everywhere.
 function buyerDoNotSellText(contactId) {
@@ -529,6 +560,7 @@ function renderEdit() {
       ${field('Registration', `<select id="f-registration_type">${vocabOptions(REGISTRATION_TYPE, s.registration_type, 'Select…')}</select>`, { required: true, hint: 'Full adds the litter\'s Full-registration surcharge to a prefilled price.' })}
       ${field('Status', `<select id="f-status">${vocabOptions(SALE_STATUS, s.status, 'Select…')}</select>`, { required: true })}
       ${endReasonFields(s)}
+      ${refundFields(s)}
       ${field('Price', `<input id="f-price" type="number" min="0" step="0.01" value="${esc(s.price)}">`)}
       ${feeFields(s)}
       ${field('Deposit amount', `<input id="f-deposit_amount" type="number" min="0" step="0.01" value="${esc(s.deposit_amount)}">`)}
@@ -571,8 +603,13 @@ function renderEdit() {
     ctx.pickerAllKennels = e.target.checked;
     renderEdit();
   });
-  // Voided/Returned need a reason; the reason fields come and go with the status.
+  // Voided/Returned need a reason; the reason and refund fields come and go with the
+  // status (and the refund with the reason: a health return has none).
   document.getElementById('f-status').addEventListener('change', () => {
+    ctx.draft = readForm();
+    renderEdit();
+  });
+  document.getElementById('f-end_reason')?.addEventListener('change', () => {
     ctx.draft = readForm();
     renderEdit();
   });
@@ -643,6 +680,10 @@ function readForm() {
     referred_by_contact_id: val('f-referred_by_contact_id') || null,
     end_reason: val('f-end_reason') || null,
     end_note: val('f-end_note').trim() || null,
+    // Hidden when the sale can't carry one: kept as it was (the repo clears it off a
+    // sale that isn't returned or cancelled).
+    refund_amount: document.getElementById('f-refund_amount') ? val('f-refund_amount') : (ctx.draft.refund_amount ?? ''),
+    refund_date: document.getElementById('f-refund_date') ? val('f-refund_date') || null : (ctx.draft.refund_date || null),
     // Lite has no channel picker: a channel set elsewhere is kept as it was.
     sales_channel_account_id: document.getElementById('f-sales_channel_account_id')
       ? val('f-sales_channel_account_id') || null
@@ -666,7 +707,7 @@ function readForm() {
 
 // Empty numeric strings become null.
 function normalizeMoney(candidate) {
-  for (const k of ['price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount', 'processing_fee_amount']) {
+  for (const k of ['price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount', 'processing_fee_amount', 'refund_amount']) {
     candidate[k] = candidate[k] === '' || candidate[k] == null ? null : Number(candidate[k]);
   }
   // Duration is a free-text field (e.g. "10-14"), not a number — only the
@@ -860,6 +901,15 @@ function promptOwnershipUpdate(sale) {
         <label>Owner</label>
         <select id="own-owner">${contactOptions(sale.buyer_contact_id)}</select>
       </div>
+      <div class="field" id="own-stage-field">
+        <label>What is ${esc(dogLabel)} now?</label>
+        <select id="own-stage">
+          <option value="">Leave as Puppy</option>
+          <option value="pet_home">Pet home</option>
+          <option value="active_breeding">Active breeding (breeding rights kept)</option>
+        </select>
+        <span class="field-hint">Still on your records, so ${esc(dogLabel)} moves to that list. A Puppy is asked again six months after going home.</span>
+      </div>
       <div id="own-error"></div>
       <div class="form-actions">
         <button class="btn btn-primary" id="own-confirm">Confirm</button>
@@ -876,18 +926,23 @@ function promptOwnershipUpdate(sale) {
     // External — Co-owned adds the buyer to co_owner_contact_ids instead
     // (handled below without needing a picker; owner_contact_id there stays
     // whoever it already was, typically the breeder).
+    // The life stage (review K9-7): asked whenever the pup stays on her records
+    // (Co-owned, or left as it is); External sets its own status.
+    const stageField = overlay.querySelector('#own-stage-field');
     choiceSelect.addEventListener('change', () => {
       ownerField.hidden = choiceSelect.value !== 'external';
+      stageField.hidden = choiceSelect.value === 'external';
     });
     overlay.querySelector('#own-confirm').addEventListener('click', async () => {
-      const choice = choiceSelect.value;
-      if (!choice) { close(); return; }
+      const choice = choiceSelect.value || null;
+      const stage = choice === 'external' ? null : overlay.querySelector('#own-stage').value || null;
+      if (!choice && !stage) { close(); return; }
       try {
         // Re-fetch: the co-own convenience above may have just updated this dog.
         const dog = await dogRepo.getById(sale.dog_id);
         const updates = deliveredOwnershipChanges(dog, choice, {
           ownerId: choice === 'external' ? overlay.querySelector('#own-owner').value || null : null,
-          buyerId: sale.buyer_contact_id, today: todayYMD()
+          buyerId: sale.buyer_contact_id, today: todayYMD(), stage
         });
         if (updates) await dogRepo.update(sale.dog_id, updates);
         close();
@@ -950,6 +1005,10 @@ async function doSave() {
   const prevStatus = isNew ? null : ctx.original.status;
   if (saleEndReasonsFor(candidate.status).length && !candidate.end_reason) {
     showError(`Choose why the sale was ${descriptor(SALE_STATUS, candidate.status).label.toLowerCase()}.`);
+    return;
+  }
+  if (canRecordRefund(candidate) && candidate.refund_amount > 0 && !candidate.refund_date) {
+    showError('Add the date you gave the refund, so it comes off the right month.');
     return;
   }
   if (document.getElementById('xc-rows')) {

@@ -1,14 +1,35 @@
 // ui.js — small shared rendering helpers used across pages. No framework;
 // just functions that return safe HTML strings or build DOM.
 import { descriptor } from '../data/vocab.js';
-import { todayYMD, kennelToday } from '../data/dateUtils.js';
+import { todayYMD, kennelToday, kennelNow, countdownText } from '../data/dateUtils.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { pickerGroups, dogName } from '../data/dogRepo.js';
 
 // Re-exported so pages keep importing todayYMD from here alongside the rest
 // of the shared rendering helpers — the one implementation lives in
 // data/dateUtils.js so repos and assets never drift apart on "what is today."
-export { todayYMD, kennelToday };
+export { todayYMD, kennelToday, kennelNow };
+
+// A countdown to `at` (epoch ms), ticking in place (Waitlist Timers plan Phase 2):
+// "<label> <time left>", or `done` once it's passed. '' without a moment. Call
+// startCountdowns() after putting one on the page.
+export function countdownHtml(at, { label = '', done = '' } = {}) {
+  if (!Number.isFinite(at)) return '';
+  const text = countdownText(at);
+  return `<span class="countdown" data-countdown-at="${at}" data-countdown-label="${esc(label)}" data-countdown-done="${esc(done)}">${esc(text ? `${label} ${text}`.trim() : done)}</span>`;
+}
+let countdownTimer = null;
+export function startCountdowns() {
+  const tick = () => {
+    for (const el of document.querySelectorAll('[data-countdown-at]')) {
+      const text = countdownText(Number(el.dataset.countdownAt));
+      const next = text ? `${el.dataset.countdownLabel || ''} ${text}`.trim() : (el.dataset.countdownDone || '');
+      if (el.textContent !== next) el.textContent = next;
+    }
+  };
+  tick();
+  if (!countdownTimer) countdownTimer = setInterval(tick, 1000);
+}
 
 // safeHref (K14-17) lives in data/safeHref.js so Node can test it; re-exported here.
 export { safeHref } from '../data/safeHref.js';

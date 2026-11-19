@@ -744,6 +744,7 @@ button.cal-cell:hover { border-color: var(--accent); }
 .cal-cell.cal-past { background: var(--bg); }
 .cal-cell.cal-today { border: 2px solid var(--accent); padding: 3px; }
 .cal-date { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.countdown { font-variant-numeric: tabular-nums; }
 .cal-today .cal-date { color: var(--accent); font-weight: 700; }
 .cal-chips { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .cal-chip { display: block; font-size: 11px; line-height: 1.35; padding: 0 5px; border-radius: 4px;

@@ -24,7 +24,8 @@ import {
   waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, publicWantsMore, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
-  messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, isPicksOpen, isFamilyPageOnly, LISTEN_LIVE_LITTER
+  messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, isPicksOpen, isFamilyPageOnly, LISTEN_LIVE_LITTER,
+  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
@@ -307,6 +308,8 @@ function entryView(entry, ctx) {
         litter_id: o.litter_id,
         offered_date: orNull(o.offered_date),
         respond_by_date: orNull(o.respond_by_date),
+        // The deadline's time, kennel time (Waitlist Timers plan); absent = 11:59 pm.
+        ...(isTimeOfDay(o.respond_by_time) ? { respond_by_time: o.respond_by_time } : {}),
         eligible_dog_ids: [...(o.eligible_dog_ids || [])],
         picked_dog_id: orNull(o.chosen_dog_id),
         // Server only (never shown): a side sale, not a turn (Side Sale Spec §6).
@@ -448,6 +451,8 @@ function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogs
       expected_whelp_date: u.kind === 'early_litter' ? null : orNull(u.pairing?.expected_due_date),
       whelp_date: u.kind === 'early_litter' ? orNull(u.litter.whelp_date) : null,
       picks_expected_date: u.kind === 'early_litter' ? orNull(u.litter.accept_deposits_date) : null,
+      // …and the time on it, her litter's or her usual one (Waitlist Timers plan Phase 2).
+      ...(u.kind === 'early_litter' && plannedOpening(u.litter, config)?.time ? { picks_expected_time: plannedOpening(u.litter, config).time } : {}),
       ...(u.kind === 'early_litter' ? litterLink(u.litter, kennel) : {}),
       expected_month: null,
       ...where(u)
@@ -468,10 +473,13 @@ function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogs
   return [...litterItems, ...heatItems];
 }
 
+// At most this many planned openings are walked for the turn estimate.
+const OPENINGS_MAX = 6;
+
 const toUpcomingView = (u) => ({
   id: u.id, kind: u.kind, label: u.label, pairing_id: u.pairing_id, litter_id: u.litter_id,
   sire: u.sire, dam: u.dam, breed: u.breed, expected_whelp_date: u.expected_whelp_date, whelp_date: u.whelp_date,
-  picks_expected_date: u.picks_expected_date, expected_month: u.expected_month, ...withPhotos(u.photos_url), ...(u.page && u.photos_url ? { page: true } : {}), public: u.public, family: u.family
+  picks_expected_date: u.picks_expected_date, ...(u.picks_expected_time ? { picks_expected_time: u.picks_expected_time } : {}), expected_month: u.expected_month, ...withPhotos(u.photos_url), ...(u.page && u.photos_url ? { page: true } : {}), public: u.public, family: u.family
 });
 
 const readyCheckView = (rc) => (rc ? { asked: rc.asked, answer_by: rc.answer_by, answer: rc.answer } : null);
@@ -536,6 +544,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       whelp_date: orNull(litter.whelp_date),
       ready_date: orNull(litter.estimated_ready_date),
       picks_open: Boolean(litter.picks_opened_date),
+      // When she planned to open picks, with a time (Waitlist Timers plan Phase 2): the
+      // server pushes her a reminder then. Only before they open, and only with a time.
+      ...(!litter.picks_opened_date && plannedOpening(litter, config)?.time ? { planned_open: plannedOpening(litter, config) } : {}),
       ...litterLink(litter, kennel),
       ...(config.turn_prices !== false ? { prices: litterPrices(litter, pups.filter((d) => isPupAvailable(d, sales))) } : {}),
       pairing_id: orNull(litter.pairing_id),
@@ -565,9 +576,39 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       entry_id: e.id,
       // Their window if the server offers them a turn (a program can set a longer one).
       respond_days: program && program.respond_days_override != null && program.respond_days_override !== '' ? Number(program.respond_days_override) : Number(config.respond_days),
+      // …in hours, when she counts turns in hours (turnHours); absent = days.
+      ...(turnHours(config, program) != null ? { respond_hours: turnHours(config, program) } : {}),
       litters: Object.fromEntries(offer.map((x) => [x.litter.id, x.eligibleDogs.map((d) => d.id).sort()])),
       prepassed: prepassed.map((x) => x.litter.id)
     });
+  }
+
+  // The turn order as each of her planned litters opens (Waitlist Timers plan Phase 3),
+  // soonest first: open litters share one turn order, and a litter that opens joins it,
+  // so each is turnQueue's walk with that litter and every one before it counted open.
+  // A family who's used their turn on the open litters (or said "Not this litter")
+  // waits for the first planned one they'd get a turn on: the server counts their
+  // estimate to that opening (serverMoves.turnEstimate). Only times reach a family's
+  // page, never anyone else's place.
+  const planned = litters
+    .filter((l) => l.kennel_id === kennel.id && isWaitlistLitter(l, kennel) && !l.picks_opened_date && !l.waitlist_off)
+    .map((l) => ({ l, at: plannedOpening(l, config) }))
+    .filter((x) => x.at && x.at.date >= today && dogs.some((d) => d.litter_id === x.l.id && isPupAvailable(d, sales)))
+    .sort((a, b) => `${a.at.date}T${a.at.time || '00:00'}`.localeCompare(`${b.at.date}T${b.at.time || '00:00'}`) || String(a.l.id).localeCompare(String(b.l.id)))
+    .slice(0, OPENINGS_MAX);
+  const openings = [];
+  const countedOpen = [...openLitters];
+  for (const { l, at } of planned) {
+    countedOpen.push({ ...l, picks_opened_date: at.date });
+    const queue = [];
+    for (const e of rankedList(live, kennel.id, programsById)) {
+      const { offer } = splitPrepassed(e, turnLittersFor(e, kennelOffers, countedOpen, dogs, sales, opts));
+      // The pups they'd pick from: the server walks the order with them, so a family whose
+      // pups would all be taken before their turn gets no estimate. `planned`: this
+      // litter is in their turn (not only litters open before it).
+      if (offer.length) queue.push({ entry_id: e.id, dog_ids: [...new Set(offer.flatMap((x) => x.eligibleDogs.map((d) => d.id)))].sort(), planned: offer.some((x) => x.litter.id === l.id) });
+    }
+    openings.push({ litter_id: l.id, date: at.date, time: at.time || null, queue });
   }
 
   // A pending side sale (Side Sale Spec) reads to the family exactly as a turn with a
@@ -717,6 +758,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       intro: publicIntroText(config, kennel.kennel_name || ''),
       time_zone: orNull(kennel.time_zone),
       respond_days: Number(config.respond_days),
+      // Turns in hours, kept in her families' waking hours (Waitlist Timers plan T1):
+      // the server counts them as her device does (waitlistRules.hoursDeadline).
+      ...(turnHours(config, null) != null ? { turn_hours: turnHours(config, null), awake_from: fromMinutes(awakeHours(config).from), awake_until: fromMinutes(awakeHours(config).until) } : {}),
       // The weekdays she does business, so a turn the server offers counts its days
       // the way her device does (dateUtils.addOpenDays). null = every day.
       open_days: openDays(config).length === 7 ? null : openDays(config),
@@ -787,6 +831,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     litters: litterViews,
     upcoming: upcoming.map(toUpcomingView),
     turn_queue: turnQueue,
+    ...(openings.length ? { openings } : {}),
     events_through: Number.isInteger(eventsThrough) && eventsThrough > 0 ? eventsThrough : 0,
     // For the server only, never in a family's view: her standard location (a public
     // place near her, Family Requests plan §5), where it measures a family's miles

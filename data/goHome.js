@@ -247,15 +247,20 @@ export function orphanTrainingStays(events, salesById, today) {
 // roster (Pro, `externalOwnership`): 'external' (the family owns it now: External,
 // status external_reference, owner = `ownerId` when given) or 'co_owned' (she keeps
 // a share: Co-owned, the buyer added as a co-owner). → the changes, or null.
+// `stage` (review K9-7, R3): when the pup stays in her records (Co-owned, or left
+// owned: choice null), its life stage now, 'pet_home' or 'active_breeding', with
+// today's status_date; null leaves it a Puppy. External sets its own status.
 // The Sale page's delivery prompt and Kels's check-in both write these.
-export function deliveredOwnershipChanges(dog, choice, { ownerId = null, buyerId = null, today } = {}) {
+export const DELIVERED_STAGES = ['pet_home', 'active_breeding'];
+export function deliveredOwnershipChanges(dog, choice, { ownerId = null, buyerId = null, today, stage = null } = {}) {
   if (!dog) return null;
   if (choice === 'external') {
     return { ownership_type: 'external', status: 'external_reference', status_date: today, ...(ownerId ? { owner_contact_id: ownerId } : {}) };
   }
+  const grown = DELIVERED_STAGES.includes(stage) && dog.status !== stage ? { status: stage, status_date: today } : {};
   if (choice === 'co_owned') {
     const coOwners = dog.co_owner_contact_ids || [];
-    return { ownership_type: 'co_owned', ...(buyerId && !coOwners.includes(buyerId) ? { co_owner_contact_ids: [...coOwners, buyerId] } : {}) };
+    return { ownership_type: 'co_owned', ...(buyerId && !coOwners.includes(buyerId) ? { co_owner_contact_ids: [...coOwners, buyerId] } : {}), ...grown };
   }
-  return null;
+  return Object.keys(grown).length ? grown : null;
 }

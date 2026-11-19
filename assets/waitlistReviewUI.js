@@ -42,8 +42,7 @@ import { readNudgeKey, STEP_OF, REVIEW_STEPS, reviewSummary, readinessProblems, 
 import * as actions from '../data/waitlistActions.js';
 import {
   waitlistConfig, waitlistIsSetUp, entryName, describeOfferChanges, contactMatches, contactMatchReason, privateName, publicName, publicSourceName, listedName,
-  isPupAvailable, eligiblePupsFor, turnIdOf, restoresFamily, overallPositions, isFamilyPageOnly, litterQueue, respondByDate
-} from '../data/waitlistRules.js';
+  isPupAvailable, eligiblePupsFor, turnIdOf, restoresFamily, overallPositions, isFamilyPageOnly, litterQueue, respondByDate, respondBy, deadlineLabel, turnDeadline, timeLabel, fromMinutes } from '../data/waitlistRules.js';
 import { hasOwnForm } from '../data/guidedForm.js';
 import { entryQuestions, formQuestions, answerText } from '../data/waitlistForm.js';
 import { backOutItems, backOutSummary, backOutPaidText, suggestOutcome } from '../data/backOut.js';
@@ -772,7 +771,7 @@ class Review {
       ]);
       if (pick === '__skip') { this.skipped++; continue; }
       if (pick === 'none') { await this.runNudgeAction(n.actions[0]); continue; }
-      if (pick === 'time') { await this.moreTime(turnId, turn[0].respond_by_date, e); continue; }
+      if (pick === 'time') { await this.moreTime(turnId, turnDeadline(turn), e); continue; }
       if (pick === 'pass') {
         const res = await actions.recordOutcome(turn[0].id, 'passed', { date: this.today });
         await this.load();
@@ -784,26 +783,33 @@ class Review {
     }
   }
 
+  // `was`: the turn's deadline, { date, time }.
   async moreTime(turnId, was, e) {
+    // The deadline the engine would give a turn offered now, on one of her open days
+    // (K6-8); with turns in hours (or a turn that has a time), a time on it too.
+    const suggested = respondBy(this.today, this.config, this.programMap.get(e.waitlist_program_id) || null);
+    const timed = this.config.turn_hours != null || Boolean(was.time);
+    const time = suggested.time || was.time || this.config.awake_until;
+    const times = Array.from({ length: 48 }, (_, i) => fromMinutes(i * 30))
+      .map((t) => `<option value="${t}"${t === time ? ' selected' : ''}>${esc(timeLabel(t))}</option>`).join('');
     const res = await this.chat.form({
-      title: `<strong>More time for ${esc(this.name(e))}</strong><span class="kels-lead">They had until ${esc(fmtDate(was))}.</span>`,
-      // The date the engine would give a turn offered today, on one of her open days (K6-8).
-      html: field('New deadline', `<input id="wr-until" type="date" value="${esc(respondByDate(this.today, this.config, this.programMap.get(e.waitlist_program_id) || null))}">`),
+      title: `<strong>More time for ${esc(this.name(e))}</strong><span class="kels-lead">They had until ${esc(deadlineLabel(was.date, was.time, fmtDate))}.</span>`,
+      html: field('New deadline', `<input id="wr-until" type="date" value="${esc(suggested.date)}">${timed ? ` <select id="wr-until-time" style="width:auto;" aria-label="Time">${times}</select>` : ''}`),
       submitLabel: 'Give them more time',
       cancelLabel: 'Never mind',
       submit: async (root) => {
         // A string from submit is shown as the form's error, so the date goes back in an object.
         try {
-          const t = await actions.extendTurn(turnId, { until: root.querySelector('#wr-until').value, date: this.today });
-          return { until: t.respond_by_date, movedFrom: t.moved_from };
+          const t = await actions.extendTurn(turnId, { until: root.querySelector('#wr-until').value, untilTime: root.querySelector('#wr-until-time')?.value || null, date: this.today });
+          return { until: t.respond_by_date, untilTime: t.respond_by_time, movedFrom: t.moved_from };
         } catch (err) { return err.message; }
       },
-      reply: (r) => `Until ${fmtDate(r.until)}`
+      reply: (r) => `Until ${deadlineLabel(r.until, r.untilTime, fmtDate)}`
     });
     if (!res.done) { this.skipped++; return; }
     const moved = res.result.movedFrom ? ` You're closed on ${esc(fmtDate(res.result.movedFrom))}, so it's your next open day.` : '';
-    await this.chat.say(`${esc(this.name(e))} has until ${esc(fmtDate(res.result.until))} now.${moved} Let them know.`);
-    await this.emails([{ entryId: e.id, kind: 'offer', extra: { litterIds: this.offers.filter((o) => turnIdOf(o) === turnId).map((o) => o.litter_id), respondBy: res.result.until } }]);
+    await this.chat.say(`${esc(this.name(e))} has until ${esc(deadlineLabel(res.result.until, res.result.untilTime, fmtDate))} now.${moved} Let them know.`);
+    await this.emails([{ entryId: e.id, kind: 'offer', extra: { litterIds: this.offers.filter((o) => turnIdOf(o) === turnId).map((o) => o.litter_id), respondBy: res.result.until, respondByTime: res.result.untilTime || null } }]);
   }
 
   // Their pick and deposit, through the family page's own dialogs.
@@ -832,7 +838,7 @@ class Review {
     await this.load();
     await this.chat.say(out.depositDone
       ? lines([`${this.name(e)} is placed.`, ...this.changeLines(out.res)])
-      : `${esc(this.pupName(out.res.offer.chosen_dog_id))} is held for ${esc(this.name(e))} until ${esc(fmtDate(offer.respond_by_date))}. Record the deposit on their page when it arrives.`);
+      : `${esc(this.pupName(out.res.offer.chosen_dog_id))} is held for ${esc(this.name(e))} until ${esc(deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate))}. Record the deposit on their page when it arrives.`);
     if (out.depositDone) await this.emails(offerSpecs(out.res));
   }
 
@@ -928,7 +934,7 @@ class Review {
     }
     const who = this.entriesById.get(turn.entry_id);
     const passed = (turn.auto_passed || []).length;
-    await this.chat.say(`${passed ? `${plural(passed, 'family', 'families')} had already said "Not this litter", so I passed them. ` : ''}It's ${esc(who ? this.name(who) : 'the next family')}'s turn. They have until ${esc(fmtDate(turn.respond_by_date))} to pick a pup and send the deposit, or pass.`);
+    await this.chat.say(`${passed ? `${plural(passed, 'family', 'families')} had already said "Not this litter", so I passed them. ` : ''}It's ${esc(who ? this.name(who) : 'the next family')}'s turn. They have until ${esc(deadlineLabel(turn.respond_by_date, turn.respond_by_time, fmtDate))} to pick a pup and send the deposit, or pass.`);
     await this.emails(offerSpecs({ next: turn }));
   }
 

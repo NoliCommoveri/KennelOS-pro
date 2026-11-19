@@ -148,6 +148,13 @@ export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 // '2026-10-20' → 'October 20, 2026' (no time zone involved). Anything else as is.
+// 'HH:MM' → '7:00 pm' (waitlistRules.timeLabel's copy; the Worker's serverMoves has one too).
+function timeLabel(t) {
+  if (typeof t !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) return '';
+  const h = Number(t.slice(0, 2));
+  return `${h % 12 || 12}:${t.slice(3)} ${h < 12 ? 'am' : 'pm'}`;
+}
+
 export function longDate(ymd) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? ''));
   return m ? `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}` : String(ymd ?? '');
@@ -172,12 +179,12 @@ export function emailTemplate(config, kind) {
 }
 
 // The placeholder values a set of facts fills in. Dates come as YYYY-MM-DD.
-export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, position = null, payBy = null, request = '', distance = null, transport = [] } = {}) {
+export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, respondByTime = null, position = null, payBy = null, request = '', distance = null, transport = [] } = {}) {
   return {
     'kennel name': kennelName || 'Our kennel',
     family: family || 'there',
     litter: joinNames(litters) || 'our litter',
-    'respond by': respondBy ? longDate(respondBy) : 'the date on your status page',
+    'respond by': respondBy ? `${longDate(respondBy)}${timeLabel(respondByTime) ? ` at ${timeLabel(respondByTime)}` : ''}` : 'the date on your status page',
     position: position ? `#${position}` : 'on the list',
     'pay by': payBy ? ` by ${longDate(payBy)}` : '',
     request: request || '',

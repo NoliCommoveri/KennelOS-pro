@@ -286,7 +286,7 @@ export function planServerEvent(event, ctx) {
   const labels = (list) => (list || []).map(litterLabel).join(', ') || 'a litter';
 
   if (event.kind === 'server_close') {
-    const what = `Their turn on ${labels(p.litter_ids)} reached its deadline (${p.respond_by_date || 'the respond-by date'}) while your phone was off, and KennelOS closed it`;
+    const what = `Their turn on ${labels(p.litter_ids)} reached its deadline (${p.respond_by_date ? `${p.respond_by_date}${p.respond_by_time ? ` ${p.respond_by_time}` : ''}` : 'the respond-by date'}) while your phone was off, and KennelOS closed it`;
     const rows = offers.filter((o) => !o.is_archived && turnIdOf(o) === p.turn_id && o.outcome === 'open');
     if (!rows.length) return note(`${what} on their status page. You'd already recorded how it ended, so nothing changed here.`);
     const picked = rows.find((o) => o.chosen_dog_id);
@@ -298,7 +298,7 @@ export function planServerEvent(event, ctx) {
 
   // server_offer
   const rows = Array.isArray(p.rows) ? p.rows : [];
-  const what = `KennelOS offered them their turn on ${labels(rows.map((r) => r.litter_id))} while your phone was off (respond by ${p.respond_by_date || '?'}) and emailed them`;
+  const what = `KennelOS offered them their turn on ${labels(rows.map((r) => r.litter_id))} while your phone was off (respond by ${p.respond_by_date ? `${p.respond_by_date}${p.respond_by_time ? ` ${p.respond_by_time}` : ''}` : '?'}) and emailed them`;
   if (!p.turn_id || !rows.length) return skip('bad_payload');
   if (offers.some((o) => turnIdOf(o) === p.turn_id)) return skip('already_applied');
   const why = (reason) => note(`${what}, but ${reason}, so it wasn't recorded here. Their status page showed the offer until your next update: let them know where things stand.`);
@@ -321,7 +321,7 @@ export function planServerEvent(event, ctx) {
   if (!turnRows.length) return why('none of those pups is still available with picks open');
   return {
     op: 'server_offer', date,
-    turn: { turn_id: String(p.turn_id), offered_date: p.offered_date || date, respond_by_date: p.respond_by_date, rows: turnRows },
+    turn: { turn_id: String(p.turn_id), offered_date: p.offered_date || date, respond_by_date: p.respond_by_date, ...(p.respond_by_time ? { respond_by_time: p.respond_by_time } : {}), rows: turnRows },
     activity: line(`${what}.`)
   };
 }

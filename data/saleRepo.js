@@ -8,7 +8,7 @@ import { makeRepo } from './repoBase.js';
 import { SALE_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
-import { isOpenSale, saleEndReasonsFor } from './vocab.js';
+import { isOpenSale, saleEndReasonsFor, REFUNDABLE_SALE_STATUSES } from './vocab.js';
 
 const base = makeRepo('sales', SALE_REFERENCES);
 
@@ -32,6 +32,14 @@ function validateSale(candidate) {
   if (candidate.end_reason && !saleEndReasonsFor(candidate.status).some((r) => r.value === candidate.end_reason)) {
     throw new Error(`Sale: "${candidate.end_reason}" isn't a reason for a ${candidate.status} sale.`);
   }
+  // A refund (review K10-11): an amount of 0 or more, and a YYYY-MM-DD date.
+  const refund = candidate.refund_amount;
+  if (refund != null && refund !== '' && !(Number(refund) >= 0)) {
+    throw new Error('Sale: the refund must be an amount of 0 or more.');
+  }
+  if (candidate.refund_date && !/^\d{4}-\d{2}-\d{2}$/.test(candidate.refund_date)) {
+    throw new Error('Sale: the refund date must be a date (YYYY-MM-DD).');
+  }
 }
 
 // Why a sale ended only means something on a voided or returned sale: on any
@@ -42,11 +50,21 @@ function withEndReason(record) {
   return { ...record, end_reason: null, end_note: null };
 }
 
+// A refund only means something on a sale that ended and kept money (returned or
+// cancelled; vocab.canRecordRefund): on any other status it's cleared, as the end
+// reason is. A lost sale keeps it (its end reason may change back) but counts nothing.
+const REFUND_FIELDS = { refund_amount: null, refund_date: null };
+function withRefund(record) {
+  if (REFUNDABLE_SALE_STATUSES.includes(record.status)) return record;
+  if (record.refund_amount == null && record.refund_date == null) return record;
+  return { ...record, ...REFUND_FIELDS };
+}
+
 export const saleRepo = {
   ...base,
 
   async create(data) {
-    data = withEndReason(data);
+    data = withRefund(withEndReason(data));
     validateSale(data);
     // Kennel scope (Multi-Kennel Scope Spec §4.3) — the sale inherits the kennel of
     // the dog being placed, so a kennel-B dog sold while scoped to A still files
@@ -64,8 +82,11 @@ export const saleRepo = {
     const existing = await db.sales.get(id);
     if (!existing) throw new Error(`sales: no record with id ${id}`);
     const raw = { ...existing, ...changes };
-    const merged = withEndReason(raw);
+    let merged = withEndReason(raw);
     if (merged !== raw) changes = { ...changes, end_reason: null, end_note: null };
+    const refunded = withRefund(merged);
+    if (refunded !== merged) changes = { ...changes, ...REFUND_FIELDS };
+    merged = refunded;
     validateSale(merged);
     const saved = await base.update(id, changes);
     await contactRepo.ensureType(saved.referred_by_contact_id, 'buyer_referrer');

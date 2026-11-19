@@ -34,6 +34,58 @@ export function dayInZone(timeZone, now = new Date()) {
 // everything else in the app keeps the device's date.
 export const kennelToday = (kennel, now = new Date()) => dayInZone(kennel?.time_zone || null, now);
 
+// The time of day in an IANA time zone, as 'HH:MM' (24-hour). No zone, or one this
+// browser doesn't know: the device's own clock.
+export function timeInZone(timeZone, now = new Date()) {
+  const p2 = (n) => String(n).padStart(2, '0');
+  const local = () => `${p2(now.getHours())}:${p2(now.getMinutes())}`;
+  if (!timeZone) return local();
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(now).map((x) => [x.type, x.value]));
+    return `${p2(Number(p.hour) % 24)}:${p.minute}`;
+  } catch {
+    return local();
+  }
+}
+
+// The moment a kennel wall time happens: `date` + `time` ('HH:MM'; none = the end of
+// that day) in `timeZone` (none: the device's). → epoch ms, or null with no date. What
+// the waitlist countdowns tick toward; the Worker's serverMoves.zonedInstant is a copy.
+export function zonedInstant(date, time, timeZone = null) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date ?? ''));
+  if (!m) return null;
+  const t = typeof time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(time) ? time : '24:00';
+  const [y, mo, d, h, mi] = [Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(t.slice(0, 2)), Number(t.slice(3))];
+  if (!timeZone) return new Date(y, mo, d, h, mi).getTime();
+  const wall = Date.UTC(y, mo, d, h, mi);
+  const offset = (ts) => {
+    const at = new Date(ts);
+    const [ld, lt] = [dayInZone(timeZone, at), timeInZone(timeZone, at)];
+    const [a, b, c] = ld.split('-').map(Number);
+    return Date.UTC(a, b - 1, c, Number(lt.slice(0, 2)), Number(lt.slice(3))) - Math.floor(ts / 60000) * 60000;
+  };
+  return wall - offset(wall - offset(wall));
+}
+
+// How long until `at` (epoch ms) from `now`, in words for a countdown: '2 days 4 hr',
+// '5 hr 12 min', '12:04' in the last hour (minutes:seconds), '' once it's passed.
+export function countdownText(at, now = Date.now()) {
+  const left = Math.floor((at - now) / 1000);
+  if (!(left > 0)) return '';
+  const d = Math.floor(left / 86400);
+  const h = Math.floor((left % 86400) / 3600);
+  const m = Math.floor((left % 3600) / 60);
+  if (d > 0) return `${d} day${d === 1 ? '' : 's'}${h ? ` ${h} hr` : ''}`;
+  if (h > 0) return `${h} hr${m ? ` ${m} min` : ''}`;
+  return `${m}:${String(left % 60).padStart(2, '0')}`;
+}
+
+// The kennel's own now, { date: 'YYYY-MM-DD', time: 'HH:MM' }, on the same clock as
+// kennelToday: what a waitlist deadline at a time of day (Waitlist Timers plan) is
+// set from and compared against.
+export const kennelNow = (kennel, now = new Date()) => ({ date: kennelToday(kennel, now), time: timeInZone(kennel?.time_zone || null, now) });
+
 // n days from today (negative = past) — sample-data dates that should stay
 // "still relevant" regardless of when the packet is seeded.
 export function daysFromToday(n) {

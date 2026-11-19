@@ -175,6 +175,7 @@ export const SYNC_REGISTRY = Object.freeze({
     cloud: [
       'kennel_id', 'pairing_id', 'sire_id', 'dam_id', 'status', 'nickname',
       'whelp_date', 'accept_deposits_date', 'estimated_ready_date',
+      'picks_open_time', // the time on accept_deposits_date picks are planned to open (Waitlist Timers plan); families see a countdown
       'litter_registration_number', 'puppies_born_total', 'puppies_born_alive',
       'puppies_born_deceased', 'puppies_born_abnormalities', 'delivery_type', 'foster_direction',
       'foster_partner_contact_id',
@@ -253,7 +254,9 @@ export const SYNC_REGISTRY = Object.freeze({
       'extra_charges',
       // Its payment schedule and the payments received (Payment Schedule plan §3.1,
       // §3.2, D5): money, private like price.
-      'payment_schedule', 'payments'
+      'payment_schedule', 'payments',
+      // A refund on a sale that ended (review K10-11, R4): money, private like price.
+      'refund_amount', 'refund_date'
     ],
     pending: []
   },
@@ -472,6 +475,7 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: ALL,
     cloud: [
       'entry_id', 'litter_id', 'kennel_id', 'offered_date', 'respond_by_date',
+      'respond_by_time', // the deadline's time of day, kennel time (Waitlist Timers plan); null = 11:59 pm
       'eligible_dog_ids', 'outcome', 'outcome_date', 'chosen_dog_id', 'counts_as_pass',
       'picked_date', 'sale_id', // §9: "every field except notes"
       'turn_id', // the turn the row belongs to (Spec §16.1): how the list ran, like outcome

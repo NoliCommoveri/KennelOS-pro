@@ -55,9 +55,8 @@ import {
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
-  sideSaleOf, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow,
-  familyDetails, contactForEmail
-} from '../data/waitlistRules.js';
+  sideSaleOf, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
+  familyDetails, contactForEmail, deadlineLabel } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq
@@ -79,7 +78,7 @@ import { editionFlags } from '../data/editionConfig.js';
 import { CLOUD_DATA_CHANGED_EVENT } from '../data/settings.js';
 import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { sessionToken } from '../data/cloud/cloudAuth.js';
-import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
+import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
   pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, backOutDialog, statusLinkFor, copyLink, creditDialog,
@@ -370,7 +369,7 @@ function emailChoices(e) {
   if (familySale(e, ctx.sales, ctx.kennelOffers, ctx.kennelEntries)) out.push({ kind: 'transport_options', label: 'Transport options (getting their pup home)' });
   const open = ctx.offers.filter((o) => o.outcome === 'open' && !o.is_archived && !o.chosen_dog_id);
   if (open.length) {
-    out.push({ kind: 'offer', label: 'It\'s your turn (send again)', extra: { litterIds: open.map((o) => o.litter_id), respondBy: turnRespondBy(open) } });
+    out.push({ kind: 'offer', label: 'It\'s your turn (send again)', extra: { litterIds: open.map((o) => o.litter_id), respondBy: turnDeadline(open).date, respondByTime: turnDeadline(open).time } });
   }
   return out;
 }
@@ -1645,13 +1644,13 @@ async function onOfferLitter() {
         <div class="faint" style="margin-left:22px;">${c.blocked ? esc(c.blocked) : `${esc(picks)} · pups for them: ${esc(c.eligible.map(pupLabel).join(', '))}`}</div>
       </label>`;
   };
-  const days = ctx.programs.get(e.waitlist_program_id)?.respond_days_override || ctx.config.respond_days;
+  const turnLength = turnLengthText(ctx.config, ctx.programs.get(e.waitlist_program_id) || null);
   await formModal({
     title: `Offer ${entryName(e, ctx.contact)} their turn`,
     confirmLabel: 'Offer the turn',
     bodyHtml: choices.length
       ? `${choices.map(rowHtml).join('')}
-         <p class="field-hint">Their turn covers this litter and every other open litter they match; they pick one pup from any of them, or pass on all of them. They get ${esc(days)} days to pick a pup and send the deposit. Offering someone who isn't next doesn't change anyone's place; the next family ${ctx.config.auto_offer_on.length ? 'is up (offered automatically if you chose that in Waitlist settings)' : 'is up'} once this one is settled. ${emailHint()}</p>`
+         <p class="field-hint">Their turn covers this litter and every other open litter they match; they pick one pup from any of them, or pass on all of them. They get ${esc(turnLength)} to pick a pup and send the deposit. Offering someone who isn't next doesn't change anyone's place; the next family ${ctx.config.auto_offer_on.length ? 'is up (offered automatically if you chose that in Waitlist settings)' : 'is up'} once this one is settled. ${emailHint()}</p>`
       : '<p class="muted">No upcoming or current litters on this kennel yet.</p>',
     onConfirm: async (o) => {
       const picked = o.querySelector('input[name="ol"]:checked');
@@ -1692,7 +1691,7 @@ async function onOfferOutcome(offer, outcome) {
     const saleId = out.res.sale.id;
     const message = out.depositDone
       ? [`${name} is placed.`, ...offerChangeLines(out.res)].join('\n\n')
-      : `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${fmtDate(offer.respond_by_date)}. Send them the deposit details (the sale's invoice is under Documents on this page). Record "Deposit received" when it arrives.`;
+      : `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate)}. Send them the deposit details (the sale's invoice is under Documents on this page). Record "Deposit received" when it arrives.`;
     // A carried-over deposit placed them at the pick: what's left to send them is
     // the contract and the invoice (showing the deposit paid).
     if (out.depositDone && carriedAtPick && canPickToSend()) {
@@ -1702,7 +1701,7 @@ async function onOfferOutcome(offer, outcome) {
       return;
     }
     if (!out.depositDone && canPickToSend()) {
-      if (await confirmModal({ title: 'Pick recorded', message: `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${fmtDate(offer.respond_by_date)}.\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' })) {
+      if (await confirmModal({ title: 'Pick recorded', message: `${dogName(out.res.offer.chosen_dog_id)} is held for ${name} until ${deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate)}.\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' })) {
         await onOfferOutcome(out.res.offer, 'send');
       }
       return;
@@ -1763,8 +1762,8 @@ async function onOfferOutcome(offer, outcome) {
     const res = await actions.undoPrepass(offer.id);
     await afterAction();
     if (res.joined) {
-      await alertModal({ title: 'Added to their turn', message: `${lname} is in ${name}'s turn now, with the same deadline (${fmtDate(res.joined.respond_by_date)}).${canEmail() ? '' : ' Let them know; nothing is sent automatically.'}` });
-      await emailFamilies([{ entryId: e.id, kind: 'offer', extra: { litterIds: res.joined.litter_ids, respondBy: res.joined.respond_by_date } }]);
+      await alertModal({ title: 'Added to their turn', message: `${lname} is in ${name}'s turn now, with the same deadline (${deadlineLabel(res.joined.respond_by_date, res.joined.respond_by_time, fmtDate)}).${canEmail() ? '' : ' Let them know; nothing is sent automatically.'}` });
+      await emailFamilies([{ entryId: e.id, kind: 'offer', extra: { litterIds: res.joined.litter_ids, respondBy: res.joined.respond_by_date, respondByTime: res.joined.respond_by_time || null } }]);
     }
     return;
   }
@@ -1774,8 +1773,8 @@ async function onOfferOutcome(offer, outcome) {
     if (!res) return;
     await afterAction();
     const back = res.offers.map((x) => ctx.litters.find((l) => l.id === x.litter_id)).filter(Boolean).map(litterLabel).join(', ');
-    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${back || 'this litter'}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit.${canEmail() ? '' : ' Let them know; nothing is sent automatically.'}`, ...offerChangeLines(res)].join('\n\n') });
-    await emailFamilies([{ entryId: e.id, kind: 'offer', extra: { litterIds: res.offers.map((x) => x.litter_id), respondBy: res.offer.respond_by_date } }, ...offerSpecs(res)]);
+    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${back || 'this litter'}), with until ${deadlineLabel(res.offer.respond_by_date, res.offer.respond_by_time, fmtDate)} to pick and pay the deposit.${canEmail() ? '' : ' Let them know; nothing is sent automatically.'}`, ...offerChangeLines(res)].join('\n\n') });
+    await emailFamilies([{ entryId: e.id, kind: 'offer', extra: { litterIds: res.offers.map((x) => x.litter_id), respondBy: res.offer.respond_by_date, respondByTime: res.offer.respond_by_time || null } }, ...offerSpecs(res)]);
     return;
   }
 
@@ -1806,7 +1805,7 @@ async function onOfferOutcome(offer, outcome) {
   // next family's turn began.
   const closed = { passed: 'pass_recorded', no_response: 'deadline_passed' }[outcome];
   await emailFamilies([
-    ...(closed ? [{ entryId: e.id, kind: closed, extra: { litterIds: turnLitterIds.length ? turnLitterIds : [offer.litter_id], respondBy: offer.respond_by_date } }] : []),
+    ...(closed ? [{ entryId: e.id, kind: closed, extra: { litterIds: turnLitterIds.length ? turnLitterIds : [offer.litter_id], respondBy: offer.respond_by_date, respondByTime: offer.respond_by_time || null } }] : []),
     ...offerSpecs(res)
   ]);
 }
@@ -1871,10 +1870,10 @@ function liveOffersHtml() {
   const open = live.some((o) => o.outcome === 'open');
   return `<section class="card"><h2 style="margin-top:0;">${open ? 'Their turn' : 'Recent offers'}</h2>
     ${live.map((o, i) => {
-      const overdue = o.outcome === 'open' && isTurnOverdue(o, today);
+      const overdue = o.outcome === 'open' && isTurnOverdue(o, kennelNow(ctx.kennel));
       return `<div style="padding:8px 0;${i ? 'border-top:1px solid var(--border);' : ''}">
         <div><strong>${litterLink(o.litter_id)}</strong> · ${offerStatusHtml(o)}</div>
-        <div class="faint">Offered ${esc(fmtDate(o.offered_date))}${o.respond_by_date ? ` · respond by ${esc(fmtDate(o.respond_by_date))}` : ''}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</div>
+        <div class="faint">Offered ${esc(fmtDate(o.offered_date))}${o.respond_by_date ? ` · respond by ${esc(deadlineLabel(o.respond_by_date, o.respond_by_time, fmtDate))}` : ''}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</div>
         ${offerButtons(o, today)}
       </div>`;
     }).join('')}
@@ -1898,7 +1897,7 @@ function offersHistoryHtml() {
   return `<section class="card"><h2 style="margin-top:0;">Offers</h2>
       <div style="overflow-x:auto;"><table class="data"><thead><tr><th>Litter</th><th>Offered</th><th>Respond by</th><th>Outcome</th><th>Pass?</th></tr></thead><tbody>${
         offers.map((o) => `<tr><td>${litterLink(o.litter_id)}</td>
-            <td>${esc(fmtDate(o.offered_date))}</td><td>${o.respond_by_date ? esc(fmtDate(o.respond_by_date)) : none}</td>
+            <td>${esc(fmtDate(o.offered_date))}</td><td>${o.respond_by_date ? esc(deadlineLabel(o.respond_by_date, o.respond_by_time, fmtDate)) : none}</td>
             <td>${offerStatusHtml(o)}</td>
             <td>${o.counts_as_pass ? '<span class="badge badge-amber">Counts</span>' : none}${o.notes ? ` <span class="faint" title="${esc(o.notes)}">ⓘ</span>` : ''}</td></tr>`).join('')
       }</tbody></table></div></section>`;
@@ -2081,7 +2080,7 @@ async function confirmNarrowing(changes) {
   for (const l of fx.skippedLitters) lines.push(`They're next for ${litterLabel(l)}. This skips them there, with no pass counted.`);
   for (const o of fx.openOffers) {
     const l = ctx.litters.find((x) => x.id === o.litter_id);
-    lines.push(`Their open offer on ${l ? litterLabel(l) : 'a litter'}${o.respond_by_date ? ` (until ${fmtDate(o.respond_by_date)})` : ''} stays open. Passing on it still counts as a pass.`);
+    lines.push(`Their open offer on ${l ? litterLabel(l) : 'a litter'}${o.respond_by_date ? ` (until ${deadlineLabel(o.respond_by_date, o.respond_by_time, fmtDate)})` : ''} stays open. Passing on it still counts as a pass.`);
   }
   lines.push('Make sure this is a real change and not a way around a pass. It goes in their answer history.');
   return confirmModal({ title: `Narrow what ${entryName(e, ctx.contact)} asked for?`, message: lines.join('\n\n'), confirmLabel: 'Save anyway' });

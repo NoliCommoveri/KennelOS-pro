@@ -33,6 +33,13 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   fee_links: null,
   max_passes: 2,
   respond_days: 3, // days to accept AND send the deposit (§6.5)
+  // A turn in hours instead (Waitlist Timers plan T1): null = respond_days, ending
+  // 11:59 pm; whole hours = from when it's offered, counted on her open days, rounded
+  // up to the half hour, and kept inside her families' waking hours.
+  turn_hours: null,
+  awake_from: '08:00', // families' waking hours, kennel time ('HH:MM', on :00 or :30)
+  awake_until: '21:00',
+  picks_open_time: null, // her usual time picks open on a litter's accept-deposits day ('HH:MM'); a litter's own picks_open_time wins
   online: false, // her list is published online (W2 Plan §5; only where isWaitlistOnlineOffered)
   online_form: false, // she takes applications through the online form (W2 Plan step 4)
   auto_offer_on: [], // which closings offer the next family by themselves (WAITLIST_AUTO_OFFER_TRIGGER); none = she offers
@@ -101,6 +108,14 @@ export function waitlistConfigProblem(c) {
   if (c.fee_amount != null && !(Number(c.fee_amount) >= 0)) return 'The application fee can\'t be negative.';
   if (!whole(c.fee_due_days)) return 'Days to pay must be a whole number, at least 1.';
   if (c.respond_days != null && !whole(c.respond_days)) return 'Days to accept and pay the deposit must be at least 1.';
+  if (c.turn_hours != null && (!whole(c.turn_hours) || Number(c.turn_hours) > TURN_HOURS_MAX)) return `Hours to accept and pay the deposit must be a whole number from 1 to ${TURN_HOURS_MAX}.`;
+  if (c.turn_hours != null || c.awake_from != null || c.awake_until != null) {
+    const from = c.awake_from ?? WAITLIST_CONFIG_DEFAULTS.awake_from;
+    const until = c.awake_until ?? WAITLIST_CONFIG_DEFAULTS.awake_until;
+    if (!isDeadlineTime(from) || !isDeadlineTime(until)) return 'Waking hours are set on the hour or half hour.';
+    if (toMinutes(from) >= toMinutes(until)) return 'Waking hours have to start before they end.';
+  }
+  if (c.picks_open_time != null && c.picks_open_time !== '' && !isDeadlineTime(c.picks_open_time)) return 'Picks open on the hour or half hour.';
   if (c.max_passes != null && !whole(c.max_passes)) return 'Passes before removal must be at least 1.';
   if (c.ready_answer_days != null && !whole(c.ready_answer_days)) return 'Days to answer must be at least 1.';
   if (Array.isArray(c.open_days) && !c.open_days.length) return 'Keep at least one day you do business ticked.';
@@ -145,7 +160,7 @@ export function waitlistSummaryLines(config, { programs = [], online = false, fm
   lines.push(c.fee_amount != null && Number(c.fee_amount) > 0
     ? `Application fee: ${fmtMoney(c.fee_amount)}${policy ? `, ${policy}` : ''}${c.fee_due_days ? `, due within ${c.fee_due_days} day${Number(c.fee_due_days) === 1 ? '' : 's'} of approval` : ''}.`
     : 'No application fee.');
-  lines.push(`Families get ${c.respond_days} day${Number(c.respond_days) === 1 ? '' : 's'} to accept an offer and pay the deposit, and can pass ${c.max_passes} time${Number(c.max_passes) === 1 ? '' : 's'} before they're removed${c.no_response_counts_as_pass ? ' (no response counts as a pass)' : ''}.`);
+  lines.push(`Families get ${turnLengthText(c, null)} to accept an offer and pay the deposit, and can pass ${c.max_passes} time${Number(c.max_passes) === 1 ? '' : 's'} before they're removed${c.no_response_counts_as_pass ? ' (no response counts as a pass)' : ''}.`);
   lines.push(autoOfferSummary(c));
   if (c.color_matching) lines.push('Offers only go to families who listed the pup\'s color.');
   if (online) lines.push(c.online ? `Online: your list is set to be online${c.online_form ? ', with applications online' : ''}.` : 'Your list isn\'t online.');
@@ -338,6 +353,107 @@ export function respondByDate(offeredDate, config, program) {
     : Number(config.respond_days);
   return addOpenDays(offeredDate, days, businessDays(config));
 }
+
+// --- Deadlines at a time of day (Waitlist Timers plan §4) ------------------------
+// A row's deadline is `respond_by_date` + `respond_by_time` ('HH:MM', kennel time).
+// No time is the end of that day (11:59 pm), as every deadline made before the
+// hours model reads. Deadlines are compared as keys, 'YYYY-MM-DDTHH:MM', with
+// '24:00' for no time; "now" is the kennel's { date, time } (dateUtils.kennelNow), or
+// a bare date read as that day's 00:00, so an old caller never closes one early.
+
+export const TURN_HOURS_MAX = 336; // two weeks
+export const DEADLINE_STEP_MINUTES = 30; // hours deadlines round up to :00 / :30 (T3, the Worker runs on them)
+export const isTimeOfDay = (v) => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+export const isDeadlineTime = (v) => isTimeOfDay(v) && Number(v.slice(3)) % DEADLINE_STEP_MINUTES === 0;
+export const toMinutes = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+export const fromMinutes = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+export const deadlineKey = (date, time) => (date ? `${date}T${isTimeOfDay(time) ? time : '24:00'}` : '');
+export function nowKey(now) {
+  if (!now) return '';
+  if (typeof now === 'string') return `${now}T00:00`;
+  return `${now.date}T${isTimeOfDay(now.time) ? now.time : '00:00'}`;
+}
+// Is a deadline (date + time) reached at `now`?
+export const isPastDeadline = (date, time, now) => Boolean(date) && nowKey(now) >= deadlineKey(date, time);
+
+// The turn's length in hours (T1, T6: a program's longer window counts its days as
+// 24 hours each), or null when she counts turns in days.
+export function turnHours(config, program) {
+  if (!config || !isSet(config.turn_hours)) return null;
+  if (program && isSet(program.respond_days_override)) return Number(program.respond_days_override) * 24;
+  return Number(config.turn_hours);
+}
+
+// Her families' waking hours: { from, until } in minutes from midnight.
+export function awakeHours(config) {
+  const d = WAITLIST_CONFIG_DEFAULTS;
+  let from = isDeadlineTime(config?.awake_from) ? config.awake_from : d.awake_from;
+  let until = isDeadlineTime(config?.awake_until) ? config.awake_until : d.awake_until;
+  if (toMinutes(from) >= toMinutes(until)) { from = d.awake_from; until = d.awake_until; }
+  return { from: toMinutes(from), until: toMinutes(until) };
+}
+
+// `hours` from `at` ({ date, time }), counted only on open days (T5), rounded up to
+// the half hour, and moved into waking hours: before them, to their start that day;
+// after them, to their start on her next open day. → { date, time }. The Worker's
+// serverMoves.hoursDeadline is a copy (a test pins the two).
+export function hoursDeadline(at, hours, calendar, awake = { from: 8 * 60, until: 21 * 60 }) {
+  const isOpen = (d) => addOpenDays(addDaysToYMD(d, -1), 1, calendar) === d;
+  const nextOpen = (d) => addOpenDays(d, 1, calendar);
+  let date = at.date;
+  let m = isTimeOfDay(at.time) ? toMinutes(at.time) : awake.from;
+  if (!isOpen(date)) { date = nextOpen(date); m = 0; }
+  let left = Math.max(1, Math.round(Number(hours) || 0)) * 60;
+  while (left > 1440 - m) { left -= 1440 - m; date = nextOpen(date); m = 0; }
+  m += left;
+  m = Math.ceil(m / DEADLINE_STEP_MINUTES) * DEADLINE_STEP_MINUTES;
+  if (m < awake.from) m = awake.from;
+  else if (m > awake.until) { date = nextOpen(date); m = awake.from; }
+  return { date, time: fromMinutes(m) };
+}
+
+// The deadline for a turn offered at `at` ({ date, time }, the kennel's now; a bare
+// date starts at her waking hours): the hours model when she set turn_hours, else
+// respondByDate with no time. → { date, time }.
+export function respondBy(at, config, program) {
+  const start = typeof at === 'string' ? { date: at, time: null } : at;
+  const hours = turnHours(config, program);
+  if (hours == null) return { date: respondByDate(start.date, config, program), time: null };
+  return hoursDeadline(start, hours, businessDays(config), awakeHours(config));
+}
+
+// How long a turn lasts, in words: '24 hours' or '3 days' (a program's longer
+// window when it sets one).
+export function turnLengthText(config, program) {
+  const h = turnHours(config, program);
+  if (h != null) return `${h} hour${h === 1 ? '' : 's'}`;
+  const d = program && isSet(program.respond_days_override) ? Number(program.respond_days_override) : Number(config.respond_days);
+  return `${d} day${d === 1 ? '' : 's'}`;
+}
+
+// Every half hour of the day, 'HH:MM' (the time pickers).
+export const HALF_HOURS = Object.freeze(Array.from({ length: 48 }, (_, i) => fromMinutes(i * 30)));
+
+// When picks are planned to open on a litter (Waitlist Timers plan Phase 2): its
+// accept-deposits day, at its own picks_open_time, else her usual one. → { date,
+// time } (time null: no time set, the start of that day), or null with no date.
+export function plannedOpening(litter, config) {
+  if (!litter || !litter.accept_deposits_date) return null;
+  const time = isTimeOfDay(litter.picks_open_time) ? litter.picks_open_time : (isTimeOfDay(config?.picks_open_time) ? config.picks_open_time : null);
+  return { date: litter.accept_deposits_date, time };
+}
+// Has a planned opening come at `now` (the kennel's { date, time }, or a date)?
+export const isOpeningDue = (opening, now) => Boolean(opening) && nowKey(now) >= `${opening.date}T${opening.time || '00:00'}`;
+
+// 'HH:MM' → '7:00 pm' (her pages and the emails). '' for no time.
+export function timeLabel(t) {
+  if (!isTimeOfDay(t)) return '';
+  const h = Number(t.slice(0, 2));
+  return `${h % 12 || 12}:${t.slice(3)} ${h < 12 ? 'am' : 'pm'}`;
+}
+// A deadline for her pages: the date as `fmt` writes it, then the time when it has one.
+export const deadlineLabel = (date, time, fmt = (d) => d) => (date ? `${fmt(date)}${isTimeOfDay(time) ? `, ${timeLabel(time)}` : ''}` : '');
 
 // The first day on or after `ymd` that she's open (her open days and closed
 // dates): a deadline set by hand lands there, as respondByDate's do.
@@ -712,9 +828,13 @@ export function lostSaleFamily(sale, entries, offers) {
 // (not expected, sold or closed), `accept_deposits_date` on or before today,
 // picks not open, at least one pup available. Today suggests Open picks for each;
 // nothing opens by itself.
-export function depositsDueLitters(litters, pups, sales, today) {
+// `today` is a date or the kennel's { date, time }, or (litter) => either; with
+// `configFor` (litter → its kennel's config) a planned time counts too: due from that
+// time (Waitlist Timers plan Phase 2), else from the start of the day.
+export function depositsDueLitters(litters, pups, sales, today, { configFor = null } = {}) {
+  const nowOf = (l) => (typeof today === 'function' ? today(l) : today);
   return litters.filter((l) => !l.is_archived && !l.waitlist_off && ['whelped', 'weaning', 'ready'].includes(l.status)
-    && l.accept_deposits_date && l.accept_deposits_date <= today && !l.picks_opened_date
+    && l.accept_deposits_date && isOpeningDue(plannedOpening(l, configFor ? configFor(l) : null), nowOf(l)) && !l.picks_opened_date
     && pups.some((d) => d.litter_id === l.id && isPupAvailable(d, sales)));
 }
 
@@ -1297,19 +1417,30 @@ export function openTurns(offers, kennelId) {
   return [...groups.entries()].map(([id, rows]) => ({
     id, entry_id: rows[0].entry_id, offers: rows,
     offered_date: rows.map((o) => o.offered_date || '').sort()[0] || null,
-    respond_by_date: turnRespondBy(rows)
+    respond_by_date: turnDeadline(rows).date,
+    respond_by_time: turnDeadline(rows).time
   })).sort((a, b) => String(a.offered_date).localeCompare(String(b.offered_date)));
 }
 
 // A turn's deadline: the latest respond-by date among its rows. Every writer keeps
 // the open rows of a turn on one date; this is the one place that reads it.
 export function turnRespondBy(rows) {
-  return (rows || []).map((o) => o.respond_by_date || '').sort().reverse()[0] || null;
+  return turnDeadline(rows).date;
+}
+// The turn's deadline with its time: the row with the latest deadline key.
+// → { date, time } (both null when no row has a date).
+export function turnDeadline(rows) {
+  let best = null;
+  for (const o of rows || []) {
+    if (!o.respond_by_date) continue;
+    if (!best || deadlineKey(o.respond_by_date, o.respond_by_time) > deadlineKey(best.respond_by_date, best.respond_by_time)) best = o;
+  }
+  return { date: best?.respond_by_date || null, time: (best && isTimeOfDay(best.respond_by_time)) ? best.respond_by_time : null };
 }
 
-// Is this open turn (openTurns' shape, or anything with respond_by_date) past its
-// deadline on `today`?
-export const isTurnOverdue = (turn, today) => Boolean(turn && turn.respond_by_date) && turn.respond_by_date < today;
+// Is this open turn (openTurns' shape, or anything with respond_by_date and
+// respond_by_time) past its deadline at `now` (the kennel's { date, time }, or a date)?
+export const isTurnOverdue = (turn, now) => Boolean(turn) && isPastDeadline(turn.respond_by_date, turn.respond_by_time, now);
 
 // Does this family hold an open turn? `offers` may be the kennel's or the family's.
 export function holdsTurn(offers, entryId) {
@@ -1319,10 +1450,11 @@ export function holdsTurn(offers, entryId) {
 // The deadline when a litter joins an open turn (§16.1 rule 5): it restarts from
 // today for the whole turn, but never earlier than the turn's own date, so time
 // she gave them by hand is kept (K6-2).
-export function joinRespondBy(turn, today, config, program) {
-  const restart = respondByDate(today, config, program);
-  const was = (turn && turn.respond_by_date) || '';
-  return was > restart ? was : restart;
+// `now` is the kennel's { date, time } (or a date). → { date, time }.
+export function joinRespondBy(turn, now, config, program) {
+  const restart = respondBy(now, config, program);
+  const was = turn && turn.respond_by_date ? { date: turn.respond_by_date, time: isTimeOfDay(turn.respond_by_time) ? turn.respond_by_time : null } : null;
+  return was && deadlineKey(was.date, was.time) > deadlineKey(restart.date, restart.time) ? was : restart;
 }
 
 // The litters a family could be offered in a turn now: each open-picks litter (not

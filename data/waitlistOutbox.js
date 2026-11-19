@@ -63,6 +63,7 @@ const litterLabel = (l, dogsById) => l.nickname || `${dogsById.get(l.dam_id)?.ca
 // body }, or null when this family can't be emailed. `extra`:
 //   litterIds    the litter(s) it's about (an offer, a closed turn, a new litter)
 //   respondBy    YYYY-MM-DD (an offer; a closed turn)
+//   respondByTime 'HH:MM' with it, when the deadline has a time (Waitlist Timers plan)
 //   request      { field, request } (a decision on their request)
 export async function draftFor(entryId, kind, extra = {}) {
   if (!EMAIL_KINDS.includes(kind)) throw new Error(`Unknown email "${kind}".`);
@@ -84,6 +85,7 @@ export async function draftFor(entryId, kind, extra = {}) {
     facts.litters = litters.filter(Boolean).map((l) => litterLabel(l, dogsById));
   }
   if (extra.respondBy) facts.respondBy = extra.respondBy;
+  if (extra.respondBy && extra.respondByTime) facts.respondByTime = extra.respondByTime;
   if (extra.request) facts.request = requestPhrase(extra.request.field, extra.request.request);
   // Transport options (Family Requests plan §5.1): their latest address's miles, and
   // her Transport accounts shared with families.
@@ -116,7 +118,7 @@ export async function draftsFor(specs) {
 // ({ next, offered } as waitlistActions returns them).
 export function offerSpecs(res) {
   return [res?.next, ...(res?.offered || [])].filter(Boolean).map((t) => ({
-    entryId: t.entry_id, kind: 'offer', extra: { litterIds: t.litter_ids || [t.litter_id], respondBy: t.respond_by_date }
+    entryId: t.entry_id, kind: 'offer', extra: { litterIds: t.litter_ids || [t.litter_id], respondBy: t.respond_by_date, ...(t.respond_by_time ? { respondByTime: t.respond_by_time } : {}) }
   }));
 }
 

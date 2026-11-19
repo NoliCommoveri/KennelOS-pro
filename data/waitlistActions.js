@@ -45,18 +45,18 @@ import { pickupFor, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE } from './goHome
 import { eventRepo } from './eventRepo.js';
 import { kennelChargeList, kennelChargeGroups, chargeFromPriceList, saleExtraCharges } from './extraCharges.js';
 import { expectedPricing } from './saleDefaults.js';
-import { todayYMD, kennelToday } from './dateUtils.js';
+import { todayYMD, kennelToday, kennelNow } from './dateUtils.js';
 import { applicationMergeBlocker, applicationMergeChanges } from './applicationDuplicates.js';
 import { replaceAndDelete, mergeDuplicate, mergeBlocker } from './recordMerge.js';
 import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
 import { RELEASED_SALE_STATUSES, SALE_END_REASON, BOARDING_FREQUENCY_OPTIONS, registrationsForPurposes, descriptor } from './vocab.js';
 import {
   waitlistConfig, openDays, businessDays, closedDates, liveClosedDates, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, passToForgive,
-  respondByDate, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
+  respondByDate, respondBy, deadlineKey, isTimeOfDay, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
   splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit,
-  turnIsEmpty, emptiedTurns, turnRespondBy, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
+  turnIsEmpty, emptiedTurns, turnRespondBy, turnDeadline, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
   FAMILY_DETAIL_KEYS
 } from './waitlistRules.js';
 
@@ -77,6 +77,14 @@ const nowISO = () => new Date().toISOString();
 // The kennel's own date (D11): every action that sets or reads a waitlist deadline
 // defaults its day to this, never the device's.
 const kennelDay = async (kennelId) => kennelToday(kennelId ? await kennelRepo.getById(kennelId) : null);
+
+// When a turn offered on `date` starts (Waitlist Timers plan §4): the kennel's now
+// when `date` is its today (or unset), else that day, which the hours model starts
+// at her families' waking hours.
+const turnStart = (kennel, date) => { const now = kennelNow(kennel); return !date || date === now.date ? now : { date, time: null }; };
+// A deadline ({ date, time }) as an offer row's fields.
+const dueFields = (due) => ({ respond_by_date: due.date, respond_by_time: due.time || null });
+const sameDue = (o, due) => o.respond_by_date === due.date && (o.respond_by_time || null) === (due.time || null);
 
 const appendNote = (notes, line) => [notes, line].filter(Boolean).join('\n');
 const money = (v) => `$${Number(v).toFixed(2)}`;
@@ -595,7 +603,8 @@ function turnView(rows) {
   return {
     id: turnIdOf(rows[0]), entry_id: rows[0].entry_id, offers: rows,
     litter_ids: rows.map((o) => o.litter_id),
-    respond_by_date: turnRespondBy(rows)
+    respond_by_date: turnDeadline(rows).date,
+    respond_by_time: turnDeadline(rows).time
   };
 }
 
@@ -607,7 +616,7 @@ async function recordPrepassed(entry, prepassed, { turnId, today, respondBy, cou
   for (const [i, { litter, eligibleDogs, prepass }] of prepassed.entries()) {
     rows.push(await waitlistOfferRepo.create({
       entry_id: entry.id, litter_id: litter.id, kennel_id: litter.kennel_id, turn_id: turnId,
-      offered_date: today, respond_by_date: respondBy, eligible_dog_ids: eligibleDogs.map((d) => d.id),
+      offered_date: today, ...dueFields(respondBy), eligible_dog_ids: eligibleDogs.map((d) => d.id),
       outcome: 'passed', outcome_date: today, counts_as_pass: counts && i === 0,
       pass_reason: prepass.reason || null,
       notes: `${PREPASSED_NOTE}${prepass.date || 'their status page'} ("Not this litter"); recorded when their turn came.`
@@ -625,7 +634,7 @@ async function recordPrepassed(entry, prepassed, { turnId, today, respondBy, cou
 async function autoPassTurn(c, entry, prepassed, today) {
   const program = c.programsById.get(entry.waitlist_program_id) || null;
   const counts = countsAsPass('passed', { config: c.config, program });
-  await recordPrepassed(entry, prepassed, { turnId: crypto.randomUUID(), today, respondBy: today, counts });
+  await recordPrepassed(entry, prepassed, { turnId: crypto.randomUUID(), today, respondBy: { date: today, time: null }, counts });
   const offers = await waitlistOfferRepo.getByEntry(entry.id);
   const removed = shouldRemoveForPasses(entry, offers, c.config);
   if (removed) await waitlistEntryRepo.update(entry.id, { status: 'removed', removed_date: today, removed_reason: 'second_pass' });
@@ -645,9 +654,9 @@ async function autoPassTurn(c, entry, prepassed, today) {
 async function makeTurn(c, entry, ls, { today, note = '', prepassed = [] }) {
   const program = c.programsById.get(entry.waitlist_program_id) || null;
   const turnId = crypto.randomUUID();
-  const respondBy = respondByDate(today, c.config, program);
+  const due = respondBy(turnStart(c.kennel, today), c.config, program);
   const rows = [];
-  if (prepassed.length) await recordPrepassed(entry, prepassed, { turnId, today, respondBy });
+  if (prepassed.length) await recordPrepassed(entry, prepassed, { turnId, today, respondBy: due });
   for (const { litter, eligibleDogs } of ls) {
     rows.push(await waitlistOfferRepo.create({
       entry_id: entry.id,
@@ -655,7 +664,7 @@ async function makeTurn(c, entry, ls, { today, note = '', prepassed = [] }) {
       kennel_id: litter.kennel_id,
       turn_id: turnId,
       offered_date: today,
-      respond_by_date: respondBy,
+      ...dueFields(due),
       eligible_dog_ids: eligibleDogs.map((d) => d.id),
       outcome: 'open',
       notes: note || ''
@@ -697,17 +706,26 @@ export async function previewNextTurn(kennelId, { today } = {}) {
 // date must be after today; a day she's closed moves to her next open day, as
 // every other deadline does (K6-8). → the turn (turnView), with `moved_from` set
 // when the date was moved.
-export const extendTurn = atomic(async function extendTurn(turnId, { until, date } = {}) {
+// `untilTime` ('HH:MM', kennel time) sets the time on that day; unset keeps the
+// turn's own time, and a turn with none keeps the end of the day.
+export const extendTurn = atomic(async function extendTurn(turnId, { until, untilTime, date } = {}) {
   const offers = (await waitlistOfferRepo.getAll()).filter((o) => !o.is_archived && o.outcome === 'open' && turnIdOf(o) === turnId);
   if (!offers.length) throw new Error('That turn isn\'t open any more.');
   const kennel = offers[0].kennel_id ? await kennelRepo.getById(offers[0].kennel_id) : null;
   date ??= kennelToday(kennel);
-  if (!until || until <= date) throw new Error('Pick a new deadline after today.');
+  // With a time, later today is fine (once it's still ahead); a whole day is after today.
+  const later = untilTime && isTimeOfDay(untilTime)
+    ? until > date || (until === date && deadlineKey(until, untilTime) > `${date}T${date === kennelNow(kennel).date ? kennelNow(kennel).time : '00:00'}`)
+    : until > date;
+  if (!until || !later) throw new Error(untilTime ? 'Pick a new deadline that\'s still ahead.' : 'Pick a new deadline after today.');
   const asked = until;
   until = onOpenDay(until, waitlistConfig(kennel));
+  if (untilTime != null && untilTime !== '' && !isTimeOfDay(untilTime)) throw new Error('Pick a time for the new deadline.');
+  const time = untilTime || turnDeadline(offers).time || null;
+  const at = (d, t) => `${d}${t ? ` ${t}` : ''}`;
   const rows = [];
   for (const o of offers) {
-    rows.push(await waitlistOfferRepo.update(o.id, { respond_by_date: until, notes: appendNote(o.notes, `Given more time on ${date}: until ${until} (was ${o.respond_by_date || 'no date'}).`) }));
+    rows.push(await waitlistOfferRepo.update(o.id, { respond_by_date: until, respond_by_time: time, notes: appendNote(o.notes, `Given more time on ${date}: until ${at(until, time)} (was ${o.respond_by_date ? at(o.respond_by_date, o.respond_by_time) : 'no date'}).`) }));
   }
   return { ...turnView(rows), moved_from: until !== asked ? asked : null };
 });
@@ -786,16 +804,16 @@ export const openPicks = atomic(async function openPicks(litterId, { date } = {}
   // They passed on it ahead of time: it doesn't join; their next turn records it.
   if (entry && prepassFor(entry, litter)) return null;
   const program = entry ? c.programsById.get(entry.waitlist_program_id) || null : null;
-  const respondBy = joinRespondBy(open, date, c.config, program);
+  const due = joinRespondBy(open, turnStart(c.kennel, date), c.config, program);
   const rows = [];
   for (const o of open.offers) {
-    rows.push(o.respond_by_date === respondBy ? o : await waitlistOfferRepo.update(o.id, {
-      respond_by_date: respondBy, notes: appendNote(o.notes, `Respond-by date ${respondBy > (o.respond_by_date || '') ? 'restarted' : 'kept'} on ${date}: another litter joined this turn.`)
+    rows.push(sameDue(o, due) ? o : await waitlistOfferRepo.update(o.id, {
+      ...dueFields(due), notes: appendNote(o.notes, `Respond-by date ${deadlineKey(due.date, due.time) > deadlineKey(o.respond_by_date, o.respond_by_time) ? 'restarted' : 'kept'} on ${date}: another litter joined this turn.`)
     }));
   }
   rows.push(await waitlistOfferRepo.create({
     entry_id: open.entry_id, litter_id: litter.id, kennel_id: litter.kennel_id, turn_id: open.id,
-    offered_date: date, respond_by_date: respondBy, eligible_dog_ids: eligible.map((d) => d.id), outcome: 'open'
+    offered_date: date, ...dueFields(due), eligible_dog_ids: eligible.map((d) => d.id), outcome: 'open'
   }));
   return { ...turnView(rows), joined: true };
 });
@@ -1321,11 +1339,11 @@ export const undoPass = atomic(async function undoPass(offerId, { today } = {}) 
     result.restored = true;
   }
   const label = offer.outcome === 'passed' ? 'Pass' : 'No response';
-  const respondBy = respondByDate(today, c.config, program);
+  const due = respondBy(turnStart(c.kennel, today), c.config, program);
   for (const o of rows) {
     const re = reopen.find((x) => x.o.id === o.id);
     const saved = await waitlistOfferRepo.update(o.id, re
-      ? { outcome: 'open', outcome_date: null, counts_as_pass: false, respond_by_date: respondBy, eligible_dog_ids: re.eligible.map((d) => d.id),
+      ? { outcome: 'open', outcome_date: null, counts_as_pass: false, ...dueFields(due), eligible_dog_ids: re.eligible.map((d) => d.id),
           notes: appendNote(o.notes, `${label} undone by you on ${today}; their turn is back with a new respond-by date.`) }
       : { counts_as_pass: false, notes: appendNote(o.notes, `${label} undone by you on ${today}; no matching pup left in this litter, so it stays closed.`) });
     if (re) result.offers.push(saved);
@@ -1376,7 +1394,7 @@ export const undoPrepass = atomic(async function undoPrepass(offerId, { today } 
   if (eligible.length) {
     const row = await waitlistOfferRepo.create({
       entry_id: entry.id, litter_id: litter.id, kennel_id: litter.kennel_id, turn_id: mine.id,
-      offered_date: today, respond_by_date: mine.respond_by_date, eligible_dog_ids: eligible.map((d) => d.id), outcome: 'open',
+      offered_date: today, respond_by_date: mine.respond_by_date, respond_by_time: mine.respond_by_time || null, eligible_dog_ids: eligible.map((d) => d.id), outcome: 'open',
       notes: `Added to their turn on ${today}: they changed their mind about "Not this litter".`
     });
     joined = turnView([...mine.offers, row]);
@@ -1447,7 +1465,7 @@ export const recordOutcome = atomic(async function recordOutcome(offerId, outcom
 // A turn KennelOS offered while her phone was off (W2 step 7;
 // waitlistEvents.planServerEvent checked it against her records): the same rows,
 // with the server's ids, so the family's pick on it maps to them.
-// `turn`: { turn_id, offered_date, respond_by_date, rows: [{ offer_id, litter_id, dog_ids }] }.
+// `turn`: { turn_id, offered_date, respond_by_date, respond_by_time?, rows: [{ offer_id, litter_id, dog_ids }] }.
 export const applyServerOffer = atomic(async function applyServerOffer(entryId, turn) {
   const entry = await load(entryId);
   const rows = [];
@@ -1456,7 +1474,7 @@ export const applyServerOffer = atomic(async function applyServerOffer(entryId, 
     if (had) { rows.push(had); continue; }
     rows.push(await waitlistOfferRepo.create({
       id: r.offer_id, entry_id: entry.id, litter_id: r.litter_id, kennel_id: entry.kennel_id, turn_id: turn.turn_id,
-      offered_date: turn.offered_date, respond_by_date: turn.respond_by_date, eligible_dog_ids: [...r.dog_ids], outcome: 'open',
+      offered_date: turn.offered_date, respond_by_date: turn.respond_by_date, respond_by_time: isTimeOfDay(turn.respond_by_time) ? turn.respond_by_time : null, eligible_dog_ids: [...r.dog_ids], outcome: 'open',
       notes: 'Offered by KennelOS while your phone was off (your automatic offers).'
     }));
   }
@@ -1528,7 +1546,7 @@ export const restoreAfterLostSale = atomic(async function restoreAfterLostSale(s
 
   const c = await kennelContext(offer.kennel_id);
   const program = c.programsById.get(entry.waitlist_program_id) || null;
-  const respondBy = respondByDate(date, c.config, program);
+  const due = respondBy(turnStart(c.kennel, date), c.config, program);
   for (const o of turnOffers(c.offers, turnIdOf(offer)).filter((x) => x.outcome === 'open')) {
     const litter = c.litters.find((l) => l.id === o.litter_id);
     // Never the lost pup itself, even if she hasn't recorded its death or hold yet.
@@ -1537,7 +1555,7 @@ export const restoreAfterLostSale = atomic(async function restoreAfterLostSale(s
     const cleared = o.id === offer.id ? { ...lost(o), chosen_dog_id: null, picked_date: null, sale_id: null } : {};
     if (eligible.length) {
       result.offers.push(await waitlistOfferRepo.update(o.id, {
-        ...cleared, respond_by_date: respondBy, eligible_dog_ids: eligible.map((d) => d.id),
+        ...cleared, ...dueFields(due), eligible_dog_ids: eligible.map((d) => d.id),
         notes: appendNote(o.notes, `${o.id === offer.id ? `Pick cleared on ${date}: ${why}. ` : ''}Respond-by date restarted on ${date} so they can pick another pup.`)
       }));
     } else {

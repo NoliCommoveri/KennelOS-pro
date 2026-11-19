@@ -191,7 +191,9 @@ class Setup {
     const res = await this.chat.form({
       title: '<strong>Now, how offers work.</strong><span class="kels-lead">When it\'s a family\'s turn, they get an offer to pick a pup.</span>',
       html: `<div class="ck-inline">
-          ${field('Days to accept and pay the deposit', `<input id="ws-respond" type="number" min="1" step="1" value="${esc(c.respond_days)}">`)}
+          ${c.turn_hours != null
+            ? field('Hours to accept and pay the deposit', `<input id="ws-hours" type="number" min="1" step="1" value="${esc(c.turn_hours)}">`)
+            : field('Days to accept and pay the deposit', `<input id="ws-respond" type="number" min="1" step="1" value="${esc(c.respond_days)}">`)}
           ${field('Passes before they\'re removed', `<input id="ws-passes" type="number" min="1" step="1" value="${esc(c.max_passes)}">`)}
         </div>
         ${group('Rules', check('ws-noresp', 'No response by the deadline counts as a pass', c.no_response_counts_as_pass)
@@ -205,13 +207,14 @@ class Setup {
       submitLabel: 'Save',
       cancelLabel: 'Skip this',
       submit: async (root) => (await this.saveConfig({
-        respond_days: numOrNull(root.querySelector('#ws-respond').value),
+        // Her turns in hours (Waitlist settings → Turns & offers) stay in hours here.
+        ...(c.turn_hours != null ? { turn_hours: numOrNull(root.querySelector('#ws-hours').value) } : { respond_days: numOrNull(root.querySelector('#ws-respond').value) }),
         max_passes: numOrNull(root.querySelector('#ws-passes').value),
         no_response_counts_as_pass: root.querySelector('#ws-noresp').checked,
         color_matching: root.querySelector('#ws-colors').checked,
         auto_offer_on: [...root.querySelectorAll('[data-auto]:checked')].map((b) => b.dataset.auto)
       })) || true,
-      reply: () => `${this.config.respond_days} days, ${this.config.max_passes} passes`
+      reply: () => `${this.config.turn_hours != null ? `${this.config.turn_hours} hours` : `${this.config.respond_days} days`}, ${this.config.max_passes} passes`
     });
     if (!res.done) return null;
     await this.chat.say('Got it. That\'s fair to families and to you.', { typing: 400 });

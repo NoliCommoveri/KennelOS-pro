@@ -37,6 +37,7 @@ import { logOwnMessage } from '../data/waitlistOutbox.js';
 import { depositPaid, getSaleStatement } from '../data/incomeView.js';
 import { photoLink } from '../data/waitlistProjection.js';
 import { todayYMD } from '../data/dateUtils.js';
+import { deadlineLabel } from '../data/waitlistRules.js';
 import { esc, fmtDate, fmtMoney, promptModal } from './ui.js';
 import { REGISTRATION_TYPE, CONTRACT_FORM_TYPE, descriptor } from '../data/vocab.js';
 
@@ -117,7 +118,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           ${field('Price', `<input id="ps-price" type="number" min="0" step="0.01" value="${esc(s.price ?? '')}">`)}
           ${field('Deposit', `<input id="ps-deposit" type="number" min="0" step="0.01" value="${esc(s.deposit_amount ?? '')}">`, depositPaid(s)
             ? `Already received${s.deposit_date ? ` ${fmtDate(s.deposit_date)}` : ''}. The message thanks them for it instead of asking.`
-            : offer.respond_by_date ? `Due by ${fmtDate(offer.respond_by_date)}${offer.side ? '' : ', the end of their turn'}.` : '')}
+            : offer.respond_by_date ? `Due by ${deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate)}${offer.side ? '' : ', the end of their turn'}.` : '')}
           ${field('Transport fee', `<input id="ps-transport" type="number" min="0" step="0.01" value="${esc(s.transport_fee ?? '')}">`)}
           ${field('Sold through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.')}
           ${field('Deposit paid via', `<select id="ps-deposit-via"><option value="">— not set —</option>${accounts
@@ -338,7 +339,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         message = depositRequestMessage({
           who, pupName: dog?.call_name || '', litterLabel,
           deposit: money.deposit, depositCredit: money.depositCredit,
-          depositDue: offer.respond_by_date ? fmtDate(offer.respond_by_date) : '',
+          depositDue: offer.respond_by_date ? deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate) : '',
           depositPaid: depositPaid(sale) ? (sale.deposit_date ? fmtDate(sale.deposit_date) : true) : money.depositPaid,
           payAccount, paymentText,
           contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '',

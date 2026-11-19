@@ -17,7 +17,7 @@ import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import * as actions from '../data/waitlistActions.js';
 import { previewPicks } from '../data/picksPreview.js';
-import { entryName, waitlistConfigProblem, openDays, closedDates, liveClosedDates } from '../data/waitlistRules.js';
+import { entryName, waitlistConfigProblem, openDays, closedDates, liveClosedDates, deadlineLabel } from '../data/waitlistRules.js';
 import { SEX, DISPOSITION, REGISTRATION_TYPE, SALE_STATUS, WAITLIST_PREF_SEX, WAITLIST_AUTO_OFFER_TRIGGER, PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
 import { isReadOnly, readOnlyWhy } from '../data/demoMode.js';
 import { esc, fmtDate, todayYMD, confirmModal } from './ui.js';
@@ -302,16 +302,16 @@ function actionHtml(p, n) {
   };
   switch (a.kind) {
     case 'offer':
-      lines.push(`${n.familyLink(a.entry_id)} ${p.already_open ? 'is next for a turn' : 'gets the next turn'}: ${littersWithPups(a.litters)}. Pick and pay by <strong>${esc(fmtDate(a.respond_by))}</strong>.${a.prepassed.length ? ` They said "Not this litter" to ${esc(a.prepassed.map(n.litterName).join(', '))}, so that's recorded as passed when their turn comes.` : ''}${p.already_open ? ' Use "Offer to them" when you\'re ready.' : ''}`);
+      lines.push(`${n.familyLink(a.entry_id)} ${p.already_open ? 'is next for a turn' : 'gets the next turn'}: ${littersWithPups(a.litters)}. Pick and pay by <strong>${esc(deadlineLabel(a.respond_by, a.respond_by_time, fmtDate))}</strong>.${a.prepassed.length ? ` They said "Not this litter" to ${esc(a.prepassed.map(n.litterName).join(', '))}, so that's recorded as passed when their turn comes.` : ''}${p.already_open ? ' Use "Offer to them" when you\'re ready.' : ''}`);
       break;
     case 'join':
-      lines.push(`This litter joins ${n.familyLink(a.entry_id)}'s turn: they're the top family for it (${esc(n.pups(a.dog_ids))}). ${a.was_respond_by === a.respond_by ? `Their deadline stays <strong>${esc(fmtDate(a.respond_by))}</strong>.` : `Their deadline restarts for the whole turn: ${esc(fmtDate(a.was_respond_by))} → <strong>${esc(fmtDate(a.respond_by))}</strong>.`}`);
+      lines.push(`This litter joins ${n.familyLink(a.entry_id)}'s turn: they're the top family for it (${esc(n.pups(a.dog_ids))}). ${a.was_respond_by === a.respond_by && (a.was_respond_by_time || null) === (a.respond_by_time || null) ? `Their deadline stays <strong>${esc(deadlineLabel(a.respond_by, a.respond_by_time, fmtDate))}</strong>.` : `Their deadline restarts for the whole turn: ${esc(deadlineLabel(a.was_respond_by, a.was_respond_by_time, fmtDate))} → <strong>${esc(deadlineLabel(a.respond_by, a.respond_by_time, fmtDate))}</strong>.`}`);
       break;
     case 'wait':
-      lines.push(`This litter waits. ${n.familyLink(a.holder_id)} holds the turn (${esc(a.holder_litter_ids.map(n.litterName).join(', '))}) until ${esc(fmtDate(a.respond_by))}${a.prepass_blocked ? ', and said "Not this litter" to this one' : ', and isn\'t the top family for this litter'}.${nextAfterHolder()}`);
+      lines.push(`This litter waits. ${n.familyLink(a.holder_id)} holds the turn (${esc(a.holder_litter_ids.map(n.litterName).join(', '))}) until ${esc(deadlineLabel(a.respond_by, a.respond_by_time, fmtDate))}${a.prepass_blocked ? ', and said "Not this litter" to this one' : ', and isn\'t the top family for this litter'}.${nextAfterHolder()}`);
       break;
     case 'held':
-      lines.push(`${n.familyLink(a.holder_id)} holds the turn (${esc(a.holder_litter_ids.map(n.litterName).join(', '))}) until ${esc(fmtDate(a.respond_by))}.${nextAfterHolder()}`);
+      lines.push(`${n.familyLink(a.holder_id)} holds the turn (${esc(a.holder_litter_ids.map(n.litterName).join(', '))}) until ${esc(deadlineLabel(a.respond_by, a.respond_by_time, fmtDate))}.${nextAfterHolder()}`);
       break;
     default:
       lines.push('Nobody on the list qualifies for any available pup in your open litters. "Left out" below says why.');

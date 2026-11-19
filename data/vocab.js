@@ -431,6 +431,13 @@ export const saleEndReasonsFor = (status) => SALE_END_REASON.filter((r) => r.sta
 // (waitlistRules.restoresFamily). A cancelled sale or a buyer's-choice return is not.
 export const isLostSale = (s) => !!s && (s.status === 'voided' || (s.status === 'returned' && s.end_reason === 'health_problem'));
 
+// A sale that ended but kept money as income (a cancelled sale, a buyer's-choice
+// return): the only kind a refund can be recorded on (Sale.refund_amount /
+// refund_date, review K10-11). A lost sale already counts nothing, so a refund on it
+// would take her income below what she was paid.
+export const REFUNDABLE_SALE_STATUSES = ['returned', 'cancelled'];
+export const canRecordRefund = (s) => !!s && REFUNDABLE_SALE_STATUSES.includes(s.status) && !isLostSale(s);
+
 // Statuses that close a sale out. A closed sale no longer makes its buyer a
 // current "family": not in the Companion family package (companion.js), not in
 // its bundle (companionExport.js), and no Companion link request from their
@@ -1047,5 +1054,8 @@ export const INCOME_COMPONENTS = [
   // A NEGATIVE line: what a sales channel (Good Dog, Stripe…) kept of a sale's
   // payments (Sale.processing_fee_amount), so earned income is what she actually
   // received (Integrations plan §5). Never on an invoice or a receivable.
-  { value: 'processing_fee', label: 'Processing fees', badge: 'badge-red' }
+  { value: 'processing_fee', label: 'Processing fees', badge: 'badge-red' },
+  // A NEGATIVE line: money given back on a sale that ended (Sale.refund_amount,
+  // canRecordRefund), on the refund's date. Never on an invoice or a receivable.
+  { value: 'refund', label: 'Refunds', badge: 'badge-red' }
 ];

@@ -21,12 +21,12 @@ import {
   waitlistConfig, litterQueue, nextTurn, openTurns, turnOffers, turnIdOf, eligiblePupsFor, isPupAvailable,
   overallPositions, entryName, describeOfferChanges, soonFamiliesForLitter, whelpNotes,
   isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker, autoOffers, autoOfferSummary, closingTrigger,
-  nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly, isTurnOverdue
-} from '../data/waitlistRules.js';
+  nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly, isTurnOverdue, deadlineLabel, turnLengthText, plannedOpening } from '../data/waitlistRules.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { WAITLIST_OFFER_OUTCOME, SEX } from '../data/vocab.js';
-import { esc, badge, fmtDate, todayYMD, kennelToday, confirmModal, alertModal } from './ui.js';
+import { zonedInstant } from '../data/dateUtils.js';
+import { esc, badge, fmtDate, todayYMD, kennelToday, kennelNow, confirmModal, alertModal, countdownHtml, startCountdowns } from './ui.js';
 import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink, formModal } from './waitlistUI.js';
 import { offerEmails } from './waitlistEmailUI.js';
 import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
@@ -168,7 +168,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   if (open) {
     const entry = entriesById.get(open.entry_id);
     const live = entry ? eligiblePupsFor(entry, litter, d.pups, d.sales, opts) : [];
-    const overdue = isTurnOverdue(open, today);
+    const overdue = isTurnOverdue(open, kennelNow(d.kennel));
     const picked = isAwaitingDeposit(open) ? pupsById.get(open.chosen_dog_id) : null;
     // Her request (W2 Plan §8): the family's status-page link, to send by Messenger.
     const copyBtn = entry && statusLinkFor(entry, d.kennel)
@@ -176,7 +176,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     openHtml = `
       <div class="card" style="margin:12px 0 0;background:var(--surface-2, transparent);">
         <p style="margin:0 0 6px;"><strong>${entry ? familyLink(entry) : 'A family'}'s turn</strong> since ${esc(fmtDate(open.offered_date))}
-          · pick and pay by <strong>${esc(fmtDate(open.respond_by_date))}</strong>${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</p>
+          · pick and pay by <strong>${esc(deadlineLabel(open.respond_by_date, open.respond_by_time, fmtDate))}</strong>${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ` · ${countdownHtml(zonedInstant(open.respond_by_date, open.respond_by_time, d.kennel?.time_zone || null), { label: 'ends in', done: 'deadline reached' })}`}</p>
         ${otherLitters(open).length ? `<p class="muted" style="margin:0 0 6px;">Their turn also covers ${esc(otherLitters(open).join(', '))}: they pick one pup from any of them, or pass on all of them.</p>` : ''}
         ${isAwaitingDeposit(open)
           ? `<p style="margin:0 0 10px;"><span class="badge badge-purple">Picked ${esc(picked ? picked.call_name : 'a pup')}</span> <span class="muted">held until the deposit arrives${open.sale_id ? ` · <a href="sale.html?id=${encodeURIComponent(open.sale_id)}">open the sale</a>` : ''}</span></p>
@@ -211,7 +211,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   const heldElsewhere = !open ? kennelTurns[0] : null;
   if (heldElsewhere) {
     const holder = entriesById.get(heldElsewhere.entry_id);
-    nextHtml = `<p class="muted" style="margin:12px 0 0;">${holder ? familyLink(holder) : 'Another family'} holds the turn (${esc(heldElsewhere.offers.map((o) => d.litterName(o.litter_id)).join(', '))}) until ${esc(fmtDate(heldElsewhere.respond_by_date))}. One family at a time across your open litters: the next turn is worked out when theirs closes.</p>`;
+    nextHtml = `<p class="muted" style="margin:12px 0 0;">${holder ? familyLink(holder) : 'Another family'} holds the turn (${esc(heldElsewhere.offers.map((o) => d.litterName(o.litter_id)).join(', '))}) until ${esc(deadlineLabel(heldElsewhere.respond_by_date, heldElsewhere.respond_by_time, fmtDate))}. One family at a time across your open litters: the next turn is worked out when theirs closes.</p>`;
   } else if (picksOpen && !open) {
     const next = nextTurn(d.entries, d.kennelOffers, d.kennelLitters, d.kennelPups, d.kennelSales, { ...opts, kennelId: litter.kennel_id });
     const here = next && next.litters.some((x) => x.litter.id === litter.id);
@@ -246,6 +246,13 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
         }</tbody></table></details>`
     : '';
 
+  // When she planned to open picks (Waitlist Timers plan Phase 2), with a countdown
+  // while it's still ahead.
+  const planned = picksOpen ? null : plannedOpening(litter, d.config);
+  const plannedAt = planned ? zonedInstant(planned.date, planned.time || '00:00', d.kennel?.time_zone || null) : null;
+  const plannedLine = planned && plannedAt > Date.now()
+    ? `Planned to open ${esc(deadlineLabel(planned.date, planned.time, fmtDate))} (${countdownHtml(plannedAt, { label: 'in', done: 'now' })}). `
+    : '';
   mount.innerHTML = `
     <section class="card" style="margin-top:16px;">
       <div class="row-between">
@@ -256,13 +263,14 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       </div>
       <p class="field-hint" style="margin:6px 0 0;">${picksOpen
         ? `Picks opened ${esc(fmtDate(litter.picks_opened_date))}. One family at a time across all your open litters, in list order; each turn shows every pup they match in every open litter, and only passing on all of them counts as a pass. Families with no matching pup, paused, or listening only for other sires or dams are skipped and nothing is held against them. A pup is only theirs once the deposit is in. ${autoOfferSummary(d.config)} Nothing is sent automatically, so tell each family yourself.`
-        : `${available.length} pup${available.length === 1 ? '' : 's'} available. Opening picks offers the next turn (${esc(d.config.respond_days)} days to pick and pay the deposit), or, while a family holds a turn, adds this litter to it when they're first in line for it.`}</p>
+        : `${plannedLine}${available.length} pup${available.length === 1 ? '' : 's'} available. Opening picks offers the next turn (${esc(turnLengthText(d.config, null))} to pick and pay the deposit), or, while a family holds a turn, adds this litter to it when they're first in line for it.`}</p>
       ${openHtml}
       ${nextHtml}
       <h3 style="margin:16px 0 0;font-size:15px;">In line for this litter</h3>
       ${queueHtml}
       ${historyHtml}
     </section>`;
+  startCountdowns();
 
   const rerender = async () => { await onChange(); };
   const run = (fn) => async () => {
@@ -331,7 +339,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       const saleId = out.res.sale.id;
       const lines = out.depositDone
         ? [`${name} is placed.`, ...(await changeLines(out.res, await freshEntries(litter), familyName))]
-        : [`${pupsById.get(out.res.offer.chosen_dog_id)?.call_name || 'The pup'} is held for ${name} until ${fmtDate(open.respond_by_date)}. Send them the deposit details (the sale has an invoice), and record "Deposit received" when it arrives.`];
+        : [`${pupsById.get(out.res.offer.chosen_dog_id)?.call_name || 'The pup'} is held for ${name} until ${deadlineLabel(open.respond_by_date, open.respond_by_time, fmtDate)}. Send them the deposit details (the sale has an invoice), and record "Deposit received" when it arrives.`];
       if (out.depositDone) await offerEmails(offerSpecs(out.res));
       if (await confirmModal({ title: out.depositDone ? 'Deposit received' : 'Pick recorded', message: `${lines.join('\n\n')}\n\nOpen the sale?`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
         location.href = `sale.html?id=${encodeURIComponent(saleId)}`;
@@ -360,7 +368,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
         await alertModal(await outcomeMessage(name, res, await freshEntries(litter), familyName));
         // Their turn closed, and maybe the next family's began (W2 step 6).
         await offerEmails([
-          { entryId: open.entry_id, kind: outcome === 'passed' ? 'pass_recorded' : 'deadline_passed', extra: { litterIds: turnLitterIds, respondBy: open.respond_by_date } },
+          { entryId: open.entry_id, kind: outcome === 'passed' ? 'pass_recorded' : 'deadline_passed', extra: { litterIds: turnLitterIds, respondBy: open.respond_by_date, respondByTime: open.respond_by_time || null } },
           ...offerSpecs(res)
         ]);
       });
@@ -388,8 +396,8 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     const holder = holding ? entriesById.get(holding.entry_id) : null;
     const res = await undoPassDialog({ offer: o, name, holderName: holder ? familyName(holder) : null, removed: entry.status === 'removed' });
     if (!res) return;
-    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${res.offers.map((x) => d.litterName(x.litter_id)).join(', ')}), with until ${fmtDate(res.offer.respond_by_date)} to pick and pay the deposit. Let them know.`, ...(await changeLines(res, await freshEntries(litter), familyName))].join('\n\n') });
-    await offerEmails([{ entryId: o.entry_id, kind: 'offer', extra: { litterIds: res.offers.map((x) => x.litter_id), respondBy: res.offer.respond_by_date } }, ...offerSpecs(res)]);
+    await alertModal({ title: 'Their turn is back', message: [`${name}'s turn is back (${res.offers.map((x) => d.litterName(x.litter_id)).join(', ')}), with until ${deadlineLabel(res.offer.respond_by_date, res.offer.respond_by_time, fmtDate)} to pick and pay the deposit. Let them know.`, ...(await changeLines(res, await freshEntries(litter), familyName))].join('\n\n') });
+    await offerEmails([{ entryId: o.entry_id, kind: 'offer', extra: { litterIds: res.offers.map((x) => x.litter_id), respondBy: res.offer.respond_by_date, respondByTime: res.offer.respond_by_time || null } }, ...offerSpecs(res)]);
   })));
 }
 
@@ -462,8 +470,8 @@ function offeredMessage(turn, entriesById, familyName, litterName) {
   const name = e ? familyName(e) : 'the next family';
   const litters = (turn.litter_ids || []).map(litterName).join(', ');
   return turn.joined
-    ? say('Added to their turn', `${name} is first in line for this litter too, so it joined their turn (${litters}). Their deadline restarted: until ${fmtDate(turn.respond_by_date)}. Let them know.`)
-    : say('Turn offered', `It's ${name}'s turn (${litters}). They have until ${fmtDate(turn.respond_by_date)} to pick a pup from any of these and send the deposit, or pass. Let them know.`);
+    ? say('Added to their turn', `${name} is first in line for this litter too, so it joined their turn (${litters}). Their deadline restarted: until ${deadlineLabel(turn.respond_by_date, turn.respond_by_time, fmtDate)}. Let them know.`)
+    : say('Turn offered', `It's ${name}'s turn (${litters}). They have until ${deadlineLabel(turn.respond_by_date, turn.respond_by_time, fmtDate)} to pick a pup from any of these and send the deposit, or pass. Let them know.`);
 }
 
 // describeOfferChanges, with names from a fresh read: an accept or a removal may

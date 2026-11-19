@@ -42,7 +42,7 @@ import { paymentStatement, chargePieces } from './paymentSchedule.js';
 import { expectedPickupDate } from './goHome.js';
 import { businessDays, waitlistConfig } from './waitlistRules.js';
 import { todayYMD } from './dateUtils.js';
-import { INCOME_COMPONENTS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES, isLostSale, descriptor } from './vocab.js';
+import { INCOME_COMPONENTS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES, isLostSale, canRecordRefund, descriptor } from './vocab.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -214,6 +214,23 @@ export function feeComponents(s, cash, { open = cash, depositPart = null, paid =
     if (paid.rest > 0 && restGross > 0) out.push({ component: 'processing_fee', amount: -round2(restFee * Math.min(paid.rest / restGross, 1)), state: 'earned', when: paid.restWhen || s.balance_paid_date || s.sale_date || String(s.created_at || '').slice(0, 10), due: '' });
   }
   return out.filter((c) => c.amount);
+}
+
+// A refund on a sale that ended and kept money (Sale.refund_amount / refund_date,
+// review K10-11; vocab.canRecordRefund) as ONE negative `refund` line, earned on the
+// refund's date (else the sale's own date), so the month she gave it back is the
+// month it comes off. Never more than the sale's earned money, so a sale never goes
+// below nothing; the processing fee is the processor's and stays a cost. A lost sale
+// already counts nothing, so it has none. Kept out of saleComponents, like the fee:
+// invoices and paidOnSale show what the buyer paid.
+export function refundComponents(s, cash) {
+  const asked = num(s.refund_amount);
+  if (!(asked > 0) || !canRecordRefund(s)) return [];
+  const kept = round2(cash.filter((c) => c.state === 'earned' && c.amount > 0).reduce((t, c) => t + c.amount, 0));
+  const amount = round2(Math.min(asked, kept));
+  if (!(amount > 0)) return [];
+  const when = s.refund_date || s.sale_date || s.deposit_date || s.balance_paid_date || String(s.created_at || '').slice(0, 10);
+  return [{ component: 'refund', amount: -amount, state: 'earned', when, due: '', ...(s.refund_date ? { paid_date: s.refund_date } : {}) }];
 }
 
 // How much of the sale's processing fee is the deposit's: Stripe's reported fee for
@@ -698,7 +715,8 @@ export async function getCreditedByLine(source, id) {
 // kennel hub (kennel.html) needs, since it reports on the kennel you opened
 // rather than the kennel you are currently scoped to. Leave it unset everywhere
 // else and the active scope applies (Multi-Kennel Scope Spec §7/§8).
-export async function getIncomeRows({ includeArchived = false, kennelId = null, today = todayYMD() } = {}) {
+// `saleId` reads that one sale's row alone, whatever the scope (getSaleNet).
+export async function getIncomeRows({ includeArchived = false, kennelId = null, today = todayYMD(), saleId = null } = {}) {
   const scopeTo = (list) => (kennelId ? list.filter((r) => r.kennel_id === kennelId) : inScopeOnly(list));
   const [sales, studs, dogs, contacts, entries, offers, kennels, litters, placements, accounts] = await Promise.all([
     saleRepo.getAll({ includeArchived }),
@@ -737,7 +755,7 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
   // picker can never disagree about which money is yours-right-now. Both tables
   // carry a stamped kennel_id (a sale inherits the dog's, a stud service OUR
   // dog's), and both are pass-throughs when unscoped.
-  for (const s of scopeTo(sales)) {
+  for (const s of saleId ? sales.filter((x) => x.id === saleId) : scopeTo(sales)) {
     const feeCredit = creditBySale.get(s.id) || NO_FEE_CREDIT;
     // The sale's payment statement, read as getSaleStatement reads it, then its
     // income (ledgerComponents): `when` always has a date, for filing by month; `due`
@@ -762,8 +780,9 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
       paid = { deposit: depPaid, rest: Math.max(0, round2(rst.paid - depPaid - rst.received.filter((m) => m.kind === 'credit' || m.kind === 'fee').reduce((t, m) => t + m.amount, 0))), restWhen: lastPay };
     }
     const fees = feeComponents(s, cash, { open, paid, depositPart: depositFeePart(s, accountsById) });
+    const refunds = refundComponents(s, cash);
     if (!cash.length && !fees.length) continue; // no money on this sale — nothing to show
-    const components = [...cash, ...fees];
+    const components = [...cash, ...fees, ...refunds];
     rows.push({
       source_type: 'sale',
       source_id: s.id,
@@ -783,9 +802,12 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
       fee_credit: feeCredit,
       // The channel's fee on this sale (Integrations plan §5): already netted
       // out of `earned` / `anticipated` by its negative components.
-      processing_fee: components.filter((c) => c.component === 'processing_fee').reduce((t, c) => t - c.amount, 0)
+      processing_fee: components.filter((c) => c.component === 'processing_fee').reduce((t, c) => t - c.amount, 0),
+      // Given back on a sale that ended (refundComponents), already off `earned`.
+      refunded: refunds.reduce((t, c) => t - c.amount, 0)
     });
   }
+  if (saleId) return rows;
 
   for (const s of scopeTo(studs)) {
     if (ourRole(s, dogById) !== 'stud') continue; // our dam's service = we pay = an expense
@@ -849,6 +871,21 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
 
   // Newest first, undated rows last — same posture as the Expenses ledger.
   return rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+
+// What she nets on one sale, as the ledger counts it (review K10-10): its income,
+// earned and still to come (price, transport, boarding, extras, a fee charged back as
+// an extra), less the processing fee and any refund, plus the application fee
+// credited to its price (income on the family's waitlist row, but paid toward this
+// pup). A released sale counts what it kept; a lost sale nothing but the fee it
+// cost. null when there's no such sale.
+export async function getSaleNet(saleId, { today = todayYMD() } = {}) {
+  const sale = saleId ? await saleRepo.getById(saleId) : null;
+  if (!sale) return null;
+  const [row] = await getIncomeRows({ includeArchived: true, saleId, today });
+  if (!row) return 0;
+  const credited = isLostSale(sale) || RELEASED_SALE_STATUSES.includes(sale.status) ? 0 : feeCreditAmount(row.fee_credit);
+  return round2(row.earned + row.anticipated + credited);
 }
 
 // Roll a set of income rows into grand totals plus a per-component breakdown

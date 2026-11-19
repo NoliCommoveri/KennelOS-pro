@@ -19,9 +19,8 @@ import {
   waitlistConfig, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, nextOfferedTurn, openTurns, isTurnOverdue, isPupAvailable,
   soonFamiliesForKennel, kennelBreeds, resolveBreed, whelpNotes, nextTurnPrepassNote, describeOfferChanges,
-  numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly
-} from '../data/waitlistRules.js';
-import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, cardShell, alertModal, wireActionMenu } from '../assets/ui.js';
+  numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly, deadlineLabel } from '../data/waitlistRules.js';
+import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, cardShell, alertModal, wireActionMenu } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, openSoonNotice } from '../assets/waitlistUI.js';
 import { offerEmails } from '../assets/waitlistEmailUI.js';
 import { programIconHtml } from '../assets/programIcons.js';
@@ -210,8 +209,8 @@ async function main() {
   const turnLine = kennelTurns.length
     ? kennelTurns.map((t) => {
       const e = entriesById.get(t.entry_id);
-      const overdue = isTurnOverdue(t, today);
-      return `<p style="margin:0 0 8px;"><strong>${e ? familyLink(e) : 'A family'}'s turn</strong>: ${esc(t.offers.map((o) => litterLabel(litters.find((x) => x.id === o.litter_id) || {})).join(', '))} · pick and pay by ${esc(fmtDate(t.respond_by_date))}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</p>`;
+      const overdue = isTurnOverdue(t, kennelNow(kennel));
+      return `<p style="margin:0 0 8px;"><strong>${e ? familyLink(e) : 'A family'}'s turn</strong>: ${esc(t.offers.map((o) => litterLabel(litters.find((x) => x.id === o.litter_id) || {})).join(', '))} · pick and pay by ${esc(deadlineLabel(t.respond_by_date, t.respond_by_time, fmtDate))}${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ''}</p>`;
     }).join('')
     : upNext
       ? `<p style="margin:0 0 8px;">Next turn: <strong>${familyLink(upNext.entry)}</strong> (${esc(upNext.litters.map((x) => litterLabel(x.litter)).join(', '))}) <button class="btn btn-sm btn-primary" data-offer-litter="${esc(upNext.litters[0].litter.id)}">Offer to them</button></p>${prepassNoteHtml(upNext)}`
@@ -302,7 +301,7 @@ async function main() {
         if (turn && !turn.none) {
           const e = entriesById.get(turn.entry_id);
           const covers = (turn.litter_ids || []).map((id) => litterLabel(litters.find((x) => x.id === id) || {})).join(', ');
-          await alertModal({ title: turn.joined ? 'Added to their turn' : 'Turn offered', message: [...passedLines, `It's ${e ? entryName(e, contactsById.get(e.contact_id)) : 'the next family'}'s turn (${covers}). They have until ${fmtDate(turn.respond_by_date)} to pick a pup from any of these and send the deposit, or pass. Let them know.`].join('\n\n') });
+          await alertModal({ title: turn.joined ? 'Added to their turn' : 'Turn offered', message: [...passedLines, `It's ${e ? entryName(e, contactsById.get(e.contact_id)) : 'the next family'}'s turn (${covers}). They have until ${deadlineLabel(turn.respond_by_date, turn.respond_by_time, fmtDate)} to pick a pup from any of these and send the deposit, or pass. Let them know.`].join('\n\n') });
           await offerEmails(offerSpecs({ next: turn }));
         } else if (turn?.none) {
           await alertModal({ title: 'No turn offered', message: [...passedLines, 'Nobody else on the list is eligible for the pups available right now.'].join('\n\n') });

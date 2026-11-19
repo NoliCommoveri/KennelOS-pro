@@ -7,6 +7,7 @@ import { dogRepo, ReferenceBlockedError, dogName as nameOf } from '../data/dogRe
 import { CapExceededError } from '../data/repoBase.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
+import { moveLitterPups } from '../data/pedigreeEdit.js';
 import { pairingRepo } from '../data/pairingRepo.js';
 import { offerKeeperTests } from '../assets/keeperTests.js';
 import { kennelRepo, seedTestsKennel } from '../data/kennelRepo.js';
@@ -736,6 +737,23 @@ function updateWarnings() {
   // offer the three fixes a mismatch could mean instead of just a message.
   const litter = d.litter_id ? ctx.littersById.get(d.litter_id) : null;
   const dobConflict = !!(litter && litter.whelp_date && d.date_of_birth && d.date_of_birth !== litter.whelp_date);
+  // The same for its sire and dam (review K9-8): the litter names them too.
+  const parentConflicts = litter ? ['sire', 'dam'].filter((role) => {
+    const f = `${role}_id`;
+    return litter[f] && d[f] && d[f] !== litter[f];
+  }) : [];
+  const parentWarn = (role) => {
+    const f = `${role}_id`;
+    const name = (id) => esc(nameOf(ctx.dogsById.get(id)) || 'another dog');
+    return `
+      <div class="inline-warn">
+        ${role === 'sire' ? 'Sire' : 'Dam'} (${name(d[f])}) isn't this litter's ${role} (${name(litter[f])}). Saving keeps it for this dog only, as in a split litter.
+        <div class="pill-row" style="margin-top:6px;">
+          <button type="button" class="btn btn-sm" data-warn-parent-use-litter="${role}">Use the litter's ${role}</button>
+          <button type="button" class="btn btn-sm" data-warn-parent-use-dog="${role}">Change the litter's ${role} (every pup on ${name(litter[f])})</button>
+        </div>
+      </div>`;
+  };
 
   box.innerHTML =
     (warns.length ? `<div class="inline-warn">${warns.map(esc).join('<br>')}</div>` : '') +
@@ -747,7 +765,28 @@ function updateWarnings() {
           <button type="button" class="btn btn-sm" id="warn-dob-use-dog">Update litter's whelp date to match</button>
           <button type="button" class="btn btn-sm" id="warn-dob-change-litter">Change litter</button>
         </div>
-      </div>` : '');
+      </div>` : '') +
+    parentConflicts.map(parentWarn).join('');
+
+  box.querySelectorAll('[data-warn-parent-use-litter]').forEach((b) => {
+    b.onclick = () => {
+      const f = `${b.dataset.warnParentUseLitter}_id`;
+      ctx.draft = readForm();
+      ctx.draft[f] = litter[f];
+      renderEdit();
+    };
+  });
+  box.querySelectorAll('[data-warn-parent-use-dog]').forEach((b) => {
+    b.onclick = async () => {
+      const role = b.dataset.warnParentUseDog;
+      const f = `${role}_id`;
+      // Every pup still on the old parent follows (this dog too, once saved).
+      await moveLitterPups(litter.id, role, litter[f], d[f]);
+      const updated = await litterRepo.update(litter.id, { [f]: d[f] });
+      ctx.littersById.set(updated.id, updated);
+      updateWarnings();
+    };
+  });
 
   if (dobConflict) {
     document.getElementById('warn-dob-use-litter').onclick = () => {

@@ -22,7 +22,8 @@
 // pedigree-only dog, or cleared (data/pedigreeEdit.js). The tree redraws after.
 import { dogRepo, dogName } from '../data/dogRepo.js';
 import { esc, fmtDate, dogOptgroups } from './ui.js';
-import { setParent, addNewParent, spotCandidates, sexCorrectable } from '../data/pedigreeEdit.js';
+import { setParent, addNewParent, spotCandidates, sexCorrectable, spotFixable, litterParentMismatch } from '../data/pedigreeEdit.js';
+import { litterRepo } from '../data/litterRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { titlesOf, displayName } from '../data/dogTitles.js';
@@ -85,9 +86,13 @@ function boxNames(d, titleEvents) {
   return { name: d.call_name, reg: d.registered_name || titles.length ? full : '' };
 }
 
-function nodeHtml(n, editable, titleEvents = new Map()) {
+// A spot can be fixed only under a dog that can itself be edited (review K9-11): in
+// Lite an archived (departed) dog's own sire and dam stay as they are. Its own spot,
+// under its child, still can: that's how a dog put there by mistake comes out.
+function nodeHtml(n, editable, titleEvents = new Map(), byId = new Map()) {
+  const fixable = editable && n.childId && spotFixable(byId.get(n.childId), editionFlags);
   if (n.placeholder) {
-    const add = editable && n.childId ? `<button type="button" class="btn btn-sm ped-add" ${fixAttrs(n)} title="Add the ${esc(n.role)}">+ Add ${esc(n.role)}</button>` : '';
+    const add = fixable ? `<button type="button" class="btn btn-sm ped-add" ${fixAttrs(n)} title="Add the ${esc(n.role)}">+ Add ${esc(n.role)}</button>` : '';
     return `<div class="ped-node ped-unknown" style="width:${NODE_W}px;height:${NODE_H}px;">
       <span class="faint">Unknown</span>${add}
     </div>`;
@@ -106,7 +111,7 @@ function nodeHtml(n, editable, titleEvents = new Map()) {
     : `<a href="#" class="ped-name" data-nav="${esc(d.id)}" title="Re-center on this dog">${esc(names.name || '(unnamed)')}</a>`;
   const archBadge = d.is_archived && !hideArchive ? '<span class="badge badge-gray ped-arch">arch</span>' : '';
   const openLink = hideArchive ? '' : `<a class="ped-open" href="dog.html?id=${encodeURIComponent(d.id)}" title="Open record">↗</a>`;
-  const fix = editable && n.childId && !hideArchive
+  const fix = fixable
     ? `<button type="button" class="ped-fix" ${fixAttrs(n)} title="Fix this spot" aria-label="Fix ${esc(n.role)} spot: ${esc(dogName(d) || 'this dog')}">✎</button>` : '';
   return `<div class="ped-node" style="width:${NODE_W}px;height:${NODE_H}px;border-left-color:${SEX_BORDER[d.sex] || SEX_BORDER.unknown};">
     <div class="ped-main">
@@ -167,7 +172,7 @@ export async function renderPedigree(opts) {
 
   const nodesHtml = nodes.map((n) => {
     const top = cyCenter(n) - NODE_H / 2;
-    return `<div class="ped-pos" style="left:${cx(n)}px;top:${top}px;">${nodeHtml(n, editable, titleEvents)}</div>`;
+    return `<div class="ped-pos" style="left:${cx(n)}px;top:${top}px;">${nodeHtml(n, editable, titleEvents, byId)}</div>`;
   }).join('');
 
   // Build offspring section
@@ -277,6 +282,48 @@ export async function renderPedigree(opts) {
 }
 
 // --- Fixing one spot -------------------------------------------------------------
+// A question with a few answers, one button each. Resolves the chosen value, or
+// null on Cancel or the backdrop (nothing is written then).
+function choose({ title, message, choices }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h2 style="margin-top:0;">${esc(title)}</h2>
+      <p class="muted">${esc(message)}</p>
+      <div class="form-actions" style="flex-wrap:wrap;">
+        ${choices.map((c, i) => `<button class="btn${i === 0 ? ' btn-primary' : ''}" data-choice="${i}">${esc(c.label)}</button>`).join('')}
+        <button class="btn" data-choice="cancel">Cancel</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const done = (v) => { overlay.remove(); resolve(v); };
+    overlay.querySelectorAll('[data-choice]').forEach((b) => b.addEventListener('click', () => {
+      done(b.dataset.choice === 'cancel' ? null : choices[Number(b.dataset.choice)].value);
+    }));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+  });
+}
+
+// A pup's new sire or dam that isn't its litter's (review K9-8): the whole litter, or
+// just this pup (a split litter)? → 'all' | 'this' | null (cancelled). 'this' with no
+// question when nothing disagrees.
+async function askLitterChange(child, role, parentName, parentId) {
+  const litter = child.litter_id ? await litterRepo.getById(child.litter_id) : null;
+  if (!litterParentMismatch(child, litter, role, parentId)) return 'this';
+  const field = role === 'sire' ? 'sire_id' : 'dam_id';
+  const was = litter[field] ? await dogRepo.getById(litter[field]) : null;
+  const pup = dogName(child) || 'this pup';
+  return choose({
+    title: `Change the litter's ${role} too?`,
+    message: `${pup}'s litter has ${dogName(was) || 'another dog'} as its ${role}. Is ${parentName || 'the new dog'} the ${role} of the whole litter, or just ${pup}'s (a split litter)?`,
+    choices: [
+      { value: 'all', label: `The whole litter (every pup on ${dogName(was) || 'the old one'})` },
+      { value: 'this', label: `Just ${pup}` }
+    ]
+  });
+}
+
 // The child's sire or dam: a dog on file, a new one typed in, or cleared.
 // Resolves true when something changed.
 function fixSpotDialog({ dogs, childId, role }) {
@@ -298,7 +345,7 @@ function fixSpotDialog({ dogs, childId, role }) {
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
       <h2 style="margin-top:0;">${esc(word)} of ${esc(dogName(child) || 'this dog')}</h2>
-      <p class="muted">Here now: ${current ? `<strong>${esc(dogName(current))}</strong> <a href="dog.html?id=${encodeURIComponent(current.id)}">Edit ${esc(dogName(current))}’s details ↗</a>` : 'nobody recorded'}</p>
+      <p class="muted">Here now: ${current ? `<strong>${esc(dogName(current))}</strong>${current.is_archived && !editionFlags.archivedDogLinks ? '' : ` <a href="dog.html?id=${encodeURIComponent(current.id)}">Edit ${esc(dogName(current))}’s details ↗</a>`}` : 'nobody recorded'}</p>
       <div class="field"><label for="pf-pick">Put here</label>
         <select id="pf-pick">
           <option value="new"${current ? '' : ' selected'}>A dog not in KennelOS — type it in…</option>
@@ -310,7 +357,7 @@ function fixSpotDialog({ dogs, childId, role }) {
           <input id="pf-name" type="text" placeholder="As it reads on the pedigree"></div>
         <div class="field"><label for="pf-reg">Registration number</label>
           <input id="pf-reg" type="text" placeholder="Optional, e.g. NP806704/02"></div>
-        <p class="field-hint">Added as a pedigree-only dog. If that registration number is already on a dog in KennelOS, that dog is used instead.</p>
+        <p class="field-hint">Added as a pedigree-only dog. If that registration number is already on a dog in KennelOS, that dog is used instead; if the name is, you're asked first.</p>
       </div>
       <div id="pf-err"></div>
       <div class="form-actions">
@@ -328,9 +375,33 @@ function fixSpotDialog({ dogs, childId, role }) {
       const pick = $('#pf-pick').value;
       try {
         if (pick === 'new') {
-          await addNewParent(childId, role, { registered_name: $('#pf-name').value, registration_number: $('#pf-reg').value });
+          const typed = { registered_name: $('#pf-name').value, registration_number: $('#pf-reg').value };
+          let r = await addNewParent(childId, role, typed);
+          let scope = null;
+          if (r.matches) {
+            // A name already on a pedigree-only dog (review K9-9): that one, or a new dog?
+            const label = (d) => `${dogName(d)}${d.registration_number ? ` · ${d.registration_number}` : ''}`;
+            const matchId = await choose({
+              title: `Use ${dogName(r.matches[0])} already on file?`,
+              message: `${r.matches.length > 1 ? 'Dogs with this name are' : 'A dog with this name is'} already on file. Using it keeps one record wherever that dog appears, so a shared ancestor shows as shared.`,
+              choices: [...r.matches.slice(0, 3).map((d) => ({ value: d.id, label: `Use ${label(d)}` })), { value: 'new', label: 'No, a different dog' }]
+            });
+            if (matchId == null) return;
+            const picked = matchId === 'new' ? null : r.matches.find((d) => d.id === matchId);
+            if (picked) {
+              scope = await askLitterChange(child, role, dogName(picked), picked.id);
+              if (!scope) return;
+            }
+            r = await addNewParent(childId, role, { ...typed, matchId: picked ? picked.id : null, litter: scope || 'this' });
+          }
+          // Written to this pup; the litter follows only when she says so (review K9-8).
+          if (!scope && r.dog && await askLitterChange(child, role, dogName(r.dog), r.dog.id) === 'all') {
+            await setParent(childId, role, r.dog.id, { litter: 'all' });
+          }
         } else if (pick !== currentId) {
-          await setParent(childId, role, pick);
+          const scope = await askLitterChange(child, role, dogName(dogs.find((d) => d.id === pick)), pick);
+          if (!scope) return;
+          await setParent(childId, role, pick, { litter: scope });
         } else { done(false); return; }
         done(true);
       } catch (e) { fail(e); }

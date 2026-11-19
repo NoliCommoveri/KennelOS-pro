@@ -12,7 +12,7 @@ import { waitlistEntryRepo } from '../data/waitlistEntryRepo.js';
 import { WAITLIST_OPEN_STATUSES } from '../data/vocab.js';
 import { esc, fmtDate, fmtMoney, todayYMD, kennelToday, confirmModal, alertModal, promptModal } from './ui.js';
 import { PLACEMENT_PURPOSE, cleanPurposes, descriptor } from '../data/vocab.js';
-import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges, restoresFamily, pupClaims } from '../data/waitlistRules.js';
+import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate, soonNoticeText, entryName, waitlistConfig, autoOffers, overallPositions, describeOfferChanges, restoresFamily, pupClaims, deadlineLabel } from '../data/waitlistRules.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -423,7 +423,7 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
       ${carriedHint}${creditHint}
       ${carried.length
         ? '<p class="field-hint">Creates the Sale (price and deposit from the litter\'s expected amounts). You can still switch the pup until the next family is offered a turn.</p>'
-        : `<p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(fmtDate(offer.respond_by_date))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`}`,
+        : `<p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`}`,
     onConfirm: async (o) => {
       const chosenDogId = o.querySelector('#pk-dog').value;
       const date = o.querySelector('#pk-date').value || day;
