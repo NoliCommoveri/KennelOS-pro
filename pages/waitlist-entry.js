@@ -59,6 +59,7 @@ import {
   sideSaleOf, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
   familyDetails, contactForEmail, deadlineLabel } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
+import { canShareFiles, shareOrDownload, shareFailText } from '../assets/pdfShare.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq
 } from '../data/waitlistForm.js';
@@ -2023,7 +2024,7 @@ function docsHtml() {
       <h2 style="margin-top:0;">Documents</h2>
       ${docs.map((d, i) => `<div class="row-between" style="padding:6px 0;border-top:${i ? '1px solid var(--border)' : '0'};gap:8px;flex-wrap:wrap;">
           <span>${esc(d.label)}</span>
-          <span class="pill-row"><a class="btn btn-sm" href="${esc(docHref(d))}">View</a><button class="btn btn-sm btn-primary" data-pdf="${i}">Download PDF</button></span>
+          <span class="pill-row"><a class="btn btn-sm" href="${esc(docHref(d))}">View</a><button class="btn btn-sm btn-primary" data-pdf="${i}">${canShareFiles() ? 'Share PDF' : 'Download PDF'}</button></span>
         </div>`).join('')}
       <div class="pill-row" style="margin-top:8px;"><button class="btn btn-sm" data-act="combined-doc">Make a combined invoice or receipt</button></div>
     </section>`;
@@ -2031,15 +2032,27 @@ function docsHtml() {
 
 function wireDocs(root) {
   const docs = familyDocList();
+  // Each PDF button hands its file to the share sheet where files can be shared (an
+  // iPhone home-screen app, where a download goes nowhere), else downloads it
+  // (assets/pdfShare.js). The PDF library loads now and each file is kept once made,
+  // so a tap reaches the share sheet quickly; a share refused for want of a tap
+  // (the file took too long) says to tap again, and the next tap is immediate.
+  if (docs.length) import('../assets/invoicePdf.js').then((m) => m.loadJsPdf()).catch(() => {});
+  const files = new Map();
+  const label = canShareFiles() ? 'Share PDF' : 'Download PDF';
   root.querySelectorAll('[data-pdf]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      const i = Number(btn.dataset.pdf);
       btn.disabled = true;
       try {
-        const { downloadInvoicePdf } = await import('../assets/invoicePdf.js');
-        const d = docs[Number(btn.dataset.pdf)];
-        await downloadInvoicePdf({ source: 'family', entry: ctx.entry.id, doc: d.doc, cfg: { v: 2, pick: d.pick } });
+        if (!files.has(i)) {
+          const { invoicePdfFile } = await import('../assets/invoicePdf.js');
+          const d = docs[i];
+          files.set(i, await invoicePdfFile({ source: 'family', entry: ctx.entry.id, doc: d.doc, cfg: { v: 2, pick: d.pick } }));
+        }
+        await shareOrDownload(files.get(i));
       } catch (err) {
-        showError(err.message || String(err));
+        showError(shareFailText(err, label));
       } finally {
         btn.disabled = false;
       }

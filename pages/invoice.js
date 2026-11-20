@@ -1,9 +1,10 @@
 // invoice.js — Invoice / Receipt view (§24). Renders the printable financial
 // document: a family's (a waitlist entry and the sale it goes toward, Payment
 // Schedule plan §6) or a stud service's. What the document SAYS is built by
-// assets/invoiceDoc.js; this page draws it as HTML and "Download PDF" draws the same
-// model as a real PDF file (assets/invoicePdf.js, vendored jsPDF). "Print" is the
-// browser's own print.
+// assets/invoiceDoc.js; this page draws it as HTML and the PDF button ("Share PDF"
+// where files can go to the share sheet, else "Download PDF") draws the same model as
+// a real PDF file (assets/invoicePdf.js, vendored jsPDF; assets/pdfShare.js hands it
+// over). "Print" is the browser's own print.
 //
 // Query params:
 //   source = 'family' (with entry=<id> or sale=<id>) | 'stud' (with id=<id>); the
@@ -21,6 +22,7 @@
 //              what was collected off (an invoice) or prints what's left (a receipt).
 import { buildInvoiceDoc, fmtDateMDY, money } from '../assets/invoiceDoc.js';
 import { esc, param } from '../assets/ui.js';
+import { canShareFiles, shareOrDownload, shareFailText } from '../assets/pdfShare.js';
 
 const root = document.getElementById('inv-root');
 
@@ -138,6 +140,7 @@ async function main() {
     back.textContent = '← Back to the family';
   }
   render(d);
+  makePdfFile().catch(() => {});
   // An invoice with a sale can go out with her payment link (Integrations plan §4).
   if (d.saleId && req.doc === 'invoice') {
     const btn = document.getElementById('inv-pay-link');
@@ -154,16 +157,32 @@ async function main() {
 }
 
 document.getElementById('inv-print').addEventListener('click', () => window.print());
-document.getElementById('inv-pdf').addEventListener('click', async (ev) => {
-  const btn = ev.currentTarget;
-  btn.disabled = true;
+// The PDF button: the share sheet where files can be shared (an iPhone, where
+// Print can't open from the home-screen app), else a download. The file is made
+// once the page is drawn (main), so a tap reaches the share sheet at once.
+const pdfBtn = document.getElementById('inv-pdf');
+const PDF_LABEL = canShareFiles() ? 'Share PDF' : 'Download PDF';
+pdfBtn.textContent = PDF_LABEL;
+let pdfFile = null;
+function makePdfFile() {
+  if (!pdfFile) {
+    pdfFile = import('../assets/invoicePdf.js').then((m) => m.invoicePdfFile(request()));
+    pdfFile.catch(() => { pdfFile = null; }); // a failure shows on the tap, which tries again
+  }
+  return pdfFile;
+}
+function pdfNote(text) {
+  const box = document.getElementById('inv-pdf-note');
+  box.textContent = text;
+  box.hidden = !text;
+}
+pdfBtn.addEventListener('click', async () => {
+  pdfNote('');
   try {
-    const { downloadInvoicePdf } = await import('../assets/invoicePdf.js');
-    await downloadInvoicePdf(request());
+    await shareOrDownload(await makePdfFile());
   } catch (e) {
-    root.insertAdjacentHTML('afterbegin', `<div class="inline-error no-print">${esc(e.message || String(e))}</div>`);
-  } finally {
-    btn.disabled = false;
+    if (e?.name === 'NotAllowedError') pdfNote(shareFailText(e, PDF_LABEL));
+    else root.insertAdjacentHTML('afterbegin', `<div class="inline-error no-print">${esc(shareFailText(e, PDF_LABEL))}</div>`);
   }
 });
 

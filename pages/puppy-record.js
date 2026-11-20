@@ -24,6 +24,7 @@ import { pupSale, readiness, doneText } from '../data/prepPups.js';
 import { getSaleStatements } from '../data/incomeView.js';
 import { litterLabel } from '../data/litterCheckin.js';
 import { esc, param, todayYMD, wireActionMenu } from '../assets/ui.js';
+import { shareOrDownload, shareFailText } from '../assets/pdfShare.js';
 
 const root = document.getElementById('pr-root');
 
@@ -468,31 +469,10 @@ function shareNote(text, isError = false) {
 async function onSharePdf() {
   if (!pdfInput) return;
   shareNote('');
-  let file;
   try {
-    file = await makePdfFile();
+    await shareOrDownload(await makePdfFile());
   } catch (e) {
-    shareNote(`The PDF couldn't be made: ${e.message || e}`, true);
-    return;
-  }
-  let canShare = false;
-  try { canShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] }); } catch { /* no */ }
-  if (!canShare) {
-    // No share sheet for files (most computers): download it instead.
-    const url = URL.createObjectURL(file);
-    const a = document.createElement('a');
-    a.href = url; a.download = file.name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    return;
-  }
-  try {
-    await navigator.share({ files: [file], title: file.name.replace(/\.pdf$/, '') });
-  } catch (e) {
-    if (e?.name === 'AbortError') return; // she closed the share sheet
-    // The PDF took too long and the tap no longer counts: it's ready now.
-    if (e?.name === 'NotAllowedError') shareNote('Your PDF is ready. Tap Share as PDF again.');
-    else shareNote(`Sharing didn't work here: ${e.message || e}`, true);
+    shareNote(shareFailText(e, 'Share as PDF'), e?.name !== 'NotAllowedError');
   }
 }
 
