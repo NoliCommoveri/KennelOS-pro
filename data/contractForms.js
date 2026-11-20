@@ -267,7 +267,7 @@ export const PREFILL_FIELDS = {
     ['boardingPer', 'Boarding rate per (Day, Week, Month)'],
     ['boardingLength', 'How long (e.g. 2 weeks)'],
     ['boardingTotal', 'Boarding total'],
-    ['boardingStart', 'Boarding starts (the day the pup could go home, after any training stay)'],
+    ['boardingStart', 'Boarding starts (the day the pup could go home, after any extended stay)'],
     ['boardingEnd', 'Boarding ends (the day before pickup)']
   ],
   extra: [

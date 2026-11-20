@@ -273,7 +273,7 @@ const TASKS = [
     sub: 'Requests, messages, backing out, offers and picks, applications and fees',
     keywords: ['waitlist', 'review', 'applications', 'applicants', 'new applications', 'fees', 'fee received', 'deposits', 'picks', 'open picks',
       'offers', 'turns', 'messages', 'backed out', 'back out', 'cancel a sale', 'void', 'pup died', 'refund', 'requests', 'extras', 'pickup',
-      'pickup time', 'transport', 'training stay', 'boarding', 'ready now', 'manage my waitlist'],
+      'pickup time', 'transport', 'training stay', 'extended stay', 'boarding', 'ready now', 'manage my waitlist'],
     // Pro only (the waitlist); its script is Pro-only too, so it's imported on start.
     available: () => editionFlags.waitlist,
     // Up near the top while anything on the list is waiting on her, like Today's waitlist nudges.

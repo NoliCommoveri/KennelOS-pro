@@ -1,11 +1,14 @@
 // awayBoard.js — "away from home" rows from boarding events (Event.event_type ===
-// 'boarding'), normalized to one view-model so board.js, today.js, and
-// dashboard.js render/count them the same way. A stud service's trip is a
+// 'boarding') whose dog is away (vocab.boardingStayAt), normalized to one
+// view-model so board.js, today.js, and dashboard.js render/count them the same
+// way. Stays at her place (a sold pup's deferred pickup or extended stay, a stud
+// visiting) are the board's "Staying with us" rows instead, never Away from home. A stud service's trip is a
 // boarding event too (logged when the service is saved, studRules.
 // studBoardingPrefill); the service's own dates never make a row.
 import { eventRepo } from './eventRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { isScoped, subjectInScope } from './kennelScope.js';
+import { boardingStayAt } from './vocab.js';
 
 function fromBoardingEvent(ev) {
   const d = ev.details || {};
@@ -18,6 +21,7 @@ function fromBoardingEvent(ev) {
     returnDate: ev.event_end_date || null,
     dropoffTime: d.dropoff_time || '',
     pickupTime: d.pickup_time || '',
+    title: ev.title || '',
     sourceType: 'boarding_event',
     sourceId: ev.id,
     href: `dog.html?id=${encodeURIComponent(ev.subject_id)}`
@@ -42,13 +46,17 @@ async function scopeRows(rows) {
 
 // Sorted soonest-return-first, open-ended stays last — same ordering
 // eventRepo.getBoardRows() used before the union.
-export async function getAwayBoardRows() {
-  const boarding = await eventRepo.getBoardRows();
-  const rows = await scopeRows(boarding.map(fromBoardingEvent));
-  return rows.sort((a, b) => {
-    if (!a.returnDate && !b.returnDate) return 0;
-    if (!a.returnDate) return 1;
-    if (!b.returnDate) return -1;
-    return a.returnDate < b.returnDate ? -1 : 1;
-  });
+function byReturn(a, b) {
+  if (!a.returnDate && !b.returnDate) return 0;
+  if (!a.returnDate) return 1;
+  if (!b.returnDate) return -1;
+  return a.returnDate < b.returnDate ? -1 : 1;
 }
+
+async function rowsWhere(stayAt) {
+  const boarding = (await eventRepo.getBoardRows()).filter((ev) => boardingStayAt(ev) === stayAt);
+  return (await scopeRows(boarding.map(fromBoardingEvent))).sort(byReturn);
+}
+
+export const getAwayBoardRows = () => rowsWhere('away');
+export const getStayingWithUsRows = () => rowsWhere('with_us');

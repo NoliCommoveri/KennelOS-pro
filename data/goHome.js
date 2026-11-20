@@ -111,7 +111,7 @@ export const pickupEvent = (pup, sale, date, time = '', method = '', location = 
 });
 export const boardingEvent = (pup, start, end = '') => ({
   subject_type: 'dog', subject_id: pup.id, event_type: 'boarding', event_date: start,
-  ...(end ? { event_end_date: end } : {}), title: BOARDING_TITLE, details: { boarding_reason: 'Deferred pickup' }
+  ...(end ? { event_end_date: end } : {}), title: BOARDING_TITLE, details: { stay_at: 'with_us', boarding_reason: 'Deferred pickup' }
 });
 
 // The pickup message (Payment Schedule plan §7): what Kels's Pups are going home
@@ -148,11 +148,12 @@ export function pickupMessage(p = {}) {
 }
 
 // --- Training stays (Family Requests plan §6) ----------------------------------------
-// An extra that needs the pup to stay (a training package: `boarding_days` on the
-// sale's charge) is a boarding event on the pup, reason Training, linked by
+// An extra that needs the pup to stay (an extended stay or training package:
+// `boarding_days` on the sale's charge) is a boarding event on the pup, with us,
+// reason Extended stay, linked by
 // `details.sale_id` and `details.extra_charge_id` (the link is stored on the event
 // only; the sale finds its stays by query).
-export const TRAINING_REASON = 'Training';
+export const EXTENDED_STAY_REASON = 'Extended stay';
 
 // The pup's stays linked to this charge (not archived).
 export const trainingStaysFor = (sale, charge, events) => events.filter((e) => !e.is_archived && e.event_type === 'boarding'
@@ -164,7 +165,7 @@ export function trainingStayEvent(pup, sale, charge, start) {
   return {
     subject_type: 'dog', subject_id: pup.id, event_type: 'boarding', event_date: start,
     event_end_date: addDaysToYMD(start, days - 1), title: charge.label,
-    details: { boarding_reason: TRAINING_REASON, sale_id: sale.id, extra_charge_id: charge.id }
+    details: { stay_at: 'with_us', boarding_reason: EXTENDED_STAY_REASON, sale_id: sale.id, extra_charge_id: charge.id }
   };
 }
 

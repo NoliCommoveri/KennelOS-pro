@@ -33,7 +33,7 @@ export const PLACES = [
   { id: 'dashboard', title: 'Dashboard', href: 'dashboard.html', keywords: ['dashboard', 'at a glance', 'counts', 'summary', 'overview'],
     where: 'The Dashboard is your kennel at a glance, at the bottom of Today.' },
   { id: 'board', title: 'Location / Status Board', href: 'board.html', keywords: ['away', 'boarding', 'location', 'where is my dog', 'board', 'status board'],
-    where: 'The Location / Status Board lists every dog away from home right now (boarding and in-person stud services). It\'s on Today.' },
+    where: 'The Location / Status Board lists every dog away from home right now (boarding and in-person stud services), and below them the dogs staying with you (deferred pickups, extended stays, visiting studs). It\'s on Today.' },
   { id: 'scheduled-placements', title: 'Scheduled drop-offs', href: 'scheduled-placements.html', keywords: ['drop off', 'pickup', 'pick up', 'go home', 'going home', 'scheduled placements'],
     where: 'Scheduled Placements lists every puppy drop-off still to come. It\'s on Today.' },
 

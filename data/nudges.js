@@ -795,7 +795,7 @@ export async function computeNudges() {
       const name = dogsById.get(event.subject_id)?.call_name || 'the pup';
       nudges.push({
         key: `training-stay-orphan:${event.id}`,
-        title: `${event.title || 'A training stay'} for ${name} is still on the calendar, but its extra is off ${sale ? 'the sale' : 'a sale that\'s gone'}`,
+        title: `${event.title || 'An extended stay'} for ${name} is still on the calendar, but its extra is off ${sale ? 'the sale' : 'a sale that\'s gone'}`,
         detail: `${event.event_date}${event.event_end_date ? ` to ${event.event_end_date}` : ''}. Remove the stay, or keep it (dismiss this).`,
         subjectHref: `dog.html?id=${encodeURIComponent(event.subject_id)}`,
         actions: [{ label: 'Remove the stay', run: async () => { await eventRepo.archive(event.id); return { title: 'Removed', message: `The stay is off ${name}'s calendar.` }; } }]
@@ -857,7 +857,7 @@ export async function computeNudges() {
             title: `${name}'s sale includes boarding (${boardingChargeText(s2)}). Log the boarding?`,
             detail: `${family} is paying for ${name} to stay with you after the ready date (${issue.readyDate}), but no boarding is logged.`,
             subjectHref: `sale.html?id=${encodeURIComponent(s2.id)}`,
-            actions: [{ label: 'Log boarding', run: async () => { location.href = dogHref({ logEvent: 'boarding', logDate: start, logTitle: BOARDING_TITLE, ...(end ? { logEnd: end } : {}), logDetails: JSON.stringify({ boarding_reason: 'Deferred pickup' }) }); } }]
+            actions: [{ label: 'Log boarding', run: async () => { location.href = dogHref({ logEvent: 'boarding', logDate: start, logTitle: BOARDING_TITLE, ...(end ? { logEnd: end } : {}), logDetails: JSON.stringify({ stay_at: 'with_us', boarding_reason: 'Deferred pickup' }) }); } }]
           });
         } else if (issue.kind === 'schedule') {
           nudges.push({

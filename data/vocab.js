@@ -543,8 +543,34 @@ export function descriptor(vocab, value) {
 // combobox surfaces these as suggestions without blocking free text.
 export const BOARDING_REASON_SUGGESTIONS = [
   'Stud service', 'Co-owner rotation', 'Foster', 'Grow-out', 'Owner travel', 'Whelp assist',
-  'With handler / show circuit', 'Training', 'Other'
+  'With handler / show circuit', 'Training', 'Extended stay', 'Deferred pickup', 'Other'
 ];
+
+// Where a boarding stay is: `away` (the dog is somewhere else — Away from home) or
+// `with_us` (a dog staying at her place — a sold pup's deferred pickup or extended
+// stay, an outside stud visiting). Enforced choice for boarding's `stay_at` detail;
+// blank means "work it out" (boardingStayAt).
+export const STAY_AT = [
+  { value: 'away',    label: 'Away' },
+  { value: 'with_us', label: 'With us' }
+];
+// Reasons that mean the dog is at her place when the stay has no `stay_at`.
+const WITH_US_REASONS = ['deferred pickup', 'extended stay'];
+
+// Where a boarding event's dog is → 'away' | 'with_us'. `details.stay_at` wins;
+// without it (stays logged before the field), a stay from a sale's stay extra
+// (`extra_charge_id`) or a pickup's standard boarding (`pickup_boarding`), a
+// deferred-pickup / extended-stay reason, or the location "With us" (a stud
+// coming to us, studRules.studBoardingPrefill) is with us; anything else is away.
+export function boardingStayAt(ev) {
+  const d = ev?.details || {};
+  if (d.stay_at === 'away' || d.stay_at === 'with_us') return d.stay_at;
+  if (d.extra_charge_id || d.pickup_boarding) return 'with_us';
+  const norm = (v) => String(v || '').trim().toLowerCase();
+  if (WITH_US_REASONS.includes(norm(d.boarding_reason))) return 'with_us';
+  if (norm(d.location) === 'with us') return 'with_us';
+  return 'away';
+}
 
 // Suggest-not-enforce starter set for a recorded COI's `method` (Stage 5, Build
 // Brief §1.5/§2.1) — Dog.recorded_coi.method is free text; a combobox surfaces
@@ -832,12 +858,14 @@ export const EVENT_TYPES = [
   { value: 'evaluation',         label: 'Evaluation',         badge: 'badge-neutral', subjects: ['dog'], duration: 'instant',
     fields: [{ key: 'evaluator', label: 'Evaluator', type: 'text' }, { key: 'temperament_notes', label: 'Temperament notes', type: 'textarea' }, { key: 'structure_notes', label: 'Structure notes', type: 'textarea' }] },
   // Boarding (Stage4.5 Addendum §C3) — a span with a top-level related_contact_id
-  // (the person/kennel the dog is staying with). `location` and `boarding_reason`
+  // (the person/kennel the dog is staying with). `stay_at` (STAY_AT) says whether
+  // the dog is away or with us (blank → boardingStayAt works it out). `location` and `boarding_reason`
   // stay plain strings in `details`; boarding_reason is suggest-not-enforce, never
   // a validated vocab. dropoff_time/pickup_time are inert display strings — never
   // parsed or compared.
   { value: 'boarding',           label: 'Boarding',           badge: 'badge-amber',   subjects: ['dog'], duration: 'span', relatedContact: true,
     fields: [
+      { key: 'stay_at', label: 'Where', type: 'select', options: STAY_AT },
       { key: 'location', label: 'Location', type: 'text' },
       { key: 'boarding_reason', label: 'Reason', type: 'combobox', options: BOARDING_REASON_SUGGESTIONS },
       { key: 'dropoff_time', label: 'Drop-off time', type: 'text' },

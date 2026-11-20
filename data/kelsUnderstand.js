@@ -55,7 +55,7 @@ export const ENTRIES = [
       + tail(ctx.flags.shows, 'Shows in the next two weeks have their own card, Upcoming shows.') },
   { id: 'today-away', section: 'today', q: 'Why isn\'t my dog under Away from home?',
     keywords: ['away', 'away from home', 'boarding', 'board', 'stay', 'trip', 'gone', 'location', 'return'],
-    a: (ctx) => 'Away from home lists only Boarding entries that haven\'t ended yet, so medications and heat cycles never show there.'
+    a: (ctx) => 'Away from home lists only Boarding entries that haven\'t ended yet and are somewhere else, so medications and heat cycles never show there. A stay at your place, like a deferred pickup, an extended stay or a visiting stud, is under Staying with us on the Location / Status Board instead. Each Boarding entry has a Where choice, Away or With us, if one is in the wrong list.'
       + tail(ctx.flags.studServices, 'A stud service\'s trip counts, because saving the service logs it as Boarding.')
       + ' A stay with no return date stays on the list until you add one.' },
 

@@ -425,7 +425,7 @@ class Review {
     await this.emails(emails('request_approved'));
     if (cancel) {
       for (const stay of staysBefore) {
-        await this.chat.say(`Remove the training stay too? ${esc(stay.title || 'The stay')}, ${esc(fmtDate(stay.event_date))}${stay.event_end_date ? ` to ${esc(fmtDate(stay.event_end_date))}` : ''}.`);
+        await this.chat.say(`Remove the extended stay too? ${esc(stay.title || 'The stay')}, ${esc(fmtDate(stay.event_date))}${stay.event_end_date ? ` to ${esc(fmtDate(stay.event_end_date))}` : ''}.`);
         if ((await this.chat.choose([{ label: 'Remove it', value: 'yes', primary: true }, { label: 'Keep it', value: 'no' }])) === 'yes') {
           await eventRepo.archive(stay.id);
           await this.chat.say('Removed.');
@@ -437,7 +437,7 @@ class Review {
       const dog = await dogRepo.getById(res.sale.dog_id);
       const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
       const stay = trainingStayEvent(dog, res.sale, res.charge, defaultStart(readyDateOf(litter), this.today));
-      await this.chat.say(`Log ${esc(dog?.call_name || 'the pup')}'s ${res.boardingDays}-day training stay from ${esc(fmtDate(stay.event_date))}?`);
+      await this.chat.say(`Log ${esc(dog?.call_name || 'the pup')}'s ${res.boardingDays}-day extended stay from ${esc(fmtDate(stay.event_date))}?`);
       if ((await this.chat.choose([{ label: 'Log it', value: 'yes', primary: true }, { label: 'Later', value: 'no' }])) === 'yes') {
         await eventRepo.create(stay);
         await this.chat.say(`Logged, ${esc(fmtDate(stay.event_date))} to ${esc(fmtDate(stay.event_end_date))}. You can change the dates on ${esc(dog?.call_name || 'the pup')}'s page.`);

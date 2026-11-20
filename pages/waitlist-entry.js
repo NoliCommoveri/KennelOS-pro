@@ -809,7 +809,7 @@ async function linkedStays(chargeId) {
 async function afterTrainingApproval(res, staysBefore) {
   if (res.kind === 'cancel') {
     for (const stay of staysBefore) {
-      if (await confirmModal({ title: 'Remove the training stay?', message: `${stay.title || 'The stay'} (${fmtDate(stay.event_date)}${stay.event_end_date ? ` to ${fmtDate(stay.event_end_date)}` : ''}) is still on the pup's calendar.`, confirmLabel: 'Remove the stay', cancelLabel: 'Keep it' })) {
+      if (await confirmModal({ title: 'Remove the extended stay?', message: `${stay.title || 'The stay'} (${fmtDate(stay.event_date)}${stay.event_end_date ? ` to ${fmtDate(stay.event_end_date)}` : ''}) is still on the pup's calendar.`, confirmLabel: 'Remove the stay', cancelLabel: 'Keep it' })) {
         await eventRepo.archive(stay.id);
       }
     }

@@ -81,7 +81,7 @@ const HOW = {
   boardingPer: 'The rate\'s per: Day, Week or Month.',
   boardingLength: 'How many days, weeks or months the sale\'s boarding is for.',
   boardingTotal: 'The rate times the length.',
-  boardingStart: 'The day the pup could go home: the litter\'s ready date, or the day after its last training stay.',
+  boardingStart: 'The day the pup could go home: the litter\'s ready date, or the day after its last extended stay.',
   boardingEnd: 'The day before the pickup on your calendar, else counted from the start by the length.',
   extraName: 'The extra\'s name on the sale (the one this template is for).',
   extraDescription: 'Its description on your price list.',

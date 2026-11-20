@@ -1952,7 +1952,7 @@ export const applyPickupBoarding = atomic(async function applyPickupBoarding(sal
   await saleRepo.update(sale.id, { deferred_boarding_amount: rate, deferred_boarding_frequency: 'Day', deferred_boarding_duration_days: b.days, boarding_from_pickup: true });
   await eventRepo.create({
     subject_type: 'dog', subject_id: sale.dog_id, event_type: 'boarding', event_date: b.start, event_end_date: b.end, title: BOARDING_TITLE,
-    details: { boarding_reason: 'Deferred pickup', sale_id: sale.id, pickup_boarding: 'yes' }
+    details: { stay_at: 'with_us', boarding_reason: 'Deferred pickup', sale_id: sale.id, pickup_boarding: 'yes' }
   });
 });
 

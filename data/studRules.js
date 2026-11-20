@@ -117,6 +117,7 @@ export function studBoardingPrefill(s, partner) {
     event_type: 'boarding', event_date: s.sent_date, event_end_date: s.returned_date || '',
     related_contact_id: s.partner_contact_id || '', title: STUD_BOARDING_REASON,
     details: {
+      stay_at: s.direction === 'to_us' ? 'with_us' : 'away',
       boarding_reason: STUD_BOARDING_REASON,
       location: s.direction === 'to_us' ? 'With us' : String(partner?.address || '').replace(/\s*\n+\s*/g, ', ').trim()
     }
