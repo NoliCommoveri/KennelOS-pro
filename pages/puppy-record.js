@@ -23,7 +23,7 @@ import { editionFlags } from '../data/editionConfig.js';
 import { pupSale, readiness, doneText } from '../data/prepPups.js';
 import { getSaleStatements } from '../data/incomeView.js';
 import { litterLabel } from '../data/litterCheckin.js';
-import { esc, param, todayYMD } from '../assets/ui.js';
+import { esc, param, todayYMD, wireActionMenu } from '../assets/ui.js';
 
 const root = document.getElementById('pr-root');
 
@@ -107,30 +107,26 @@ function eventDetail(ev) {
   }
 }
 
-// A "label: value" row — omitted entirely when the value is empty (no null
-// placeholders anywhere in this document, per owner decision).
-function row(label, value) {
-  if (value == null || value === '') return '';
-  return `<div class="pr-row"><span class="pr-k">${esc(label)}</span><span class="pr-v">${value}</span></div>`;
+// The record is built once as a plain model (recordModel / coverModel: text, never
+// HTML) and drawn twice from it: as this page (recordHtml / coverHtml, below) and
+// as the Share as PDF file (assets/puppyRecordPdf.js). So the page and the file
+// always show the same fields.
+
+// A "label: value" field — null when the value is empty (no null placeholders
+// anywhere in this document, per owner decision). `bold` for the pup's call name.
+function field(label, value, bold = false) {
+  if (value == null || value === '') return null;
+  return { k: label, v: String(value), bold };
 }
 
-// A shared, centered "pulled out of the box" section title — Puppy
-// Information / Parents / Health History / Buyer all use this same one so
-// the page reads as a sequence of equally-weighted labeled blocks.
-function sectionLabel(text) {
-  return `<h2 class="pr-section-label">${esc(text)}</h2>`;
-}
-
-// Splits a set of already-rendered rows into side-by-side columns of up to
-// `size` PRESENT rows each — a puppy/parent with a lot of recorded fields
-// flows sideways into a new column after 5, instead of stretching tall.
-function columnedRows(rowsHtml, size = 5) {
-  const present = rowsHtml.filter(Boolean);
-  if (!present.length) return '<p class="pr-empty">No details recorded.</p>';
-  const columns = [];
-  for (let i = 0; i < present.length; i += size) columns.push(present.slice(i, i + size));
-  if (columns.length === 1) return columns[0].join('');
-  return `<div class="pr-info-columns">${columns.map((c) => `<div class="pr-info-col">${c.join('')}</div>`).join('')}</div>`;
+// Splits fields into side-by-side columns of up to `size` PRESENT fields each — a
+// puppy/parent with a lot of recorded fields flows sideways into a new column
+// after 5, instead of stretching tall. [] when none is present.
+function columns(fields, size = 5) {
+  const present = fields.filter(Boolean);
+  const cols = [];
+  for (let i = 0; i < present.length; i += size) cols.push(present.slice(i, i + size));
+  return cols;
 }
 
 // Genetic, OFA / PennHIP and breed-specific test results for a dog, as a single
@@ -144,50 +140,44 @@ async function testsLine(dogId) {
   const events = await eventRepo.getForSubject('dog', dogId);
   const parts = [];
   for (const e of events) {
-    const field = TEST_RESULT_FIELD[e.event_type];
-    const result = field && String((e.details || {})[field] ?? '').trim();
+    const f = TEST_RESULT_FIELD[e.event_type];
+    const result = f && String((e.details || {})[f] ?? '').trim();
     if (!result) continue;
     const name = testTokensOf(e)[0] || String(e.title ?? '').trim() || descriptor(EVENT_TYPES, e.event_type).label;
-    parts.push(`${esc(name)}: ${esc(result)}`);
+    parts.push(`${name}: ${result}`);
   }
   return parts.join(' | ');
 }
 
-async function parentCard(role, dog) {
-  if (!dog) {
-    return `<div class="pr-parent">
-      <div class="pr-parent-role">${esc(role)}</div>
-      <div class="pr-empty">Unknown</div>
-    </div>`;
-  }
+// → { role, unknown: true } or { role, cols, tests }
+async function parentModel(role, dog) {
+  if (!dog) return { role, unknown: true };
   const tests = shows('parentTests') ? await testsLine(dog.id) : '';
-  const rows = [
-    shows('parentRegisteredName') && row('Registered name', dog.registered_name ? esc(dog.registered_name) : ''),
-    shows('parentCallName') && row('Call name', dog.call_name ? esc(dog.call_name) : ''),
-    shows('parentBreed') && row('Breed', dog.breed ? esc(dog.breed) : ''),
-    shows('parentRegistrationNumber') && row('Registration #', dog.registration_number ? esc(dog.registration_number) : '')
-  ];
-  return `<div class="pr-parent">
-    <div class="pr-parent-role">${esc(role)}</div>
-    ${columnedRows(rows)}
-    ${tests ? `<div class="pr-tests">${tests}</div>` : ''}
-  </div>`;
+  return {
+    role,
+    cols: columns([
+      shows('parentRegisteredName') && field('Registered name', dog.registered_name),
+      shows('parentCallName') && field('Call name', dog.call_name),
+      shows('parentBreed') && field('Breed', dog.breed),
+      shows('parentRegistrationNumber') && field('Registration #', dog.registration_number)
+    ]),
+    tests
+  };
 }
 
-function puppyInfoCard(dog, litter) {
-  const rows = [
-    shows('callName') && row('Call name', dog.call_name ? `<strong>${esc(dog.call_name)}</strong>` : ''),
-    shows('registeredName') && row('Registered name', dog.registered_name ? esc(dog.registered_name) : ''),
-    shows('sex') && row('Sex', dog.sex ? esc(descriptor(SEX, dog.sex).label) : ''),
-    shows('dateOfBirth') && row('Date of birth', dog.date_of_birth ? esc(fmtDateMDY(dog.date_of_birth)) : ''),
-    shows('breed') && row('Breed', dog.breed ? esc(dog.breed) : ''),
-    shows('colorMarkings') && row('Color / markings', dog.color_markings ? esc(dog.color_markings) : ''),
-    shows('microchip') && row('Microchip ID', dog.microchip_id ? esc(dog.microchip_id) : ''),
-    shows('registry') && row('Registry', dog.registry ? esc(dog.registry) : ''),
-    shows('registrationNumber') && row('Registration #', dog.registration_number ? esc(dog.registration_number) : ''),
-    shows('litterRegistration') && row('Litter registration #', litter && litter.litter_registration_number ? esc(litter.litter_registration_number) : '')
-  ];
-  return `<section class="pr-card">${columnedRows(rows)}</section>`;
+function puppyInfoColumns(dog, litter) {
+  return columns([
+    shows('callName') && field('Call name', dog.call_name, true),
+    shows('registeredName') && field('Registered name', dog.registered_name),
+    shows('sex') && field('Sex', dog.sex ? descriptor(SEX, dog.sex).label : ''),
+    shows('dateOfBirth') && field('Date of birth', fmtDateMDY(dog.date_of_birth)),
+    shows('breed') && field('Breed', dog.breed),
+    shows('colorMarkings') && field('Color / markings', dog.color_markings),
+    shows('microchip') && field('Microchip ID', dog.microchip_id),
+    shows('registry') && field('Registry', dog.registry),
+    shows('registrationNumber') && field('Registration #', dog.registration_number),
+    shows('litterRegistration') && field('Litter registration #', litter?.litter_registration_number)
+  ]);
 }
 
 // Deals the Health History cards into HEALTH_COLUMNS stacks, each card onto
@@ -196,8 +186,8 @@ function puppyInfoCard(dog, litter) {
 // HEALTH_EVENT_TYPES order across the top row.
 const HEALTH_COLUMNS = 3;
 
-function healthCardLines(events) {
-  return 1 + healthItems(events).reduce((n, it) => n + 2 + it.vet.length + (it.notes ? 1 : 0), 0);
+function healthCardLines(card) {
+  return 1 + card.items.reduce((n, it) => n + 2 + it.vet.length + (it.notes ? 1 : 0), 0);
 }
 
 // One line per distinct item rather than per entry (owner call, 2026-10-09): every
@@ -218,47 +208,33 @@ function healthItems(events) {
     if (!items.has(key)) items.set(key, { label, vet, notes, dates: [] });
     items.get(key).dates.push(fmtDateMDY(ev.event_date));
   }
-  return [...items.values()];
+  return [...items.values()].map((it) => ({ ...it, dates: it.dates.join(', ') }));
 }
 
-function healthCardsHtml(byType) {
-  const groups = HEALTH_EVENT_TYPES
-    .filter((type) => shows(healthKey(type)))
-    .map((type) => ({ type, events: byType.get(type) || [] }))
-    .filter((g) => g.events.length);
-  if (!groups.length) return '<p class="pr-empty">No health events to show.</p>';
+// → the cards dealt into HEALTH_COLUMNS columns ([[{ title, items }]]), or [] when
+// there's nothing to show.
+function healthColumns(byType) {
+  const cards = HEALTH_EVENT_TYPES
+    .filter((type) => shows(healthKey(type)) && byType.get(type)?.length)
+    .map((type) => ({ title: eventTypeLabel(type), items: healthItems(byType.get(type)) }));
+  if (!cards.length) return [];
   const cols = Array.from({ length: HEALTH_COLUMNS }, () => ({ lines: 0, cards: [] }));
-  for (const g of groups) {
+  for (const card of cards) {
     const col = cols.reduce((min, c) => (c.lines < min.lines ? c : min));
-    col.cards.push(healthCardHtml(g));
-    col.lines += healthCardLines(g.events);
+    col.cards.push(card);
+    col.lines += healthCardLines(card);
   }
-  return `<div class="pr-health-grid">${cols.map((c) => `<div class="pr-health-col">${c.cards.join('')}</div>`).join('')}</div>`;
+  return cols.map((c) => c.cards);
 }
 
-function healthCardHtml(g) {
-  const items = healthItems(g.events).map((it) => `<li>
-      <div>${esc(it.label)}</div>
-      ${it.vet.map((l) => `<div class="pr-hvet">${esc(l)}</div>`).join('')}
-      <div class="pr-hdate">${esc(it.dates.join(', '))}</div>
-      ${it.notes ? `<div class="pr-hnotes">${esc(it.notes)}</div>` : ''}
-    </li>`).join('');
-  return `<div class="pr-health-card">
-    <h3>${esc(eventTypeLabel(g.type))}</h3>
-    <ul class="pr-health-list">${items}</ul>
-  </div>`;
-}
-
-function buyerCardHtml(contact) {
-  if (!contact) return '';
-  const rows = [
-    shows('buyerName') && row('Name', contact.name ? esc(contact.name) : ''),
-    shows('buyerPhone') && row('Phone', contact.phone ? esc(contact.phone) : ''),
-    shows('buyerEmail') && row('Email', contact.email ? esc(contact.email) : ''),
-    shows('buyerAddress') && row('Address', contact.address ? esc(contact.address).replace(/\n/g, '<br>') : '')
-  ];
-  if (!rows.some(Boolean)) return '';
-  return `<section class="pr-card">${columnedRows(rows)}</section>`;
+function buyerColumns(contact) {
+  if (!contact) return [];
+  return columns([
+    shows('buyerName') && field('Name', contact.name),
+    shows('buyerPhone') && field('Phone', contact.phone),
+    shows('buyerEmail') && field('Email', contact.email),
+    shows('buyerAddress') && field('Address', contact.address)
+  ]);
 }
 
 // The pup's own kennel when it's one of the user's own; otherwise the active
@@ -271,9 +247,14 @@ function resolveKennel(dog, kennels, activeKennel) {
     || null;
 }
 
-// One pup's record, header to buyer. `sale` may be null (a pup with no sale
-// prints without the buyer block). `events`: the pup's events.
-async function recordHtml(dog, sale, events, ownKennel) {
+// One pup's record, header to buyer, as a model. `sale` may be null (a pup with no
+// sale prints without the buyer block). `events`: the pup's events.
+//   → { logo, title, sub, generated, sections: [
+//        { kind: 'info',    label, cols }           cols [] → "No details recorded."
+//        { kind: 'parents', label, parents }        (parentModel)
+//        { kind: 'health',  label, columns }        columns [] → "No health events to show."
+//        { kind: 'buyer',   label, cols } ] }
+async function recordModel(dog, sale, events, ownKennel) {
   const [buyer, sire, dam, litter] = await Promise.all([
     sale?.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null,
     dog.sire_id ? dogRepo.getById(dog.sire_id) : null,
@@ -288,41 +269,37 @@ async function recordHtml(dog, sale, events, ownKennel) {
     byType.get(e.event_type).push(e);
   }
 
-  const [sireHtml, damHtml] = await Promise.all([parentCard('Sire', sire), parentCard('Dam', dam)]);
-  const buyerHtml = shows('buyer') ? buyerCardHtml(buyer) : '';
   // A section whose every field is unticked is left off, heading and all.
   const anyShown = (keys) => keys.some((k) => shows(k));
-  const puppyOn = anyShown(['callName', 'registeredName', 'sex', 'dateOfBirth', 'breed', 'colorMarkings', 'microchip', 'registry', 'registrationNumber', 'litterRegistration']);
-  const parentsOn = anyShown(['parentRegisteredName', 'parentCallName', 'parentBreed', 'parentRegistrationNumber', 'parentTests']);
-  const healthOn = anyShown(HEALTH_EVENT_TYPES.map(healthKey));
+  const sections = [];
+  if (anyShown(['callName', 'registeredName', 'sex', 'dateOfBirth', 'breed', 'colorMarkings', 'microchip', 'registry', 'registrationNumber', 'litterRegistration'])) {
+    sections.push({ kind: 'info', label: 'Puppy Information', cols: puppyInfoColumns(dog, litter) });
+  }
+  if (anyShown(['parentRegisteredName', 'parentCallName', 'parentBreed', 'parentRegistrationNumber', 'parentTests'])) {
+    sections.push({ kind: 'parents', label: 'Parents', parents: await Promise.all([parentModel('Sire', sire), parentModel('Dam', dam)]) });
+  }
+  if (anyShown(HEALTH_EVENT_TYPES.map(healthKey))) {
+    sections.push({ kind: 'health', label: 'Health History', columns: healthColumns(byType) });
+  }
+  const buyerCols = shows('buyer') ? buyerColumns(buyer) : [];
+  if (buyerCols.length) sections.push({ kind: 'buyer', label: 'Buyer', cols: buyerCols });
 
-  return `<section class="pr-pup">
-    <div class="pr-header">
-      ${ownKennel?.logo_data_url && shows('logo') ? `<img src="${esc(ownKennel.logo_data_url)}" alt="${esc(ownKennel.kennel_name || '')} logo" style="max-height:72px; max-width:200px; object-fit:contain; margin-bottom:6px;">` : ''}
-      <h1>${esc(ownKennel?.kennel_name || 'Puppy Record')}</h1>
-      <div class="pr-kennel">Puppy Record</div>
-      ${shows('generatedDate') ? `<div class="pr-generated">Generated ${esc(fmtDateMDY(todayYMD()))}</div>` : ''}
-    </div>
-
-    ${puppyOn ? sectionLabel('Puppy Information') + puppyInfoCard(dog, litter) : ''}
-
-    ${parentsOn ? `${sectionLabel('Parents')}
-    <div class="pr-parents">
-      ${sireHtml}
-      ${damHtml}
-    </div>` : ''}
-
-    ${healthOn ? sectionLabel('Health History') + healthCardsHtml(byType) : ''}
-
-    ${buyerHtml ? `<div class="pr-keep">${sectionLabel('Buyer')}${buyerHtml}</div>` : ''}
-  </section>`;
+  return {
+    logo: ownKennel?.logo_data_url && shows('logo') ? ownKennel.logo_data_url : '',
+    title: ownKennel?.kennel_name || 'Puppy Record',
+    sub: 'Puppy Record',
+    generated: shows('generatedDate') ? `Generated ${fmtDateMDY(todayYMD())}` : '',
+    sections
+  };
 }
 
 // The breeder's cover page (&cover=1): the litter(s), today, and each pup's
 // readiness (data/prepPups.js, the same rules as Kels's Pups are going home), its drop-off
 // date and family. For her, not the families, so the kennel's field picks don't
 // apply to it.
-async function coverHtml(pups) {
+//   → { title, label, generated, rows: [{ name, status, family, dropoff, done, missing }] }
+//     family '' = no sale; done '' = nothing done yet
+async function coverModel(pups) {
   const litterIds = [...new Set(pups.map((p) => p.dog.litter_id).filter(Boolean))];
   const litters = (await Promise.all(litterIds.map((id) => litterRepo.getById(id)))).filter(Boolean);
   const littersById = new Map(litters.map((l) => [l.id, l]));
@@ -346,28 +323,177 @@ async function coverHtml(pups) {
       statement: sale ? statements.get(sale.id) || null : null,
       hasBreedSchedule: schedules.get((dog.breed || '').trim()) || false
     });
-    const family = sale?.buyer_contact_id ? contactsById.get(sale.buyer_contact_id)?.name || '' : '';
-    const done = ready.items.filter((i) => i.done).map((i) => i.label);
     const missing = ready.items.filter((i) => !i.done).map((i) => i.label);
-    return `<tr>
-      <td><strong>${esc(dog.call_name || dog.registered_name || 'Puppy')}</strong><div class="pr-cover-sub">${esc(doneText(ready))}</div></td>
-      <td>${family ? esc(family) : '<span class="pr-empty">No sale</span>'}${ready.pickupDate ? `<div class="pr-cover-sub">Drop-off ${esc(fmtDateMDY(ready.pickupDate))}</div>` : ''}</td>
-      <td>${done.length ? esc(done.join(', ')) : '—'}</td>
-      <td class="pr-cover-missing">${missing.length ? esc(missing.join(', ')) : 'Nothing'}</td>
-    </tr>`;
+    return {
+      name: dog.call_name || dog.registered_name || 'Puppy',
+      status: doneText(ready),
+      family: sale?.buyer_contact_id ? contactsById.get(sale.buyer_contact_id)?.name || '' : '',
+      dropoff: ready.pickupDate ? `Drop-off ${fmtDateMDY(ready.pickupDate)}` : '',
+      done: ready.items.filter((i) => i.done).map((i) => i.label).join(', '),
+      missing: missing.length ? missing.join(', ') : 'Nothing'
+    };
   }));
-  const label = litters.map((l) => litterLabel(l, parentsById)).join(', ');
+  return {
+    title: 'Getting ready to leave',
+    label: litters.map((l) => litterLabel(l, parentsById)).join(', '),
+    generated: `${fmtDateMDY(today)} · for you, not the families`,
+    rows
+  };
+}
+
+// --- Drawn as this page ----------------------------------------------------------
+
+function rowHtml(f) {
+  const v = esc(f.v).replace(/\n/g, '<br>');
+  return `<div class="pr-row"><span class="pr-k">${esc(f.k)}</span><span class="pr-v">${f.bold ? `<strong>${v}</strong>` : v}</span></div>`;
+}
+
+function columnsHtml(cols) {
+  if (!cols.length) return '<p class="pr-empty">No details recorded.</p>';
+  if (cols.length === 1) return cols[0].map(rowHtml).join('');
+  return `<div class="pr-info-columns">${cols.map((c) => `<div class="pr-info-col">${c.map(rowHtml).join('')}</div>`).join('')}</div>`;
+}
+
+// A shared, centered "pulled out of the box" section title — Puppy
+// Information / Parents / Health History / Buyer all use this same one so
+// the page reads as a sequence of equally-weighted labeled blocks.
+function sectionLabel(text) {
+  return `<h2 class="pr-section-label">${esc(text)}</h2>`;
+}
+
+function parentHtml(p) {
+  if (p.unknown) {
+    return `<div class="pr-parent">
+      <div class="pr-parent-role">${esc(p.role)}</div>
+      <div class="pr-empty">Unknown</div>
+    </div>`;
+  }
+  return `<div class="pr-parent">
+    <div class="pr-parent-role">${esc(p.role)}</div>
+    ${columnsHtml(p.cols)}
+    ${p.tests ? `<div class="pr-tests">${esc(p.tests)}</div>` : ''}
+  </div>`;
+}
+
+function healthCardHtml(card) {
+  const items = card.items.map((it) => `<li>
+      <div>${esc(it.label)}</div>
+      ${it.vet.map((l) => `<div class="pr-hvet">${esc(l)}</div>`).join('')}
+      <div class="pr-hdate">${esc(it.dates)}</div>
+      ${it.notes ? `<div class="pr-hnotes">${esc(it.notes)}</div>` : ''}
+    </li>`).join('');
+  return `<div class="pr-health-card">
+    <h3>${esc(card.title)}</h3>
+    <ul class="pr-health-list">${items}</ul>
+  </div>`;
+}
+
+function sectionHtml(s) {
+  switch (s.kind) {
+    case 'info':
+      return sectionLabel(s.label) + `<section class="pr-card">${columnsHtml(s.cols)}</section>`;
+    case 'parents':
+      return `${sectionLabel(s.label)}<div class="pr-parents">${s.parents.map(parentHtml).join('')}</div>`;
+    case 'health':
+      return sectionLabel(s.label) + (s.columns.length
+        ? `<div class="pr-health-grid">${s.columns.map((c) => `<div class="pr-health-col">${c.map(healthCardHtml).join('')}</div>`).join('')}</div>`
+        : '<p class="pr-empty">No health events to show.</p>');
+    case 'buyer':
+      return `<div class="pr-keep">${sectionLabel(s.label)}<section class="pr-card">${columnsHtml(s.cols)}</section></div>`;
+    default:
+      return '';
+  }
+}
+
+function recordHtml(r) {
+  return `<section class="pr-pup">
+    <div class="pr-header">
+      ${r.logo ? `<img src="${esc(r.logo)}" alt="${esc(r.title)} logo" style="max-height:72px; max-width:200px; object-fit:contain; margin-bottom:6px;">` : ''}
+      <h1>${esc(r.title)}</h1>
+      <div class="pr-kennel">${esc(r.sub)}</div>
+      ${r.generated ? `<div class="pr-generated">${esc(r.generated)}</div>` : ''}
+    </div>
+    ${r.sections.map(sectionHtml).join('\n')}
+  </section>`;
+}
+
+function coverHtml(c) {
+  const rows = c.rows.map((r) => `<tr>
+      <td><strong>${esc(r.name)}</strong><div class="pr-cover-sub">${esc(r.status)}</div></td>
+      <td>${r.family ? esc(r.family) : '<span class="pr-empty">No sale</span>'}${r.dropoff ? `<div class="pr-cover-sub">${esc(r.dropoff)}</div>` : ''}</td>
+      <td>${r.done ? esc(r.done) : '—'}</td>
+      <td class="pr-cover-missing">${esc(r.missing)}</td>
+    </tr>`);
   return `<section class="pr-cover">
     <div class="pr-header">
-      <h1>Getting ready to leave</h1>
-      ${label ? `<div class="pr-kennel">${esc(label)}</div>` : ''}
-      <div class="pr-generated">${esc(fmtDateMDY(today))} · for you, not the families</div>
+      <h1>${esc(c.title)}</h1>
+      ${c.label ? `<div class="pr-kennel">${esc(c.label)}</div>` : ''}
+      <div class="pr-generated">${esc(c.generated)}</div>
     </div>
     <table class="pr-cover-table">
       <thead><tr><th>Puppy</th><th>Family</th><th>Done</th><th>Missing</th></tr></thead>
       <tbody>${rows.join('')}</tbody>
     </table>
   </section>`;
+}
+
+// --- Share as PDF ------------------------------------------------------------------
+
+// What Share as PDF draws: set in main() once the page is drawn.
+let pdfInput = null; // { cover, records, filename }
+let pdfFile = null; // the File, made once per page load
+let pdfMaking = null;
+
+// The PDF is made as soon as the page is drawn, so a tap on Share as PDF can hand
+// it to the share sheet straight away: iPhone only opens the share sheet for a
+// tap, and a share started after a long wait counts as no tap.
+function makePdfFile() {
+  if (pdfFile) return Promise.resolve(pdfFile);
+  if (!pdfMaking) {
+    pdfMaking = import('../assets/puppyRecordPdf.js')
+      .then((m) => m.puppyRecordPdfFile(pdfInput))
+      .then((f) => { pdfFile = f; return f; })
+      .finally(() => { pdfMaking = null; });
+  }
+  return pdfMaking;
+}
+
+function shareNote(text, isError = false) {
+  const box = document.getElementById('pr-share-note');
+  box.className = `no-print ${isError ? 'inline-error' : 'muted'}`;
+  box.textContent = text;
+  box.hidden = !text;
+}
+
+async function onSharePdf() {
+  if (!pdfInput) return;
+  shareNote('');
+  let file;
+  try {
+    file = await makePdfFile();
+  } catch (e) {
+    shareNote(`The PDF couldn't be made: ${e.message || e}`, true);
+    return;
+  }
+  let canShare = false;
+  try { canShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] }); } catch { /* no */ }
+  if (!canShare) {
+    // No share sheet for files (most computers): download it instead.
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url; a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return;
+  }
+  try {
+    await navigator.share({ files: [file], title: file.name.replace(/\.pdf$/, '') });
+  } catch (e) {
+    if (e?.name === 'AbortError') return; // she closed the share sheet
+    // The PDF took too long and the tap no longer counts: it's ready now.
+    if (e?.name === 'NotAllowedError') shareNote('Your PDF is ready. Tap Share as PDF again.');
+    else shareNote(`Sharing didn't work here: ${e.message || e}`, true);
+  }
 }
 
 async function main() {
@@ -415,11 +541,16 @@ async function main() {
   }
 
   const first = pups[0].dog;
-  document.title = pups.length === 1 ? `${first.call_name || first.registered_name || 'Puppy'} — Puppy Record` : `${pups.length} Puppy Records`;
+  const firstName = first.call_name || first.registered_name || 'Puppy';
+  document.title = pups.length === 1 ? `${firstName} — Puppy Record` : `${pups.length} Puppy Records`;
 
   const records = [];
-  for (const p of pups) records.push(await recordHtml(p.dog, p.sale, p.events, ownKennel));
-  root.innerHTML = (param('cover') ? await coverHtml(pups) : '') + records.join('');
+  for (const p of pups) records.push(await recordModel(p.dog, p.sale, p.events, ownKennel));
+  const cover = param('cover') ? await coverModel(pups) : null;
+  root.innerHTML = (cover ? coverHtml(cover) : '') + records.map(recordHtml).join('');
+
+  pdfInput = { cover, records, filename: pups.length === 1 ? `${firstName} Puppy Record.pdf` : `${pups.length} Puppy Records.pdf` };
+  document.getElementById('pr-share').disabled = false;
 
   // Launched from the Sales hub's "Print Puppy Record" picker or Kels's Pups are going home
   // (?autoprint=1) — open the browser print dialog as soon as the layout has
@@ -427,8 +558,12 @@ async function main() {
   if (param('autoprint')) {
     setTimeout(() => window.print(), 200);
   }
+  // Ready before she taps Share as PDF (makePdfFile); a failure shows on the tap.
+  makePdfFile().catch(() => {});
 }
 
 document.getElementById('pr-print').addEventListener('click', () => window.print());
+document.getElementById('pr-share').addEventListener('click', onSharePdf);
+wireActionMenu(document.getElementById('pr-more'));
 
 main();

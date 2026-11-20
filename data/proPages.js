@@ -143,6 +143,8 @@ export const PRO_ONLY_STANDALONE = [
   // Which fields the Puppy Record prints, read only by the Pro-only Puppy Record
   // and Kennel pages.
   'data/puppyRecordFields.js',
+  // The Puppy Record's Share as PDF file, loaded only by the Pro-only Puppy Record page.
+  'assets/puppyRecordPdf.js',
   // A kennel's settings as form pieces (logo, nudges, Puppy Record fields): the
   // Kennel page's, and Kels's "Getting Started", which imports it only in the parts
   // that need that page (none in Lite).

@@ -134,8 +134,15 @@
     <div class="pr-actions no-print">
       <a class="btn btn-sm" id="pr-back" href="sales.html">← Back to sale</a>
       <button class="btn btn-primary btn-sm" id="pr-print">Print / Save as PDF</button>
-      <a class="btn btn-sm" id="pr-fields" href="kennels.html" hidden>Choose fields</a>
+      <div class="action-menu" id="pr-more">
+        <button class="btn btn-sm" type="button" aria-haspopup="menu" aria-expanded="false">More ▾</button>
+        <div class="action-menu-list" role="menu" hidden>
+          <button type="button" role="menuitem" id="pr-share" disabled>Share as PDF</button>
+          <a role="menuitem" id="pr-fields" href="kennels.html" hidden>Choose fields</a>
+        </div>
+      </div>
     </div>
+    <p id="pr-share-note" class="no-print muted" style="text-align:center;" hidden></p>
     <div id="pr-root"><p class="pr-empty">Loading…</p></div>
   </main>
   <script type="module" src="../app.js"></script>
