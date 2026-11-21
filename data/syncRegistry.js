@@ -232,7 +232,10 @@ export const SYNC_REGISTRY = Object.freeze({
       // pup, and the disposition to put back on a cancel.
       'side_entry_id', 'side_deposit_due', 'side_holds_pup', 'side_prior_disposition',
       // When she sent its deposit request (Review sale & send), as an offer row keeps it.
-      'side_request_sent_date'
+      'side_request_sent_date',
+      // Any sale's deposit due date (Unified Sale plan §4, U3; owner approved 2026-11-21:
+      // cloud, like side_deposit_due).
+      'deposit_due_date'
     ],
     private: [
       'price', 'deposit_amount', 'transport_fee', 'deferred_boarding_amount',

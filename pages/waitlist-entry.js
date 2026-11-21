@@ -2311,7 +2311,7 @@ function sideSaleHtml(e) {
   const send = canPickToSend();
   return `<section class="card"><h2 style="margin-top:0;">Side sale</h2>
     <div><strong>${litter ? litterLink(litter.id) : none}</strong> · <span class="badge badge-purple">Picked ${esc(dogName(sale.dog_id))}</span> <span class="faint">deposit pending · <a href="sale.html?id=${encodeURIComponent(sale.id)}">sale</a></span>${sale.side_request_sent_date ? ` <span class="badge badge-blue">Deposit request sent ${esc(fmtDate(sale.side_request_sent_date))}</span>` : ''}${claims.length > 1 ? ' <span class="badge badge-red">Two sales on this pup</span>' : ''}</div>
-    <div class="faint">Recorded ${esc(fmtDate(sale.sale_date))} · deposit due ${esc(fmtDate(sale.side_deposit_due))}${overdue ? ' <span class="badge badge-red">Deposit overdue</span>' : ''}${sale.side_holds_pup ? ` · ${esc(dogName(sale.dog_id))} is held for them` : ` · ${esc(dogName(sale.dog_id))} is still offered to other families until the deposit`}</div>
+    <div class="faint">Recorded ${esc(fmtDate(sale.sale_date))} · deposit due ${esc(fmtDate(sale.side_deposit_due))}${overdue ? ' <span class="badge badge-red">Deposit overdue</span>' : ''} · ${esc(dogName(sale.dog_id))} is held for them</div>
     <div class="pill-row" style="margin-top:6px;">
       ${send ? `<button class="btn btn-primary btn-sm" data-side="send">${sale.side_request_sent_date ? 'Review sale & send again…' : 'Review sale & send…'}</button>` : ''}
       <button class="btn btn-sm${send ? '' : ' btn-primary'}" data-side="deposit">Deposit received…</button>
@@ -2365,7 +2365,7 @@ async function onSideSale() {
     await alertModal({ title: `${name} is placed`, message: `Their deposit carried over from the pup they lost is recorded as paid for ${res.dog.call_name}.` });
     return;
   }
-  const held = `${res.dog.call_name} is ${res.sale.side_holds_pup ? 'held for' : 'set aside for'} ${name} until ${fmtDate(res.sale.side_deposit_due)}${res.sale.side_holds_pup ? '' : ' (still offered to other families until the deposit)'}.`;
+  const held = `${res.dog.call_name} is held for ${name} until ${fmtDate(res.sale.side_deposit_due)}, off every other family's turn.`;
   if (canPickToSend()) {
     if (await confirmModal({ title: 'Side sale recorded', message: `${held}\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' })) {
       const fresh = await saleRepo.getById(res.sale.id);

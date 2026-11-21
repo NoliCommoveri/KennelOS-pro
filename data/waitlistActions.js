@@ -1121,6 +1121,9 @@ export const recordSideSale = atomic(async function recordSideSale(entryId, { do
     lead_source: 'Waitlist',
     ...expectedPricing({ ...dog, ...dogChanges }, litter, registration),
     side_entry_id: entry.id,
+    // Every sale's deposit due date (Unified Sale plan §4); side_deposit_due is kept
+    // for older builds and backups.
+    deposit_due_date: due,
     side_deposit_due: due,
     side_holds_pup: holds,
     side_prior_disposition: prior
@@ -1194,17 +1197,28 @@ export const cancelSideSale = atomic(async function cancelSideSale(saleId, { dat
   return { sale: saved, restored };
 });
 
-// Two claims on one pup, one deposit in (§5): end the rest. `keepSaleId` is the sale
-// that won. → [{ kind: 'side_cancelled', entry_id, sale_id, restored } |
+// Two claims on one pup, one deposit in (§5; Unified Sale plan §2, for every sale):
+// end the rest. `keepSaleId` is the sale that won. A side sale is cancelled (they keep
+// their place), a turn pick let go, and any other sale still waiting on its deposit
+// cancelled. → [{ kind: 'side_cancelled', entry_id, sale_id, restored } |
+//              { kind: 'sale_cancelled', sale_id, buyer, restored } |
 //              { kind: 'pick_released', entry_id, offer_id, voided }]
 async function resolveOtherClaims(dogId, { keepSaleId, date, who }) {
   const out = [];
+  const offers = await waitlistOfferRepo.getAll();
+  const isPickSale = (s) => offers.some((o) => !o.is_archived && o.outcome === 'open' && o.sale_id === s.id);
   for (const s of await saleRepo.getByDog(dogId)) {
-    if (s.id === keepSaleId || !isSideSalePending(s)) continue;
-    const r = await cancelSideSale(s.id, { date, why: who });
-    out.push({ kind: 'side_cancelled', entry_id: s.side_entry_id, sale_id: s.id, restored: r.restored });
+    if (s.id === keepSaleId) continue;
+    if (isSideSalePending(s)) {
+      const r = await cancelSideSale(s.id, { date, why: who });
+      out.push({ kind: 'side_cancelled', entry_id: s.side_entry_id, sale_id: s.id, restored: r.restored });
+    } else if (!s.is_archived && s.status === 'deposit_pending' && !isPickSale(s)) {
+      await saleRepo.update(s.id, { status: 'cancelled', notes: appendNote(s.notes, `Cancelled ${date}: ${who}.`) });
+      const buyer = s.buyer_contact_id ? (await contactRepo.getById(s.buyer_contact_id))?.name || null : null;
+      out.push({ kind: 'sale_cancelled', sale_id: s.id, buyer, restored: null });
+    }
   }
-  const picks = (await waitlistOfferRepo.getAll()).filter((o) => !o.is_archived && o.outcome === 'open' && o.chosen_dog_id === dogId && o.sale_id !== keepSaleId);
+  const picks = offers.filter((o) => !o.is_archived && o.outcome === 'open' && o.chosen_dog_id === dogId && o.sale_id !== keepSaleId);
   for (const o of picks) {
     await releasePick(o, { date, why: who, strict: false });
     await waitlistOfferRepo.update(o.id, {
@@ -1224,6 +1238,15 @@ async function resolveOtherClaims(dogId, { keepSaleId, date, who }) {
   }
   return out;
 }
+
+// A deposit recorded on the Sale page (any sale, any buyer): every other claim on the
+// pup ends, as when a side sale's or a turn pick's deposit arrives. → resolveOtherClaims.
+export const settleOtherClaims = atomic(async function settleOtherClaims(saleId, { date } = {}) {
+  const sale = await saleRepo.getById(saleId);
+  if (!sale) throw new Error('That sale no longer exists.');
+  date ??= todayYMD();
+  return resolveOtherClaims(sale.dog_id, { keepSaleId: sale.id, date, who: 'another buyer\'s deposit arrived first' });
+});
 
 // Open turns left with no pup in them (waitlistRules.turnIsEmpty: she kept the pup,
 // put it on Health hold, recorded its death or archived it, sold it, or another

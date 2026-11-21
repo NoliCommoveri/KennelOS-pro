@@ -629,7 +629,7 @@ function statementOpts(sale, { dog = null, litter = null, events = [], kennel = 
     today, openDays: businessDays(waitlistConfig(kennel)),
     feeCredit: fee && fee.amount > 0 ? { ...fee, date: feeCreditDate(sale, ctx) } : null,
     credits: entry ? creditsOf(entry) : [], feeCharges: entry ? feeCharge(entry) : [],
-    depositDueDate: sale.side_deposit_due || offer?.respond_by_date || null
+    depositDueDate: sale.deposit_due_date || sale.side_deposit_due || offer?.respond_by_date || null
   };
 }
 

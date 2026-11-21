@@ -31,6 +31,8 @@ import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelSco
 import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 import { deliveredOwnershipChanges, addedStays } from '../data/goHome.js';
 import { offerStayAndPickup } from '../assets/stayPickupUI.js';
+import { saleBlocker, saleWarning, pulledFrom, otherClaims, claimLine, depositDueOf, isDepositOverdue } from '../data/saleChecks.js';
+import { DISPOSITION } from '../data/vocab.js';
 
 // Statuses that warrant the "log a scheduled pickup" prompt (Stage4.5 Addendum §D4).
 const PLACEMENT_PROMPT_STATUSES = ['paid_in_full', 'delivered'];
@@ -54,7 +56,7 @@ const blankSale = () => ({
   deferred_boarding_duration_days: '', end_reason: '', end_note: '',
   sales_channel_account_id: '', processing_fee_amount: '', fee_passed_to_buyer: false,
   deposit_paid_via_account_id: '', balance_paid_via_account_id: '', extra_charges: [],
-  refund_amount: '', refund_date: ''
+  refund_amount: '', refund_date: '', deposit_due_date: ''
 });
 
 const ctx = {
@@ -73,8 +75,66 @@ const ctx = {
   doNotSell: [],
   // The sale's payment statement as last shown (Payments card), for the edit form's
   // final payment date.
-  statement: null
+  statement: null,
+  // What the form's checks read (Unified Sale plan §2.2), loaded when the form opens:
+  // every sale, and the open turns and families with the waitlist.
+  claimRefs: null
 };
+
+// Loaded once per form: the live sales, and (waitlist) the offers and families.
+async function loadClaimRefs() {
+  // The waitlist's repos load only when the form opens, off the page's first load.
+  const wl = editionFlags.waitlist
+    ? await Promise.all([import('../data/waitlistOfferRepo.js'), import('../data/waitlistEntryRepo.js')])
+    : null;
+  const [sales, offers, entries] = await Promise.all([
+    saleRepo.getAll({ includeArchived: false }),
+    wl ? wl[0].waitlistOfferRepo.getAll() : [],
+    wl ? wl[1].waitlistEntryRepo.getAll({ includeArchived: true }) : []
+  ]);
+  ctx.claimRefs = { sales, offers, entriesById: new Map(entries.map((e) => [e.id, e])) };
+}
+
+// A turn pick's sale (an open turn holds it): its deposit is due by the turn's
+// deadline, so the form gives it no Deposit due of its own. False until the claims load.
+const isTurnPickSale = (s) => Boolean(s?.id && ctx.claimRefs?.offers.some((o) => !o.is_archived && o.outcome === 'open' && o.sale_id === s.id));
+
+// The sale's checks, each said plainly (Unified Sale plan §2.2): a pup no sale can be
+// made on (refused at Save), the pup itself (placed, gone home, or one the sale would
+// pull from Undecided / Keeping / Health hold), and the other live claims on it now.
+// None but the first blocks. → { blocker, claims: the claim lines, lines: all lines }
+function saleCheckLines(draft = ctx.draft) {
+  const dog = ctx.dogsById.get(draft.dog_id);
+  if (!dog) return { blocker: '', claims: [], lines: [] };
+  const dogChanged = ctx.mode === 'new' || dog.id !== ctx.original?.dog_id;
+  const blocker = dogChanged ? saleBlocker(dog) : '';
+  if (blocker) return { blocker, claims: [], lines: [] };
+  const notes = [];
+  const warn = dogChanged ? saleWarning(dog) : '';
+  if (warn) notes.push(warn);
+  const pulled = dogChanged ? pulledFrom(dog) : null;
+  if (pulled) {
+    const is = { undecided: 'still undecided', keeping: 'marked Keeping', health_hold: 'on a health hold' }[pulled];
+    const was = descriptor(DISPOSITION, pulled)?.label || pulled;
+    notes.push(`${dog.call_name} is ${is}. This sale holds the pup for the buyer; if it's cancelled before the deposit, ${dog.call_name} goes back to ${was}.`);
+  }
+  const claims = [];
+  const refs = ctx.claimRefs;
+  if (refs) {
+    const nameOfEntry = (id) => { const e = refs.entriesById.get(id); return e ? (ctx.contactsById.get(e.contact_id)?.name || e.application?.name || '') : ''; };
+    const nameOfSale = (x) => ctx.contactsById.get(x.buyer_contact_id)?.name || '';
+    for (const c of otherClaims(dog.id, { sales: refs.sales, offers: refs.offers, exceptSaleId: ctx.original?.id || null })) {
+      claims.push(claimLine(c, { sales: refs.sales, nameOfEntry, nameOfSale, fmtDate }));
+    }
+  }
+  return { blocker, claims, lines: [...notes, ...claims] };
+}
+function saleChecksHtml(draft = ctx.draft) {
+  const { blocker, lines } = saleCheckLines(draft);
+  if (blocker) return `<div class="inline-warn field-wide" role="alert">${esc(blocker)} Choose another pup.</div>`;
+  if (!lines.length) return '';
+  return `<div class="inline-warn field-wide" role="status">${lines.map((l) => esc(l)).join('<br>')}<br><span class="faint">You can still record the sale.</span></div>`;
+}
 
 async function loadRefs() {
   const [dogs, contacts, leadSources, litters, accounts, kennels, doNotSell] = await Promise.all([
@@ -492,6 +552,7 @@ function renderView() {
       ${row('Deferred pickup boarding', s.deferred_boarding_amount != null && s.deferred_boarding_amount !== '' ? `${esc(money(s.deferred_boarding_amount))}${s.deferred_boarding_frequency ? ` per ${esc(s.deferred_boarding_frequency)}` : ''}${s.deferred_boarding_duration_days ? ` × ${esc(s.deferred_boarding_duration_days)}` : ''}` : '')}
       ${saleExtraCharges(s).length ? row('Extra charges', saleExtraCharges(s).map((x) => `${esc(x.label)} <span class="muted">${esc(money(x.amount))}</span>${(x.payments || []).map((st) => `<br><span class="faint" style="margin-left:12px;">${esc(`${st.percent}% · ${money(st.amount)}`)} · ${st.paid_date ? `paid ${esc(fmtDate(st.paid_date))}` : st.due_date ? `due ${esc(fmtDate(st.due_date))}` : st.due === 'before_pickup' ? `due ${st.n || 0} days before pickup` : 'due with the balance'}</span>`).join('')}`).join('<br>')) : ''}
       ${row('Sale date', s.sale_date ? esc(fmtDate(s.sale_date)) : '')}
+      ${s.status === 'deposit_pending' && depositDueOf(s) ? row('Deposit due', `${esc(fmtDate(depositDueOf(s)))}${isDepositOverdue(s, todayYMD()) ? ' <span class="badge badge-red">Deposit overdue</span>' : ''}`) : ''}
       ${row('Deposit date', s.deposit_date ? esc(fmtDate(s.deposit_date)) : '')}
       ${hasSchedule(s)
         ? row('Final payment due', (finalDueDate(ctx.statement) || s.balance_due_date) ? `${esc(fmtDate(finalDueDate(ctx.statement) || s.balance_due_date))} <span class="faint">(payment schedule)</span>` : '<span class="faint">Not known yet (payment schedule)</span>')
@@ -542,6 +603,16 @@ function buyerDoNotSellHtml(contactId) {
   return warn ? `<div class="inline-warn field-wide" role="status">${esc(/[.!?]$/.test(warn) ? warn : `${warn}.`)} You can still record the sale.</div>` : '';
 }
 
+// "Also set the pup's registration" when the sale's differs from the pup's intended
+// one (Unified Sale plan §2.2), on a new sale or a changed pup.
+function setRegistrationHtml(s) {
+  const dog = ctx.dogsById.get(s.dog_id);
+  if (!dog || !s.registration_type || s.registration_type === (dog.intended_registration || '')) return '';
+  if (ctx.mode !== 'new' && dog.id === ctx.original?.dog_id) return '';
+  const label = descriptor(REGISTRATION_TYPE, s.registration_type)?.label || s.registration_type;
+  return `<label class="check-inline" style="display:block;margin-top:6px;"><input id="f-set-dog-registration" type="checkbox"${s.set_dog_registration ? ' checked' : ''}> Also set ${esc(dog.call_name)}'s intended registration to ${esc(label)}</label>`;
+}
+
 function field(label, inner, { required = false, hint = '', wide = false } = {}) {
   return `<div class="field${wide ? ' field-wide' : ''}">
     <label>${esc(label)}${required ? ' <span class="req">*</span>' : ''}</label>
@@ -558,7 +629,8 @@ function renderEdit() {
       ${field('Dog', `<select id="f-dog_id">${dogOptions(s.dog_id)}</select>`, { required: true })}
       ${field('Buyer', `<select id="f-buyer_contact_id">${contactOptions(s.buyer_contact_id)}</select>`, { required: true })}
       ${buyerDoNotSellHtml(s.buyer_contact_id)}
-      ${field('Registration', `<select id="f-registration_type">${vocabOptions(REGISTRATION_TYPE, s.registration_type, 'Select…')}</select>`, { required: true, hint: 'Full adds the litter\'s Full-registration surcharge to a prefilled price.' })}
+      <div id="sale-checks" class="field-wide" style="display:contents;">${saleChecksHtml(s)}</div>
+      ${field('Registration', `<select id="f-registration_type">${vocabOptions(REGISTRATION_TYPE, s.registration_type, 'Select…')}</select>${setRegistrationHtml(s)}`, { required: true, hint: 'Full adds the litter\'s Full-registration surcharge to a prefilled price.' })}
       ${field('Status', `<select id="f-status">${vocabOptions(SALE_STATUS, s.status, 'Select…')}</select>`, { required: true })}
       ${endReasonFields(s)}
       ${refundFields(s)}
@@ -575,6 +647,7 @@ function renderEdit() {
         </div>`, { hint: 'A boarding rate for a buyer who delayed pickup — the count is the number of frequency units (e.g. 2 = 2 weeks). A plain rate, not a Financials cost.' })}
       ${extraChargesField(s)}
       ${field('Sale date', `<input id="f-sale_date" type="date" value="${esc(s.sale_date)}">`)}
+      ${s.status === 'deposit_pending' && !isTurnPickSale(ctx.original) ? `<div id="deposit-due-field" style="display:contents;">${field('Deposit due', `<input id="f-deposit_due_date" type="date" value="${esc(depositDueOf(s) || '')}">`, { hint: 'When the deposit is due, if it isn\'t in yet. Today tells you if it\'s late.' })}</div>` : ''}
       ${field('Deposit date', `<input id="f-deposit_date" type="date" value="${esc(s.deposit_date)}">`)}
       ${hasSchedule(s)
         ? field('Final payment due', `<div style="padding:8px 0;">${(finalDueDate(ctx.statement) || s.balance_due_date) ? esc(fmtDate(finalDueDate(ctx.statement) || s.balance_due_date)) : 'Not known yet'}</div>`, { hint: 'This sale has a payment schedule: change its dates with Edit the schedule, under Payments.' })
@@ -670,6 +743,9 @@ function readForm() {
     price: val('f-price'),
     deposit_amount: val('f-deposit_amount'),
     deposit_date: val('f-deposit_date'),
+    // Shown while the deposit is pending; otherwise kept as it was.
+    deposit_due_date: document.getElementById('f-deposit_due_date') ? val('f-deposit_due_date') || null : (ctx.draft.deposit_due_date || null),
+    set_dog_registration: !!document.getElementById('f-set-dog-registration')?.checked,
     // With a payment schedule the box isn't shown (its dates are the schedule's): keep it.
     balance_due_date: document.getElementById('f-balance_due_date') ? val('f-balance_due_date') : (ctx.draft.balance_due_date || ''),
     balance_paid_date: val('f-balance_paid_date'),
@@ -866,9 +942,17 @@ function enterEdit() {
   ctx.draft = { ...ctx.original };
   ctx.suggestedFee = null; // a stored fee is hers: it never follows the price
   renderEdit();
+  loadClaimRefs().then(() => { if (ctx.mode === 'edit') refreshSaleChecks(); }).catch(() => {});
   renderProfileActions();
   renderContractsSection();
   renderPaymentsSection();
+}
+
+// The checks block alone, so a reload of the claims never redraws the form.
+function refreshSaleChecks() {
+  if (isTurnPickSale(ctx.original)) document.getElementById('deposit-due-field')?.remove();
+  const el = document.getElementById('sale-checks');
+  if (el) el.innerHTML = saleChecksHtml(readForm());
 }
 
 function cancel() {
@@ -1022,6 +1106,40 @@ async function doSave() {
     if (error) { showError(error); return; }
     candidate.extra_charges = list;
   }
+  // The sale's checks (Unified Sale plan §2.2): a pup no sale can be made on is refused.
+  const checks = saleCheckLines(candidate);
+  if (checks.blocker) { showError(`${checks.blocker} Choose another pup.`); return; }
+  // A side sale's due date is also its side_deposit_due, which the family's page, the
+  // waitlist's reminders and older builds read: kept in step.
+  if (candidate.side_entry_id && candidate.deposit_due_date) candidate.side_deposit_due = candidate.deposit_due_date;
+  const setDogRegistration = candidate.set_dog_registration;
+  delete candidate.set_dog_registration;
+  // A pup pulled from Undecided / Keeping / Health hold by a new sale still waiting on
+  // its deposit: remembered, so a cancel puts it back.
+  if (isNew && candidate.status === 'deposit_pending') {
+    const prior = pulledFrom(ctx.dogsById.get(candidate.dog_id));
+    if (prior) { candidate.side_holds_pup = true; candidate.side_prior_disposition = prior; }
+  }
+  // The deposit is in (a new sale past Deposit Pending, or one moving off it): every
+  // other claim on the pup ends (another sale waiting on its deposit is cancelled, a
+  // turn pick let go, a side sale cancelled; the family keeps their place). Asked
+  // first; No saves nothing.
+  const depositIn = !RELEASED_SALE_STATUSES.includes(candidate.status) && candidate.status !== 'deposit_pending'
+    && (isNew || prevStatus === 'deposit_pending' || candidate.dog_id !== ctx.original?.dog_id);
+  let settle = false;
+  if (depositIn && ctx.claimRefs) {
+    const others = otherClaims(candidate.dog_id, { sales: ctx.claimRefs.sales, offers: ctx.claimRefs.offers, exceptSaleId: ctx.original?.id || null });
+    if (others.length) {
+      const pup = ctx.dogsById.get(candidate.dog_id)?.call_name || 'this pup';
+      const ok = await confirmModal({
+        title: `End the other ${others.length === 1 ? 'claim' : 'claims'} on ${pup}?`,
+        message: `${checks.claims.map((l) => l.replace(' The first deposit received takes the pup.', '')).join(' ')} With this deposit in, ${pup} is this buyer's: ${others.length === 1 ? 'the other is' : 'the others are'} ended (a sale waiting on its deposit is cancelled${editionFlags.waitlist ? '; a family keeps their place on the list' : ''}). Let them know.`,
+        confirmLabel: 'Save and end it', cancelLabel: 'Go back'
+      });
+      if (!ok) return;
+      settle = true;
+    }
+  }
   // Cancelled on a waitlist family's open sale is their back-out: the rest of the form
   // saves now, and the back-out confirm (after the save) cancels the sale and decides
   // their place, so they're never left Placed on a cancelled sale.
@@ -1043,6 +1161,14 @@ async function doSave() {
     let saved = isNew
       ? await saleRepo.create(candidate)
       : await saleRepo.update(ctx.original.id, candidate);
+
+    if (settle) {
+      const { settleOtherClaims } = await import('../data/waitlistActions.js');
+      await settleOtherClaims(saved.id, { date: todayYMD() });
+    }
+    if (setDogRegistration && saved.registration_type) {
+      await dogRepo.update(saved.dog_id, { intended_registration: saved.registration_type });
+    }
 
     // --- Post-save prompt sequence: each awaits the previous, all optional
     // (a Skip never blocks the save that already happened above). ---
@@ -1101,6 +1227,12 @@ async function doSave() {
       const done = await backOutDialog({ entryId: backOut.id });
       saved = await saleRepo.getById(saved.id);
       if (!done) await alertModal({ title: 'Not cancelled', message: 'The sale wasn\'t cancelled: they\'re a waitlist family, so a back-out is recorded through that confirm. Your other changes are saved.' });
+    } else if (!isNew && saved.status === 'cancelled' && prevStatus === 'deposit_pending' && saved.side_holds_pup && saved.side_prior_disposition && saved.side_prior_disposition !== 'available') {
+      // The pup this sale held goes back to what it was (Unified Sale plan §2.2).
+      const { restoreHeldPup } = await import('../data/pendingSale.js');
+      const restored = await restoreHeldPup(saved);
+      if (restored) await alertModal({ title: 'Pup put back', message: `${ctx.dogsById.get(saved.dog_id)?.call_name || 'The pup'} is back to ${descriptor(DISPOSITION, restored)?.label || restored}, as before this sale.` });
+      else await promptReleasedPup(saved, { onError: showError });
     } else if (!isNew && RELEASED_SALE_STATUSES.includes(saved.status) && prevStatus !== saved.status) {
       await promptReleasedPup(saved, { onError: showError });
       if (editionFlags.waitlist && restoresFamily(saved)) {
@@ -1305,6 +1437,7 @@ async function main() {
   if (isNew) {
     ctx.mode = 'new';
     ctx.draft = blankSale();
+    loadClaimRefs().then(() => { if (ctx.mode === 'new') refreshSaleChecks(); }).catch(() => {});
     const dogId = param('dog');
     if (dogId && ctx.dogsById.has(dogId)) {
       ctx.draft.dog_id = dogId;
@@ -1322,6 +1455,9 @@ async function main() {
   if (!s) { showError('Sale not found. It may have been deleted.'); return; }
   ctx.original = s;
   ctx.mode = 'view';
+  // A sale waiting on its deposit: the claims load now, off the first paint, so Edit
+  // knows a turn pick at once (isTurnPickSale).
+  if (editionFlags.waitlist && s.status === 'deposit_pending') loadClaimRefs().catch(() => {});
   // Out-of-scope banner (Multi-Kennel Scope Spec §7). A detail page reached by id
   // is deliberately NEVER scope-filtered — a direct link, a bookmark, or a click
   // through from a pedigree must always resolve — so an sale belonging to another

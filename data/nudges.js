@@ -49,7 +49,8 @@ import { todayYMD, kennelToday, kennelNow, monthsBetween, addDaysToYMD } from '.
 // A heat with no end date logged is taken as over this many days after it started
 // (a typical heat runs about three weeks), for the "record a pairing?" nudge.
 export const HEAT_OPEN_DAYS = 21;
-import { descriptor, PAIRING_STATUS, LITTER_STATUS, SALE_STATUS, isOpenSale, PAIRING_ENDED_STATUSES, WHELPED_OR_LATER } from './vocab.js';
+import { descriptor, PAIRING_STATUS, LITTER_STATUS, SALE_STATUS, DISPOSITION, isOpenSale, PAIRING_ENDED_STATUSES, WHELPED_OR_LATER } from './vocab.js';
+import { isDepositOverdue } from './saleChecks.js';
 import { editionFlags } from './editionConfig.js';
 import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
@@ -932,8 +933,47 @@ export async function computeNudges() {
   // A scheduled payment coming due or gone by (Payment Schedule plan §5.2): every
   // open sale, a sale with no schedule as its one due date. All editions.
   nudges.push(...(await paymentDueItems(inScopeOnly(sales), today, { dogsById })));
+  // A deposit past its due date on any sale but a side sale or a turn pick (those ask
+  // on the family's page; Unified Sale plan §2.2). All editions.
+  let overdue = inScopeOnly(sales).filter((s) => !s.side_entry_id && s.deposit_due_date && isDepositOverdue(s, today));
+  if (overdue.length) {
+    const picks = new Set((await waitlistOfferRepo.getAll()).filter((o) => !o.is_archived && o.outcome === 'open' && o.sale_id).map((o) => o.sale_id));
+    overdue = overdue.filter((s) => !picks.has(s.id));
+  }
+  if (overdue.length) nudges.push(...depositOverdueNudges(today, overdue, dogsById, new Map((await contactRepo.getAll({ includeArchived: true })).map((c) => [c.id, c]))));
 
   return nudges;
+}
+
+// --- A deposit past its due date (Unified Sale plan §2.2) ---------------------------
+// Any sale still waiting on its deposit whose deposit_due_date has gone by, except a
+// side sale (the waitlist nudge asks for it on the family's page) and a turn pick's
+// (its turn's deadline; computeNudges leaves those out). Nothing happens by
+// itself. Key per sale and due date, so a new date brings it back. Pure.
+export function depositOverdueNudges(today, sales, dogsById = new Map(), contactsById = new Map()) {
+  const out = [];
+  for (const s of sales) {
+    if (s.side_entry_id || !s.deposit_due_date || !isDepositOverdue(s, today)) continue;
+    const buyer = contactsById.get(s.buyer_contact_id)?.name || 'The buyer';
+    const pup = dogsById.get(s.dog_id)?.call_name || 'the pup';
+    const href = `sale.html?id=${encodeURIComponent(s.id)}`;
+    const prior = s.side_holds_pup && s.side_prior_disposition !== 'available' ? s.side_prior_disposition : null;
+    out.push({
+      key: `sale-deposit-overdue:${s.id}:${s.deposit_due_date}`,
+      title: `${buyer}'s deposit for ${pup} was due ${nudgeDate(s.deposit_due_date, today)}`,
+      detail: `Nothing happens by itself. If it came, record it on the sale; to give them more time, change the deposit due date there. Or cancel the sale${prior ? ` and ${pup} goes back to ${descriptor(DISPOSITION, prior)?.label.toLowerCase() || prior}` : ''}.`,
+      subjectHref: href,
+      actions: [
+        { label: 'Open the sale', run: async () => { location.href = href; } },
+        { label: 'Cancel the sale', run: async () => {
+          const { cancelPendingSale } = await import('./pendingSale.js');
+          const r = await cancelPendingSale(s.id, { date: today });
+          return { title: 'Sale cancelled', message: `${pup}'s sale to ${buyer} is cancelled.${r.restored ? ` ${pup} is back to ${descriptor(DISPOSITION, r.restored)?.label || r.restored}.` : ''} Let them know.` };
+        } }
+      ]
+    });
+  }
+  return out;
 }
 
 // --- Payments due (Payment Schedule plan §5.2, D4) ----------------------------------

@@ -298,7 +298,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     const name = familyName(res.entry);
     await alertModal({ title: res.depositDone ? `${name} is placed` : 'Side sale recorded', message: res.depositDone
       ? `The money they carried over from an earlier sale covers the deposit for ${res.dog.call_name}, so it's recorded as received today.`
-      : `${res.dog.call_name} is ${res.sale.side_holds_pup ? 'held for' : 'set aside for'} ${name} until ${fmtDate(res.sale.side_deposit_due)}${res.sale.side_holds_pup ? '' : ' (still offered to other families until the deposit)'}. Their page shows it like a pick on their turn. Send them the deposit details from their page (Review sale & send).` });
+      : `${res.dog.call_name} is held for ${name} until ${fmtDate(res.sale.side_deposit_due)}, off every other family's turn. Their page shows it like a pick on their turn. Send them the deposit details from their page (Review sale & send).` });
   });
   on('sold-before', async () => { await soldBeforeDialog(litter); });
   // "Who's in line…" may save settings or a pup, so it re-renders after.

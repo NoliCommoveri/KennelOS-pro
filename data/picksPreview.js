@@ -37,8 +37,7 @@ export function pupBlockers(dog, sales = [], offers = []) {
   if (UNOFFERED_DISPOSITIONS.includes(disp)) out.push({ code: 'disposition', disposition: disp });
   for (const s of sales.filter((x) => x.dog_id === dog.id && liveSale(x))) {
     if (isSideSalePending(s)) {
-      // An unheld side sale doesn't take the pup (it's still offered).
-      if (s.side_holds_pup) out.push({ code: 'side_sale', sale_id: s.id, entry_id: s.side_entry_id, due: s.side_deposit_due || null });
+      out.push({ code: 'side_sale', sale_id: s.id, entry_id: s.side_entry_id, due: s.side_deposit_due || null });
       continue;
     }
     const pick = offers.find((o) => !o.is_archived && o.outcome === 'open' && o.sale_id === s.id);

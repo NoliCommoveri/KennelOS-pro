@@ -37,6 +37,9 @@ function validateSale(candidate) {
   if (refund != null && refund !== '' && !(Number(refund) >= 0)) {
     throw new Error('Sale: the refund must be an amount of 0 or more.');
   }
+  if (candidate.deposit_due_date && !/^\d{4}-\d{2}-\d{2}$/.test(candidate.deposit_due_date)) {
+    throw new Error('Sale: the deposit due date must be a date (YYYY-MM-DD).');
+  }
   if (candidate.refund_date && !/^\d{4}-\d{2}-\d{2}$/.test(candidate.refund_date)) {
     throw new Error('Sale: the refund date must be a date (YYYY-MM-DD).');
   }

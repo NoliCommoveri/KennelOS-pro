@@ -622,6 +622,17 @@ export function holdsPlace(entry, { sales, dogs } = {}) {
   return !dog || (!dog.is_archived && !GONE_DOG_STATUSES.includes(dog.status));
 }
 
+// Bought out of order: placed by a side sale (a sale outside the turn order, linked to
+// their record by side_entry_id), not by a pick on their turn. On the public list
+// such a family keeps a plain row at their number, never "Pup selected", so other
+// families can't see a sale was made out of order (owner, 2026-11-21). `sales`: array
+// or Map by id.
+export function boughtOutOfOrder(entry, sales) {
+  if (!entry || !entry.placed_sale_id) return false;
+  const sale = saleLookup(sales)(entry.placed_sale_id);
+  return Boolean(sale && sale.side_entry_id === entry.id);
+}
+
 // The waitlist record a contact's "Waitlist page" opens (owner, 2026-11-15): one that
 // isn't closed, else the most recent. Not closed: still in the pipeline
 // (WAITLIST_OPEN_STATUSES), or placed with its sale still open (their sale, charges and
@@ -746,15 +757,14 @@ const UNOFFERED_DISPOSITIONS = ['undecided', 'keeping', 'placed', 'health_hold']
 // other non-archived sale (open OR delivered) means it's spoken for.
 // Only an `available` disposition is offered: the breeder marks a pup Available
 // once she's decided to sell it, and Kels's Tidy up asks about pups left unset.
-// A side sale (Side Sale Spec) still waiting on its deposit takes the pup only when
-// it holds it (`side_holds_pup`: she pulled the pup from Undecided / Keeping /
-// Health hold for that family); otherwise the pup stays offered until the deposit.
+// Every live sale takes the pup, a side sale still waiting on its deposit included
+// (Unified Sale plan U8): a sale she records herself is never taken from her by a
+// turn.
 export function isPupAvailable(dog, sales = []) {
   if (!dog || dog.is_archived) return false;
   if (GONE_DOG_STATUSES.includes(dog.status)) return false;
   if (UNOFFERED_DISPOSITIONS.includes(dog.disposition || 'undecided')) return false;
-  return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status)
-    && !(isSideSalePending(s) && !s.side_holds_pup));
+  return !sales.some((s) => s.dog_id === dog.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status));
 }
 
 // "Already Reserved" (E2, decided 2026-11-11): disposition Placed, not archived, not
@@ -2020,13 +2030,15 @@ export const listedName = (entry, fullName) => (entry && entry.private_listing ?
 // the server closes or opens while her phone is off shows right away.
 // Numbers come from numberedList (`sales` and `dogs` are required): a family with a
 // pup selected keeps its number and isn't a row here (its number is a gap, as a
-// paused family's is); publicSelected gives those rows.
+// paused family's is); publicSelected gives those rows. One placed by a side sale is
+// a plain row here instead, with its answers as they were (boughtOutOfOrder).
 export const DECIDING_LABEL = 'Currently deciding';
 export function publicList(entries, kennelId, programsById = new Map(), { today, nameOf = (e) => entryName(e, null), deciding = () => false, config = null, wantsMore = () => [], sales, dogs } = {}) {
   return numberedList(entries, kennelId, programsById, { sales, dogs })
     .map((e, i) => ({ entry: e, position: i + 1 }))
-    .filter(({ entry }) => isOnList(entry))
-    .map(({ entry, position }) => ({ entry, position, paused: isPaused(entry, today, config) }))
+    // A family that bought out of order keeps a plain row (boughtOutOfOrder).
+    .filter(({ entry }) => isOnList(entry) || boughtOutOfOrder(entry, sales))
+    .map(({ entry, position }) => ({ entry, position, paused: isOnList(entry) && isPaused(entry, today, config) }))
     .filter(({ paused }) => !paused || Boolean(config && config.public_show_paused))
     .map(({ entry, position, paused }) => ({
       position,
@@ -2045,7 +2057,7 @@ export const PUP_SELECTED_LABEL = 'Pup selected';
 export function publicSelected(entries, kennelId, programsById = new Map(), { nameOf = (e) => entryName(e, null), config = null, sales, dogs } = {}) {
   return numberedList(entries, kennelId, programsById, { sales, dogs })
     .map((e, i) => ({ entry: e, position: i + 1 }))
-    .filter(({ entry }) => !isOnList(entry))
+    .filter(({ entry }) => !isOnList(entry) && !boughtOutOfOrder(entry, sales))
     .map(({ entry, position }) => ({
       position,
       name: listedName(entry, nameOf(entry)),
@@ -2169,6 +2181,7 @@ export function describeOfferChanges({ next = null, voided = [], offered = [], w
   // A second claim on the same pup, ended by this deposit (Side Sale Spec §5).
   for (const r of resolved) {
     if (r.kind === 'side_cancelled') lines.push(`${nameOf(r.entry_id)}'s side sale on the same pup was cancelled. They keep their place; let them know.${r.restored ? ' The pup was put back to what it was before.' : ''}`);
+    else if (r.kind === 'sale_cancelled') lines.push(`${r.buyer || 'Another buyer'}'s sale of the same pup, still waiting on its deposit, was cancelled. Let them know.`);
     else if (r.kind === 'pick_released') lines.push(`${nameOf(r.entry_id)} had picked the same pup: their pick was let go. ${r.voided ? 'No pup was left for them, so their turn ended (not a pass).' : 'Their turn stays open on the pups left.'} Let them know.`);
   }
   // Families whose turn was passed at once ("Not this litter" to all of it, §16.2):
