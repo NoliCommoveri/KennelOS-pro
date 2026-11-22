@@ -19,7 +19,8 @@ import {
   waitlistConfig, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, nextOfferedTurn, openTurns, isTurnOverdue, isPupAvailable,
   soonFamiliesForKennel, kennelBreeds, resolveBreed, whelpNotes, nextTurnPrepassNote, describeOfferChanges,
-  numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly, deadlineLabel } from '../data/waitlistRules.js';
+  numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly, deadlineLabel, isHeldPick, heldPickOf, PICKS_STANDING_LABEL } from '../data/waitlistRules.js';
+import { picksStanding } from '../data/waitlistStanding.js';
 import { openSaleFamilies } from '../data/waitlistFamilyRules.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, cardShell, alertModal, confirmModal, wireActionMenu } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, openSoonNotice } from '../assets/waitlistUI.js';
@@ -156,12 +157,14 @@ async function main() {
   // they keep their place and number until the pup goes home.
   const salesById = new Map(sales.map((x) => [x.id, x]));
   const numbered = numberedList(entries, kennel.id, programs, { sales, dogs });
+  // Where they stand on the picks open now (as on the public list): Passed, No response…
+  const standingOf = (e) => picksStanding(e, { offers, litters, pups: dogs, sales, today, config });
   const selectedPup = (e) => dogs.find((d) => d.id === salesById.get(e.placed_sale_id)?.dog_id)?.call_name || '';
   const listHtml = numbered.length
     ? table(['#', 'Family', 'Wants', 'Passes', 'In line since'], numbered.map((e, i) => (e.status === 'active' ? row(e, [
         `<strong>${i + 1}</strong>`,
-        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today, config)}${breedFlag(e)}`,
-        prefsSummary(e),
+        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today, config)}${breedFlag(e)}${heldPickOf(offers, e.id) ? ` <span class="badge badge-amber" title="Shown as Pup selected on the public list until the deposit is in or the hold ends">Pup held: ${esc(dogs.find((d) => d.id === heldPickOf(offers, e.id).chosen_dog_id)?.call_name || 'pup')}, deposit due ${esc(deadlineLabel(heldPickOf(offers, e.id).respond_by_date, heldPickOf(offers, e.id).respond_by_time, fmtDate))}</span>` : ''}`,
+        standingOf(e) ? `<span class="faint">${esc(PICKS_STANDING_LABEL[standingOf(e)])}</span>` : prefsSummary(e),
         `${passesUsed(e, offers)} of ${esc(config.max_passes)}`,
         `${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ' <span class="badge badge-purple" title="You set this place by hand">Moved by you</span>' : ''}`
       ]) : row(e, [
@@ -192,7 +195,7 @@ async function main() {
       const available = pups.filter((d) => isPupAvailable(d, sales));
       const reserved = pups.filter(isPupReserved);
       const lOffers = offers.filter((o) => o.litter_id === l.id);
-      const open = lOffers.find((o) => o.outcome === 'open' && !o.is_archived) || null;
+      const open = lOffers.find((o) => o.outcome === 'open' && !o.is_archived && !isHeldPick(o)) || null;
       // First in line for this litter alone (Spec §6.1): only to say someone is.
       const next = open ? null : nextFamilyForLitter(entries, lOffers, l, pups, sales, opts);
       return { l, available, reserved, open, next };

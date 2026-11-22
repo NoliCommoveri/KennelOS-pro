@@ -21,13 +21,17 @@ export const EMAIL_KINDS = Object.freeze([
   // A back-out she approved, one wording per outcome (what happened to the deposit).
   'backed_out_keep', 'backed_out_move', 'backed_out_refund',
   // Sent by the server itself while her phone is off (W2 step 7).
-  'offer_reminder', 'fee_reminder', 'ready_check'
+  'offer_reminder', 'fee_reminder', 'ready_check',
+  // Their deposit for a pup they picked (a turn pick or one held past the turn): she
+  // sends it from Communicate, and the server sends it instead of offer_reminder once
+  // they've picked.
+  'deposit_reminder'
 ]);
 
 // The templates her device publishes for the server (kennel.email_templates in the
 // projection, W2 step 7): what it sends by itself. Only [Kennel Name], [Family],
-// [Litter], [Respond by] and [Pay by] are filled in there.
-export const SERVER_EMAIL_KINDS = Object.freeze(['offer', 'deadline_passed', 'offer_reminder', 'fee_reminder', 'ready_check']);
+// [Litter], [Respond by], [Pay by], [Pup], [Missed] and [Pass] are filled in there.
+export const SERVER_EMAIL_KINDS = Object.freeze(['offer', 'deadline_passed', 'offer_reminder', 'fee_reminder', 'ready_check', 'deposit_reminder']);
 
 export const EMAIL_SUBJECT_MAX = 200;
 export const EMAIL_BODY_MAX = 8000;
@@ -37,7 +41,10 @@ export const EMAIL_PLACEHOLDERS = Object.freeze([
   { key: '[Kennel Name]', hint: 'your kennel' },
   { key: '[Family]', hint: 'the family\'s name' },
   { key: '[Litter]', hint: 'the litter or litters' },
-  { key: '[Respond by]', hint: 'the last day to choose and pay the deposit' },
+  { key: '[Respond by]', hint: 'the last day to choose and pay the deposit, with its time' },
+  { key: '[Pup]', hint: 'the puppy they picked' },
+  { key: '[Missed]', hint: '"your response", or "your full deposit" once they\'d picked (a turn that closed)' },
+  { key: '[Pass]', hint: 'what the closed turn meant by your rules, like "Per our policy, this counts as a pass (1 of 2)."' },
   { key: '[Position]', hint: 'their place in line, like #4' },
   { key: '[Pay by]', hint: '" by <date>" when the fee has a due date, else nothing' },
   { key: '[Request]', hint: 'what they asked for' },
@@ -62,6 +69,7 @@ export const EMAIL_TEMPLATE_KINDS = Object.freeze([
   { kind: 'status_link', label: 'Their status page link' },
   { kind: 'transport_options', label: 'Transport options (getting their pup home)' },
   { kind: 'offer_reminder', label: 'Reminder: their turn ends soon (sent by KennelOS)' },
+  { kind: 'deposit_reminder', label: 'Reminder: the deposit for their pick is due (sent by you or KennelOS)' },
   { kind: 'fee_reminder', label: 'Reminder: the fee is due soon (sent by KennelOS)' },
   { kind: 'ready_check', label: '"Ready now?" (sent by KennelOS)' }
 ]);
@@ -92,8 +100,8 @@ export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
     body: 'Hi [Family],\n\nWe\'ve recorded your pass on [Litter]. Your status page shows where you stand on our waitlist.\n\n[Kennel Name]'
   },
   deadline_passed: {
-    subject: 'Your turn for [Litter] has closed',
-    body: 'Hi [Family],\n\nThe time to choose a puppy from [Litter] and send the deposit ended on [Respond by], so your turn has closed. Your status page shows where you stand on our waitlist.\n\n[Kennel Name]'
+    subject: 'Your turn for [Kennel Name] puppy picks has ended',
+    body: 'Hi [Family],\n\nYour turn has ended for [Kennel Name] puppy picks from [Litter]. We didn\'t receive [Missed] before the deadline, [Respond by]. [Pass] The next family in line is being offered the turn.\n\nPlease see your status page for details.\n\n[Kennel Name]'
   },
   review_prefs: {
     subject: 'A new litter at [Kennel Name]: [Litter]',
@@ -130,6 +138,10 @@ export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
   offer_reminder: {
     subject: 'Reminder: your turn for [Litter] ends [Respond by]',
     body: 'Hi [Family],\n\nA reminder that your turn to choose a puppy from [Litter] ends on [Respond by]. If you haven\'t yet, please choose your puppy and send your deposit, or let us know on your status page if you\'d like to pass.\n\n[Kennel Name]'
+  },
+  deposit_reminder: {
+    subject: 'Reminder: your deposit for [Pup] is due [Respond by]',
+    body: 'Hi [Family],\n\nA reminder that your deposit for [Pup] is due by [Respond by]. We\'re holding [Pup] for you until then. The amount still due and how to pay are on your status page. If it isn\'t in by then, [Pup] goes back to being available.\n\nIf anything has changed, please let us know on your status page.\n\n[Kennel Name]'
   },
   fee_reminder: {
     subject: 'Your application fee for [Kennel Name] is due[Pay by]',
@@ -179,8 +191,25 @@ export function emailTemplate(config, kind) {
 }
 
 // The placeholder values a set of facts fills in. Dates come as YYYY-MM-DD.
-export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, respondByTime = null, position = null, payBy = null, request = '', distance = null, transport = [] } = {}) {
+// [Missed]: what didn't arrive by a closed turn's deadline (`picked`: they'd chosen a pup).
+export const missedText = (picked) => (picked ? 'your full deposit' : 'your response');
+
+// [Pass]: what a turn closed with no response or no deposit meant, by her rules.
+// `pass` { counted, used, max, removed } (recordOutcome's passes, plus removed); null = ''.
+export function passText(pass) {
+  if (!pass) return '';
+  if (!pass.counted) return 'This doesn\'t count as one of your passes.';
+  const of = Number.isFinite(pass.used) && Number.isFinite(pass.max) ? ` (${pass.used} of ${pass.max})` : '';
+  return pass.removed
+    ? `Per our policy, this counts as a pass${of}, and as it was your last one, you've been removed from our waitlist.`
+    : `Per our policy, this counts as a pass${of}.`;
+}
+
+export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, respondByTime = null, position = null, payBy = null, request = '', distance = null, transport = [], pup = '', picked = false, pass = null } = {}) {
   return {
+    pup: pup || 'your puppy',
+    missed: missedText(picked),
+    pass: passText(pass),
     'kennel name': kennelName || 'Our kennel',
     family: family || 'there',
     litter: joinNames(litters) || 'our litter',
@@ -222,7 +251,7 @@ export function draftEmail(kind, facts, config) {
   return {
     kind,
     subject: fillPlaceholders(t.subject, values).replace(/\s+/g, ' ').trim().slice(0, EMAIL_SUBJECT_MAX),
-    body: (fillPlaceholders(t.body, values).replace(/[ \t]+\n/g, '\n').trim().slice(0, Math.max(0, EMAIL_BODY_MAX - tail.length)) + tail).trim()
+    body: (fillPlaceholders(t.body, values).replace(/([^\s]) {2,}/g, '$1 ').replace(/[ \t]+\n/g, '\n').trim().slice(0, Math.max(0, EMAIL_BODY_MAX - tail.length)) + tail).trim()
   };
 }
 

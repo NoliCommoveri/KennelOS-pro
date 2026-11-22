@@ -16,7 +16,7 @@ import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate,
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
-import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale,
+import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, holdPick, changeHoldDate, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale,
   approveBackOut, backOutMoney, backOutEntryFor, hasPendingRequest } from '../data/waitlistActions.js';
 import { backOutItems, backOutSummary, backOutPaidText } from '../data/backOut.js';
 import { eventRepo } from '../data/eventRepo.js';
@@ -484,6 +484,46 @@ export async function depositDialog({ offer, name, pupName, sale }) {
       const when = o.querySelector('#dp-date').value || day;
       res = await confirmDeposit(offer.id, { date: when, amount: o.querySelector('#dp-amount').value });
     }
+  });
+  return ok ? res : null;
+}
+
+// Hold their pick past their turn (waitlistActions.holdPick): part of the deposit, or
+// none, is in. The deposit's date and time are asked; their turn ends and the next
+// family is up. → holdPick's result, or null.
+export async function holdPickDialog({ offer, name, pupName }) {
+  let res = null;
+  const day = kennelToday(offer.kennel_id ? await kennelRepo.getById(offer.kennel_id) : null);
+  const ok = await formModal({
+    title: `Hold ${pupName} for ${name}?`,
+    confirmLabel: 'Hold the pup',
+    bodyHtml: `<p style="margin-top:0;">Their turn ends now, so the next family can be offered a turn, and ${esc(pupName)} stays theirs while they send the rest of the deposit.</p>
+      <div class="form-grid">
+        <div class="field"><label>Deposit due by</label><input id="hp-date" type="date" min="${esc(day)}" value="${esc(offer.respond_by_date && offer.respond_by_date >= day ? offer.respond_by_date : day)}"></div>
+        <div class="field"><label>Time</label><input id="hp-time" type="time" value="${esc(offer.respond_by_time || '')}"></div>
+        <div class="field"><label>Received so far</label><input id="hp-amount" type="number" min="0" step="0.01" placeholder="Leave blank if nothing yet"></div>
+        <div class="field"><label>Received on</label><input id="hp-amount-date" type="date" value="${esc(day)}"></div>
+      </div>
+      <p class="field-hint">On the public list they show "Pup selected" and ${esc(pupName)} shows reserved. Everything else stays as it is now: the sale waits on its deposit, their page shows what they still owe, and you record <strong>Deposit received</strong> when it's in. If it isn't in by then, it closes as no deposit (a pass, by your rules) and ${esc(pupName)} is available again; you can also record <strong>No deposit</strong> or <strong>Void</strong> before then. What they've sent so far is saved as a credit for funds received toward the deposit, so their page, the invoice and the deposit request ask only for the rest. Don't enter money you've already recorded as a credit.</p>`,
+    onConfirm: async (o) => {
+      res = await holdPick(offer.id, { date: day, until: o.querySelector('#hp-date').value, untilTime: o.querySelector('#hp-time').value || null,
+        received: o.querySelector('#hp-amount').value, receivedDate: o.querySelector('#hp-amount-date').value || day });
+    }
+  });
+  return ok ? res : null;
+}
+
+// A held pick's deadline moved (more time, or less). → the offer, or null.
+export async function changeHoldDialog({ offer, name }) {
+  let res = null;
+  const ok = await formModal({
+    title: `When is ${name}'s deposit due?`,
+    confirmLabel: 'Save',
+    bodyHtml: `<div class="form-grid">
+        <div class="field"><label>Deposit due by</label><input id="hd-date" type="date" value="${esc(offer.respond_by_date || '')}"></div>
+        <div class="field"><label>Time</label><input id="hd-time" type="time" value="${esc(offer.respond_by_time || '')}"></div>
+      </div>`,
+    onConfirm: async (o) => { res = await changeHoldDate(offer.id, { until: o.querySelector('#hd-date').value, untilTime: o.querySelector('#hd-time').value || null }); }
   });
   return ok ? res : null;
 }

@@ -3,7 +3,7 @@
 // Sale.contract_id, Stage4 Revision v2 §5). Buyer is a Contact (no Buyer table).
 import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { saleRepo, ReferenceBlockedError } from '../data/saleRepo.js';
-import { expectedPricing, priceForRegistrationChange } from '../data/saleDefaults.js';
+import { expectedPricing, priceForRegistrationChange, depositForRegistrationChange } from '../data/saleDefaults.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
@@ -707,6 +707,9 @@ function renderEdit() {
       const change = priceForRegistrationChange(dog, litter, ctx.draft.price, was, ctx.draft.registration_type);
       const price = await askRegistrationPrice(change, was, ctx.draft.registration_type);
       if (price != null) ctx.draft.price = price;
+      // The deposit follows the Full deposit surcharge while it's still the expected one.
+      const deposit = depositForRegistrationChange(dog, litter, { ...ctx.draft, status: ctx.draft.status }, was, ctx.draft.registration_type);
+      if (deposit != null) ctx.draft.deposit_amount = deposit;
     }
     applySuggestedFee();
     renderEdit();

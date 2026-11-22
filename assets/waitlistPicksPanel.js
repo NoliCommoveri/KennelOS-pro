@@ -21,7 +21,7 @@ import {
   waitlistConfig, litterQueue, nextTurn, openTurns, turnOffers, turnIdOf, eligiblePupsFor, isPupAvailable,
   overallPositions, entryName, describeOfferChanges, soonFamiliesForLitter, whelpNotes,
   isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker, autoOffers, autoOfferSummary, closingTrigger,
-  nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly, isTurnOverdue, deadlineLabel, turnLengthText, plannedOpening } from '../data/waitlistRules.js';
+  nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly, isTurnOverdue, deadlineLabel, turnLengthText, plannedOpening, isHeldPick } from '../data/waitlistRules.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 import { WAITLIST_OFFER_OUTCOME, SEX } from '../data/vocab.js';
@@ -29,7 +29,7 @@ import { zonedInstant } from '../data/dateUtils.js';
 import { esc, badge, fmtDate, todayYMD, kennelToday, kennelNow, confirmModal, alertModal, countdownHtml, startCountdowns } from './ui.js';
 import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDialog, statusLinkFor, copyLink, formModal } from './waitlistUI.js';
 import { offerEmails } from './waitlistEmailUI.js';
-import { offerSpecs, midTurn } from '../data/waitlistOutbox.js';
+import { offerSpecs, closedTurnExtra, midTurn } from '../data/waitlistOutbox.js';
 import { openPicksPreview, previewParam } from './picksPreviewModal.js';
 import { sideSaleDialog } from './sideSaleUI.js';
 
@@ -135,7 +135,8 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   const available = d.pups.filter((p) => isPupAvailable(p, d.sales));
   const queue = litterQueue(d.entries, litter, d.pups, d.sales, opts);
   const positions = overallPositions(d.entries, litter.kennel_id, d.programsById, { sales: d.allSales, dogs: d.dogsById });
-  const open = d.offers.find((o) => o.outcome === 'open' && !o.is_archived) || null;
+  // The litter's turn; a pick held for its deposit (isHeldPick) only when no turn is open.
+  const open = d.offers.find((o) => o.outcome === 'open' && !o.is_archived && !isHeldPick(o)) || d.offers.find((o) => o.outcome === 'open' && !o.is_archived) || null;
   // The turn open in the kennel (at most one since §16.1; older offers may leave more).
   const kennelTurns = openTurns(d.kennelOffers, litter.kennel_id);
   const otherLitters = (offer) => turnOffers(d.kennelOffers, turnIdOf(offer)).filter((o) => o.outcome === 'open' && o.litter_id !== offer.litter_id).map((o) => d.litterName(o.litter_id));
@@ -368,7 +369,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
         await alertModal(await outcomeMessage(name, res, await freshEntries(litter), familyName));
         // Their turn closed, and maybe the next family's began (W2 step 6).
         await offerEmails([
-          { entryId: open.entry_id, kind: outcome === 'passed' ? 'pass_recorded' : 'deadline_passed', extra: { litterIds: turnLitterIds, respondBy: open.respond_by_date, respondByTime: open.respond_by_time || null } },
+          { entryId: open.entry_id, kind: outcome === 'passed' ? 'pass_recorded' : 'deadline_passed', extra: { litterIds: turnLitterIds, respondBy: open.respond_by_date, respondByTime: open.respond_by_time || null, ...closedTurnExtra(open, res) } },
           ...offerSpecs(res)
         ]);
       });

@@ -197,6 +197,7 @@ export const SYNC_REGISTRY = Object.freeze({
     private: [
       'expected_price_male', 'expected_price_female', 'expected_deposit_male',
       'expected_deposit_female', 'full_reg_surcharge_male', 'full_reg_surcharge_female',
+      'full_reg_deposit_surcharge_male', 'full_reg_deposit_surcharge_female',
       'foster_comp_model', 'foster_our_share_pct',
       'foster_split_basis', 'foster_flat_fee_per_pup', 'foster_split_notes',
       'feeding_schedule_override', 'notes',
@@ -494,7 +495,11 @@ export const SYNC_REGISTRY = Object.freeze({
       'restored_date', 'lost_dog_id', 'lost_picked_date', 'lost_accepted_date',
       // When the family backed out of the pup this offer placed (Family Requests
       // plan §7): a date, like outcome_date.
-      'backed_out_date'
+      'backed_out_date',
+      // The day she held the family's pick past their turn for its deposit (waitlistRules.
+      // isHeldPick; owner approved 2026-11-22: cloud): a date, like picked_date; the
+      // server reads it so the hold never blocks the next turn.
+      'held_date'
     ],
     // pass_reason: the family's own reason for a pass (Spec §16.5, decided private:
     // it can name money or health).

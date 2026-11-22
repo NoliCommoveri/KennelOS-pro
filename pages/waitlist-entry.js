@@ -48,7 +48,7 @@ import { trainingStaysFor, boardingChargeText, addedStays } from '../data/goHome
 import { eventRepo } from '../data/eventRepo.js';
 import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmailUI.js';
 import { programIconHtml } from '../assets/programIcons.js';
-import { offerSpecs, retryEmail, dropEmail, isHeldEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
+import { offerSpecs, closedTurnExtra, retryEmail, dropEmail, isHeldEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
   waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
   entryName, publicSourceName, holdsPlace, waitlistLitters, isWaitlistLitter, LISTEN_LIVE_PAIRING, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, isPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
@@ -57,7 +57,7 @@ import {
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
   sideSaleOf, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
-  familyDetails, contactForEmail, deadlineLabel } from '../data/waitlistRules.js';
+  familyDetails, contactForEmail, deadlineLabel, isHeldPick } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import { canShareFiles, shareOrDownload, shareFailText } from '../assets/pdfShare.js';
 import {
@@ -83,7 +83,7 @@ import { sessionToken } from '../data/cloud/cloudAuth.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
   resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
-  pickDialog, depositDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, backOutDialog, statusLinkFor, copyLink, creditDialog,
+  pickDialog, depositDialog, holdPickDialog, changeHoldDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, backOutDialog, statusLinkFor, copyLink, creditDialog,
   openStatusPage
 } from '../assets/waitlistUI.js';
 
@@ -372,6 +372,11 @@ function emailChoices(e) {
   const open = ctx.offers.filter((o) => o.outcome === 'open' && !o.is_archived && !o.chosen_dog_id);
   if (open.length) {
     out.push({ kind: 'offer', label: 'It\'s your turn (send again)', extra: { litterIds: open.map((o) => o.litter_id), respondBy: turnDeadline(open).date, respondByTime: turnDeadline(open).time } });
+  }
+  // A pick waiting on its deposit (on their turn, or held past it): its due date and time.
+  for (const p of ctx.offers.filter((o) => isAwaitingDeposit(o) && !o.is_archived)) {
+    out.unshift({ kind: 'deposit_reminder', label: `Reminder: the deposit for ${dogName(p.chosen_dog_id)} is due ${deadlineLabel(p.respond_by_date, p.respond_by_time, fmtDate)}`,
+      extra: { pup: dogName(p.chosen_dog_id), litterIds: [p.litter_id], respondBy: p.respond_by_date, respondByTime: p.respond_by_time || null } });
   }
   return out;
 }
@@ -1749,6 +1754,18 @@ async function onOfferOutcome(offer, outcome) {
     })) await afterAction();
     return;
   }
+  if (outcome === 'hold') {
+    const res = await holdPickDialog({ offer, name, pupName: dogName(offer.chosen_dog_id) });
+    if (!res) return;
+    await afterAction();
+    await alertModal({ title: `${dogName(offer.chosen_dog_id)} is held for ${name}`, message: [`Their deposit is due by ${deadlineLabel(res.offer.respond_by_date, res.offer.respond_by_time, fmtDate)}. Their turn has ended.`, ...offerChangeLines(res)].join('\n\n') });
+    await emailFamilies(offerSpecs(res));
+    return;
+  }
+  if (outcome === 'holddate') {
+    if (await changeHoldDialog({ offer, name })) await afterAction();
+    return;
+  }
   if (outcome === 'deposit') {
     const res = await depositDialog({ offer, name, pupName: dogName(offer.chosen_dog_id), sale: ctx.sales.find((x) => x.id === offer.sale_id) || null });
     if (!res) return;
@@ -1815,7 +1832,7 @@ async function onOfferOutcome(offer, outcome) {
   // next family's turn began.
   const closed = { passed: 'pass_recorded', no_response: 'deadline_passed' }[outcome];
   await emailFamilies([
-    ...(closed ? [{ entryId: e.id, kind: closed, extra: { litterIds: turnLitterIds.length ? turnLitterIds : [offer.litter_id], respondBy: offer.respond_by_date, respondByTime: offer.respond_by_time || null } }] : []),
+    ...(closed ? [{ entryId: e.id, kind: closed, extra: { litterIds: turnLitterIds.length ? turnLitterIds : [offer.litter_id], respondBy: offer.respond_by_date, respondByTime: offer.respond_by_time || null, ...closedTurnExtra(offer, res) } }] : []),
     ...offerSpecs(res)
   ]);
 }
@@ -1840,7 +1857,9 @@ function offerButtons(o, today) {
     const send = canPickToSend() && o.sale_id;
     list = [
       ...(send ? [btn('send', o.deposit_request_sent_date ? 'Review sale & send again…' : 'Review sale & send…', true)] : []),
-      btn('deposit', 'Deposit received…', !send), btn('change', 'Change pup…'), btn('passed', 'Passed'), btn('no_response', 'No deposit'), btn('voided', 'Void')
+      btn('deposit', 'Deposit received…', !send),
+      isHeldPick(o) ? btn('holddate', 'Change hold date…') : btn('hold', 'Hold pup…', false, 'End their turn so the next family can be offered, and hold this pup until a date for the deposit'),
+      btn('change', 'Change pup…'), btn('passed', 'Passed'), btn('no_response', 'No deposit'), btn('voided', 'Void')
     ];
   } else if (o.outcome === 'open') {
     list = [btn('pick', 'Picked a pup…', true), btn('passed', 'Passed'), btn('no_response', 'No response'), btn('voided', 'Void')];
@@ -1862,7 +1881,7 @@ function offerButtons(o, today) {
 function offerStatusHtml(o) {
   const sale = o.sale_id && isAwaitingDeposit(o) ? ` · <a href="sale.html?id=${encodeURIComponent(o.sale_id)}">sale</a>` : '';
   return isAwaitingDeposit(o)
-    ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>${o.deposit_request_sent_date ? ` <span class="badge badge-blue">Deposit request sent ${esc(fmtDate(o.deposit_request_sent_date))}</span>` : ''}`
+    ? `<span class="badge badge-purple">Picked ${esc(dogName(o.chosen_dog_id))}</span> <span class="faint">deposit pending${sale}</span>${isHeldPick(o) ? ` <span class="badge badge-amber" title="Their turn ended on ${esc(fmtDate(o.held_date))}; the pup is held for the deposit">Held</span>` : ''}${o.deposit_request_sent_date ? ` <span class="badge badge-blue">Deposit request sent ${esc(fmtDate(o.deposit_request_sent_date))}</span>` : ''}`
     : `${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${o.chosen_dog_id ? ` ${esc(dogName(o.chosen_dog_id))}` : ''}${o.pass_reason ? ` <span class="faint">${esc(reasonText(o.pass_reason))}</span>` : ''}${o.restored_date ? ` <span class="faint">${o.lost_accepted_date ? 'had' : 'picked'} ${esc(o.lost_dog_id ? dogName(o.lost_dog_id) : 'a pup')}; back in line ${esc(fmtDate(o.restored_date))}</span>` : ''}`;
 }
 const litterLink = (id) => {
@@ -1909,7 +1928,7 @@ function offersHistoryHtml() {
         offers.map((o) => `<tr><td>${litterLink(o.litter_id)}</td>
             <td>${esc(fmtDate(o.offered_date))}</td><td>${o.respond_by_date ? esc(deadlineLabel(o.respond_by_date, o.respond_by_time, fmtDate)) : none}</td>
             <td>${offerStatusHtml(o)}</td>
-            <td>${o.counts_as_pass ? '<span class="badge badge-amber">Counts</span>' : none}${o.notes ? ` <span class="faint" title="${esc(o.notes)}">ⓘ</span>` : ''}</td></tr>`).join('')
+            <td>${o.counts_as_pass ? `<span class="badge badge-amber">Counts</span> <button class="btn btn-sm" data-forgive="${esc(o.id)}" title="A free pass: it stops counting toward their limit. Their turn stays closed and nobody's place changes.">Don't count this pass…</button>` : none}${o.notes ? ` <span class="faint" title="${esc(o.notes)}">ⓘ</span>` : ''}</td></tr>`).join('')
       }</tbody></table></div></section>`;
 }
 
@@ -2452,6 +2471,23 @@ function renderHistory() {
   pane.innerHTML = parts.length ? parts.join('') : '<section class="card"><p class="muted" style="margin:0;">Nothing here yet.</p></section>';
   wireMessages(pane);
   wireDocs(pane);
+  pane.querySelectorAll('[data-forgive]').forEach((btn) => btn.addEventListener('click', () => forgivePassFlow(btn.dataset.forgive).catch((err) => showError(err.message || String(err)))));
+}
+
+// Don't count this pass (a free pass): only the count changes.
+async function forgivePassFlow(offerId) {
+  const offer = ctx.offers.find((o) => o.id === offerId);
+  if (!offer) return;
+  const name = entryName(ctx.entry, ctx.contact);
+  const litter = ctx.litters.find((l) => l.id === offer.litter_id);
+  const used = ctx.offers.filter((o) => o.counts_as_pass === true && !o.is_archived).length;
+  if (!(await confirmModal({
+    title: `Don't count this pass for ${name}?`,
+    message: `Their ${offer.outcome === 'no_response' ? 'no response' : 'pass'} on ${litter ? litterLabel(litter) : 'this litter'} stops counting toward their limit (${used - 1} of ${ctx.config.max_passes} used after this). Their turn on it stays closed, and nobody's turn or place on the list changes.`,
+    confirmLabel: 'Don\'t count it'
+  }))) return;
+  await actions.forgivePass(offerId);
+  await afterAction();
 }
 
 function renderAll() {

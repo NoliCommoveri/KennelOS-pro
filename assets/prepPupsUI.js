@@ -40,7 +40,7 @@ import { newPayment, paymentsWith, paidInFullOffer, paidInFullChanges, nextPayme
 import { splitName } from '../data/contractForms.js';
 import { timeRange } from '../data/pickupSlots.js';
 import { inScopeOnly, resolveKennelIdForWrite } from '../data/kennelScope.js';
-import { priceForRegistrationChange } from '../data/saleDefaults.js';
+import { priceForRegistrationChange, depositForRegistrationChange } from '../data/saleDefaults.js';
 import { saleFeeEstimate } from '../data/processingFees.js';
 import { paymentAccounts } from '../data/paymentLinks.js';
 import { stripeConnection } from '../data/stripeLinks.js';
@@ -574,6 +574,9 @@ class Prep {
     await this.chat.say('Saved on the sale.');
     const accounts = new Map((await accountRepo.getAll()).map((a) => [a.id, a]));
     for (const { r, reg } of res.result) {
+      // The deposit follows the Full deposit surcharge while it's still the expected one.
+      const deposit = depositForRegistrationChange(r.pup, this.litter, r.sale, r.sale.registration_type || '', reg);
+      if (deposit != null) await saleRepo.update(r.sale.id, { deposit_amount: deposit });
       const change = priceForRegistrationChange(r.pup, this.litter, r.sale.price, r.sale.registration_type || '', reg);
       if (change && change.from != null && change.to !== change.from) {
         await this.chat.say(`${esc(descriptor(REGISTRATION_TYPE, reg).label)} ${change.delta > 0 ? 'adds' : 'takes off'} ${esc(fmtMoney(Math.abs(change.delta)))} for this litter. Change ${esc(pupName(r.pup))}'s price from ${esc(fmtMoney(change.from))} to ${esc(fmtMoney(change.to))}?`);

@@ -118,8 +118,8 @@ export function emptyDraft({ litterId = null } = {}) {
     // yet (the step starts on the dam's); '' = none.
     registry: null,
     prices: {
-      expected_price_male: '', expected_deposit_male: '', full_reg_surcharge_male: '',
-      expected_price_female: '', expected_deposit_female: '', full_reg_surcharge_female: ''
+      expected_price_male: '', expected_deposit_male: '', full_reg_surcharge_male: '', full_reg_deposit_surcharge_male: '',
+      expected_price_female: '', expected_deposit_female: '', full_reg_surcharge_female: '', full_reg_deposit_surcharge_female: ''
     },
     pricesFilled: false,
     acceptDepositsDate: '',
@@ -512,7 +512,8 @@ export function pupPriceText(pup, prices) {
   if (base == null) return '';
   const extra = pup.intended_registration === 'full' ? (num(prices[`full_reg_surcharge_${sex}`]) || 0) : 0;
   const dep = num(prices[`expected_deposit_${sex}`]);
-  return `${usd(base + extra)}${dep != null ? `, ${usd(dep)} deposit` : ''}`;
+  const depExtra = pup.intended_registration === 'full' ? (num(prices[`full_reg_deposit_surcharge_${sex}`]) || 0) : 0;
+  return `${usd(base + extra)}${dep != null ? `, ${usd(dep + depExtra)} deposit` : ''}`;
 }
 
 function newDogLines(spec, role, names) {

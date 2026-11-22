@@ -34,7 +34,7 @@ import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { getShowRecord } from '../data/showPoints.js';
 import { titlesOf, displayName, formTitleChips, titleSuggestions, splitTitleInput, MAX_ABBR, MAX_ORGANIZATION } from '../data/dogTitles.js';
 import { esc, safeHref, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, dogRefHtml, dogOptgroups } from '../assets/ui.js';
-import { priceForRegistrationChange } from '../data/saleDefaults.js';
+import { priceForRegistrationChange, depositForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from '../assets/salePrompts.js';
 import { renderUpgradeNudge } from '../assets/upgradeNudge.js';
 import { renderTimeline } from '../assets/timeline.js';
@@ -1126,7 +1126,8 @@ async function promptSaleRegistration(dog) {
     try {
       const change = litter ? priceForRegistrationChange(dog, litter, sale.price, sale.registration_type, reg) : null;
       const price = await askRegistrationPrice(change, sale.registration_type, reg);
-      await saleRepo.update(sale.id, { registration_type: reg, ...(price != null ? { price } : {}) });
+      const deposit = litter ? depositForRegistrationChange(dog, litter, sale, sale.registration_type, reg) : null;
+      await saleRepo.update(sale.id, { registration_type: reg, ...(price != null ? { price } : {}), ...(deposit != null ? { deposit_amount: deposit } : {}) });
     } catch (e) {
       showError(`The sale wasn't updated: ${e.message || e} Change it on the sale's page.`);
     }

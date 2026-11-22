@@ -438,8 +438,8 @@ function screens(draft, data, ctx) {
         title: 'What are you asking for them?',
         html: `<p class="gl-lead">${draft.pricesFilled ? 'Filled in from your last litter of this breed. Change anything that\'s different.' : 'Leave blank anything you haven\'t decided.'}</p>
           <div class="gl-price-grid">
-            <div><h3>Boys</h3>${field('Price', moneyInput('expected_price_male'))}${field('Deposit', moneyInput('expected_deposit_male'))}${field('Extra for Full registration', moneyInput('full_reg_surcharge_male'))}</div>
-            <div><h3>Girls</h3>${field('Price', moneyInput('expected_price_female'))}${field('Deposit', moneyInput('expected_deposit_female'))}${field('Extra for Full registration', moneyInput('full_reg_surcharge_female'))}</div>
+            <div><h3>Boys</h3>${field('Price', moneyInput('expected_price_male'))}${field('Deposit', moneyInput('expected_deposit_male'))}${field('Extra for Full registration', moneyInput('full_reg_surcharge_male'))}${field('Extra deposit for Full', moneyInput('full_reg_deposit_surcharge_male'))}</div>
+            <div><h3>Girls</h3>${field('Price', moneyInput('expected_price_female'))}${field('Deposit', moneyInput('expected_deposit_female'))}${field('Extra for Full registration', moneyInput('full_reg_surcharge_female'))}${field('Extra deposit for Full', moneyInput('full_reg_deposit_surcharge_female'))}</div>
           </div>
           ${available.length ? `<div class="gl-preview"><p class="gl-q">How families will see the available puppies:</p><ul id="gl-price-preview">${previewItems(available, p)}</ul></div>` : ''}`,
         wire: (root) => {

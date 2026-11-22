@@ -25,7 +25,7 @@ import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { contractRepo } from '../data/contractRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
-import { priceForRegistrationChange } from '../data/saleDefaults.js';
+import { priceForRegistrationChange, depositForRegistrationChange } from '../data/saleDefaults.js';
 import { askRegistrationPrice } from './salePrompts.js';
 import { rankForms, formTypeGroups, splitName, isFirmaForm } from '../data/contractForms.js';
 import { loadContractForms, openContractForSale, gatherContractFacts, buildSignatureLink, markContractSent, contractForForm, saleAddOns, logPickup } from '../data/contractSend.js';
@@ -175,6 +175,9 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         if (!litter) return;
         const price = await askRegistrationPrice(priceForRegistrationChange(dog, litter, priceEl.value, was, reg), was, reg);
         if (price != null) { priceEl.value = price; suggest(); netLine(); }
+        // The deposit follows the Full deposit surcharge while it's still the expected one.
+        const deposit = depositForRegistrationChange(dog, litter, { ...sale, deposit_amount: $('#ps-deposit').value }, was, reg);
+        if (deposit != null) { $('#ps-deposit').value = deposit; suggest(); netLine(); }
       });
       priceEl.addEventListener('input', () => { suggest(); netLine(); });
       $('#ps-deposit').addEventListener('input', () => { suggest(); netLine(); });

@@ -77,7 +77,7 @@ import {
 } from './waitlistActions.js';
 import { pendingExtraRequests } from './familyExtras.js';
 import { pendingPickupRequests, requestText as pickupRequestText } from './familyPickup.js';
-import { offerSpecs, isHeldEmail, retryEmail, dropEmail } from './waitlistOutbox.js';
+import { offerSpecs, closedTurnExtra, isHeldEmail, retryEmail, dropEmail } from './waitlistOutbox.js';
 import { outcomeReport } from './waitlistReview.js';
 import { contractRepo } from './contractRepo.js';
 import { ourStudPairingIds, studParents, pickDue, serviceDate, boardingEndedUpdate } from './studRules.js';
@@ -1303,7 +1303,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
           }) });
           // `emails`: who to offer an email (Today shows the preview; W2 step 6).
           return { title: 'Recorded', message: lines.join('\n\n'), emails: [
-            { entryId: e.id, kind: 'deadline_passed', extra: { litterIds: t.offers.map((x) => x.litter_id), respondBy: t.respond_by_date, respondByTime: t.respond_by_time || null } },
+            { entryId: e.id, kind: 'deadline_passed', extra: { litterIds: t.offers.map((x) => x.litter_id), respondBy: t.respond_by_date, respondByTime: t.respond_by_time || null, ...closedTurnExtra(o, res) } },
             ...offerSpecs(res)
           ] };
         }

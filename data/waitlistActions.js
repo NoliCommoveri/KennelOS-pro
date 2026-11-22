@@ -29,7 +29,7 @@
 // by the deadline = no response: the Sale is cancelled and the pup is free again.
 import { db, dataTables } from './db.js';
 import { kennelRepo } from './kennelRepo.js';
-import { creditsOf, feeCharge, allocateCredits, creditsWithCarried, carriedCredit, carriedCreditsOf } from './receivedCredits.js';
+import { creditsOf, feeCharge, allocateCredits, creditsWithCarried, carriedCredit, carriedCreditsOf, newCredit } from './receivedCredits.js';
 import { getSaleStatement, paidBesidesCredits, paidOnSaleByPart, getSaleFeeCredit } from './incomeView.js';
 import { contactRepo } from './contactRepo.js';
 import { waitlistEntryRepo, syncContactWaitlistStatus } from './waitlistEntryRepo.js';
@@ -57,7 +57,7 @@ import {
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
   splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit,
   turnIsEmpty, emptiedTurns, turnRespondBy, turnDeadline, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
-  FAMILY_DETAIL_KEYS
+  FAMILY_DETAIL_KEYS, isHeldPick
 } from './waitlistRules.js';
 import { contactFromApplication, saleKennelId } from './waitlistFamilyRules.js';
 
@@ -912,6 +912,16 @@ async function releasePick(offer, { date, why, strict = true }) {
     status: 'cancelled',
     notes: appendNote(sale.notes, `Cancelled ${date}: the waitlist pick lapsed (${why}).`)
   });
+  if (isHeldPick(offer)) await unreserveHeldPup(sale.dog_id, sale.id);
+}
+
+// A held pick's pup is shown reserved (Placed) while it's held. When the pick lapses,
+// it's Available again, if still Placed and no other live sale holds it.
+async function unreserveHeldPup(dogId, saleId) {
+  const dog = dogId ? await dogRepo.getById(dogId) : null;
+  if (!dog || dog.is_archived || dog.disposition !== 'placed') return;
+  const others = (await saleRepo.getByDog(dog.id)).filter((x) => x.id !== saleId && !x.is_archived && !RELEASED_SALE_STATUSES.includes(x.status));
+  if (!others.length) await dogRepo.update(dog.id, { disposition: 'available' });
 }
 
 async function loadOffer(offerId) {
@@ -1011,7 +1021,7 @@ export const changePick = atomic(async function changePick(offerId, { chosenDogI
   if ((sale.price ?? null) === was.price) changes.price = now.price;
   if (sale.status === 'deposit_pending' && (sale.deposit_amount ?? null) === was.deposit_amount) changes.deposit_amount = now.deposit_amount;
   const savedSale = await saleRepo.update(sale.id, changes);
-  if (accepted) {
+  if (accepted || isHeldPick(offer)) {
     await dogRepo.update(dog.id, { disposition: 'placed' });
     if (oldDog) await dogRepo.update(oldDog.id, { disposition: 'available' });
   }
@@ -1020,6 +1030,75 @@ export const changePick = atomic(async function changePick(offerId, { chosenDogI
     notes: appendNote(offer.notes, `Pick switched from ${oldDog ? oldDog.call_name : 'another pup'} to ${dog.call_name} on ${date}.`)
   });
   return { offer: saved, sale: savedSale };
+});
+
+// Hold their pick until a date and time (owner, 2026-11-22): the family picked and
+// part of the deposit (or none) is in. Their turn ends so the next family gets a
+// normal turn now, while this pick stays open for its deposit until `until` /
+// `untilTime` (its respond-by, so the deposit request, reminders, the deadline and
+// the sale's deposit due all read it). The pup is shown reserved (Placed) and the
+// family "Pup selected" on the public list; on her side the sale stays Deposit
+// Pending. Deposit received places them as usual; No deposit (by her, or at the
+// deadline) lets the pick go and counts as a pass by her rules; Void ends it with no
+// pass. The other litters of their turn close (voided, never a pass). Returns
+// recordOutcome's shape: `next` / `waiting` is the next family's turn.
+// `received` (optional): money they've sent toward it now, saved as a credit for funds
+// received (toward the deposit, then the rest of the price and extras) on `receivedDate`.
+export const holdPick = atomic(async function holdPick(offerId, { date, until, untilTime = null, received = null, receivedDate = null } = {}) {
+  const offer = await loadOpenOffer(offerId);
+  date ??= await kennelDay(offer.kennel_id);
+  if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
+  if (isHeldPick(offer)) throw new Error('Their pick is already held. Change the date on it instead.');
+  if (!until || !/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error('Enter the date the deposit is due by.');
+  if (untilTime && !isTimeOfDay(untilTime)) throw new Error('Enter a time like 18:00.');
+  if (until < date) throw new Error('The date the deposit is due by can\'t be in the past.');
+  const sale = await heldSale(offer);
+  if (!sale || sale.is_archived || sale.status !== 'deposit_pending') throw new Error('Their pick has no sale waiting on its deposit. Open the sale and fix it first.');
+  const result = { offer: null, sale, removed: false, passes: null, next: null, voided: [], offered: [], waiting: [] };
+  if (received !== null && received !== undefined && String(received).trim() !== '' && Number(received) !== 0) {
+    const entry = await load(offer.entry_id);
+    const credit = newCredit({ amount: received, date: receivedDate || date, note: 'Part of the deposit, with the pup held', applies_to: ['deposit', 'price', 'extras'] });
+    await waitlistEntryRepo.update(entry.id, withCarry(entry, credit));
+    result.credit = credit;
+  }
+  for (const o of await openTurnRows(offer)) {
+    if (o.id === offer.id) continue;
+    await waitlistOfferRepo.update(o.id, { outcome: 'voided', outcome_date: date, counts_as_pass: false,
+      notes: appendNote(o.notes, `Closed ${date}: they picked a pup in another litter, held for their deposit. Not a pass.`) });
+  }
+  const when = `${until}${untilTime ? ` ${untilTime}` : ''}`;
+  result.offer = await waitlistOfferRepo.update(offer.id, {
+    held_date: date, ...dueFields({ date: until, time: untilTime }),
+    notes: appendNote(offer.notes, `Pick held on ${date} until ${when} for the deposit; their turn ended so the next family could be offered.`)
+  });
+  await dogRepo.update(offer.chosen_dog_id, { disposition: 'placed' });
+  return finishTurn(result, offer.kennel_id, date, 'accepted');
+});
+
+// Change a held pick's deadline (more time, or less). → the offer.
+export const changeHoldDate = atomic(async function changeHoldDate(offerId, { until, untilTime = null } = {}) {
+  const offer = await loadOpenOffer(offerId);
+  if (!isHeldPick(offer)) throw new Error('This pick isn\'t held.');
+  if (!until || !/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error('Enter the date the deposit is due by.');
+  if (untilTime && !isTimeOfDay(untilTime)) throw new Error('Enter a time like 18:00.');
+  return waitlistOfferRepo.update(offer.id, { ...dueFields({ date: until, time: untilTime }),
+    notes: appendNote(offer.notes, `Hold moved to ${until}${untilTime ? ` ${untilTime}` : ''}.`) });
+});
+
+// Don't count this pass (owner, 2026-11-22): a situational free pass. The pass stops
+// counting toward their limit; nothing else changes (the turn stays closed, nobody's
+// turn or place moves). A family already removed for their passes is brought back
+// with Undo removal instead (that forgives their last pass). → the offer.
+export const forgivePass = atomic(async function forgivePass(offerId, { today } = {}) {
+  const offer = await loadOffer(offerId);
+  if (offer.counts_as_pass !== true) throw new Error('That isn\'t counted as a pass.');
+  const entry = await load(offer.entry_id);
+  if (entry.status === 'removed' && entry.removed_reason === 'second_pass') {
+    throw new Error('They were removed for their passes. Use Undo removal on their page: it brings them back and doesn\'t count their last pass.');
+  }
+  today ??= await kennelDay(offer.kennel_id);
+  return waitlistOfferRepo.update(offer.id, { counts_as_pass: false,
+    notes: appendNote(offer.notes, `Pass not counted: you gave them this one on ${today}.`) });
 });
 
 // The deposit arrived for a picked pup: the Sale moves to deposit paid, the pup is

@@ -277,9 +277,8 @@ export async function buildProspectiveBundle(contact, { kennelId = null } = {}) 
         // the registration rides along so a surcharged price explains itself.
         price: !showPrice ? null : nonEmpty(expectedPricing(d, l).price),
         registration: showPrice ? nonEmpty(d.intended_registration) : null,
-        deposit: !showDeposit ? null
-          : d.sex === 'male' ? nonEmpty(l.expected_deposit_male)
-            : d.sex === 'female' ? nonEmpty(l.expected_deposit_female) : null
+        // By sex, plus the Full deposit surcharge for a pup intended Full.
+        deposit: !showDeposit || !['male', 'female'].includes(d.sex) ? null : nonEmpty(expectedPricing(d, l).deposit_amount)
       }));
     litters.push({
       nickname: l.nickname || '',

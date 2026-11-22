@@ -11,6 +11,8 @@ import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
+import { litterRepo } from '../data/litterRepo.js';
+import { picksStanding } from '../data/waitlistStanding.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { waitlistConfig, entryName, publicList, publicListText, publicWantsMore, kennelBreeds, placeHidden, publicSelected, publicSourceName, PUBLIC_INTRO_DEFAULT, PUBLIC_INTRO_MAX } from '../data/waitlistRules.js';
 import { editionFlags } from '../data/editionConfig.js';
@@ -74,13 +76,14 @@ function mountIntro(kennel) {
 
 // The public list as text (Spec §15.3), the same families and fields as online.
 async function renderText(kennel) {
-  const [entries, offers, programs, contacts, dogs, sales] = await Promise.all([
+  const [entries, offers, programs, contacts, dogs, sales, litters] = await Promise.all([
     waitlistEntryRepo.getByKennel(kennel.id),
     waitlistOfferRepo.getByKennel(kennel.id),
     waitlistProgramRepo.getMapForKennel(kennel.id),
     contactRepo.getAll({ includeArchived: true }),
     dogRepo.getAll({ includeArchived: true }),
-    saleRepo.getAll({ includeArchived: true })
+    saleRepo.getAll({ includeArchived: true }),
+    litterRepo.getAll()
   ]);
   const today = todayYMD();
   const config = waitlistConfig(kennel);
@@ -88,14 +91,16 @@ async function renderText(kennel) {
   const dogsById = new Map(dogs.map((d) => [d.id, d]));
   const breeds = kennelBreeds(kennel, dogs);
   const rows = publicList(entries, kennel.id, programs, {
-    today, config, nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), sales, dogs: dogsById,
+    today, config, nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), sales, dogs: dogsById, offers,
+    // Same as online: where they stand on the picks open now (Passed, No response…).
+    standing: (e) => picksStanding(e, { offers, litters, pups: dogs, sales, today, config }),
     // Same as online: what else they narrowed, after the sex.
     wantsMore: (e) => publicWantsMore(e, { config, breeds, dogsById }),
     // Same as online: the family holding a turn shows as "Currently deciding".
     deciding: (e) => Boolean(placeHidden(e, offers))
   });
   // Same as online: a family with a pup selected keeps its number ("✓ #3 … Pup selected").
-  const selected = publicSelected(entries, kennel.id, programs, { config, nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), sales, dogs: dogsById });
+  const selected = publicSelected(entries, kennel.id, programs, { config, nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), sales, dogs: dogsById, offers });
   const text = publicListText(rows, { kennelName: kennel.kennel_name, today, fmtDate, selected });
   els.text.innerHTML = `
     <div class="row-between" style="gap:8px;flex-wrap:wrap;">

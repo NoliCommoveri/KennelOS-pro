@@ -65,6 +65,8 @@ const litterLabel = (l, dogsById) => l.nickname || `${dogsById.get(l.dam_id)?.ca
 //   respondBy    YYYY-MM-DD (an offer; a closed turn)
 //   respondByTime 'HH:MM' with it, when the deadline has a time (Waitlist Timers plan)
 //   request      { field, request } (a decision on their request)
+//   pup          the pup they picked, by name (the deposit reminder)
+//   picked, pass a closed turn: whether they'd picked, and its pass ({ counted, used, max, removed })
 export async function draftFor(entryId, kind, extra = {}) {
   if (!EMAIL_KINDS.includes(kind)) throw new Error(`Unknown email "${kind}".`);
   const entry = await waitlistEntryRepo.getById(entryId);
@@ -87,6 +89,9 @@ export async function draftFor(entryId, kind, extra = {}) {
   if (extra.respondBy) facts.respondBy = extra.respondBy;
   if (extra.respondBy && extra.respondByTime) facts.respondByTime = extra.respondByTime;
   if (extra.request) facts.request = requestPhrase(extra.request.field, extra.request.request);
+  if (extra.pup) facts.pup = String(extra.pup);
+  if (extra.picked) facts.picked = true;
+  if (extra.pass) facts.pass = extra.pass;
   // Transport options (Family Requests plan §5.1): their latest address's miles, and
   // her Transport accounts shared with families.
   if (kind === 'transport_options') {
@@ -116,6 +121,13 @@ export async function draftsFor(specs) {
 
 // The emails a turn change calls for: an offer to every family a turn went to
 // ({ next, offered } as waitlistActions returns them).
+// The facts a closed turn's email ([Missed], [Pass]) takes: whether they'd picked (the
+// row as it was before it closed) and recordOutcome's passes, with whether they were removed.
+export const closedTurnExtra = (offer, res) => ({
+  picked: Boolean(offer?.chosen_dog_id),
+  ...(res?.passes ? { pass: { counted: Boolean(res.passes.counted), used: res.passes.used, max: res.passes.max, removed: Boolean(res.removed) } } : {})
+});
+
 export function offerSpecs(res) {
   return [res?.next, ...(res?.offered || [])].filter(Boolean).map((t) => ({
     entryId: t.entry_id, kind: 'offer', extra: { litterIds: t.litter_ids || [t.litter_id], respondBy: t.respond_by_date, ...(t.respond_by_time ? { respondByTime: t.respond_by_time } : {}) }

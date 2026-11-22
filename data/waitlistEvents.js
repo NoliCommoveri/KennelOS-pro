@@ -36,7 +36,7 @@
 import { familySale } from './familyExtras.js';
 import { carriedCreditsOf } from './receivedCredits.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
-import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, PREF_FIELD_LABEL, prefValueText, turnIdOf, turnSpent, passReasonOf, sideSaleOf, changePhase, freeChanges } from './waitlistRules.js';
+import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, PREF_FIELD_LABEL, prefValueText, turnIdOf, turnSpent, passReasonOf, sideSaleOf, changePhase, freeChanges, isHeldPick } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
 import { backOutReasons, BACK_OUT_OTHER } from './backOut.js';
 
@@ -335,7 +335,8 @@ export function planServerEvent(event, ctx) {
   // A family buying a pup through a side sale is never offered a turn meanwhile
   // (Side Sale Spec §2): the server's queue was published before you recorded it.
   if (sideSaleOf(entry, sales)) return why(`you'd recorded a side sale to them (${pupName(sideSaleOf(entry, sales).dog_id)}, waiting on the deposit)`);
-  const open = kennelOffers.filter((o) => !o.is_archived && o.outcome === 'open');
+  // A pick held for its deposit isn't a turn (isHeldPick).
+  const open = kennelOffers.filter((o) => !o.is_archived && o.outcome === 'open' && !isHeldPick(o));
   if (open.length) return why('another turn is open on your records');
   const turnRows = [];
   for (const r of rows) {

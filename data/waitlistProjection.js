@@ -25,7 +25,7 @@ import {
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, isWaitlistLitter, isPicksOpen, isFamilyPageOnly, LISTEN_LIVE_LITTER,
-  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening, statusPopupTexts, changePhase, freeChanges
+  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening, statusPopupTexts, changePhase, freeChanges, isHeldPick, countsAsPass
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
@@ -33,6 +33,7 @@ import { isWebsiteAddress } from './websiteAddress.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE, waitlistPolicies } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
+import { picksStanding } from './waitlistStanding.js';
 import { sharedReferrals, sharedTransport } from './referralShare.js';
 import { feePay, withClientRef } from './waitlistFeePay.js';
 import { familySale, familyExtrasView, pupBirthDate, creditSale } from './familyExtras.js';
@@ -165,8 +166,11 @@ function litterPrices(litter, pups) {
     female: num(expectedPricing({ sex: 'female' }, litter, reg).price)
   }]));
   const deposit = { male: num(litter.expected_deposit_male), female: num(litter.expected_deposit_female) };
+  // With a Full deposit surcharge, the deposit for a pup planned (or offered) Full.
+  const full = { male: num(expectedPricing({ sex: 'male' }, litter, 'full').deposit_amount), female: num(expectedPricing({ sex: 'female' }, litter, 'full').deposit_amount) };
+  const fullDiffers = regs.includes('full') && (full.male !== deposit.male || full.female !== deposit.female);
   const any = Object.values(by).some((p) => p.male != null || p.female != null) || deposit.male != null || deposit.female != null;
-  return any ? { by_registration: by, deposit } : null;
+  return any ? { by_registration: by, deposit, ...(fullDiffers ? { deposit_full: full } : {}) } : null;
 }
 
 // One family's status page (Plan §5). A family still in the pipeline gets the
@@ -252,7 +256,9 @@ function entryView(entry, ctx) {
       sire_ids: [...(entry.listen_sire_ids || [])],
       dam_ids: [...(entry.listen_dam_ids || [])]
     },
-    passes: { used: passesUsed(entry, ctx.offers), max: Number(ctx.config.max_passes) },
+    // `no_response`: whether a turn closed with no response or no deposit counts as a
+    // pass for them (her rule and their program's), for the server's "turn ended" email.
+    passes: { used: passesUsed(entry, ctx.offers), max: Number(ctx.config.max_passes), no_response: countsAsPass('no_response', { config: ctx.config, program }) },
     requests: requestsView(entry, ctx.today),
     // Which of their changes apply without her OK right now (Free Changes plan §4),
     // and the phase that decides it ('before' / 'after' pups are born). Her device
@@ -319,6 +325,9 @@ function entryView(entry, ctx) {
         picked_dog_id: orNull(o.chosen_dog_id),
         // Server only (never shown): a side sale, not a turn (Side Sale Spec §6).
         ...(o.direct ? { direct: true } : {}),
+        // Server only: a pick held for its deposit after their turn ended (isHeldPick).
+        // Its deadline closes it as on a turn, but it never blocks the next turn.
+        ...(isHeldPick(o) ? { held: true } : {}),
         // Sending the deposit (their turn card, once they pick): her payment
         // instructions (already on their page for the fee), and the deposit on the
         // sale their pick made, else her listed deposit for that pup.
@@ -536,7 +545,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
         breed: breedOf(dogsById, litter.dam_id, litter.sire_id), sire: parent(litter.sire_id), dam: parent(litter.dam_id)
       });
     }
-    const open = kennelOffers.find((o) => o.litter_id === litter.id && o.outcome === 'open') || null;
+    const open = kennelOffers.find((o) => o.litter_id === litter.id && o.outcome === 'open' && !isHeldPick(o)) || null;
     litterViews[litter.id] = {
       label: litterLabel(litter, dogsById),
       // What a family's Available Puppies card shows (decided 2026-10-08): her
@@ -826,13 +835,14 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
     // the page is served (publicList, familyPages.listView).
     public_list: publicList(live, kennel.id, programsById, {
-      today, nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), config, sales, dogs: dogsById,
+      today, nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), config, sales, dogs: dogsById, offers: kennelOffers,
+      standing: (e) => picksStanding(e, { offers: kennelOffers, litters, pups: dogs, sales, today, config }),
       wantsMore: (e) => publicWantsMore(e, { config, breeds: kennelBreeds(kennel, dogs), dogsById })
     }),
     // Families with a pup selected (E1), at the numbers they hold: the public list
     // has gaps there. Names as public_list's (private names masked).
     public_selected: publicSelected(live, kennel.id, programsById, {
-      nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), config, sales, dogs: dogsById
+      nameOf: (e) => publicSourceName(e, contactsById.get(e.contact_id)), config, sales, dogs: dogsById, offers: kennelOffers
     }),
     entries: entryViews,
     litters: litterViews,
