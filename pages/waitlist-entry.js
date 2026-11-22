@@ -56,8 +56,8 @@ import {
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
-  sideSaleOf, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
-  familyDetails, contactForEmail, deadlineLabel, isHeldPick } from '../data/waitlistRules.js';
+  sideSaleOf, sideSaleInOrder, boughtOutOfOrder, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
+  familyDetails, contactForEmail, deadlineLabel, isHeldPick, turnDeadline } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import { canShareFiles, shareOrDownload, shareFailText } from '../assets/pdfShare.js';
 import {
@@ -193,6 +193,17 @@ function lostSale(e) {
   return ctx.sales.find((x) => ids.has(x.id) && lostSaleFamily(x, [e], offers)) || null;
 }
 
+// Their side sale while it hasn't ended: one waiting on its deposit, or the one
+// they're placed with. Null when there's none. Its `side_in_order` decides how the
+// public list shows them (sideSaleInOrder).
+function liveSideSale(e) {
+  const pending = sideSaleOf(e, ctx.sales);
+  if (pending) return pending;
+  if (e.status !== 'placed') return null;
+  const sale = ctx.sales.find((x) => x.id === e.placed_sale_id);
+  return sale && sale.side_entry_id === e.id && !sale.is_archived && !RELEASED_SALE_STATUSES.includes(sale.status) ? sale : null;
+}
+
 // The sale "End the sale…" ends (decided 2026-10-11): the one they're placed with,
 // or the one holding the pup they picked in an open turn, while it hasn't ended
 // already. Null when there's none. { sale, placed }.
@@ -290,7 +301,10 @@ function statusLines(e) {
     // A family page only (E3): a status page, never a place.
     if (isFamilyPageOnly(e)) lines.push('<span class="badge badge-blue">Family page only</span> <span class="faint">Their status page has their pickup times, extras, the puppy portal link and your messages. They aren\'t on the list: no number, and they show on no list or report.</span>');
     // Pup selected (E1): they keep their place and number until the pup goes home.
-    if (holdsPlace(e, numbering())) {
+    if (holdsPlace(e, numbering()) && boughtOutOfOrder(e, ctx.sales)) {
+      const places = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering());
+      lines.push(`<span class="badge badge-green">Pup selected</span> <strong>#${esc(places.get(e.id))}</strong> of ${esc(places.size)} on the list. <span class="faint">A side sale out of order: the public list shows them as a plain row with their answers, so nobody can tell. If it was an early sale with nobody waiting ahead of them, use ⋯ › Show as Pup selected on the public list.</span>`);
+    } else if (holdsPlace(e, numbering())) {
       const places = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering());
       lines.push(`<span class="badge badge-green">Pup selected</span> <strong>#${esc(places.get(e.id))}</strong> of ${esc(places.size)} on the list. <span class="faint">They keep this number until ${placedPup ? esc(dogName(placedPup)) : 'their pup'} goes home (the sale marked Delivered), so nobody behind them moves back if a pup is lost.</span>`);
     }
@@ -331,6 +345,22 @@ function otherRecordsLine(e) {
 // What a message to this family would say now (Message via…), for her to edit: their turn (or the pup
 // they're holding), a fee that's due, or where they are on the list — plus their
 // status page link when the list is online.
+// The payments on their sale she can remind them of (owner, 2026-11-22): each due date
+// on its schedule still owed, or the final payment where it has none (the sale's
+// balance due date, else at pickup). Not while the deposit is still owed (the deposit
+// reminder covers that) or once the sale has ended. → [{ due, name, when, pup }]
+function paymentReminders() {
+  const st = ctx.payments?.statement;
+  if (!st || st.ended || st.deposit?.owed > 0) return [];
+  const pup = dogName(ctx.payments.sale.dog_id);
+  return st.dueDates.filter((d) => d.owed > 0).map((d) => ({
+    due: d,
+    pup,
+    name: d.step.label ? String(d.step.label) : d.isFinal ? 'final payment' : 'payment',
+    when: d.date ? `by ${fmtDate(d.date)}` : d.step.due === 'at_pickup' ? 'at pickup' : 'on a date not set yet'
+  }));
+}
+
 function suggestedText(e) {
   const first = String(entryName(e, ctx.contact)).trim().split(/\s+/)[0] || 'there';
   const kennel = ctx.kennel.kennel_name;
@@ -345,6 +375,12 @@ function suggestedText(e) {
     }
     const names = open.map((o) => { const l = ctx.litters.find((x) => x.id === o.litter_id); return l ? litterLabel(l) : 'a litter'; }).join(', ');
     return `Hi ${first}, this is ${kennel}. Good news: it's your turn on our waitlist! You can pick a pup from ${names}. Please let us know your pick and send your deposit${by ? ` by ${fmtDate(by)}` : ''}, or tell us if you'd like to pass this time.${linkLine}`;
+  }
+  // Their next payment on the sale (a text is hers to send, so it can carry the amount).
+  const nextPay = paymentReminders()[0];
+  if (nextPay) {
+    const how = nextPay.due.isFinal && String(ctx.kennel.final_payment_methods || '').trim() ? `Final payment: ${String(ctx.kennel.final_payment_methods).trim()}` : ctx.config.payment_instructions;
+    return `Hi ${first}, this is ${kennel}. A friendly reminder that your ${nextPay.name} of ${fmtMoney(nextPay.due.owed)} for ${nextPay.pup} is due ${nextPay.when}.${how ? `\n\n${how}` : ''}${linkLine}`;
   }
   if (e.status === 'approved') {
     const fee = e.fee_amount != null ? fmtMoney(e.fee_amount) : '';
@@ -372,6 +408,12 @@ function emailChoices(e) {
   const open = ctx.offers.filter((o) => o.outcome === 'open' && !o.is_archived && !o.chosen_dog_id);
   if (open.length) {
     out.push({ kind: 'offer', label: 'It\'s your turn (send again)', extra: { litterIds: open.map((o) => o.litter_id), respondBy: turnDeadline(open).date, respondByTime: turnDeadline(open).time } });
+  }
+  // Each payment still owed on their sale (its schedule's, or the final payment), first
+  // after any deposit reminder.
+  for (const r of [...paymentReminders()].reverse()) {
+    out.unshift({ kind: 'payment_reminder', label: `Reminder: ${r.due.label} for ${r.pup} is due ${r.when}${r.due.status === 'not_received' ? ' (past due)' : ''}`,
+      extra: { pup: r.pup, payment: r.name, due: r.due.date || null, dueAtPickup: !r.due.date && r.due.step.due === 'at_pickup' } });
   }
   // A pick waiting on its deposit (on their turn, or held past it): its due date and time.
   for (const p of ctx.offers.filter((o) => isAwaitingDeposit(o) && !o.is_archived)) {
@@ -1206,6 +1248,21 @@ async function onUndoFee() {
   const e = ctx.entry;
   if (!(await confirmModal({ title: 'Mark the fee not received?', message: 'They go back to approved, waiting for their fee, and lose this place in line until it\'s received. If they were emailed that they\'re on the list, let them know.', confirmLabel: 'Fee not received', danger: true }))) return;
   await actions.undoFeeReceived(e.id);
+  await afterAction();
+}
+
+// How the public list shows a side sale (owner, 2026-11-22): in order, as a turn sale
+// ("Pup selected"); out of order, a plain row with their answers. Undoable.
+async function onSideSaleOrder() {
+  const sale = liveSideSale(ctx.entry);
+  if (!sale) return;
+  const name = entryName(ctx.entry, ctx.contact);
+  const on = !sideSaleInOrder(sale);
+  const ok = await confirmModal(on
+    ? { title: `Show ${name} as Pup selected?`, message: `For an early sale, not one out of order. The public list shows them as a turn sale: "✓ Pup selected" at their number${sale.status === 'deposit_pending' ? ', from now while the deposit is pending' : ''}, until ${dogName(sale.dog_id)} goes home. You can change this back.`, confirmLabel: 'Show as Pup selected' }
+    : { title: `Show ${name} as a plain row?`, message: 'The public list shows them at their number with their answers, as a family still waiting, so nobody can tell a pup was sold out of order. You can change this back.', confirmLabel: 'Show as a plain row' });
+  if (!ok) return;
+  await actions.setSideSaleInOrder(sale.id, on);
   await afterAction();
 }
 
@@ -2187,6 +2244,7 @@ async function renderHeaderActions() {
       <div class="action-menu-list" role="menu" hidden>
         ${reservationHref(e) ? `<a role="menuitem" href="${esc(reservationHref(e))}" title="A reservation agreement for this family, with their preferences picked">Reservation agreement…</a><hr>` : ''}
         ${link ? '<button type="button" role="menuitem" id="btn-newlink" title="Make a new link; the old one stops working">New status link…</button><hr>' : ''}
+        ${liveSideSale(e) && !isFamilyPageOnly(e) ? `<button type="button" role="menuitem" id="btn-sideorder" title="How the public list shows this side sale">${sideSaleInOrder(liveSideSale(e)) ? 'Show as a plain row on the public list…' : 'Show as Pup selected on the public list…'}</button><hr>` : ''}
         ${isLiveEntry(e) ? '<button type="button" role="menuitem" id="btn-samefamily" title="They applied twice: merge the two and delete one">Same family as another application…</button><hr>' : ''}
         <button type="button" role="menuitem" id="btn-archive">${e.is_archived ? 'Unarchive' : 'Archive'}</button>
         <button type="button" role="menuitem" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete…</button>
@@ -2195,6 +2253,7 @@ async function renderHeaderActions() {
   wireActionMenu(document.getElementById('entry-manage'));
   document.getElementById('btn-newlink')?.addEventListener('click', () => onNewLink().catch((err) => showError(err.message || String(err))));
   document.getElementById('btn-samefamily')?.addEventListener('click', () => onSameFamily().catch((err) => showError(err.message || String(err))));
+  document.getElementById('btn-sideorder')?.addEventListener('click', () => onSideSaleOrder().catch((err) => showError(err.message || String(err))));
   document.getElementById('btn-archive').onclick = async () => {
     const verb = e.is_archived ? 'Unarchive' : 'Archive';
     if (!(await confirmModal({ title: `${verb} this entry?`, message: e.is_archived ? '' : `Archived entries are hidden from the waitlist and drop off the list.${openOfferWarning()}`, confirmLabel: verb }))) return;
@@ -2336,7 +2395,7 @@ function sideSaleHtml(e) {
       <button class="btn btn-sm${send ? '' : ' btn-primary'}" data-side="deposit">Deposit received…</button>
       <button class="btn btn-sm" data-side="cancel">Cancel side sale…</button>
     </div>
-    <p class="field-hint" style="margin-bottom:0;">Outside the turn order: no turn moves on for it and it never counts as a pass. Their status page shows it like a pick on their turn.</p>
+    <p class="field-hint" style="margin-bottom:0;">Outside the turn order: no turn moves on for it and it never counts as a pass. Their status page shows it like a pick on their turn. ${sideSaleInOrder(sale) ? 'Nobody waiting was ahead of them, so the public list shows them as Pup selected, as for a turn sale.' : 'The public list shows them as a plain row with their answers, so nobody can tell it was out of order.'} <span class="faint">Change it in ⋯.</span></p>
   </section>`;
 }
 

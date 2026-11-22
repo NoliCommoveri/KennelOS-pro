@@ -92,6 +92,10 @@ export async function draftFor(entryId, kind, extra = {}) {
   if (extra.pup) facts.pup = String(extra.pup);
   if (extra.picked) facts.picked = true;
   if (extra.pass) facts.pass = extra.pass;
+  // A payment on their sale (payment_reminder): which one, and when it's due.
+  if (extra.payment) facts.payment = String(extra.payment);
+  if (extra.due) facts.due = extra.due;
+  if (extra.dueAtPickup) facts.dueAtPickup = true;
   // Transport options (Family Requests plan §5.1): their latest address's miles, and
   // her Transport accounts shared with families.
   if (kind === 'transport_options') {

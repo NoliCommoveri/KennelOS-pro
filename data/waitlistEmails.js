@@ -25,7 +25,10 @@ export const EMAIL_KINDS = Object.freeze([
   // Their deposit for a pup they picked (a turn pick or one held past the turn): she
   // sends it from Communicate, and the server sends it instead of offer_reminder once
   // they've picked.
-  'deposit_reminder'
+  'deposit_reminder',
+  // A payment on their sale's schedule, or the final payment where it has none: she
+  // sends it from Communicate (owner, 2026-11-22). Never sent by the server.
+  'payment_reminder'
 ]);
 
 // The templates her device publishes for the server (kennel.email_templates in the
@@ -49,7 +52,9 @@ export const EMAIL_PLACEHOLDERS = Object.freeze([
   { key: '[Pay by]', hint: '" by <date>" when the fee has a due date, else nothing' },
   { key: '[Request]', hint: 'what they asked for' },
   { key: '[Distance]', hint: '" You\'re about 340 miles from us." when they gave their address, else nothing' },
-  { key: '[Transport Options]', hint: 'your Transport accounts shared with families: name, link, notes' }
+  { key: '[Transport Options]', hint: 'your Transport accounts shared with families: name, link, notes' },
+  { key: '[Payment]', hint: 'which payment is due, like "final payment" or your name for it' },
+  { key: '[Due]', hint: 'when that payment is due, like "by December 4, 2026" or "at pickup"' }
 ]);
 
 // The emails she can reword, in the order the settings editor shows them.
@@ -70,6 +75,7 @@ export const EMAIL_TEMPLATE_KINDS = Object.freeze([
   { kind: 'transport_options', label: 'Transport options (getting their pup home)' },
   { kind: 'offer_reminder', label: 'Reminder: their turn ends soon (sent by KennelOS)' },
   { kind: 'deposit_reminder', label: 'Reminder: the deposit for their pick is due (sent by you or KennelOS)' },
+  { kind: 'payment_reminder', label: 'Reminder: a payment on their sale is due (sent by you)' },
   { kind: 'fee_reminder', label: 'Reminder: the fee is due soon (sent by KennelOS)' },
   { kind: 'ready_check', label: '"Ready now?" (sent by KennelOS)' }
 ]);
@@ -143,6 +149,10 @@ export const DEFAULT_EMAIL_TEMPLATES = Object.freeze({
     subject: 'Reminder: your deposit for [Pup] is due [Respond by]',
     body: 'Hi [Family],\n\nA reminder that your deposit for [Pup] is due by [Respond by]. We\'re holding [Pup] for you until then. The amount still due and how to pay are on your status page. If it isn\'t in by then, [Pup] goes back to being available.\n\nIf anything has changed, please let us know on your status page.\n\n[Kennel Name]'
   },
+  payment_reminder: {
+    subject: 'Reminder: your [Payment] for [Pup] is due [Due]',
+    body: 'Hi [Family],\n\nA reminder that your [Payment] for [Pup] is due [Due]. The amount still due and how to pay are on your status page.\n\nIf you have any questions, please send us a message from your status page.\n\n[Kennel Name]'
+  },
   fee_reminder: {
     subject: 'Your application fee for [Kennel Name] is due[Pay by]',
     body: 'Hi [Family],\n\nA reminder that your application fee is due[Pay by]. The amount and how to pay are on your status page. Your place in line is set by the day we receive it.\n\n[Kennel Name]'
@@ -205,9 +215,11 @@ export function passText(pass) {
     : `Per our policy, this counts as a pass${of}.`;
 }
 
-export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, respondByTime = null, position = null, payBy = null, request = '', distance = null, transport = [], pup = '', picked = false, pass = null } = {}) {
+export function placeholderValues({ kennelName = '', family = '', litters = [], respondBy = null, respondByTime = null, position = null, payBy = null, request = '', distance = null, transport = [], pup = '', picked = false, pass = null, payment = '', due = null, dueAtPickup = false } = {}) {
   return {
     pup: pup || 'your puppy',
+    payment: String(payment || '').trim() || 'payment',
+    due: due ? `by ${longDate(due)}` : dueAtPickup ? 'at pickup' : 'by the date on your status page',
     missed: missedText(picked),
     pass: passText(pass),
     'kennel name': kennelName || 'Our kennel',

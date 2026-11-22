@@ -232,6 +232,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // the sale): the waitlist family, the deposit's due date, whether it holds the
       // pup, and the disposition to put back on a cancel.
       'side_entry_id', 'side_deposit_due', 'side_holds_pup', 'side_prior_disposition',
+      // Whether the public list shows a side sale as a turn sale, Pup selected (owner,
+      // 2026-11-22): cloud with the other side-sale fields, so every device publishes the same.
+      'side_in_order',
       // When she sent its deposit request (Review sale & send), as an offer row keeps it.
       'side_request_sent_date',
       // Any sale's deposit due date (Unified Sale plan §4, U3; owner approved 2026-11-21:

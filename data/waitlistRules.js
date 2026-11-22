@@ -625,12 +625,29 @@ export function holdsPlace(entry, { sales, dogs } = {}) {
 // Bought out of order: placed by a side sale (a sale outside the turn order, linked to
 // their record by side_entry_id), not by a pick on their turn. On the public list
 // such a family keeps a plain row at their number, never "Pup selected", so other
-// families can't see a sale was made out of order (owner, 2026-11-21). `sales`: array
+// families can't see a sale was made out of order (owner, 2026-11-21). A side sale
+// marked in order (`side_in_order`, sideSaleInOrder) is treated as a turn sale: an
+// early sale with nobody waiting ahead of them (owner, 2026-11-22). `sales`: array
 // or Map by id.
 export function boughtOutOfOrder(entry, sales) {
   if (!entry || !entry.placed_sale_id) return false;
   const sale = saleLookup(sales)(entry.placed_sale_id);
-  return Boolean(sale && sale.side_entry_id === entry.id);
+  return Boolean(sale && sale.side_entry_id === entry.id && sale.side_in_order !== true);
+}
+
+// Is a side sale shown as a turn sale on the public list (`side_in_order`)? Set when
+// it's recorded with no waiting family ahead of them (sideSaleInOrderAt), and hers to
+// change either way on the family's page. Older sales without it: out of order.
+export const sideSaleInOrder = (sale) => Boolean(sale && sale.side_entry_id && sale.side_in_order === true);
+
+// Recording a side sale: is it in order? True when no family numbered ahead of them
+// is still waiting (on the list, not paused on `today`). Families with a pup selected
+// ahead don't count. `entries`: the kennel's records.
+export function sideSaleInOrderAt(entry, entries, { kennelId, programsById = new Map(), today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
+  const ranked = rankedList(entries, kennelId ?? entry.kennel_id, programsById);
+  const at = ranked.findIndex((e) => e.id === entry.id);
+  if (at < 0) return false;
+  return !ranked.slice(0, at).some((e) => !isPaused(e, today, config));
 }
 
 // The waitlist record a contact's "Waitlist page" opens (owner, 2026-11-15): one that
@@ -2050,7 +2067,9 @@ export const listedName = (entry, fullName) => (entry && entry.private_listing ?
 // Numbers come from numberedList (`sales` and `dogs` are required): a family with a
 // pup selected keeps its number and isn't a row here (its number is a gap, as a
 // paused family's is); publicSelected gives those rows. One placed by a side sale is
-// a plain row here instead, with its answers as they were (boughtOutOfOrder).
+// a plain row here instead, with its answers as they were (boughtOutOfOrder), unless
+// the side sale is marked in order: then, as a turn pick, Pup selected from the time
+// it's recorded (sideSaleInOrder).
 export const DECIDING_LABEL = 'Currently deciding';
 // The labels for where a family stands on the picks open now (waitlistStanding.js).
 export const PICKS_STANDING_LABEL = Object.freeze({ passed: 'Passed', no_response: 'No response', no_deposit: 'No deposit - expired', no_match: 'No matches' });
@@ -2060,7 +2079,7 @@ export function publicList(entries, kennelId, programsById = new Map(), { today,
   return numberedList(entries, kennelId, programsById, { sales, dogs })
     .map((e, i) => ({ entry: e, position: i + 1 }))
     // A family that bought out of order keeps a plain row (boughtOutOfOrder).
-    .filter(({ entry }) => (isOnList(entry) && !heldPickOf(offers, entry.id)) || boughtOutOfOrder(entry, sales))
+    .filter(({ entry }) => (isOnList(entry) && !heldPickOf(offers, entry.id) && !sideSaleInOrder(sideSaleOf(entry, sales))) || boughtOutOfOrder(entry, sales))
     .map(({ entry, position }) => ({ entry, position, paused: isOnList(entry) && isPaused(entry, today, config) }))
     .filter(({ paused }) => !paused || Boolean(config && config.public_show_paused))
     .map(({ entry, position, paused }) => ({
@@ -2080,7 +2099,7 @@ export const PUP_SELECTED_LABEL = 'Pup selected';
 export function publicSelected(entries, kennelId, programsById = new Map(), { nameOf = (e) => entryName(e, null), config = null, sales, dogs, offers = [] } = {}) {
   return numberedList(entries, kennelId, programsById, { sales, dogs })
     .map((e, i) => ({ entry: e, position: i + 1 }))
-    .filter(({ entry }) => (!isOnList(entry) && !boughtOutOfOrder(entry, sales)) || (isOnList(entry) && heldPickOf(offers, entry.id)))
+    .filter(({ entry }) => (!isOnList(entry) && !boughtOutOfOrder(entry, sales)) || (isOnList(entry) && (heldPickOf(offers, entry.id) || sideSaleInOrder(sideSaleOf(entry, sales)))))
     .map(({ entry, position }) => ({
       position,
       name: listedName(entry, nameOf(entry)),

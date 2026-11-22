@@ -17,6 +17,7 @@
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
+import { saleRepo } from '../data/saleRepo.js';
 import { ownKennels } from '../data/kennelScope.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { waitlistIsSetUp, waitlistConfig, feeForEntry, isFeeWaived, compareEntries, overallPositions, chosenOrderChanges } from '../data/waitlistRules.js';

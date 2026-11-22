@@ -55,7 +55,7 @@ import {
   respondByDate, respondBy, deadlineKey, isTimeOfDay, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
-  splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit,
+  splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit, sideSaleInOrderAt,
   turnIsEmpty, emptiedTurns, turnRespondBy, turnDeadline, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
   FAMILY_DETAIL_KEYS, isHeldPick
 } from './waitlistRules.js';
@@ -1194,7 +1194,9 @@ export const recordSideSale = atomic(async function recordSideSale(entryId, { do
     deposit_due_date: due,
     side_deposit_due: due,
     side_holds_pup: holds,
-    side_prior_disposition: prior
+    side_prior_disposition: prior,
+    // In order when nobody waiting is ahead of them: shown as a turn sale (Pup selected).
+    side_in_order: sideSaleInOrderAt(entry, c.entries, { kennelId: entry.kennel_id, programsById: c.programsById, today: date, config: c.config })
   });
   await addFamilyActivity(entry.id, [{
     id: `side-sale-${sale.id}`, kind: 'action',
@@ -1238,6 +1240,16 @@ export const confirmSideDeposit = atomic(async function confirmSideDeposit(saleI
   const result = { sale: saved, entry: placed, resolved, ended, next: null, waiting: [], auto_passed: [] };
   if (!released.voided.length && !ended.length && !resolved.some((r) => r.voided)) return result;
   return finishTurn(result, entry.kennel_id, date, released.voided.length ? 'accepted' : 'left');
+});
+
+// Mark a side sale in order or not (owner, 2026-11-22): in order, the public list
+// shows the family as a turn sale ("Pup selected"); not, a plain row with their
+// answers, so nobody can tell a pup was sold out of order. Any side sale not ended.
+export const setSideSaleInOrder = atomic(async function setSideSaleInOrder(saleId, on) {
+  const sale = await saleRepo.getById(saleId);
+  if (!sale || !sale.side_entry_id) throw new Error('That isn\'t a side sale.');
+  if (sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) throw new Error('That side sale was cancelled or archived.');
+  return saleRepo.update(sale.id, { side_in_order: Boolean(on) });
 });
 
 // Cancel a side sale (hers, or its deposit never came): the sale is cancelled and the
