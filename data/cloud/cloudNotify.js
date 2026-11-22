@@ -14,6 +14,8 @@ import * as api from './cloudApi.js';
 import { cloudBaseUrl } from './cloudConfig.js';
 import { sessionToken, currentAccount } from './cloudAuth.js';
 import { getCloudSyncState } from '../settings.js';
+import { kennelRepo } from '../kennelRepo.js';
+import { currentFormKey, newReadingCode, wrapReaderKeys } from '../waitlistCrypto.js';
 
 export const NOTIFY_CACHE = 'kennelos-notify';
 const CONFIG_KEY = 'config';
@@ -204,3 +206,28 @@ export function takeInHereText(where) {
 export const startDigest = ({ email, frequency, kinds }) => api.startDigest(token(), { email, frequency, kinds, tz: timeZone() });
 export const verifyDigest = (code) => api.verifyDigest(token(), code);
 export const stopDigest = () => api.stopDigest(token());
+
+// --- The reading link (Assisted Setup plan §8; cloud/src/reader.js) ------------------
+// Offered once support switched on her emails for each application and message. Every
+// form key her kennels hold is locked here with a new reading code; the server keeps
+// only the locked copy. → { settings, code, unlockUrl } — shown once: the code isn't
+// kept anywhere, so a lost one means making a new link.
+const formKeysHere = async () => (await kennelRepo.getAll({ includeArchived: true })).flatMap((k) => (Array.isArray(k.waitlist_form_keys) ? k.waitlist_form_keys : []));
+
+export async function makeReadingLink() {
+  const keys = await formKeysHere();
+  if (!keys.length) throw new Error('This device has no waitlist form key yet: take applications online first (Waitlist → Online).');
+  const code = newReadingCode();
+  const settings = await api.putNotifyReader(token(), await wrapReaderKeys(keys, code));
+  return { settings, code, unlockUrl: `${settings.reader.url}#code=${code}` };
+}
+
+export const stopReadingLink = () => api.deleteNotifyReader(token());
+
+// Whether the reading link still opens what's sent now: false once a kennel's current
+// form key (rotated, or a kennel newly online) isn't in it.
+export async function readingLinkCurrent(reader) {
+  if (!reader?.on) return true;
+  const have = new Set(reader.keyIds || []);
+  return (await kennelRepo.getAll()).map((k) => currentFormKey(k.waitlist_form_keys)).filter(Boolean).every((k) => have.has(k.id));
+}

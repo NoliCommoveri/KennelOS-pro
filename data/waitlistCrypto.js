@@ -75,3 +75,43 @@ export async function openSealed(keys, sealed) {
     throw new SealError('This message could not be opened (damaged, or not for this key).');
   }
 }
+
+// --- The reading link (Assisted Setup plan §8; cloud/src/reader.js) ----------------
+// Her form keys, locked with a reading code so the breeder can open applications from
+// her emails before she uses KennelOS. The code never leaves this browser except in the
+// unlock link support gives her; the server keeps only the locked copy. Opened by
+// cloud/public/family/open.js (kept in step; tests/readerCrypto.test.js).
+//
+// Code: 20 characters from Crockford's base32 (100 bits), shown in groups of four.
+// Lock: PBKDF2-SHA-256 (READER_ITERATIONS) → AES-GCM-256, `kennelos-reader/v1` as
+// additional data.
+export const READER_ITERATIONS = 310000;
+const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const READER_AAD = enc.encode('kennelos-reader/v1');
+
+export function newReadingCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const chars = [...bytes].map((b) => CODE_ALPHABET[b & 31]).join('');
+  return chars.match(/.{4}/g).join('-');
+}
+
+// What she typed, as the code: case, spaces and dashes don't matter, nor O/0 or I/L/1.
+export function normalizeReadingCode(raw) {
+  return String(raw ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+}
+
+async function readerAesKey(code, salt, iterations, usage) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(normalizeReadingCode(code)), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, { name: 'AES-GCM', length: 256 }, false, [usage]);
+}
+
+// `keys`: form keys as the kennel holds them. → { wrap, keyIds } for POST /notify/reader.
+export async function wrapReaderKeys(keys, code, { iterations = READER_ITERATIONS } = {}) {
+  const list = (Array.isArray(keys) ? keys : []).filter((k) => k && k.id && k.private_key).map((k) => ({ id: k.id, private_key: k.private_key }));
+  if (!list.length) throw new SealError('No form key to lock.');
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const aes = await readerAesKey(code, salt, iterations, 'encrypt');
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: READER_AAD }, aes, enc.encode(JSON.stringify({ keys: list })));
+  return { wrap: { v: 1, iter: iterations, salt: toB64(salt), iv: toB64(iv), ct: toB64(ct) }, keyIds: list.map((k) => k.id) };
+}

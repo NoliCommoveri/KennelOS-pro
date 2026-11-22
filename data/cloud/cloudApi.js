@@ -380,6 +380,10 @@ export const startDigest = (token, { email, frequency, kinds, tz }) =>
   getJson('/notify/digest', { method: 'POST', token, json: { email, frequency, kinds, tz } });
 export const verifyDigest = (token, code) => getJson('/notify/digest/verify', { method: 'POST', token, json: { code } });
 export const stopDigest = (token) => getJson('/notify/digest', { method: 'DELETE', token });
+// The reading link (Assisted Setup plan §8): her form keys, locked here with a code the
+// server never sees.
+export const putNotifyReader = (token, { wrap, keyIds }) => getJson('/notify/reader', { method: 'POST', token, json: { wrap, key_ids: keyIds } });
+export const deleteNotifyReader = (token) => getJson('/notify/reader', { method: 'DELETE', token });
 
 export const getNotices = () => getJson('/notice').then((b) => b.notices || []);
 

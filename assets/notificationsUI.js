@@ -5,7 +5,8 @@
 // data/cloud/cloudNotify.js.
 import {
   NOTIFY_KIND_LABELS, pushSupport, getSettings, saveSettings, enableAlertsHere, disableAlertsHere,
-  sendTestAlert, startDigest, verifyDigest, stopDigest, takeInHere, takeInHereText, alertsLiveHere
+  sendTestAlert, startDigest, verifyDigest, stopDigest, takeInHere, takeInHereText, alertsLiveHere,
+  makeReadingLink, stopReadingLink, readingLinkCurrent
 } from '../data/cloud/cloudNotify.js';
 import { currentAccount } from '../data/cloud/cloudAuth.js';
 import { esc, confirmModal } from './ui.js';
@@ -20,6 +21,7 @@ const errText = (e) => (e && e.code === 'pro_required' ? 'Alerts and the digest 
   : e && e.code === 'bad_email' ? 'That isn\'t an email address.'
     : e && (e.code === 'invalid_code' || e.code === 'too_many_attempts') ? 'That code didn\'t work. Ask for a new one.'
       : e && e.code === 'email_unavailable' ? 'Email isn\'t available right now.'
+        : e && e.code === 'reader_not_allowed' ? 'Reading links come with emails KennelOS support turns on for you.'
         : (e && e.message) || String(e));
 
 const kindBoxes = (name, chosen) => NOTIFY_KIND_LABELS.map((k) =>
@@ -33,6 +35,8 @@ export function mountNotificationsCard(el) {
   let pendingCode = false;
   let whereText = ''; // review K12-4: alerts on a device that doesn't take family events in
   let liveHere = 'ok'; // review K12-7: the server says on; can this browser show them?
+  let made = null; // a reading link just made: its unlock link and code, shown once
+  let readerCurrent = true;
 
   const say = (text) => { note = text; render(); };
   const run = async (fn) => {
@@ -52,9 +56,13 @@ export function mountNotificationsCard(el) {
       return;
     }
     // Support's helper session (review K12-8): her alerts and digest are hers to set.
+    // The reading link is the exception (Assisted Setup plan §8): during setup this is
+    // the device that holds her form keys.
     if (account.role === 'helper') {
       el.innerHTML = `<h2 style="margin-top:0;">Notifications</h2>
-        <p class="muted">Alerts and the email digest are the breeder's own choice: she turns them on from her device. This device never gets her families' alerts.</p>`;
+        <p class="muted">Alerts and the email digest are the breeder's own choice: she turns them on from her device. This device never gets her families' alerts.</p>
+        ${readerHtml(state.reader, state.digest)}`;
+      wire();
       return;
     }
     const { push, digest } = state;
@@ -79,7 +87,7 @@ export function mountNotificationsCard(el) {
     const digestBody = !digest.available
       ? '<p class="muted">The email digest isn\'t available right now.</p>'
       : digest.email
-        ? `<p>Sent to <strong>${esc(digest.email)}</strong>, ${esc(digest.frequency === 'weekly' ? 'weekly (Mondays)' : 'daily')}, after 8 am, only when something happened.</p>
+        ? `<p>Sent to <strong>${esc(digest.email)}</strong>, ${esc(digest.frequency === 'each' ? 'one email as each thing happens' : `${digest.frequency === 'weekly' ? 'weekly (Mondays)' : 'daily'}, after 8 am, only when something happened`)}.</p>
            <div class="form-actions"><button class="btn btn-sm" data-act="digest-off">Turn off and delete my address</button></div>`
         : `<div class="field"><label for="nt-email">Send it to</label><input id="nt-email" type="email" autocomplete="email" value="${esc(digest.pendingEmail || account.email || '')}"></div>
            <p class="field-hint">To email you, KennelOS keeps this address on its server. It's used only for your digest, never shared, and deleted when you turn the digest off. Another address than your sign-in one gets a code first.</p>
@@ -98,10 +106,30 @@ export function mountNotificationsCard(el) {
       ${digestBody}
       ${digest.available ? `<div class="field"><label for="nt-freq">How often</label><select id="nt-freq">
           <option value="daily"${digest.frequency !== 'weekly' ? ' selected' : ''}>Daily</option>
-          <option value="weekly"${digest.frequency === 'weekly' ? ' selected' : ''}>Weekly (Mondays)</option></select></div>
+          <option value="weekly"${digest.frequency === 'weekly' ? ' selected' : ''}>Weekly (Mondays)</option>
+          <option value="each"${digest.frequency === 'each' ? ' selected' : ''}>As each one happens</option></select></div>
         <div class="field field-wide"><label>Include…</label>${kindBoxes('digest-kind', digest.kinds)}</div>` : ''}
+      ${readerHtml(state.reader, digest)}
       <div class="form-actions"><button class="btn btn-sm" data-act="save">Save choices</button><span class="field-hint" role="status">${esc(note)}</span></div>`;
     wire();
+  }
+
+  // The reading link (Assisted Setup plan §8): only once support switched her emails on.
+  function readerHtml(reader, digest) {
+    if (!reader?.allowed || !digest?.email) return '';
+    const shown = made ? `<div class="inline-notice">
+        <p style="margin-top:0;"><strong>Send her this unlock link once</strong>, by text message rather than email. Opening it on her phone or computer keeps the code there, and the links in her emails then open the answers.</p>
+        <p style="word-break:break-all;"><code>${esc(made.unlockUrl)}</code></p>
+        <div class="form-actions"><button class="btn btn-sm" data-act="reader-copy">Copy unlock link</button></div>
+        <p class="field-hint">Or she types the code on the page: <strong>${esc(made.code)}</strong>. It isn't kept anywhere, so it's shown only now.</p></div>` : '';
+    const body = reader.on
+      ? `<p>A reading link is on${reader.madeAt ? ` (made ${esc(new Date(reader.madeAt).toLocaleDateString())})` : ''}: each email links to the application or message.</p>
+         ${readerCurrent ? '' : '<p class="inline-warn">A form key changed since this link was made, so it can\'t open what\'s sent now. Make a new one.</p>'}
+         ${shown}
+         <div class="form-actions"><button class="btn btn-sm" data-act="reader-make">Make a new one</button><button class="btn btn-sm" data-act="reader-off">Turn off</button></div>`
+      : `<p class="field-hint">Lets the emails link to the answers, opened in her browser with a reading code. KennelOS keeps only a locked copy of the waitlist form key, which it can't open; anyone with the code and an email's link can read what families sent.</p>
+         <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="reader-make">Make a reading link</button></div>`;
+    return `<h3 style="margin-bottom:4px;">Reading link</h3>${body}`;
   }
 
   const picked = (name) => [...el.querySelectorAll(`[data-${name}]`)].filter((b) => b.checked).map((b) => b.getAttribute(`data-${name}`));
@@ -128,6 +156,23 @@ export function mountNotificationsCard(el) {
       state = await enableAlertsHere(state.push.publicKey);
       note = 'Alerts are on. Send a test to check.';
       await checkWhere();
+    });
+    on('reader-make', async () => {
+      if (state.reader?.on && !(await confirmModal({ title: 'Make a new reading link?', message: 'The old code stops working on every device that opened it.', confirmLabel: 'Make a new one' }))) return;
+      const r = await makeReadingLink();
+      state = r.settings;
+      made = { unlockUrl: r.unlockUrl, code: r.code };
+      readerCurrent = true;
+      note = 'Reading link made. Copy the unlock link now.';
+    });
+    on('reader-copy', async () => {
+      try { await navigator.clipboard.writeText(made?.unlockUrl || ''); note = 'Copied.'; } catch { note = 'Select the link and copy it.'; }
+    });
+    on('reader-off', async () => {
+      if (!(await confirmModal({ title: 'Turn off the reading link?', message: 'Her emails stop linking to the answers, and the code stops working.', confirmLabel: 'Turn off' }))) return;
+      state = await stopReadingLink();
+      made = null;
+      note = 'The reading link is off.';
     });
     on('push-off', async () => { state = await disableAlertsHere(); note = 'Alerts are off for this device.'; });
     on('test', async () => {
@@ -163,6 +208,11 @@ export function mountNotificationsCard(el) {
 
   render();
   if (currentAccount()?.signedIn) {
-    getSettings().then(async (s) => { state = s; render(); await checkWhere(); render(); }, (e) => say(errText(e)));
+    getSettings().then(async (s) => {
+      state = s; render();
+      await checkWhere();
+      try { readerCurrent = await readingLinkCurrent(s.reader); } catch { readerCurrent = true; }
+      render();
+    }, (e) => say(errText(e)));
   }
 }
