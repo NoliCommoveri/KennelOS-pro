@@ -25,8 +25,10 @@ import { studServiceRepo } from './studServiceRepo.js';
 import { expenseRepo, mileageAmount } from './expenseRepo.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
+import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { formQuestions, isAnswerQuestion, snapshotQuestions, columnsFor, IMPORT_ALIASES } from './waitlistForm.js';
-import { waitlistConfig, kennelBreeds, resolveBreed, contactForEmail } from './waitlistRules.js';
+import { waitlistConfig, kennelBreeds, resolveBreed, contactForEmail, countsAsPass } from './waitlistRules.js';
+import { familyPageOf, contactFromApplication } from './waitlistFamilyRules.js';
 import { todayYMD } from './dateUtils.js';
 import { normReg } from './pedigreeImport.js';
 import { normalizeTitles } from './dogTitles.js';
@@ -1712,30 +1714,67 @@ const EXPENSE_MAPPING = {
 //    answers while it's still under review);
 //  - email matches an approved / on-the-list entry → needs review, default Skip
 //    (they're already on the list; don't touch a live family from an old row).
-// Contacts are NOT matched here: approval offers the match (Spec §5.2), the same
-// "offered, never automatic" rule.
+// A new row whose email is exactly one contact's joins that contact; otherwise
+// approval offers the match (Spec §5.2).
+// `fee_at_time_added` (optional, blank = Applied): an amount brings in a family from
+// before the list: approved and on the list at once with that fee received (0 =
+// Waived, grandfathered free), dated from `on_list_date` (else applied_date, else
+// today) so they keep their order; same-day rows keep the file's order
+// (fee_received_at). They need a
+// contact, so one is made from the answers at commit when no email matches. A row
+// for a contact who already has a family page (a status page for a sale) on that
+// kennel → needs review, default Skip: they'd be on the list twice.
 // The columns each question reads come from waitlistForm.js: her own form's
 // imported column (`source_header`, Spec §15.1) first, then the built-in aliases,
 // so a Google Form export lines up with the questions she imported from it.
+// A litter's names as she'd type them in passed_litters (lowercased, "x" for "×",
+// spaces squeezed): its nickname, "Dam × Sire" by call names, and the dam's call name
+// alone. → Map(kennel id → Map(name → [litter])); a name two litters share is ambiguous.
+const litterKey = (s) => String(s ?? '').trim().toLowerCase().replace(/\s*×\s*|\s+x\s+/g, ' x ').replace(/\s+/g, ' ');
+function litterNameIndex(litters, dogs) {
+  const dogName = new Map((dogs || []).map((d) => [d.id, d.call_name || '']));
+  const out = new Map();
+  for (const l of (litters || []).filter((x) => !x.is_archived && x.kennel_id)) {
+    if (!out.has(l.kennel_id)) out.set(l.kennel_id, new Map());
+    const names = out.get(l.kennel_id);
+    const dam = dogName.get(l.dam_id) || '';
+    const sire = dogName.get(l.sire_id) || '';
+    for (const n of new Set([l.nickname, dam && sire ? `${dam} x ${sire}` : '', dam].map(litterKey).filter(Boolean))) {
+      if (!names.has(n)) names.set(n, []);
+      names.get(n).push(l);
+    }
+  }
+  return out;
+}
+
 const WAITLIST_MAPPING = {
   entity: 'waitlist',
   label: 'Waitlist applications',
   links: ['kennel', 'dog'],
-  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing', 'program', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'already_paid', 'already_paid_date', 'notes'],
+  templateHeaders: ['name', 'email', 'phone', 'location', 'applied_date', 'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors', 'ready_timing', 'program', 'heard_from', 'household', 'other_pets', 'experience', 'about', 'kennel_name', 'already_paid', 'already_paid_date', 'fee_at_time_added', 'on_list_date', 'passed_litters', 'passed_date', 'notes'],
   requiredForCreate: ['name', 'email'],
 
   async loadExisting() {
-    const [entries, own, programs, contacts, dogs] = await Promise.all([
+    const [entries, own, programs, contacts, dogs, litters] = await Promise.all([
       waitlistEntryRepo.getAll(),
       ownKennels(),
       waitlistProgramRepo.getAll(),
       contactRepo.getAll({ includeArchived: true }),
-      dogRepo.getAll()
+      dogRepo.getAll(),
+      litterRepo.getAll()
     ]);
     this._own = own;
+    // Each own kennel's litters by the names she'd write in passed_litters.
+    this._litterNames = litterNameIndex(litters, dogs);
+    this._littersById = new Map(litters.map((l) => [l.id, l]));
     // Each kennel's breeds: a breed preference must be one of them (never free text).
     this._breedsByKennel = new Map(own.map((k) => [k.id, kennelBreeds(k, dogs)]));
     this._formByKennel = new Map(own.map((k) => [k.id, formQuestions(waitlistConfig(k))]));
+    this._configByKennel = new Map(own.map((k) => [k.id, waitlistConfig(k)]));
+    this._allEntries = entries;
+    // Same-day on-the-list rows keep the file's order: each gets this moment plus
+    // its row number in seconds as fee_received_at (the order's last tiebreak).
+    this._listedAt = Date.now();
     this._programs = programs;
     this._contactsById = new Map(contacts.map((c) => [c.id, c]));
     // The import page sets `preferredKennelId` from its kennel picker; otherwise
@@ -1860,6 +1899,63 @@ const WAITLIST_MAPPING = {
       else reasons.push(`Program "${progName}" not found on that kennel (left blank).`);
     }
 
+    // Fee at the time they were added (optional): blank → a new application; an amount
+    // → a family she brings in from before the list, on it now with that fee received
+    // on their list date (0 = waived: grandfathered free). Not a number → flagged and
+    // left as Applied.
+    const feeRaw = col(row, 'fee_at_time_added', 'fee_when_added', 'fee_at_time', 'fee_paid', 'list_fee');
+    const fee = feeRaw ? parseMoney(feeRaw) : null;
+    const feeOk = fee !== null && fee >= 0;
+    if (feeRaw && !feeOk) reasons.push(`Unrecognized fee_at_time_added "${feeRaw}" (left as Applied). Use an amount, or 0 for no fee.`);
+    if (feeOk && record.kennel_id) {
+      const dRaw = col(row, 'on_list_date', 'list_date', 'listed_date', 'in_line_since', 'joined_date', 'approved_date', 'fee_received_date');
+      const d = dRaw ? normDate(dRaw.split(/[ T]/)[0]) : null;
+      if (dRaw && !d) reasons.push(`Unrecognized on_list_date "${dRaw}" (${record.applied_date ? 'used the applied date' : 'used today'}).`);
+      const date = d || record.applied_date || todayYMD();
+      const config = (this._configByKennel && this._configByKennel.get(record.kennel_id)) || waitlistConfig({});
+      Object.assign(record, {
+        status: 'active', applied_date: record.applied_date || date, approved_date: date,
+        fee_amount: Math.round(fee * 100) / 100, fee_credit_policy: config.fee_credit_policy, fee_due_date: null,
+        fee_received_date: date, fee_received_at: new Date((this._listedAt || Date.now()) + i * 1000).toISOString(),
+        ...(fee === 0 ? { fee_payment_method: 'Waived' } : {})
+      });
+    }
+
+    // Passes from before the list (optional, rows going on the list only): one litter
+    // per pass, e.g. "Fall litter; Spring litter". Each becomes a closed `passed` offer
+    // on that litter once the family is saved (afterCreate), counted as her rules
+    // count a pass now (countsAsPass, their program included). Out of turn is fine:
+    // turn order is never stored on an offer.
+    const passedRaw = col(row, 'passed_litters', 'passed_litter', 'passes', 'passes_used');
+    const passes = [];
+    if (passedRaw && record.status !== 'active') {
+      reasons.push('passed_litters is only for families going on the list (with fee_at_time_added): left out.');
+    } else if (passedRaw) {
+      const byName = (this._litterNames && this._litterNames.get(record.kennel_id)) || new Map();
+      for (const part of passedRaw.split(/[;,\n]/).map((x) => x.trim()).filter(Boolean)) {
+        const hits = byName.get(litterKey(part)) || [];
+        if (hits.length === 1 && !passes.some((x) => x.litter_id === hits[0].id)) passes.push({ litter_id: hits[0].id, name: part });
+        else if (hits.length === 1) reasons.push(`"${part}" is listed twice: one pass recorded.`);
+        else if (/^\d+$/.test(part)) reasons.push(`passed_litters needs the litter each pass was on, not a count ("${part}" left out). Use the litter's nickname, or "Dam x Sire".`);
+        else reasons.push(hits.length ? `"${part}" matches more than one litter (left out). Use the litter's nickname.` : `"${part}" isn't one of this kennel's litters (left out).`);
+      }
+      const dRaw = col(row, 'passed_date', 'pass_date');
+      const d = dRaw ? normDate(dRaw.split(/[ T]/)[0]) : null;
+      if (dRaw && !d) reasons.push(`Unrecognized passed_date "${dRaw}" (used each litter's date).`);
+      const config = (this._configByKennel && this._configByKennel.get(record.kennel_id)) || waitlistConfig({});
+      const program = record.waitlist_program_id ? (this._programs || []).find((p) => p.id === record.waitlist_program_id) : null;
+      const counts = countsAsPass('passed', { config, program });
+      for (const x of passes) {
+        const litter = (this._littersById && this._littersById.get(x.litter_id)) || {};
+        x.date = d || litter.accept_deposits_date || litter.whelp_date || record.fee_received_date;
+        x.counts = counts;
+      }
+      const counted = counts ? passes.length : 0;
+      if (counted >= Number(config.max_passes)) {
+        reasons.push(`${counted} pass${counted === 1 ? '' : 'es'} is at your limit of ${config.max_passes}: they'd be on the list with no passes left. Import only if that's right.`);
+      }
+    }
+
     let status_ = 'create';
     let match = null;
     let decision = 'create';
@@ -1880,13 +1976,21 @@ const WAITLIST_MAPPING = {
         reasons.push(`Already ${match.status === 'active' ? 'on the list' : 'approved'} on this kennel — not changed.`);
       }
     }
-    if (status_ === 'review') decision = 'skip';
-    else decision = status_;
     // Someone she already has (the same email): a new application joins them.
     if (status_ === 'create') {
       const known = contactForEmail(email, this._contactsById ? [...this._contactsById.values()] : []);
       if (known) record.contact_id = known.id;
+      // …unless they already have a family page here: on the list too, they'd be twice.
+      const page = known && familyPageOf(this._allEntries, record.kennel_id, known.id);
+      if (page) {
+        status_ = 'review';
+        reasons.push(`${known.name || 'They'} already ${known.name ? 'has' : 'have'} a family page on this kennel (a status page for their sale). Importing them adds a second record.`);
+      }
     }
+    if (match && record.status === 'active') reasons.push('fee_at_time_added isn\'t used on an application already here: approve them from their page.');
+    if (status_ === 'create' && passes.some((x) => x.counts) && passes.filter((x) => x.counts).length >= Number(((this._configByKennel && this._configByKennel.get(record.kennel_id)) || waitlistConfig({})).max_passes)) status_ = 'review';
+    if (status_ === 'review') decision = 'skip';
+    else decision = status_;
 
     // An update only refreshes the answers and preferences of an application
     // still under review — never its kennel, status or dates.
@@ -1899,12 +2003,31 @@ const WAITLIST_MAPPING = {
 
     return {
       index: i, raw: row, entity: 'waitlist', display: name || email || `(row ${i + 2})`,
-      record, changes,
+      record, changes, ...(passes.length ? { passes } : {}),
       status: status_, match, matchLabel: match ? this.describe(match) : '',
       reasons,
       decision,
       decisionTarget: match ? match.id : null
     };
+  },
+
+  // Its passes from before the list, once the family is saved: one closed offer each.
+  async afterCreate(r, saved) {
+    for (const x of r.passes || []) {
+      await waitlistOfferRepo.create({
+        entry_id: saved.id, litter_id: x.litter_id, kennel_id: saved.kennel_id,
+        offered_date: x.date, outcome: 'passed', outcome_date: x.date, counts_as_pass: x.counts,
+        notes: 'A pass from before KennelOS, recorded at import.'
+      });
+    }
+  },
+
+  // An on-the-list row with no contact yet: one is made from its answers, as approval
+  // does (the repo refuses an entry past Applied without one).
+  async prepareRecord(r) {
+    if (r.decision !== 'create' || r.record.status !== 'active' || r.record.contact_id) return;
+    const contact = await contactRepo.create(contactFromApplication(r.record.application));
+    r.record.contact_id = contact.id;
   },
 
   describe(e) {
@@ -2089,6 +2212,8 @@ async function commitRow(entity, mapping, r, written, result) {
     if (r.decision === 'create') {
       await stampKennelScope(entity, r.record);
       const saved = await mapping.repo.create(mapping.seedRecord ? mapping.seedRecord(r.record) : r.record);
+      // Optional per-mapping hook: records that hang off the new one (waitlist passes).
+      if (mapping.afterCreate) await mapping.afterCreate(r, saved);
       written.set(r.index, saved.id);
       result.created++;
     } else if (r.decision === 'update') {

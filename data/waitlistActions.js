@@ -59,6 +59,7 @@ import {
   turnIsEmpty, emptiedTurns, turnRespondBy, turnDeadline, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
   FAMILY_DETAIL_KEYS
 } from './waitlistRules.js';
+import { contactFromApplication, saleKennelId } from './waitlistFamilyRules.js';
 
 // Every action here is one transaction over her data tables (K6-13): a deposit, a pass
 // across a turn's litters, a back-out — each makes several writes, and a phone that
@@ -146,18 +147,6 @@ export const saveEntryEdits = atomic(async function saveEntryEdits(entryId, chan
   }
   return waitlistEntryRepo.update(entryId, changes);
 });
-
-// A new Contact from the application answers (Spec §5.2 "creates or links").
-function contactFromApplication(app = {}) {
-  return {
-    name: String(app.name || '').trim(),
-    email: String(app.email || '').trim(),
-    phone: String(app.phone || '').trim(),
-    address: String(app.location || '').trim(),
-    contact_type: ['buyer'],
-    first_contact_source: String(app.heard_from || '').trim()
-  };
-}
 
 // Approve an application. `contactId` links an existing contact (a match she
 // picked); otherwise a new contact is created from the answers. A fee-waived
@@ -2304,6 +2293,31 @@ export const addFamilyPage = atomic(async function addFamilyPage(saleId, { date 
   return waitlistEntryRepo.create({
     kennel_id: kennelId, contact_id: sale.buyer_contact_id, status: 'placed', placed_sale_id: sale.id, off_list: true,
     notes: `Family page only from ${date}: ${dog?.call_name || 'their pup'}'s sale, not a place on the list.`
+  });
+});
+
+// "Already bought" answered Make a family page (waitlistRules.openSaleFamilies): a
+// family on the list (one she imported, say) who bought before the list becomes a
+// family page for that sale: `placed`, off the list, linked to it. They give up their
+// place; their application, fee record and status link stay. Refuses a sale that
+// isn't theirs, isn't this kennel's, or that something on the waitlist already
+// claims (familyPageBlocker). → the entry.
+export const familyPageFromListEntry = atomic(async function familyPageFromListEntry(entryId, saleId, { date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  requireStatus(entry, ['active'], 'make a family page for');
+  if (entry.off_list) throw new Error('They already have a family page only.');
+  const sale = await saleRepo.getById(saleId);
+  if (!sale || sale.buyer_contact_id !== entry.contact_id) throw new Error('That sale isn\'t to this family.');
+  const dog = await dogRepo.getById(sale.dog_id);
+  const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
+  if (saleKennelId(sale, dog ? [dog] : [], litter ? [litter] : []) !== entry.kennel_id) throw new Error('That sale isn\'t one of this kennel\'s.');
+  const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(entry.kennel_id), waitlistOfferRepo.getByKennel(entry.kennel_id)]);
+  const blocker = familyPageBlocker(sale, entries, offers);
+  if (blocker) throw new Error(blocker);
+  return waitlistEntryRepo.update(entryId, {
+    status: 'placed', placed_sale_id: sale.id, off_list: true,
+    notes: appendNote(entry.notes, `Family page only from ${date}: ${dog?.call_name || 'their pup'}'s sale, bought before the list (no longer a place on it).`)
   });
 });
 

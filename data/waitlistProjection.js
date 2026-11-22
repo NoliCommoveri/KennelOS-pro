@@ -440,12 +440,12 @@ function parentTestsOf(dogsById, config, events) {
 }
 const breedOf = (dogsById, damId, sireId) => orNull(dogsById.get(damId)?.breed || dogsById.get(sireId)?.breed);
 
-function upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today }) {
+function upcomingSection(kennel, config, { litters, pairings, dogs, sales, events, dogsById, titles, testsOf, today }) {
   const show = showUpcoming(config);
   const parent = (id) => parentView(dogsById, titles, id, testsOf, { pedigree: config.parent_pedigree === true, kennel });
   const where = (u) => ({ public: show[u.stage].public, family: show[u.stage].family });
   const shown = (u) => show[u.stage].public || show[u.stage].family;
-  const litterItems = upcomingItems(kennel, { litters, pairings })
+  const litterItems = upcomingItems(kennel, { litters, pairings, dogs, sales })
     .filter(shown)
     .map((u) => ({
       ...u,
@@ -629,7 +629,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     }));
   const familyOffers = [...kennelOffers, ...sideOffers];
   const hidden = new Map(live.map((e) => [e.id, placeHidden(e, familyOffers)]));
-  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, events, dogsById, titles, testsOf, today });
+  const upcoming = upcomingSection(kennel, config, { litters, pairings, dogs, sales, events, dogsById, titles, testsOf, today });
   const creditMemo = new Map();
   const ctx = {
     config, contactsById, programsById, offers: familyOffers, today, upcoming, phase: changePhase(litters, kennel.id),

@@ -200,7 +200,7 @@ const HELP = {
   },
 
   waitlist: {
-    match: 'Each row is one application (a Google Form export works as is). It\'s matched by email on that kennel\'s list: an application still under review is refreshed; someone already approved or on the list is left alone. New rows join the list as Applied.',
+    match: 'Each row is one application (a Google Form export works as is). It\'s matched by email on that kennel\'s list: an application still under review is refreshed; someone already approved or on the list is left alone. New rows join the list as Applied, or straight onto the list when fee_at_time_added has an amount (0 for none); someone who already has a family page here (a status page for a sale) is held for you to review.',
     footnote: 'Answer columns can also use the wording of your own application form\'s questions, so a file exported from that form lines up without renaming anything.',
     columns: {
       name: { need: 'required', aliases: ['full_name', 'your_name', 'applicant_name'], text: 'The applicant\'s name.' },
@@ -222,6 +222,10 @@ const HELP = {
       kennel_name: { need: 'optional', aliases: ['kennel'], text: 'Which of your kennels\' lists this goes on. Blank uses the kennel picked above.' },
       already_paid: { need: 'optional', aliases: ['amount_paid', 'deposit_paid', 'paid'], text: 'Money they\'ve already paid you, like an early deposit. It becomes their credit for funds already received and comes off what they\'re asked to pay (the fee, then the deposit, then the rest). New applications only.' },
       already_paid_date: { need: 'optional', aliases: ['paid_date', 'deposit_date'], text: 'When you received it. Blank uses the applied date.' },
+      fee_at_time_added: { need: 'optional', aliases: ['fee_when_added', 'fee_at_time', 'fee_paid', 'list_fee'], text: 'For a family you\'re bringing in from before: the application fee they paid then. 0 = no fee (grandfathered free). Any amount puts them on the list at once with that fee received on their on_list_date: it shows in Income and on their statement, and comes off their pup\'s price if your fee is credited to the purchase. Blank: a new application to review. They\'re linked to the contact with their email, or a new contact is made for them.' },
+      on_list_date: { need: 'optional', aliases: ['list_date', 'listed_date', 'in_line_since', 'joined_date', 'approved_date'], text: 'With fee_at_time_added: the date their place (and their fee) counts from, so they keep their order. Blank uses applied_date, else today. Families on the same day keep the order of the file.' },
+      passed_litters: { need: 'optional', aliases: ['passed_litter', 'passes', 'passes_used'], text: 'For a family you\'re bringing in with fee_at_time_added: the litters they already passed on, one per pass, separated by semicolons (e.g. "Fall litter; Spring litter"). Name a litter by its nickname, "Dam x Sire" or the dam\'s call name. Each counts as a pass, the same as a pass in the app, in any order (out of turn is fine). Reaching your pass limit holds the row for you to review.' },
+      passed_date: { need: 'optional', aliases: ['pass_date'], text: 'When they passed. Blank uses each litter\'s accept deposits date, else its whelp date.' },
       notes: { need: 'optional', text: 'Your own notes.' }
     }
   }

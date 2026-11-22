@@ -1178,20 +1178,32 @@ export function familyPagePlan(litter, { pups = [], sales = [], entries = [], of
 }
 export const waitlistLitters = (kennel, litters) => (litters || []).filter((l) => isWaitlistLitter(l, kennel));
 
+// A born litter with no pup left to offer: every pup gone, kept, reserved or sold
+// (a released sale frees it). Undecided pups, or none recorded yet, keep it. Derived.
+const SPOKEN_FOR_DISPOSITIONS = ['keeping', 'placed'];
+export function isLitterSpokenFor(litter, dogs = [], sales = []) {
+  if (!litter || litter.status === 'expected') return false;
+  const pups = dogs.filter((d) => d.litter_id === litter.id && !d.is_archived);
+  if (!pups.length) return false;
+  const sold = (d) => sales.some((s) => s.dog_id === d.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status));
+  return pups.every((d) => GONE_DOG_STATUSES.includes(d.status) || SPOKEN_FOR_DISPOSITIONS.includes(d.disposition) || sold(d));
+}
+
 // What a kennel has coming before picks open (Spec §16.4), one item per future
 // litter: a pairing with no litter yet, an `expected` litter (shown with its
-// pairing, decided 2026-10-08), or a whelped litter whose picks aren't open.
+// pairing, decided 2026-10-08), or a whelped litter whose picks aren't open and
+// that still may have a pup to offer (isLitterSpokenFor; pass `dogs` and `sales`).
 // Every stage, unfiltered: the projection applies her switches (showUpcoming).
 // → [{ id, kind: 'planned_pairing' | 'pairing' | 'early_litter', stage, pairing,
 //      litter, pairing_id, litter_id, sire_id, dam_id }]. `id` is the pairing's id
 // when there is one (so "Not this litter" on it carries over to its litter),
 // else the litter's; an early litter is always its litter's id.
-export function upcomingItems(kennel, { litters = [], pairings = [] } = {}) {
+export function upcomingItems(kennel, { litters = [], pairings = [], dogs = [], sales = [] } = {}) {
   const own = (x) => !x.is_archived && x.kennel_id === kennel.id;
   const pairingsById = new Map(pairings.map((p) => [p.id, p]));
   const hasLitter = new Set(litters.filter((l) => !l.is_archived && l.pairing_id).map((l) => l.pairing_id));
   const out = [];
-  for (const l of litters.filter((x) => own(x) && isWaitlistLitter(x) && !x.picks_opened_date)) {
+  for (const l of litters.filter((x) => own(x) && isWaitlistLitter(x) && !x.picks_opened_date && !isLitterSpokenFor(x, dogs, sales))) {
     const pairing = (l.pairing_id && pairingsById.get(l.pairing_id)) || null;
     const early = l.status !== 'expected';
     out.push({

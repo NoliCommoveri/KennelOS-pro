@@ -20,7 +20,8 @@ import {
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, nextOfferedTurn, openTurns, isTurnOverdue, isPupAvailable,
   soonFamiliesForKennel, kennelBreeds, resolveBreed, whelpNotes, nextTurnPrepassNote, describeOfferChanges,
   numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly, deadlineLabel } from '../data/waitlistRules.js';
-import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, cardShell, alertModal, wireActionMenu } from '../assets/ui.js';
+import { openSaleFamilies } from '../data/waitlistFamilyRules.js';
+import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, cardShell, alertModal, confirmModal, wireActionMenu } from '../assets/ui.js';
 import { resolveWaitlistKennel, mountKennelPicker, prefsSummary, entryFlags, openSoonNotice } from '../assets/waitlistUI.js';
 import { offerEmails } from '../assets/waitlistEmailUI.js';
 import { programIconHtml } from '../assets/programIcons.js';
@@ -253,6 +254,20 @@ async function main() {
       }))
     : '<div class="empty-state">No family pages. A litter sold outside the waitlist can give its families a status page from its Litter page (Non-Waitlist Sales…).</div>';
 
+  // --- Already bought (a family on the list with an open sale, e.g. one she imported
+  // from before the list): make each a family page only. Shown only while one waits.
+  const bought = openSaleFamilies(entries, kennel.id, { sales, dogs, litters, offers });
+  const boughtHtml = bought.length
+    ? `<p class="field-hint" style="margin-top:0;">These families are on your list and already have a sale with you. A family page only gives them their status page for that sale (pickup, extras, your messages) and takes them off the list, so they don't hold a place for another pup.</p>`
+      + table(['Family', 'Pup', 'Sale', ''], bought.map(({ entry: e, sale }) => {
+        const pup = dogsById.get(sale.dog_id);
+        return `<tr><td><a href="${esc(entryHref(e))}"><strong>${nameOf(e)}</strong></a></td>
+          <td>${pup ? `<a href="dog.html?id=${encodeURIComponent(pup.id)}">${esc(pup.call_name || '—')}</a>` : none}</td>
+          <td><a href="sale.html?id=${encodeURIComponent(sale.id)}">${sale.sale_date ? esc(fmtDate(sale.sale_date)) : 'Sale'}</a></td>
+          <td><button class="btn btn-sm btn-primary" type="button" data-family-page="${esc(e.id)}" data-sale="${esc(sale.id)}">Make a family page</button></td></tr>`;
+      }))
+    : '';
+
   // --- Closed runs ---
   // A family with a pup selected is still on the list, not closed; a family page only
   // has its own section.
@@ -268,7 +283,8 @@ async function main() {
 
   const count = (n) => ` <span class="faint">(${n})</span>`;
   els.body.innerHTML =
-    cardShell('New applications' + count(applied.length), appliedHtml, { key: 'applied', isEmpty: !applied.length }) +
+    (bought.length ? cardShell('Already bought' + count(bought.length), boughtHtml, { key: 'bought' }) : '') +
+    cardShell('New applications' + count(applied.length), appliedHtml, { key: 'applied', isEmpty: !applied.length, marginTop: bought.length > 0 }) +
     cardShell('Fee due' + count(approved.length), approvedHtml, { key: 'approved', isEmpty: !approved.length, marginTop: true }) +
     cardShell('On the list' + count(numbered.length), listHtml, { key: 'list', marginTop: true }) +
     cardShell('Litters' + count(litterRows.length), littersHtml, { key: 'litters', isEmpty: !litterRows.length, marginTop: true }) +
@@ -277,6 +293,34 @@ async function main() {
 
   els.body.querySelectorAll('tr[data-href]').forEach((tr) => {
     tr.addEventListener('click', () => { location.href = tr.dataset.href; });
+  });
+
+  // "Make a family page" on an Already bought row: confirm, then convert their record.
+  els.body.querySelectorAll('[data-family-page]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const e = entriesById.get(btn.dataset.familyPage);
+      const sale = salesById.get(btn.dataset.sale);
+      const pup = sale ? dogsById.get(sale.dog_id) : null;
+      const ok = await confirmModal({
+        title: 'Make a family page?',
+        message: [
+          `${entryName(e, contactsById.get(e.contact_id))} will get a status page for ${pup?.call_name ? `${pup.call_name}'s` : 'their'} sale and come off the list: they won't hold a place or be offered another pup. Their application stays on their record. To have them wait for another pup later, they apply again.`,
+          // A fee they paid, credited to the purchase, comes off this sale (incomeView).
+          ...(Number(e.fee_amount) > 0 && e.fee_received_date && e.fee_credit_policy === 'credited_to_purchase'
+            ? [`Their ${fmtMoney(e.fee_amount)} application fee will come off this sale's price, as your fee is credited to the purchase. If the sale already allows for it, change their fee on their page first.`] : [])
+        ].join('\n\n'),
+        confirmLabel: 'Make a family page'
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await actions.familyPageFromListEntry(e.id, sale.id);
+        await main();
+      } catch (err) {
+        els.error.innerHTML = `<div class="inline-error">${esc(err.message || String(err))}</div>`;
+        btn.disabled = false;
+      }
+    });
   });
 
   // Offer the next family their turn — opening picks first if they aren't open.
