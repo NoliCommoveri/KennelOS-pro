@@ -449,8 +449,8 @@ export function prefillValues(formOrType, facts = {}) {
       ['puppySex', label(SEX, p.sex)], ['puppyColor', text(p.color_markings)],
       ['puppyDob', text(p.date_of_birth)], ['puppyMicrochip', text(p.microchip_id)],
       ['breed', text(p.breed)],
-      ['sireName', text(f.sire?.registered_name || f.sire?.call_name)],
-      ['damName', text(f.dam?.registered_name || f.dam?.call_name)],
+      ['sireName', text(f.sire?.call_name || f.sire?.registered_name)],
+      ['damName', text(f.dam?.call_name || f.dam?.registered_name)],
       ['registrationType', label(REGISTRATION_TYPE, s.registration_type)],
       ['pickupDate', text(f.pickupDate)],
       ['price', money(s.price)], ['depositAmount', money(s.deposit_amount)], ['balanceDue', money(f.balanceDue)],
@@ -465,8 +465,8 @@ export function prefillValues(formOrType, facts = {}) {
     out.push(
       ...person('buyer', f.buyer),
       ['litterName', text(r.litterName)],
-      ['sireName', text(f.sire?.registered_name || f.sire?.call_name)],
-      ['damName', text(f.dam?.registered_name || f.dam?.call_name)],
+      ['sireName', text(f.sire?.call_name || f.sire?.registered_name)],
+      ['damName', text(f.dam?.call_name || f.dam?.registered_name)],
       ['preferredSex', label(WAITLIST_PREF_SEX, c.reservation_pref_sex || 'any')],
       ['preferredColor', text(c.reservation_pref_color)],
       ['reservationDeposit', money(c.reservation_deposit_amount)]
