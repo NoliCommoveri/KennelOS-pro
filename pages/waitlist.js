@@ -19,7 +19,7 @@ import {
   waitlistConfig, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, nextOfferedTurn, openTurns, isTurnOverdue, isPupAvailable,
   soonFamiliesForKennel, kennelBreeds, resolveBreed, whelpNotes, nextTurnPrepassNote, describeOfferChanges,
-  numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly, deadlineLabel, isHeldPick, heldPickOf, PICKS_STANDING_LABEL } from '../data/waitlistRules.js';
+  numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly, deadlineLabel, isHeldPick, heldPickOf, isAwaitingDeposit, PICKS_STANDING_LABEL } from '../data/waitlistRules.js';
 import { picksStanding } from '../data/waitlistStanding.js';
 import { openSaleFamilies } from '../data/waitlistFamilyRules.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, cardShell, alertModal, confirmModal, wireActionMenu } from '../assets/ui.js';
@@ -160,10 +160,19 @@ async function main() {
   // Where they stand on the picks open now (as on the public list): Passed, No response…
   const standingOf = (e) => picksStanding(e, { offers, litters, pups: dogs, sales, today, config });
   const selectedPup = (e) => dogs.find((d) => d.id === salesById.get(e.placed_sale_id)?.dog_id)?.call_name || '';
+  // A pick on their turn: held by her (amber), or picked and waiting on the deposit
+  // without a hold (blue), so the two read apart from a placed family's Pup selected.
+  const pupCall = (id) => dogs.find((d) => d.id === id)?.call_name || 'pup';
+  const pickBadge = (e) => {
+    const held = heldPickOf(offers, e.id);
+    if (held) return ` <span class="badge badge-amber" title="Shown as Pup selected on the public list until the deposit is in or the hold ends">Pup held: ${esc(pupCall(held.chosen_dog_id))}, deposit due ${esc(deadlineLabel(held.respond_by_date, held.respond_by_time, fmtDate))}</span>`;
+    const picked = offers.find((o) => o.entry_id === e.id && !o.is_archived && isAwaitingDeposit(o));
+    return picked ? ` <span class="badge badge-blue" title="They picked this pup on their turn; the deposit isn't in yet and you haven't held the pup for them">Waiting on deposit: ${esc(pupCall(picked.chosen_dog_id))}${picked.respond_by_date ? `, due ${esc(deadlineLabel(picked.respond_by_date, picked.respond_by_time, fmtDate))}` : ''}</span>` : '';
+  };
   const listHtml = numbered.length
     ? table(['#', 'Family', 'Wants', 'Passes', 'In line since'], numbered.map((e, i) => (e.status === 'active' ? row(e, [
         `<strong>${i + 1}</strong>`,
-        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today, config)}${breedFlag(e)}${heldPickOf(offers, e.id) ? ` <span class="badge badge-amber" title="Shown as Pup selected on the public list until the deposit is in or the hold ends">Pup held: ${esc(dogs.find((d) => d.id === heldPickOf(offers, e.id).chosen_dog_id)?.call_name || 'pup')}, deposit due ${esc(deadlineLabel(heldPickOf(offers, e.id).respond_by_date, heldPickOf(offers, e.id).respond_by_time, fmtDate))}</span>` : ''}`,
+        `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today, config)}${breedFlag(e)}${pickBadge(e)}`,
         standingOf(e) ? `<span class="faint">${esc(PICKS_STANDING_LABEL[standingOf(e)])}</span>` : prefsSummary(e),
         `${passesUsed(e, offers)} of ${esc(config.max_passes)}`,
         `${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ' <span class="badge badge-purple" title="You set this place by hand">Moved by you</span>' : ''}`

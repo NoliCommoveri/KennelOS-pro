@@ -16,8 +16,9 @@ import { readyCheck, isManuallyPaused, isReadyHeld, isListenOnly, readyFromDate,
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { isWaitlistOnlineOffered, statusPageLink } from '../data/cloud/cloudConfig.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { boardingChargeText } from '../data/goHome.js';
 import { markSoonNotified, recordPick, recordOutcome, confirmDeposit, holdPick, changeHoldDate, changePick, undoPass, lostSaleFamilyFor, restoreAfterLostSale,
-  approveBackOut, backOutMoney, backOutEntryFor, hasPendingRequest } from '../data/waitlistActions.js';
+  approveBackOut, backOutMoney, backOutEntryFor, hasPendingRequest, applyPickupBoarding, clearTransportFee } from '../data/waitlistActions.js';
 import { backOutItems, backOutSummary, backOutPaidText } from '../data/backOut.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { familySale } from '../data/familyExtras.js';
@@ -882,3 +883,22 @@ export async function reportEmptiedTurns(result) {
   if (!lines.length) return;
   await alertModal({ title: result.ended.length === 1 ? 'A turn ended: no pup left in it' : 'Turns ended: no pup left in them', message: lines.join('\n\n') });
 }
+
+// After a pickup time is booked (her approval of their request, or her own booking),
+// or a cancel: nothing she typed on the sale changes without
+// her say. Her own boarding charge was kept: replace it with standard boarding?
+// A transport fee is still on the sale: remove it?
+export async function afterPickupApproval(res) {
+  const b = res.boardingKept;
+  if (b && await confirmModal({
+    title: 'Replace your boarding charge?',
+    message: `This pickup date has standard boarding: ${b.days} day${b.days === 1 ? '' : 's'} at ${fmtMoney(b.rate)} = ${fmtMoney(b.amount)}. The sale already has your own boarding charge (${boardingChargeText(res.sale, fmtMoney)}), so it was kept.`,
+    confirmLabel: 'Use standard boarding', cancelLabel: 'Keep mine'
+  })) await applyPickupBoarding(res.sale.id, b, b.rate);
+  if (res.transportFeeLeft && await confirmModal({
+    title: 'Remove the transport fee?',
+    message: `Their sale still has a ${fmtMoney(res.transportFeeLeft)} transport fee from an earlier drop-off plan.`,
+    confirmLabel: 'Remove it', cancelLabel: 'Keep it'
+  })) await clearTransportFee(res.sale.id);
+}
+

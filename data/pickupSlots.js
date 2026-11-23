@@ -76,6 +76,19 @@ export function makeSlots({ date, from, to, length = 30, locationIds = [], capac
   return { slots, error: '' };
 }
 
+// New times that overlap times she already has on the same day (at any place: she can't
+// be in two places at once, and two times at one place double-book it). → [{ made,
+// existing }], one per overlapping pair, in the order of `made`.
+export function slotConflicts(existing, made) {
+  const out = [];
+  for (const m of made) {
+    for (const e of cleanSlots(existing)) {
+      if (e.date === m.date && minutes(m.start_time) < minutes(e.end_time) && minutes(e.start_time) < minutes(m.end_time)) out.push({ made: m, existing: e });
+    }
+  }
+  return out;
+}
+
 // "10:00 AM–10:30 AM".
 export function timeRange(slot) {
   const f = (t) => {
@@ -104,8 +117,9 @@ export function slotBookings(events, entries, { live = () => true } = {}) {
 // after a training stay ends) and after today, at a place she shows families, with
 // room left. Their own booking's time is always kept. → [{ id, date, start_time,
 // end_time, left, location: { id, label, address, notes } }]
-export function familySlots({ slots, locations, bookings, from = null, today, mine = null }) {
-  const shown = new Map(locations.filter((l) => l.show_to_families).map((l) => [l.id, l]));
+// `allPlaces`: every place of hers, not only those shown to families (her own booking).
+export function familySlots({ slots, locations, bookings, from = null, today, mine = null, allPlaces = false }) {
+  const shown = new Map(locations.filter((l) => allPlaces || l.show_to_families).map((l) => [l.id, l]));
   return cleanSlots(slots).filter((s) => shown.has(s.location_id) && s.date > today && (!from || s.date >= from))
     .map((s) => {
       const left = s.capacity - (bookings.get(s.id) || 0) + (s.id === mine ? 1 : 0);

@@ -82,7 +82,7 @@ import { isCloudAvailable } from '../data/cloud/cloudConfig.js';
 import { sessionToken } from '../data/cloud/cloudAuth.js';
 import { esc, badge, fmtDate, fmtMoney, param, todayYMD, kennelToday, kennelNow, confirmModal, alertModal, wireActionMenu } from '../assets/ui.js';
 import {
-  resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal,
+  resolveWaitlistKennel, prefsSummary, entryFlags, readyHoldText, formModal, afterPickupApproval,
   pickDialog, depositDialog, holdPickDialog, changeHoldDialog, changePickDialog, undoPassDialog, restoreLostPupDialog, endSaleDialog, backOutDialog, statusLinkFor, copyLink, creditDialog,
   openStatusPage
 } from '../assets/waitlistUI.js';
@@ -565,8 +565,20 @@ function emailItemHtml(m) {
 // Where they live (Family Requests plan §4.1), when her distance rule is on or she
 // knows: the place, the miles, and her choice of whether they may suggest their own
 // meetup place.
+// Book one of her pickup times for them (when they told her instead of choosing on
+// their status page): shown while they have an open sale whose pup's litter has times.
+function bookTimeHtml(e) {
+  const sale = familySale(e, ctx.sales, ctx.kennelOffers, ctx.kennelEntries);
+  const litter = sale?.dog_id ? ctx.litters.find((l) => l.id === ctx.dogsById.get(sale.dog_id)?.litter_id) : null;
+  if (!litter?.pickup_slots?.length) return '';
+  return `<div class="pill-row" style="margin-top:10px;"><button type="button" class="btn btn-sm" id="btn-booktime" title="Book one of your pickup times for them, as if they chose it on their status page">Book a pickup time…</button></div>`;
+}
+
 function homeHtml(e) {
-  if (!locationRuleOn(ctx.config) && !e.home_place && typeof e.own_place_override !== 'boolean') return '';
+  const book = bookTimeHtml(e);
+  if (!locationRuleOn(ctx.config) && !e.home_place && typeof e.own_place_override !== 'boolean') {
+    return book ? `<section class="card"><h2 style="margin-top:0;">Pickup</h2>${book}</section>` : '';
+  }
   const where = e.home_place
     ? `Lives in <strong>${esc(e.home_place)}</strong>${Number.isFinite(e.home_miles) ? `, about ${Math.round(e.home_miles)} miles from your standard location` : ' (distance not measured)'}.`
     : 'Where they live isn\'t known yet; their status page asks once their pup is picked.';
@@ -587,7 +599,7 @@ function homeHtml(e) {
       <span class="field-hint">${current === 'true' ? 'Their status page lets them ask you to meet at an address of their own, whatever your rule says.'
         : current === 'false' ? 'Their status page shows only your pickup times at your listed places, whatever your rule says.'
           : ruleSays}</span>
-    </div></section>`;
+    </div>${book}</section>`;
 }
 
 function requestsHtml(e) {
@@ -629,6 +641,7 @@ function wireRequests(root) {
     await afterAction();
     await emailThem(approved ? 'request_approved' : 'request_declined', { request: { field: 'extra_request', request } });
   };
+  root.querySelector('#btn-booktime')?.addEventListener('click', () => run(onBookPickupTime));
   root.querySelector('#own-place')?.addEventListener('change', (ev) => {
     const v = ev.target.value;
     run(() => actions.setOwnPlaceOverride(e.id, v === '' ? null : v === 'true'));
@@ -670,21 +683,26 @@ async function onBackOut(decision) {
   if (await backOutDialog({ entryId: e.id, outcome: decision })) await afterAction();
 }
 
-// After approving a time or a cancel: nothing she typed on the sale changes without
-// her say. Her own boarding charge was kept: replace it with standard boarding?
-// A transport fee is still on the sale: remove it?
-async function afterPickupApproval(res) {
-  const b = res.boardingKept;
-  if (b && await confirmModal({
-    title: 'Replace your boarding charge?',
-    message: `This pickup date has standard boarding: ${b.days} day${b.days === 1 ? '' : 's'} at ${fmtMoney(b.rate)} = ${fmtMoney(b.amount)}. The sale already has your own boarding charge (${boardingChargeText(res.sale, fmtMoney)}), so it was kept.`,
-    confirmLabel: 'Use standard boarding', cancelLabel: 'Keep mine'
-  })) await actions.applyPickupBoarding(res.sale.id, b, b.rate);
-  if (res.transportFeeLeft && await confirmModal({
-    title: 'Remove the transport fee?',
-    message: `Their sale still has a ${fmtMoney(res.transportFeeLeft)} transport fee from an earlier drop-off plan.`,
-    confirmLabel: 'Remove it', cancelLabel: 'Keep it'
-  })) await actions.clearTransportFee(res.sale.id);
+// Book a pickup time for them (Pickup card): her times on their pup's litter from
+// today on with room, at any of her places, with the places left; theirs is marked.
+// Booking replaces any pickup still to come and answers a pickup request still waiting.
+async function onBookPickupTime() {
+  const e = ctx.entry;
+  const { slots, current, from } = await actions.pickupTimeChoices(e.id);
+  if (!slots.length) return alertModal({ title: 'No pickup times to book', message: 'Their pup\'s litter has no pickup times with room from today on. Add them, or more places, on the litter\'s Pickup times.' });
+  const label = (s) => `${fmtDate(s.date)}, ${timeRange(s)} at ${s.location.label}${s.id === current ? ' (their time now)' : ` (${s.left} left)`}`;
+  const waiting = pendingPickupRequests(e).length;
+  let res = null;
+  await formModal({
+    title: `Book a pickup time for ${entryName(e, ctx.contact)}`,
+    confirmLabel: 'Book it',
+    bodyHtml: `<div class="field"><label for="bt-slot">Pickup time</label><select id="bt-slot">${slots.map((s) => `<option value="${esc(s.id)}"${s.id === current ? ' selected' : ''}>${esc(label(s))}</option>`).join('')}</select></div>
+      ${from ? `<p class="field-hint">Their pup can go home from ${esc(fmtDate(from))}.</p>` : ''}
+      <p class="field-hint">It goes on the pup's calendar as their pickup and takes a place at that time, as if they chose it on their status page (any other pickup still to come is replaced).${waiting ? ' Their pickup request still waiting is closed by this booking.' : ''}</p>`,
+    onConfirm: async (o) => { res = await actions.bookPickupTime(e.id, o.querySelector('#bt-slot').value); }
+  });
+  if (!res) return;
+  await afterPickupApproval(res);
 }
 
 // Approving a family's own address (Family Requests plan §4): the day, time, how
