@@ -33,7 +33,8 @@ function adjustments(p) {
   const out = [];
   if (p.priority === 'ahead') out.push(badge(WAITLIST_PRIORITY, 'ahead'));
   out.push(esc(feeLabel(p)));
-  if (p.passes_count === false) out.push('Passes don\'t count');
+  if (p.max_passes_override) out.push(`${esc(p.max_passes_override)} pass${Number(p.max_passes_override) === 1 ? '' : 'es'} before removal`);
+  else if (p.passes_count === false) out.push('Passes don\'t count');
   if (p.pause_allowed) out.push('May pause');
   if (p.respond_days_override) out.push(`${esc(p.respond_days_override)} days to accept and pay`);
   return out.join(' · ');
@@ -84,8 +85,9 @@ function renderForm() {
         <div class="field"><label>Application fee</label><input id="p-fee" type="number" min="0" step="0.01" value="${esc(p.fee_override ?? '')}" placeholder="Normal fee${ctx.config.fee_amount != null ? ` (${fmtMoney(ctx.config.fee_amount)})` : ''}">
           <span class="field-hint">Blank = your normal fee. 0 = waived (they join the list as soon as you approve them).</span></div>
         <div class="field"><label>Days to accept and pay the deposit</label><input id="p-respond" type="number" min="1" step="1" value="${esc(p.respond_days_override ?? '')}" placeholder="Normal (${esc(ctx.config.respond_days)})"></div>
+        <div class="field"><label>Passes before removal</label><input id="p-passes" type="number" min="1" step="1" value="${esc(p.max_passes_override ?? '')}" placeholder="Normal (${esc(ctx.config.max_passes)})">
+          <span class="field-hint">Blank = your normal number.</span></div>
         <div class="field field-wide">
-          <label class="check-inline"><input id="p-passes" type="checkbox"${p.passes_count === false ? ' checked' : ''}> Passes by these families don't count toward removal</label>
           <label class="check-inline"><input id="p-pause" type="checkbox"${p.pause_allowed ? ' checked' : ''}> These families may pause without it counting against them</label>
         </div>
         <div class="field field-wide"><label>Description for families</label><textarea id="p-public">${esc(p.public_description || '')}</textarea>
@@ -122,7 +124,8 @@ function readForm() {
     priority: v('#p-priority'),
     fee_override: v('#p-fee') === '' ? null : Number(v('#p-fee')),
     respond_days_override: v('#p-respond') === '' ? null : Number(v('#p-respond')),
-    passes_count: !c('#p-passes'),
+    max_passes_override: v('#p-passes') === '' ? null : Number(v('#p-passes')),
+    passes_count: true,
     pause_allowed: c('#p-pause'),
     public_description: v('#p-public').trim(),
     public_icon: els.form.querySelector('input[name="p-icon"]:checked')?.value || null,

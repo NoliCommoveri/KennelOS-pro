@@ -93,6 +93,15 @@ export function unloggedPlanned(dog, events, tokensOf) {
   return testGapRows([dog], events.filter((e) => !e.is_archived), tokensOf)[0].missing;
 }
 
+// One test event's name and result, as completedTestsByDog reads them (OFA: Method +
+// Joint, else the type's name field, else the title). → { name, result } ('' when blank).
+export function testNameAndResult(e) {
+  const f = TEST_TYPE_FIELDS[e?.event_type];
+  if (!f) return { name: '', result: '' };
+  const named = e.event_type === 'ofa_pennhip' ? [e.details?.method, e.details?.joint].filter(Boolean).join(' ') : e.details?.[f.name];
+  return { name: String(named ?? '').trim() || String(e.title ?? '').trim(), result: String(e.details?.[f.result] ?? '').trim() };
+}
+
 // Each dog's completed tests as family pages show them (Waitlist: parents' health
 // tests): Map dogId → [{ name, result, outcome }], one row per test name (a retest replaces
 // the older result: the latest event_date wins), in the order first tested. A
@@ -109,11 +118,8 @@ export function completedTestsByDog(events = []) {
     .filter((e) => e && !e.is_archived && e.subject_type === 'dog' && TEST_TYPES.includes(e.event_type))
     .sort((a, b) => String(a.event_date || '').localeCompare(String(b.event_date || '')) || String(a.id).localeCompare(String(b.id)));
   for (const e of sorted) {
-    const f = TEST_TYPE_FIELDS[e.event_type];
     // eventRepo.testTokensOf's naming, kept here so this module stays pure.
-    const named = e.event_type === 'ofa_pennhip' ? [e.details?.method, e.details?.joint].filter(Boolean).join(' ') : e.details?.[f.name];
-    const name = String(named ?? '').trim() || String(e.title ?? '').trim();
-    const result = String(e.details?.[f.result] ?? '').trim();
+    const { name, result } = testNameAndResult(e);
     if (!name || !result) continue;
     const byName = latest.get(e.subject_id) || new Map();
     const k = key(name);
@@ -121,7 +127,10 @@ export function completedTestsByDog(events = []) {
     const outcome = TEST_OUTCOME.find((o) => o.toLowerCase() === flag.toLowerCase()) || '';
     // `type`: the latest result's event type (the website groups by it, siteExport's
     // health_detail section). A retest keeps the first test's place.
-    byName.set(k, { name, result, outcome, date: e.event_date || null, type: e.event_type });
+    // `family_pages`: her say on this test for waitlist family pages ('show' / 'hide',
+    // '' = follow her setting), the latest result's (vocab TEST_FAMILY_PAGES).
+    const fp = String(e.details?.family_pages ?? '').trim();
+    byName.set(k, { name, result, outcome, date: e.event_date || null, type: e.event_type, family_pages: fp === 'show' || fp === 'hide' ? fp : '' });
     latest.set(e.subject_id, byName);
   }
   return new Map([...latest].map(([id, byName]) => [id, [...byName.values()]]));

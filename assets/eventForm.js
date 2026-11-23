@@ -256,7 +256,7 @@ export async function openEventForm(opts) {
     }
     if (f.type === 'select') {
       const opts = (f.options || []).map((o) => `<option value="${esc(optValue(o))}"${optValue(o) === v ? ' selected' : ''}>${esc(optLabel(o))}</option>`).join('');
-      return `<div class="field"><label>${esc(f.label)}</label><select data-detail="${esc(f.key)}"><option value="">— select —</option>${opts}</select></div>`;
+      return `<div class="field"><label>${esc(f.label)}</label><select data-detail="${esc(f.key)}"><option value="">${esc(f.blankLabel || '— select —')}</option>${opts}</select></div>`;
     }
     const inputType = f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text';
     const stepAttr = f.type === 'number' && f.step ? ` step="${esc(f.step)}"` : '';

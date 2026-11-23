@@ -53,7 +53,7 @@ import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
 import { RELEASED_SALE_STATUSES, SALE_END_REASON, BOARDING_FREQUENCY_OPTIONS, registrationsForPurposes, descriptor } from './vocab.js';
 import {
   waitlistConfig, openDays, businessDays, closedDates, liveClosedDates, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, passToForgive,
-  respondByDate, respondBy, deadlineKey, isTimeOfDay, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
+  respondByDate, respondBy, deadlineKey, isTimeOfDay, countsAsPass, shouldRemoveForPasses, maxPassesFor, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
   splitPrepassed, prepassFor, prepassTargets, passReasonOf, passedBefore, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit, sideSaleInOrderAt,
@@ -632,16 +632,16 @@ async function autoPassTurn(c, entry, prepassed, today) {
   const counts = countsAsPass('passed', { config: c.config, program });
   await recordPrepassed(entry, prepassed, { turnId: crypto.randomUUID(), today, respondBy: { date: today, time: null }, counts });
   const offers = await waitlistOfferRepo.getByEntry(entry.id);
-  const removed = shouldRemoveForPasses(entry, offers, c.config);
+  const removed = shouldRemoveForPasses(entry, offers, c.config, program);
   if (removed) await waitlistEntryRepo.update(entry.id, { status: 'removed', removed_date: today, removed_reason: 'second_pass' });
   const names = prepassed.map((x) => c.litterLabel(x.litter)).join(', ');
   await addFamilyActivity(entry.id, [{
     id: `prepass-turn-${entry.id}-${today}-${prepassed.map((x) => x.litter.id).join('-')}`, kind: 'action',
-    body: `Their turn came up on ${names}, which they'd said "Not this litter" to, so it was recorded as a pass${counts ? ` (pass ${passesUsed(entry, offers)} of ${Number(c.config.max_passes)})` : ''} and the list moved on.${removed ? ' That was their last pass, so they were removed from the list; you can undo it from their page for 7 days.' : ''}`
+    body: `Their turn came up on ${names}, which they'd said "Not this litter" to, so it was recorded as a pass${counts ? ` (pass ${passesUsed(entry, offers)} of ${maxPassesFor(c.config, program)})` : ''} and the list moved on.${removed ? ' That was their last pass, so they were removed from the list; you can undo it from their page for 7 days.' : ''}`
   }]);
   return {
     entry_id: entry.id, litter_ids: prepassed.map((x) => x.litter.id), removed,
-    counted: Boolean(counts), used: passesUsed(entry, offers), max: Number(c.config.max_passes)
+    counted: Boolean(counts), used: passesUsed(entry, offers), max: maxPassesFor(c.config, program)
   };
 }
 
@@ -1558,8 +1558,8 @@ export const recordOutcome = atomic(async function recordOutcome(offerId, outcom
       if (o.id === offer.id) result.offer = saved;
     }
     const offers = await waitlistOfferRepo.getByEntry(entry.id);
-    result.passes = { used: passesUsed(entry, offers), max: Number(config.max_passes), counted: counts, ...(empty ? { empty: true } : {}) };
-    if (shouldRemoveForPasses(entry, offers, config)) {
+    result.passes = { used: passesUsed(entry, offers), max: maxPassesFor(config, program), counted: counts, ...(empty ? { empty: true } : {}) };
+    if (shouldRemoveForPasses(entry, offers, config, program)) {
       await waitlistEntryRepo.update(entry.id, { status: 'removed', removed_date: date, removed_reason: 'second_pass' });
       result.removed = true;
       const released = await releaseOpenOffers(entry.id, { date, why: 'the family was removed after their last pass', moveOn: false });

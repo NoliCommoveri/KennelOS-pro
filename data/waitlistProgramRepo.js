@@ -1,6 +1,6 @@
 // waitlistProgramRepo.js — all Dexie access for waitlist_programs: her own named
-// bundles of waitlist adjustments (fee override, priority, pause allowance, passes
-// not counted, a longer response window), one table rather than a fixed vocab list
+// bundles of waitlist adjustments (fee override, priority, pause allowance, their own
+// number of passes before removal, a longer response window), one table rather than a fixed vocab list
 // because programs are hers to define (Waitlist Spec §4.4/§7; End-State guide §29).
 import { db } from './db.js';
 import { makeRepo } from './repoBase.js';
@@ -17,6 +17,10 @@ function validateProgram(c) {
   }
   if (c.public_icon && !WAITLIST_PROGRAM_ICON.some((i) => i.value === c.public_icon)) {
     throw new Error(`Waitlist program: unknown icon "${c.public_icon}".`);
+  }
+  const passes = c.max_passes_override;
+  if (passes != null && passes !== '' && !(Number.isInteger(Number(passes)) && Number(passes) >= 1)) {
+    throw new Error('Waitlist program: passes before removal must be a whole number, 1 or more.');
   }
   const fee = c.fee_override;
   if (fee != null && fee !== '' && !(Number(fee) >= 0)) {

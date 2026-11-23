@@ -793,6 +793,11 @@ export const TEST_RESULT_SUGGESTIONS = [
   'Grade I', 'Grade II', 'Grade III', 'Grade IV', 'Grade V', 'Grade VI'
 ];
 const OUTCOME_FIELD = { key: 'outcome', label: 'Normal or abnormal', type: 'select', options: TEST_OUTCOME };
+// This test on waitlist family pages (the owner, 2026-11-23): blank follows the dog's
+// say and her Waitlist setting (waitlistProjection.parentTestsShown); Show shows it
+// even when they'd hide it (a single Abnormal result she wants seen); Hide keeps it off.
+export const TEST_FAMILY_PAGES = [{ value: 'show', label: 'Show' }, { value: 'hide', label: 'Hide' }];
+const FAMILY_PAGES_FIELD = { key: 'family_pages', label: 'On family pages', type: 'select', options: TEST_FAMILY_PAGES, blankLabel: 'Follow my setting' };
 
 export const EVENT_TYPES = [
   // Acquisition — an option for the first event on a newly-bought dog's
@@ -812,11 +817,11 @@ export const EVENT_TYPES = [
   // union distinct tokens already seen in events) — see eventForm.js's
   // TEST_VOCAB_FIELDS. Suggest-not-enforce, same as boarding_reason below.
   { value: 'genetic_test',       label: 'Genetic test',       badge: 'badge-purple',  subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'panel_name', label: 'Panel', type: 'combobox' }, { key: 'lab', label: 'Lab', type: 'text' }, { key: 'result', label: 'Result', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
+    fields: [{ key: 'panel_name', label: 'Panel', type: 'combobox' }, { key: 'lab', label: 'Lab', type: 'text' }, { key: 'result', label: 'Result', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD, FAMILY_PAGES_FIELD] },
   { value: 'ofa_pennhip',        label: 'OFA / PennHIP',      badge: 'badge-purple',  subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'joint', label: 'Joint', type: 'combobox' }, { key: 'method', label: 'Method', type: 'text' }, { key: 'rating', label: 'Rating', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
+    fields: [{ key: 'joint', label: 'Joint', type: 'combobox' }, { key: 'method', label: 'Method', type: 'text' }, { key: 'rating', label: 'Rating', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD, FAMILY_PAGES_FIELD] },
   { value: 'breed_specific_test', label: 'Breed-specific test', badge: 'badge-purple', subjects: ['dog'], duration: 'instant',
-    fields: [{ key: 'test_name', label: 'Test', type: 'combobox' }, { key: 'result', label: 'Result', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD] },
+    fields: [{ key: 'test_name', label: 'Test', type: 'combobox' }, { key: 'result', label: 'Result', type: 'combobox', options: TEST_RESULT_SUGGESTIONS }, OUTCOME_FIELD, FAMILY_PAGES_FIELD] },
   // A routine screening at the vet (fecal, heartworm, brucellosis...): the vet is
   // the related contact, as on a vet visit. Kept apart from the three breeding
   // test types above (see SCREENING_TESTS).

@@ -84,7 +84,8 @@ const DOG_KEYS = ['publicId', 'sent', 'status', 'sirePublicId', 'damPublicId', '
 // already treats as plain data for each type (syncRegistry), so a card never carries
 // a detail the cloud wouldn't.
 export const SHARED_EVENT_TYPES = ['genetic_test', 'ofa_pennhip', 'breed_specific_test', 'title_earned'];
-const detailKeys = (type) => [...cloudDetailKeys(type)];
+// Her family-pages say on a test (vocab TEST_FAMILY_PAGES) is hers alone: never on a card.
+const detailKeys = (type) => [...cloudDetailKeys(type)].filter((k) => k !== 'family_pages');
 
 function assertOnlyKeys(obj, allowed, ctx) {
   for (const k of Object.keys(obj)) {

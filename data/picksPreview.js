@@ -13,7 +13,7 @@ import {
   waitlistConfig, rankedList, overallPositions, isPupAvailable, pupMatchesPrefs,
   eligiblePupsFor, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, isListeningFor,
   turnSpent, turnLittersFor, openTurns, joinsOpenTurn, splitPrepassed, prepassFor,
-  respondByDate, respondBy, joinRespondBy, countsAsPass, passesUsed, shouldRemoveForPasses, kennelBreeds, resolveBreed,
+  respondByDate, respondBy, joinRespondBy, countsAsPass, passesUsed, shouldRemoveForPasses, maxPassesFor, kennelBreeds, resolveBreed,
   WHELP_NOTE_FIELDS, isSideSalePending, sideSaleOf, pupClaims
 } from './waitlistRules.js';
 import { RELEASED_SALE_STATUSES, cleanPurposes } from './vocab.js';
@@ -159,9 +159,9 @@ function simulateOpen({ entries, offers, litters, pups, sales, programsById, con
       turn_id: `preview-${guard}`, outcome: 'passed', counts_as_pass: counts && i === 0
     }));
     simOffers = [...simOffers, ...rows];
-    const removed = shouldRemoveForPasses(next.entry, simOffers, config);
+    const removed = shouldRemoveForPasses(next.entry, simOffers, config, program);
     if (removed) simEntries = simEntries.map((e) => (e.id === next.entry.id ? { ...e, status: 'removed' } : e));
-    autoPassed.push({ entry_id: next.entry.id, litter_ids: prepassed.map((x) => x.litter.id), counted: counts, used: passesUsed(next.entry, simOffers), max: Number(config.max_passes), removed });
+    autoPassed.push({ entry_id: next.entry.id, litter_ids: prepassed.map((x) => x.litter.id), counted: counts, used: passesUsed(next.entry, simOffers), max: maxPassesFor(config, program), removed });
   }
   return { kind: 'none', auto_passed: autoPassed };
 }
@@ -246,7 +246,7 @@ export function previewPicks(data, { litterId, today, view = 'combined', eitherA
         .map((l) => ({ litter_id: l.id, reasons: exclusionReasons(entry, l, pups, sales, kennelOffers, opts) }))
         .filter((x) => x.reasons.length && !x.reasons.some((r) => r.code === 'holds_turn')),
       also_in: elsewhere,
-      passes: { used: passesUsed(entry, kennelOffers), max: Number(config.max_passes), counted: countsAsPass('passed', { config, program }) },
+      passes: { used: passesUsed(entry, kennelOffers), max: maxPassesFor(config, program), counted: countsAsPass('passed', { config, program }) },
       either_as: entry.either_as || null
     });
   }

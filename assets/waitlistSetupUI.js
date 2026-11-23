@@ -56,8 +56,9 @@ export async function askNewProgram(chat, kennel, config, { fee = null, title = 
         ${field('Place in line', `<select id="wp-priority">${WAITLIST_PRIORITY.map((o) => opt(o.value, o.label, o.value === 'standard')).join('')}</select>`)}
         ${field('Application fee', `<input id="wp-fee" type="number" min="0" step="0.01" value="${fee == null ? '' : esc(fee)}" placeholder="${config.fee_amount != null ? `Normal (${esc(fmtMoney(config.fee_amount))})` : 'Normal'}">`, '0 waives it.')}
         ${field('Days to accept', `<input id="wp-respond" type="number" min="1" step="1" placeholder="Normal (${esc(config.respond_days)})">`)}
+        ${field('Passes before removal', `<input id="wp-passes" type="number" min="1" step="1" placeholder="Normal (${esc(config.max_passes)})">`)}
       </div>
-      ${group('Also', check('wp-passes', 'Their passes don\'t count toward removal', false) + check('wp-pause', 'They may pause without it counting against them', false))}
+      ${group('Also', check('wp-pause', 'They may pause without it counting against them', false))}
       ${field('Description for families (optional)', '<textarea id="wp-public" rows="2"></textarea>', 'Blank keeps the program private.')}`,
     submitLabel: 'Save program',
     cancelLabel: 'Never mind',
@@ -67,10 +68,12 @@ export async function askNewProgram(chat, kennel, config, { fee = null, title = 
       if (!name) return 'Give the program a name.';
       const respond = numOrNull(q('#wp-respond').value);
       if (respond != null && !(Number.isInteger(respond) && respond >= 1)) return 'Days to accept must be at least 1.';
+      const passes = numOrNull(q('#wp-passes').value);
+      if (passes != null && !(Number.isInteger(passes) && passes >= 1)) return 'Passes before removal must be at least 1.';
       return waitlistProgramRepo.create({
         kennel_id: kennel.id, name, priority: q('#wp-priority').value,
         fee_override: numOrNull(q('#wp-fee').value), respond_days_override: respond,
-        passes_count: !q('#wp-passes').checked, pause_allowed: q('#wp-pause').checked,
+        max_passes_override: passes, pause_allowed: q('#wp-pause').checked,
         public_description: q('#wp-public').value.trim()
       });
     },

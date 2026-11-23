@@ -50,7 +50,7 @@ import { offerEmails, syncSoon, communicateDialog } from '../assets/waitlistEmai
 import { programIconHtml } from '../assets/programIcons.js';
 import { offerSpecs, closedTurnExtra, retryEmail, dropEmail, isHeldEmail, kennelEmailsOn, familyEmail, emailErrorText } from '../data/waitlistOutbox.js';
 import {
-  waitlistConfig, overallPositions, passesUsed, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
+  waitlistConfig, overallPositions, passesUsed, maxPassesFor, anchorDate, isMovedByBreeder, contactMatches, contactMatchReason,
   entryName, publicSourceName, holdsPlace, waitlistLitters, isWaitlistLitter, LISTEN_LIVE_PAIRING, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, isPaused, isReadyHeld, readyFromDate, readyCheck, rankedList, REMOVAL_UNDO_DAYS,
   eligiblePupsFor, openTurns, turnOffers, turnIdOf, isListeningFor, isListenOnly, listenChangeKind,
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
@@ -283,7 +283,7 @@ function statusLines(e) {
     lines.push(`In line since ${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ` <span class="badge badge-purple">Moved by you</span> <span class="faint">(fee received ${esc(fmtDate(e.fee_received_date))})</span>` : ''}.`);
     const placesLine = prefPlacesText(e, pos);
     if (placesLine) lines.push(placesLine);
-    lines.push(`Passes used: ${passesUsed(e, ctx.offers)} of ${esc(ctx.config.max_passes)}.`);
+    lines.push(`Passes used: ${passesUsed(e, ctx.offers)} of ${esc(maxPassesFor(ctx.config, ctx.programs.get(e.waitlist_program_id)))}.`);
     if (canUndoFeeReceived(e, ctx.offers, today, ctx.sales)) lines.push(`<span class="badge badge-amber">Fee marked received by mistake? You can undo it until ${esc(fmtDate(addDaysToYMD(String(e.fee_received_at).slice(0, 10), REMOVAL_UNDO_DAYS)))}, until they're offered a turn</span>`);
     const flags = entryFlags(e, today, ctx.config);
     const why = isReadyHeld(e, today, ctx.config)
@@ -2641,7 +2641,7 @@ async function forgivePassFlow(offerId) {
   const used = ctx.offers.filter((o) => o.counts_as_pass === true && !o.is_archived).length;
   if (!(await confirmModal({
     title: `Don't count this pass for ${name}?`,
-    message: `Their ${offer.outcome === 'no_response' ? 'no response' : 'pass'} on ${litter ? litterLabel(litter) : 'this litter'} stops counting toward their limit (${used - 1} of ${ctx.config.max_passes} used after this). Their turn on it stays closed, and nobody's turn or place on the list changes.`,
+    message: `Their ${offer.outcome === 'no_response' ? 'no response' : 'pass'} on ${litter ? litterLabel(litter) : 'this litter'} stops counting toward their limit (${used - 1} of ${maxPassesFor(ctx.config, ctx.programs.get(ctx.entry.waitlist_program_id))} used after this). Their turn on it stays closed, and nobody's turn or place on the list changes.`,
     confirmLabel: 'Don\'t count it'
   }))) return;
   await actions.forgivePass(offerId);

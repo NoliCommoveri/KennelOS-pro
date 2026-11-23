@@ -35,7 +35,7 @@ import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
 import { RELEASED_SALE_STATUSES } from './vocab.js';
 import { pickupEvent } from './goHome.js';
 import { statusPageLink } from './cloud/cloudConfig.js';
-import { buildPortalFeed, feedCopy, pickupEventFor, zonedParts, clockText } from './portalFeed.js';
+import { buildPortalFeed, portalTakes, feedCopy, pickupEventFor, zonedParts, clockText } from './portalFeed.js';
 import { sendFamilyFeed, linkStatus, websiteLinkOffered, KennelportError } from './kennelportApi.js';
 import { getWebsiteLink, notePortalSent, noteWebsiteAnswer, clearWebsiteLink } from './kennelportLinkStore.js';
 import { licenseOk, turnPortalOff } from './kennelportLink.js';
@@ -238,7 +238,8 @@ export async function sendPortalFeed(kennel, { force = false, refresh = false, o
     if (!(await licenseOk())) return { status: 'skipped', reason: 'license' };
     const r = await records(kennel);
     const { feed, known } = buildPortalFeed({
-      kennel, ...r, today, feedId, sentAt: new Date().toISOString(), statusUrlOf: statusPageLink, known: link.portal_known || []
+      kennel, ...r, today, feedId, sentAt: new Date().toISOString(), statusUrlOf: statusPageLink, known: link.portal_known || [],
+      takes: portalTakes(site)
     });
     const copy = feedCopy(feed);
     if (!force && link.portal_sent && same(copy, link.portal_sent)) return { status: 'skipped', reason: 'unchanged' };

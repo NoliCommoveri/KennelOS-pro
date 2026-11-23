@@ -792,6 +792,18 @@ export function isPupAvailable(dog, sales = []) {
 // its puppies leave out deceased and External pups, and puppyStatus reads Placed as
 // placed; a test keeps them in step). Never both available and reserved: Available
 // and Placed are two values of one field.
+// The registration a pup goes with, as family pages show it (owner's call,
+// 2026-11-23): the one on its live sale (not archived, not returned, cancelled or
+// voided; the newest if there's more than one) once it's sold, else the one it's
+// planned for (Dog.intended_registration). null: undecided.
+export function pupRegistrationOf(dog, sales = []) {
+  if (!dog) return null;
+  const sold = sales
+    .filter((s) => s && s.dog_id === dog.id && !s.is_archived && !RELEASED_SALE_STATUSES.includes(s.status) && s.registration_type)
+    .sort((a, b) => String(b.sale_date || b.created_at || '').localeCompare(String(a.sale_date || a.created_at || '')))[0];
+  return sold?.registration_type || dog.intended_registration || null;
+}
+
 export const RESERVED_GONE_STATUSES = Object.freeze(['deceased', 'external_reference']);
 export function isPupReserved(dog) {
   if (!dog || dog.is_archived || RESERVED_GONE_STATUSES.includes(dog.status)) return false;
@@ -1903,13 +1915,22 @@ export function countsAsPass(outcome, { config = WAITLIST_CONFIG_DEFAULTS, progr
 
 const entryOffers = (entry, offers) => offers.filter((o) => o.entry_id === entry.id && !o.is_archived);
 
+// How many counted passes a family has before they're removed: their program's own
+// number (`max_passes_override`, a whole number 1 or more) when it sets one, else hers
+// (Waitlist settings' max_passes).
+export function maxPassesFor(config = WAITLIST_CONFIG_DEFAULTS, program = null) {
+  const own = program?.max_passes_override;
+  return own != null && own !== '' && Number.isInteger(Number(own)) && Number(own) >= 1 ? Number(own) : Number(config.max_passes);
+}
+
 export function passesUsed(entry, offers) {
   return entryOffers(entry, offers).filter((o) => o.counts_as_pass === true).length;
 }
 
 // Should this active entry now be removed for reaching the pass limit?
-export function shouldRemoveForPasses(entry, offers, config = WAITLIST_CONFIG_DEFAULTS) {
-  return isOnList(entry) && passesUsed(entry, offers) >= Number(config.max_passes);
+// `program`: theirs, whose own number of passes wins (maxPassesFor).
+export function shouldRemoveForPasses(entry, offers, config = WAITLIST_CONFIG_DEFAULTS, program = null) {
+  return isOnList(entry) && passesUsed(entry, offers) >= maxPassesFor(config, program);
 }
 
 export const REMOVAL_UNDO_DAYS = 7;
@@ -2249,7 +2270,7 @@ export function nextTurnPrepassNote(entry, ls, { offers = [], config = WAITLIST_
   if (offer.length) return `They said "Not this litter" to ${names}, so their turn will cover ${offer.map((x) => litterOf(x.litter)).join(', ')} only.`;
   const counts = countsAsPass('passed', { config, program });
   const used = passesUsed(entry, offers) + 1;
-  const max = Number(config.max_passes);
+  const max = maxPassesFor(config, program);
   const last = counts && used >= max ? ' That will be their last pass, so they\'ll be removed from the list.' : '';
   return `They said "Not this litter" to ${prepassed.length === 1 ? names : `all of these (${names})`}. ${doing}${counts ? ` (pass ${used} of ${max})` : ''} ${then}.${last}`;
 }

@@ -517,7 +517,7 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: ALL,
     cloud: [
       'kennel_id', 'name', 'applicable_on_form', 'priority', 'pause_allowed',
-      'passes_count', 'respond_days_override', 'public_description', 'public_icon'
+      'passes_count', 'max_passes_override', 'respond_days_override', 'public_description', 'public_icon'
     ],
     private: ['fee_override', 'notes'],
     pending: []

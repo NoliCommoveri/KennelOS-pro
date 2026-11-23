@@ -16,7 +16,7 @@ import { saleRepo } from '../data/saleRepo.js';
 import * as actions from '../data/waitlistActions.js';
 import { WAITLIST_ENTRY_STATUS, WAITLIST_PRIORITY, WAITLIST_REMOVED_REASON } from '../data/vocab.js';
 import {
-  waitlistConfig, passesUsed, isMovedByBreeder, anchorDate, contactMatches, entryName,
+  waitlistConfig, passesUsed, maxPassesFor, isMovedByBreeder, anchorDate, contactMatches, entryName,
   canUndoRemoval, overdueFees, nextFamilyForLitter, nextTurn, nextOfferedTurn, openTurns, isTurnOverdue, isPupAvailable,
   soonFamiliesForKennel, kennelBreeds, resolveBreed, whelpNotes, nextTurnPrepassNote, describeOfferChanges,
   numberedList, holdsPlace, isPupReserved, waitlistLitters, isFamilyPageOnly, deadlineLabel, isHeldPick, heldPickOf, isAwaitingDeposit, PICKS_STANDING_LABEL } from '../data/waitlistRules.js';
@@ -174,7 +174,7 @@ async function main() {
         `<strong>${i + 1}</strong>`,
         `<strong>${nameOf(e)}</strong>${programBadge(e)} ${entryFlags(e, today, config)}${breedFlag(e)}${pickBadge(e)}`,
         standingOf(e) ? `<span class="faint">${esc(PICKS_STANDING_LABEL[standingOf(e)])}</span>` : prefsSummary(e),
-        `${passesUsed(e, offers)} of ${esc(config.max_passes)}`,
+        `${passesUsed(e, offers)} of ${esc(maxPassesFor(config, programs.get(e.waitlist_program_id)))}`,
         `${esc(fmtDate(anchorDate(e)))}${isMovedByBreeder(e) ? ' <span class="badge badge-purple" title="You set this place by hand">Moved by you</span>' : ''}`
       ]) : row(e, [
         `<strong>${i + 1}</strong> <span title="Pup selected">✓</span>`,

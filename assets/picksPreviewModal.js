@@ -463,8 +463,8 @@ function settingsHtml(p, data, state) {
   const demo = isReadOnly();
   const dis = demo ? ' disabled' : '';
   const programs = [...data.programsById.values()].filter((x) => !x.is_archived);
-  const programLines = programs.filter((x) => x.priority === 'ahead' || x.passes_count === false || (x.respond_days_override != null && x.respond_days_override !== ''))
-    .map((x) => `<li>${esc(x.name || 'A program')}: ${[x.priority === 'ahead' ? 'goes ahead in line' : '', x.respond_days_override != null && x.respond_days_override !== '' ? `${esc(x.respond_days_override)} days to pick and pay` : '', x.passes_count === false ? 'passes don\'t count' : ''].filter(Boolean).join(', ')}</li>`).join('');
+  const programLines = programs.filter((x) => x.priority === 'ahead' || x.passes_count === false || x.max_passes_override || (x.respond_days_override != null && x.respond_days_override !== ''))
+    .map((x) => `<li>${esc(x.name || 'A program')}: ${[x.priority === 'ahead' ? 'goes ahead in line' : '', x.respond_days_override != null && x.respond_days_override !== '' ? `${esc(x.respond_days_override)} days to pick and pay` : '', x.max_passes_override ? `${esc(x.max_passes_override)} passes before removal` : x.passes_count === false ? 'passes don\'t count' : ''].filter(Boolean).join(', ')}</li>`).join('');
   const closed = liveClosedDates(closedDates(c), todayYMD());
   const kennelId = data.kennel.id;
   return `<h3 style="margin:16px 0 4px;font-size:15px;">Settings that decide this</h3>

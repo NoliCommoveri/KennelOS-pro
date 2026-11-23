@@ -21,6 +21,7 @@ import { pickupFrom } from './familyPickup.js';
 import { saleExtraCharges } from './extraCharges.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { RELEASED_SALE_STATUSES, isOpenSale } from './vocab.js';
+import { testNameAndResult } from './healthTestLog.js';
 
 export const PORTAL_FEED_FORMAT = 1;
 // KennelPort's caps (feed.js MAX): over them it refuses the whole feed, so the
@@ -36,6 +37,12 @@ export const FAMILY_KEYS = ['id', 'name', 'emails', 'status_url', 'placements'];
 export const PLACEMENT_KEYS = ['id', 'puppy_id', 'puppy_name', 'contract_signed_on', 'go_home_on', 'pickup_at', 'microchip', 'registration_no', 'voided', 'health', 'extras', 'vet'];
 export const VOIDED_KEYS = ['reason', 'on'];
 export const HEALTH_KEYS = ['id', 'type', 'given_on', 'name', 'notes'];
+// What a KennelPort may take beyond format 1's first fields (its facts' `portal_takes`):
+// a placement's `registration` (its sale's) and screening tests as health records.
+// Sent only to a site that lists them, since it refuses a field it doesn't know.
+export const PORTAL_TAKES = ['registration', 'screening', 'health_tests'];
+export const PORTAL_REGISTRATIONS = ['limited', 'full', 'co_own', 'none'];
+export const portalTakes = (site) => (Array.isArray(site?.portal_takes) ? site.portal_takes.filter((x) => PORTAL_TAKES.includes(x)) : []);
 export const EXTRA_KEYS = ['id', 'extra_id'];
 export const VET_KEYS = ['clinic', 'doctor', 'phone', 'address'];
 export const REMOVED_KEYS = ['type', 'id'];
@@ -181,18 +188,28 @@ export function saleEndDay(sale, today) {
   return d > today ? today : d;
 }
 
-// The puppy's shots, deworming (her preventatives) and vet visits, newest first:
-// what was given and when. A vaccine's lot and next due date go as its notes; a
-// vet visit's findings never go.
-const HEALTH_TYPE = { vaccination: 'vaccine', preventative: 'deworming', vet_visit: 'vet_visit' };
-export function healthOf(dogId, events, today) {
-  return (events || []).filter((e) => !e.is_archived && e.subject_type === 'dog' && e.subject_id === dogId && HEALTH_TYPE[e.event_type] && ymd(e.event_date) && e.event_date <= today)
+// The puppy's shots, deworming (her preventatives), vet visits and, for a site that
+// takes them (`screening`), screening tests, newest first: what was given and when. A
+// vaccine's lot and next due date go as its notes; a vet visit's findings never go;
+// a screening test goes as its test and result ("Fecal: Negative"), nothing else.
+// For a site that takes them (`health_tests`), the pup's own genetic, OFA / PennHIP and
+// breed-specific tests go too, each result as one record named by test and result
+// ("PRA-prcd: Clear", healthTestLog.testNameAndResult), never the lab, notes or its
+// Normal/Abnormal flag; one with no result yet doesn't go. She can remove any one from
+// the family's portal.
+const HEALTH_TYPE = { vaccination: 'vaccine', preventative: 'deworming', vet_visit: 'vet_visit', screening_test: 'screening', genetic_test: 'health_test', ofa_pennhip: 'health_test', breed_specific_test: 'health_test' };
+export function healthOf(dogId, events, today, { screening = false, tests = false } = {}) {
+  return (events || []).filter((e) => !e.is_archived && e.subject_type === 'dog' && e.subject_id === dogId && HEALTH_TYPE[e.event_type] && ymd(e.event_date) && e.event_date <= today
+    && (screening || e.event_type !== 'screening_test')
+    && (HEALTH_TYPE[e.event_type] !== 'health_test' || (tests && testNameAndResult(e).name && testNameAndResult(e).result)))
     .sort((a, b) => newestFirst(a.event_date, b.event_date) || String(a.id).localeCompare(String(b.id)))
     .slice(0, PORTAL_MAX.health)
     .map((e) => {
       const d = e.details || {};
       const name = e.event_type === 'vaccination' ? (line(d.vaccine, 120) || line(e.title, 120))
         : e.event_type === 'preventative' ? (line(d.product, 120) || line(e.title, 120))
+          : HEALTH_TYPE[e.event_type] === 'health_test' ? line(Object.values(testNameAndResult(e)).join(': '), 120)
+          : e.event_type === 'screening_test' ? line([line(d.test, 80) || line(e.title, 80), line(d.result, 40) || line(d.outcome, 40)].filter(Boolean).join(': '), 120)
           : (line(e.title, 120) || line(d.reason, 120));
       const notes = e.event_type === 'vaccination'
         ? line([d.lot_number ? `Lot ${line(d.lot_number, 40)}` : '', ymd(d.next_due) ? `next due ${d.next_due}` : ''].filter(Boolean).join(', '), 400)
@@ -277,7 +294,7 @@ function lastDay(sale, contract, goHome) {
 // `statusUrlOf(token)`: the family's status page address (https), or null.
 export function buildPortalFeed({
   kennel, sales = [], contracts = [], dogs = [], contacts = [], events = [], entries = [], litters = [],
-  today, feedId, sentAt = null, statusUrlOf = () => null, known = []
+  today, feedId, sentAt = null, statusUrlOf = () => null, known = [], takes = []
 }) {
   if (!kennel?.id) throw new Error('buildPortalFeed needs a kennel.');
   if (!ymd(today)) throw new Error('buildPortalFeed needs today.');
@@ -298,7 +315,7 @@ export function buildPortalFeed({
     const released = RELEASED_SALE_STATUSES.includes(sale.status);
     // A released sale's health stops at its end (K7-1): a returned pup's next home's
     // vet visits never reach this family.
-    const health = healthOf(pup.id, events, released ? saleEndDay(sale, today) : today);
+    const health = healthOf(pup.id, events, released ? saleEndDay(sale, today) : today, { screening: takes.includes('screening'), tests: takes.includes('health_tests') });
     // Resting (an archived Delivered sale): stands in `now` and is never sent.
     const keep = !resting && ((!released && sale.status !== 'delivered')
       || addDaysToYMD(lastDay(sale, contract, goHome) || today, PORTAL_KEEP_DAYS) >= today);
@@ -320,8 +337,11 @@ export function buildPortalFeed({
       voided: voidedOf(sale, today) ? assertOnlyKeys(voidedOf(sale, today), VOIDED_KEYS, 'voided') : null,
       health,
       extras: extrasOf(sale),
-      vet: placementVet(pup.id, { events, contactsById, until: released ? saleEndDay(sale, today) : today, fallback: kennelVet })
-    }, PLACEMENT_KEYS, 'placement');
+      vet: placementVet(pup.id, { events, contactsById, until: released ? saleEndDay(sale, today) : today, fallback: kennelVet }),
+      // The registration the family bought (the sale's), so their portal shows it
+      // whatever the website says, a pup placed again included.
+      ...(takes.includes('registration') ? { registration: PORTAL_REGISTRATIONS.includes(sale.registration_type) ? sale.registration_type : null } : {})
+    }, takes.includes('registration') ? [...PLACEMENT_KEYS, 'registration'] : PLACEMENT_KEYS, 'placement');
     if (!placement.vet) delete placement.vet;
     const fam = byFamily.get(sale.buyer_contact_id) || { placements: [], keep: false, newest: '' };
     const since = placement.contract_signed_on || sale.portal_early_on;
