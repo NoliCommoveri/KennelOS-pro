@@ -215,6 +215,12 @@ function entryView(entry, ctx) {
   const backOut = requestView(entry.back_out_request, ctx.today, (r) => ({ reason: r.reason?.label || '', outcome: r.outcome || null }));
   if (companion) view.back_out = { available: true, request: backOut };
   else if (backOut && backOut.decided === 'approved') view.back_out = { available: false, request: backOut };
+  // A new name for their pup (End-State guide §29): a placed family with a pup may
+  // ask for one; she approves it on her device, which renames the dog. Their request
+  // as their page shows it (the name they asked for, and the one she gave).
+  if (pup && entry.status === 'placed') {
+    view.pup_name = { available: true, name: pup, request: requestView(entry.name_request, ctx.today, (r) => ({ name: r.name || '', approved_name: orNull(r.approved_name) })) };
+  }
   // Her policies banner (it compares her last change with the day they applied) for a
   // placed family with an open sale too: a back-out policy matters most to them.
   if (companion && entry.applied_date && !WAITLIST_OPEN_STATUSES.includes(entry.status)) view.applied_date = entry.applied_date;

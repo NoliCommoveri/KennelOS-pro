@@ -544,7 +544,7 @@ ${group('passing', 'Passing & readiness', online ? 'Reasons families give, and "
         </div>
 ${online ? readySettings(c) : ''}`)}
 ${online ? group('changes', 'Family changes', 'Changes families make on their status page without your OK', familyChangesSettings(c)) : ''}
-      ${group('public', 'Public list & family pages', online ? 'Paused families, program icons, upcoming litters, parents\' health tests, Facebook, extras' : 'Paused families and program icons on the public list', `
+      ${group('public', 'Public list & family pages', online ? 'Paused families, program icons, upcoming litters, parents\' health tests, Facebook, extras, new pup names' : 'Paused families and program icons on the public list', `
         <div class="field field-wide">
           <label class="check-inline"><input id="wl-show-paused" type="checkbox"${c.public_show_paused ? ' checked' : ''}> Show paused families on the public list</label>
           <span class="field-hint">They keep their number and show "Skipped until" the date their pause ends in place of what they want. Unticked, they're left off and their number is skipped. Applies to the list online and the list copied as text.</span>
@@ -553,7 +553,7 @@ ${online ? group('changes', 'Family changes', 'Changes families make on their st
           <label class="check-inline"><input id="wl-show-programs" type="checkbox"${c.public_show_programs ? ' checked' : ''}> Show program icons on the public list</label>
           <span class="field-hint">A family in a program you gave an icon (Waitlist programs) shows that icon to the left of their number; tapping it shows the program's description for families, so others can see why they're ahead. The program's name never shows, and programs without an icon stay private. In the list copied as text, the icon is an emoji with its description below the list.</span>
         </div>
-${online ? upcomingSwitches(c) + featuredSettings(c) + parentTestsSetting(c) + facebookSettings(c) + extrasSettings(c) : ''}`)}
+${online ? upcomingSwitches(c) + featuredSettings(c) + parentTestsSetting(c) + facebookSettings(c) + extrasSettings(c) + pupNameSetting(c) : ''}`)}
 ${group('messages', 'Messages to families', online ? '"Almost your turn", status page pop-ups and the emails families get' : 'The "Almost your turn" message', `
         <div class="field field-wide"><label for="wl-soon-text">"Almost your turn" message</label>
           <textarea id="wl-soon-text" style="min-height:130px;">${esc(c.soon_notice_text || SOON_NOTICE_DEFAULT)}</textarea>
@@ -663,6 +663,15 @@ function extrasSettings(c) {
       <label for="wl-extras-url" style="margin-top:6px;">Your page with the extras' details and prices</label>
       <input id="wl-extras-url" type="url" inputmode="url" autocomplete="url" value="${esc(c.extras_info_url || '')}" placeholder="https://yourkennel.com/extras">
       <span class="field-hint">Families whose pup is picked see your message, a <strong>See our extras and prices</strong> button that opens this page in a new tab (only if you fill it in), then the extras they can ask for, by name, in your groups. Each group can link to its own page: set it under the group's name on the Extra charges price list, where you also choose which extras they can ask for. Prices never show on their page.</span>
+    </div>`;
+}
+
+// A new name a family asks for (End-State guide §29): whether her name box keeps the
+// pup's original name after theirs, in parentheses.
+function pupNameSetting(c) {
+  return `<div class="field field-wide">
+      <label class="check-inline"><input id="wl-name-keep" type="checkbox"${c.name_keep_original ? ' checked' : ''}> New pup names: keep the original name in parentheses</label>
+      <span class="field-hint">A placed family can ask for a new name for their pup from their status page. You review it on their waitlist page, where the name box starts with theirs; ticked, it also keeps the pup's name now after it, like <strong>Luna (Opal)</strong>. You can change it before you approve.</span>
     </div>`;
 }
 
@@ -842,6 +851,7 @@ async function onSaveWaitlist() {
     const label = q('#wl-featured-label').value.trim();
     waitlist_config.featured_label = label === FEATURED_LABEL_DEFAULT ? '' : label;
   }
+  if (q('#wl-name-keep')) waitlist_config.name_keep_original = q('#wl-name-keep').checked;
   if (q('#wl-extras-intro')) {
     const intro = q('#wl-extras-intro').value.trim();
     waitlist_config.extras_intro_text = intro === EXTRAS_INTRO_DEFAULT ? '' : intro;

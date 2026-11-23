@@ -276,6 +276,8 @@ export function requestPhrase(field, request) {
   if (field === 'pref_change_request') return 'to change your preferences';
   // One of their extras requests (Family Requests plan §3): { kind, name }.
   if (field === 'back_out_request') return 'to back out of your puppy\'s sale';
+  // A new name for their pup: { from_name, name }.
+  if (field === 'name_request') return request?.name ? `to name ${request.from_name || 'your puppy'} ${request.name}` : 'for a new name for your puppy';
   // A pickup request (Family Requests plan §4): { kind, date, address }.
   if (field === 'pickup_request') {
     if (request?.kind === 'cancel') return 'to cancel your pickup time';

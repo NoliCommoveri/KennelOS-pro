@@ -213,7 +213,7 @@ class Review {
       const r = readNudgeKey(n.key);
       const e = this.entriesById.get(r.entryId);
       if (r.kind === 'waitlist-messages') { messages += (e?.messages || []).filter((m) => !m.read && m.kind === 'message').length || 1; continue; }
-      const kind = { 'waitlist-pause-request': 'pause', 'waitlist-pref-request': 'pref', 'waitlist-listen-request': 'listen', 'waitlist-companion-request': 'companion' }[r.kind];
+      const kind = { 'waitlist-pause-request': 'pause', 'waitlist-pref-request': 'pref', 'waitlist-listen-request': 'listen', 'waitlist-companion-request': 'companion', 'waitlist-name-request': 'name' }[r.kind];
       if (kind) { requests[kind] = (requests[kind] || 0) + 1; continue; }
       if (r.kind === 'waitlist-extra-request') {
         const req = pendingExtraRequests(e).find((x) => x.id === r.requestId);
@@ -356,13 +356,16 @@ class Review {
     }
   }
 
-  // A request decided by the nudge's own actions (pause, answers, litters, Companion link).
+  // A request decided by the nudge's own actions (pause, answers, litters, Companion
+  // link), or opened on their page (a new pup name).
   async simpleRequest(n) {
     await this.chat.say(`<strong>${esc(n.title)}</strong><br>${esc(n.detail || '')}`);
     const pick = await this.chat.choose([...n.actions.map((a, i) => ({ label: a.label, value: String(i), primary: i === 0 })), SKIP]);
     if (pick === '__skip') { this.skipped++; return; }
     const action = n.actions[Number(pick)];
     if (action.label === 'Open Companion') return this.openPage('companion.html?type=family', 'the Companion page');
+    // A new pup name: reviewed on their page, where the name box is.
+    if (action.label === 'Open') return this.openPage(n.subjectHref, 'their page');
     await this.runNudgeAction(action);
   }
 

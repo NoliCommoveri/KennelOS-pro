@@ -87,6 +87,9 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   back_out_reasons: null, // [{ id, label }]; null = BACK_OUT_REASONS_DEFAULT ("Something else" always added)
   back_out_policy: [], // [{ reason_id, from_weeks?, until_weeks?, outcome: 'keep' | 'move' }]; first row that fits suggests
   back_out_policy_text: '', // what families read before sending; blank = BACK_OUT_POLICY_TEXT_DEFAULT
+  // A new name a family asks for (End-State guide §29): her name box starts with
+  // their name, and with this on, the pup's original name after it in parentheses.
+  name_keep_original: false,
   // Her waitlist policies (Waitlist Policies plan; waitlistForm.waitlistPolicies): an
   // ordered [{ id, heading, body, topic?, basis? }], shown on every family page and her
   // website; while any exist, the online application asks "I've read the policies".
@@ -1458,6 +1461,22 @@ export function prepassFor(entry, litter) {
     || (p.pairing_id && litter.pairing_id && p.pairing_id === litter.pairing_id)) || null;
 }
 
+// What she can record "Not this litter" on for a family (Spec §16.2, on their behalf):
+// the waitlist's litters (isWaitlistLitter) that aren't in their open turn, they
+// haven't had their turn on, they listen for and haven't passed on yet; and pairings
+// still to come (LISTEN_LIVE_PAIRING, no litter yet) they listen for.
+// → { litters: [litter], pairings: [pairing] }
+export function prepassTargets(entry, { litters = [], pairings = [], offers = [] } = {}) {
+  const passed = (id) => (entry.prepasses || []).some((p) => p.pairing_id === id);
+  return {
+    litters: litters.filter((l) => isWaitlistLitter(l, entry.kennel_id)
+      && !offers.some((o) => o.litter_id === l.id && o.entry_id === entry.id && o.outcome === 'open' && !o.is_archived)
+      && !turnSpent(offers, l.id, entry.id) && isListeningFor(entry, l) && !prepassFor(entry, l)),
+    pairings: pairings.filter((p) => p && !p.is_archived && p.kennel_id === entry.kennel_id && LISTEN_LIVE_PAIRING.includes(p.status)
+      && !litters.some((l) => !l.is_archived && l.pairing_id === p.id) && isListeningFor(entry, p) && !passed(p.id))
+  };
+}
+
 // A row written when a family's "Not this litter" was used up by their turn (the
 // actions' recordPrepassed): closed by their own instruction, not by a pass she
 // recorded. Read from its note, the only mark it has.
@@ -1602,6 +1621,30 @@ export function nextOfferedTurn(entries, offers, litters, pups, sales, { today, 
   return null;
 }
 
+// The families whose turn comes before `entryId`'s and is "Not this litter" in full
+// (§16.2), if picks were open on `opening`: ranked ahead of them, every litter of
+// their turn passed on ahead of time. Offering `entryId` their turn records these as
+// passed first, as "Offer to them" does (offerTo). Only when `entryId` is really next
+// after them: [] when another family would be offered before `entryId` (out of turn,
+// their turns haven't come). → [{ entry, litters, prepassed }]
+export function passedBefore(entryId, entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null, opening = null } = {}) {
+  const kid = kennelId || opening?.kennel_id || litters.find(isPicksOpen)?.kennel_id || null;
+  if (!kid || openTurns(offers, kid).length) return [];
+  const ls = litters
+    .filter((l) => l.kennel_id === kid)
+    .map((l) => (opening && l.id === opening.id && !l.picks_opened_date ? { ...l, picks_opened_date: today } : l));
+  const out = [];
+  for (const entry of rankedList(entries, kid, programsById)) {
+    if (entry.id === entryId) return out;
+    const mine = turnLittersFor(entry, offers, ls, pups, sales, { today, config });
+    if (!mine.length) continue;
+    const { offer, prepassed } = splitPrepassed(entry, mine);
+    if (offer.length) return [];
+    out.push({ entry, litters: mine, prepassed });
+  }
+  return [];
+}
+
 // Can this family be offered a turn starting from `litter` now? '' when they can,
 // else the reason, in her words. The offer dialog and offerTo both ask it, so the
 // list she picks from and the action never disagree (K6-7). `nameOf(entryId)`
@@ -1618,7 +1661,7 @@ export function offerBlocker(entry, litter, { offers = [], pups = [], sales = []
   if (isReadyHeld(entry, today, config)) return readyText ? readyText(entry) : 'They\'re not ready for a pup yet.';
   if (isManuallyPaused(entry, today)) return 'They\'re paused.';
   if (!isListeningFor(entry, litter)) return entry.listen_mode === 'except' ? 'They asked to skip litters from this sire or dam.' : 'They\'re only listening for litters from other sires/dams.';
-  if (prepassFor(entry, litter)) return `They said "Not this litter" to ${litter.nickname || 'this litter'} on their status page. Undo that on their page first if they've changed their mind.`;
+  if (prepassFor(entry, litter)) return `${prepassFor(entry, litter).by === 'breeder' ? 'You recorded' : 'They said'} "Not this litter" for ${litter.nickname || 'this litter'}. Remove it under Not this litter on their page (Details) if they've changed their mind.`;
   const litterPups = pups.filter((d) => d.litter_id === litter.id);
   if (!litterPups.some((d) => isPupAvailable(d, sales))) return 'No pups available yet.';
   if (!eligiblePupsFor(entry, litter, litterPups, sales, { today, config }).length) return 'No available pup matches what they want.';
@@ -2199,7 +2242,7 @@ export function autoPassedLine(a, { nameOf, litterOf }) {
 // The "Next turn" line's warning (Spec §16.2): which of the next family's turn
 // litters they said "Not this litter" to, and what offering will do. '' when none.
 // `ls` is nextTurn's litters; `litterOf(litter)` names one.
-export function nextTurnPrepassNote(entry, ls, { offers = [], config = WAITLIST_CONFIG_DEFAULTS, program = null, litterOf }) {
+export function nextTurnPrepassNote(entry, ls, { offers = [], config = WAITLIST_CONFIG_DEFAULTS, program = null, litterOf, doing = '"Offer to them" records their turn as a pass', then = 'and offers the next family' }) {
   const { offer, prepassed } = splitPrepassed(entry, ls);
   if (!prepassed.length) return '';
   const names = prepassed.map((x) => litterOf(x.litter)).join(', ');
@@ -2208,7 +2251,7 @@ export function nextTurnPrepassNote(entry, ls, { offers = [], config = WAITLIST_
   const used = passesUsed(entry, offers) + 1;
   const max = Number(config.max_passes);
   const last = counts && used >= max ? ' That will be their last pass, so they\'ll be removed from the list.' : '';
-  return `They said "Not this litter" to ${prepassed.length === 1 ? names : `all of these (${names})`}. "Offer to them" records their turn as a pass${counts ? ` (pass ${used} of ${max})` : ''} and offers the next family.${last}`;
+  return `They said "Not this litter" to ${prepassed.length === 1 ? names : `all of these (${names})`}. ${doing}${counts ? ` (pass ${used} of ${max})` : ''} ${then}.${last}`;
 }
 
 export function describeOfferChanges({ next = null, voided = [], offered = [], waiting = [], auto_passed = [], resolved = [], ended = [], side_released = [] } = {}, { nameOf, litterOf, fmtDate = (d) => d } = {}) {

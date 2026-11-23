@@ -472,6 +472,9 @@ export const SYNC_REGISTRY = Object.freeze({
       // Their request to back out (Family Requests plan §7), with their reason and
       // note: private like a pass reason.
       'back_out_request',
+      // A new name they asked for their pup (End-State guide §29), with their note:
+      // private like pause_request. What she approved renames the dog itself.
+      'name_request',
       // Duplicate applications merged into this one (applicationDuplicates.js): the
       // deleted one's name, dates and any fee moved over as a credit. Private like
       // the answers it came from.

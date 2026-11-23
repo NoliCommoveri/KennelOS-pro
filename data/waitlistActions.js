@@ -36,6 +36,7 @@ import { waitlistEntryRepo, syncContactWaitlistStatus } from './waitlistEntryRep
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import { litterRepo } from './litterRepo.js';
+import { pairingRepo } from './pairingRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { familySale, pupBirthDate, withExtraRequest } from './familyExtras.js';
@@ -55,7 +56,7 @@ import {
   respondByDate, respondBy, deadlineKey, isTimeOfDay, countsAsPass, shouldRemoveForPasses, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
-  splitPrepassed, prepassFor, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit, sideSaleInOrderAt,
+  splitPrepassed, prepassFor, prepassTargets, passReasonOf, passedBefore, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit, sideSaleInOrderAt,
   turnIsEmpty, emptiedTurns, turnRespondBy, turnDeadline, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
   FAMILY_DETAIL_KEYS, isHeldPick
 } from './waitlistRules.js';
@@ -614,7 +615,7 @@ async function recordPrepassed(entry, prepassed, { turnId, today, respondBy, cou
       offered_date: today, ...dueFields(respondBy), eligible_dog_ids: eligibleDogs.map((d) => d.id),
       outcome: 'passed', outcome_date: today, counts_as_pass: counts && i === 0,
       pass_reason: prepass.reason || null,
-      notes: `${PREPASSED_NOTE}${prepass.date || 'their status page'} ("Not this litter"); recorded when their turn came.`
+      notes: `${PREPASSED_NOTE}${prepass.date || 'their status page'} ("Not this litter"${prepass.by === 'breeder' ? ', recorded by you for them' : ''}); recorded when their turn came.`
     }));
   }
   const used = new Set(prepassed.map((x) => x.prepass));
@@ -771,9 +772,18 @@ export const offerTo = atomic(async function offerTo(litterId, entryId, { today,
     await litterRepo.update(litterId, { picks_opened_date: today });
     c = await kennelContext(litter.kennel_id);
   }
+  // Families ahead of them whose whole turn is "Not this litter" (§16.2): their turn
+  // has come, so it's recorded as passed first, as "Offer to them" does. Not when
+  // she offers out of turn: the family next in line still waits, and so do they
+  // (passedBefore finds none then).
+  const autoPassed = [];
+  for (const ahead of passedBefore(entryId, c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today))) {
+    autoPassed.push(await autoPassTurn(c, ahead.entry, ahead.prepassed, today));
+  }
+  if (autoPassed.length) c = await kennelContext(litter.kennel_id);
   const ls = turnLittersFor(entry, c.offers, c.litters, c.pups, c.sales, { today, config: c.config });
   const { offer, prepassed } = splitPrepassed(entry, ls);
-  return makeTurn(c, entry, offer, { today, note, prepassed });
+  return { ...(await makeTurn(c, entry, offer, { today, note, prepassed })), auto_passed: autoPassed };
 });
 
 // **Open picks** (Spec §6.5): stamp the litter. With no turn open, the next turn is
@@ -1758,6 +1768,7 @@ export const applyFamilyPlan = atomic(async function applyFamilyPlan(entryId, pl
       // Unmeasured (the map service was down): left for her device to measure (K8-5).
       case 'home_location': await setHomeLocation(entryId, { place: plan.place, miles: plan.miles, date: Number.isFinite(plan.miles) ? date : null }); break;
       case 'back_out_request': await waitlistEntryRepo.update(entryId, { back_out_request: plan.request }); break;
+      case 'name_request': await waitlistEntryRepo.update(entryId, { name_request: plan.request }); break;
       case 'note': case 'skip': break;
       default: throw new Error(`Unknown plan "${plan.op}".`);
     }
@@ -1873,6 +1884,36 @@ export const declineListenChange = atomic(async function declineListenChange(ent
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   return waitlistEntryRepo.update(entryId, { listen_change_request: decided(loadPending(entry, 'listen_change_request', 'listen-only'), 'declined', date) });
+});
+
+// A new name for their pup (End-State guide §29). Her name box starts with what they
+// asked for, and with her setting "Keep the original name in parentheses" on, the
+// pup's name now after it: "Luna (Opal)".
+export function nameRequestValue(request, currentName, config) {
+  const asked = String(request?.name ?? '').trim();
+  const from = String(currentName ?? request?.from_name ?? '').trim();
+  if (!asked) return from;
+  return config?.name_keep_original && from && from.toLowerCase() !== asked.toLowerCase() ? `${asked} (${from})` : asked;
+}
+
+// Approving renames the pup to `name` (what she typed, else what they asked for) and
+// keeps that on the request as `approved_name`; declining changes nothing.
+export const approveNameRequest = atomic(async function approveNameRequest(entryId, { name, date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  const req = loadPending(entry, 'name_request', 'new-name');
+  const dog = req.dog_id ? await dogRepo.getById(req.dog_id) : null;
+  if (!dog) throw new Error('Their pup is no longer in your records, so there\'s nothing to rename. Decline the request instead.');
+  const finalName = String(name ?? req.name ?? '').replace(/\s+/g, ' ').trim();
+  if (!finalName) throw new Error('Type the pup\'s new name.');
+  if (finalName !== dog.call_name) await dogRepo.update(dog.id, { call_name: finalName });
+  return waitlistEntryRepo.update(entryId, { name_request: { ...decided(req, 'approved', date), approved_name: finalName, from_name: dog.call_name || req.from_name || '' } });
+});
+
+export const declineNameRequest = atomic(async function declineNameRequest(entryId, { date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  return waitlistEntryRepo.update(entryId, { name_request: decided(loadPending(entry, 'name_request', 'new-name'), 'declined', date) });
 });
 
 // Their Companion link request (Spec §8.3). She sends the link herself from the
@@ -2335,6 +2376,25 @@ export const addPrepass = atomic(async function addPrepass(entryId, prepass) {
   const entry = await load(entryId);
   const same = (p) => (prepass.litter_id ? p.litter_id === prepass.litter_id : p.pairing_id === prepass.pairing_id);
   return waitlistEntryRepo.update(entryId, { prepasses: [...(entry.prepasses || []).filter((p) => !same(p)), prepass] });
+});
+
+// "Not this litter" recorded by her for a family who told her (Spec §16.2, on their
+// behalf): the same pending pass as theirs, marked `by: 'breeder'`, on a litter or
+// pairing prepassTargets offers, with a reason from her pass reasons ("Other" needs
+// its words). Nothing counts until their turn comes.
+export const recordNotThisLitter = atomic(async function recordNotThisLitter(entryId, { litterId = null, pairingId = null, reason = null, date } = {}) {
+  const entry = await load(entryId);
+  requireStatus(entry, ['active'], 'record "Not this litter" for');
+  const kennel = await kennelRepo.getById(entry.kennel_id);
+  const offers = await waitlistOfferRepo.getByEntry(entryId);
+  const targets = prepassTargets(entry, { litters: await litterRepo.getAll({ includeArchived: true }), pairings: await pairingRepo.getAll({ includeArchived: true }), offers });
+  if (litterId ? !targets.litters.some((l) => l.id === litterId) : !targets.pairings.some((p) => p.id === pairingId)) {
+    throw new Error('That litter can\'t take "Not this litter" for them now: it\'s in their turn, they\'ve had their turn on it, or it\'s no longer on your waitlist.');
+  }
+  const r = passReasonOf(waitlistConfig(kennel), reason);
+  if (!r) throw new Error(reason?.id === 'other' ? 'Type their reason.' : 'Choose their reason.');
+  date ??= kennelToday(kennel);
+  return addPrepass(entryId, { ...(litterId ? { litter_id: litterId } : { pairing_id: pairingId }), reason: r, date, by: 'breeder' });
 });
 
 // Take a "Not this litter" back. `target` is { litter_id } or { pairing_id }.

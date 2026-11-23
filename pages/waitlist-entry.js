@@ -57,7 +57,7 @@ import {
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
   sideSaleOf, sideSaleInOrder, boughtOutOfOrder, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
-  familyDetails, contactForEmail, deadlineLabel, isHeldPick, turnDeadline } from '../data/waitlistRules.js';
+  familyDetails, contactForEmail, deadlineLabel, isHeldPick, turnDeadline, prepassTargets, passReasons, passedBefore, nextTurnPrepassNote } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import { canShareFiles, shareOrDownload, shareFailText } from '../assets/pdfShare.js';
 import {
@@ -484,6 +484,17 @@ function pendingRequests(e) {
       hint: 'Send it from the Companion page (Current families), then mark it sent so their status page says so.',
       buttons: '<a class="btn btn-sm" href="companion.html?type=family">Open Companion</a><button class="btn btn-sm btn-primary" data-req="companion:sent">Mark sent</button><button class="btn btn-sm" data-req="companion:decline">Decline</button>' });
   }
+  // A new name for their pup (End-State guide §29): her name box starts with theirs
+  // (and the original in parentheses, with her setting on); Approve renames the pup.
+  if (actions.hasPendingRequest(e, 'name_request')) {
+    const r = e.name_request;
+    const current = ctx.dogsById.get(r.dog_id)?.call_name || r.from_name || '';
+    out.push({ kind: 'name', note: r.note,
+      text: `Asked ${esc(fmtDate(r.requested_date))} for a new name for <strong>${esc(current || 'their pup')}</strong>: <strong>${esc(r.name)}</strong>.`,
+      hint: `Change the name if you like. Approve renames the pup everywhere in KennelOS${ctx.config.name_keep_original ? '; your setting keeps the original name in parentheses' : ''}.`,
+      buttons: `<input id="name-req-value" type="text" maxlength="60" value="${esc(actions.nameRequestValue(r, current, ctx.config))}" aria-label="The pup's new name" style="width:auto;max-width:220px;">
+        <button class="btn btn-sm btn-primary" data-req="name:approve">Approve</button><button class="btn btn-sm" data-req="name:decline">Decline</button>` });
+  }
   // Extras asked for or cancelled (Family Requests plan §3): Approve puts it on (or
   // takes it off) their open sale.
   const list = kennelChargeList(ctx.kennel);
@@ -604,7 +615,9 @@ function wireRequests(root) {
     'unpause:approve': decide('unpause_request', actions.approveUnpauseRequest, true), 'unpause:decline': decide('unpause_request', actions.declineUnpauseRequest, false),
     'pref:approve': decide('pref_change_request', actions.approvePrefChange, true), 'pref:decline': decide('pref_change_request', actions.declinePrefChange, false),
     'listen:approve': decide('listen_change_request', actions.approveListenChange, true), 'listen:decline': decide('listen_change_request', actions.declineListenChange, false),
-    'companion:sent': () => actions.markCompanionLinkSent(e.id), 'companion:decline': () => actions.declineCompanionRequest(e.id)
+    'companion:sent': () => actions.markCompanionLinkSent(e.id), 'companion:decline': () => actions.declineCompanionRequest(e.id),
+    'name:approve': decide('name_request', (id) => actions.approveNameRequest(id, { name: root.querySelector('#name-req-value')?.value }), true),
+    'name:decline': decide('name_request', actions.declineNameRequest, false)
   };
   // An extras request (data-req "extra|<request id>:approve"), then the email saying so.
   const extra = (requestId, approved) => async () => {
@@ -1200,7 +1213,8 @@ const LEAVE_CHOICES = {
 };
 const leaveLabel = (e) => (e.status === 'active' ? 'Remove from list…' : 'Close application…');
 
-async function onLeave() {
+// `preset`: the choice ticked when it opens (Decline… on Interact opens it on decline).
+async function onLeave(preset = null) {
   const e = ctx.entry;
   const name = entryName(e, ctx.contact);
   const choices = LEAVE_CHOICES[e.status] || [];
@@ -1210,7 +1224,7 @@ async function onLeave() {
     title: e.status === 'active' ? `${name} is leaving the list?` : `Close ${name}'s application?`,
     confirmLabel: e.status === 'active' ? 'Take them off the list' : 'Close it',
     danger: true,
-    bodyHtml: `${choices.map((c) => `<label class="check-inline" style="display:block;margin:8px 0;"><input type="radio" name="lv" value="${c.value}"> <strong>${esc(c.label)}</strong>
+    bodyHtml: `${choices.map((c) => `<label class="check-inline" style="display:block;margin:8px 0;"><input type="radio" name="lv" value="${c.value}"${c.value === preset ? ' checked' : ''}> <strong>${esc(c.label)}</strong>
         <div class="faint" style="margin-left:22px;">${esc(c.hint)}</div></label>`).join('')}
       ${openOfferWarning() ? `<p class="field-hint">${esc(openOfferWarning().trim())}</p>` : ''}
       <p class="field-hint">${emailHint()}</p>`,
@@ -1404,14 +1418,63 @@ function readySummary(e) {
 }
 
 // "Not this litter" (Spec §16.2): litters the family passed on ahead of time on
-// their status page, with their reason. Nothing counts until their turn comes.
+// their status page, or she recorded for them, with the reason. Nothing counts until
+// their turn comes. Each can be removed (they changed their mind).
 const reasonText = (r) => (r ? `${r.label}${r.text ? `: "${r.text}"` : ''}` : '');
+const prepassName = (p) => {
+  const l = p.litter_id ? ctx.litters.find((x) => x.id === p.litter_id) : null;
+  const pr = p.pairing_id ? ctx.pairings.find((x) => x.id === p.pairing_id) : null;
+  return l ? litterLabel(l) : pr ? `${pairingLabel(pr)} (pairing)` : p.pairing_id ? 'an upcoming pairing' : 'a litter';
+};
 function notThisLitterHtml(e) {
+  const live = e.status === 'active' && !e.is_archived;
   return (e.prepasses || []).map((p) => {
-    const l = p.litter_id ? ctx.litters.find((x) => x.id === p.litter_id) : null;
-    const name = l ? litterLabel(l) : p.pairing_id ? 'an upcoming pairing' : 'a litter';
-    return `${esc(name)}${p.reason ? ` <span class="faint">— ${esc(reasonText(p.reason))}${p.date ? `, ${esc(fmtDate(p.date))}` : ''}</span>` : ''}`;
+    const key = p.litter_id ? `litter:${p.litter_id}` : `pairing:${p.pairing_id}`;
+    const meta = [p.reason ? reasonText(p.reason) : '', p.date ? fmtDate(p.date) : '', p.by === 'breeder' ? 'recorded by you' : 'from their status page'].filter(Boolean).join(', ');
+    return `${esc(prepassName(p))} <span class="faint">— ${esc(meta)}</span>${live ? ` <button class="btn btn-sm" data-unprepass="${esc(key)}">Remove</button>` : ''}`;
   }).join('<br>') + ((e.prepasses || []).length ? '<br><span class="faint">Left out of their turn when it comes, and it counts as a pass only then.</span>' : '');
+}
+
+const hasPrepassTargets = (e) => {
+  const t = prepassTargets(e, { litters: ctx.litters, pairings: ctx.pairings, offers: ctx.offers });
+  return t.litters.length + t.pairings.length > 0;
+};
+
+// Record "Not this litter" for them (Interact): a litter or upcoming pairing, and
+// their reason from her pass reasons.
+async function onRecordPrepass() {
+  const e = ctx.entry;
+  const name = entryName(e, ctx.contact);
+  const t = prepassTargets(e, { litters: ctx.litters, pairings: ctx.pairings, offers: ctx.offers });
+  const reasons = passReasons(ctx.config);
+  const opts = [
+    ...t.litters.map((l) => `<option value="litter:${esc(l.id)}">${esc(litterLabel(l))}</option>`),
+    ...t.pairings.map((p) => `<option value="pairing:${esc(p.id)}">${esc(pairingLabel(p))} (upcoming pairing)</option>`)
+  ].join('');
+  await formModal({
+    title: `"Not this litter" for ${name}`,
+    confirmLabel: 'Record it',
+    bodyHtml: `
+      <div class="field"><label for="pp-target">Which litter</label><select id="pp-target">${opts}</select></div>
+      <div class="field"><label for="pp-reason">Their reason</label><select id="pp-reason"><option value="">Choose…</option>${reasons.map((r) => `<option value="${esc(r.id)}">${esc(r.label)}</option>`).join('')}</select></div>
+      <div class="field" id="pp-other-wrap" hidden><label for="pp-other">In their words</label><input id="pp-other" type="text" maxlength="200"></div>
+      <p class="field-hint">Use this when they told you rather than tapping it on their status page. Nothing counts now: when their turn comes, this litter is left out of it and recorded as their pass. Their status page shows it, and they or you can take it back until then.</p>`,
+    onConfirm: async (o) => {
+      const [kind, id] = o.querySelector('#pp-target').value.split(':');
+      const reasonId = o.querySelector('#pp-reason').value;
+      if (!reasonId) throw new Error('Choose their reason.');
+      await actions.recordNotThisLitter(e.id, { [kind === 'litter' ? 'litterId' : 'pairingId']: id, reason: { id: reasonId, text: o.querySelector('#pp-other').value } });
+    }
+  }, (o) => o.querySelector('#pp-reason').addEventListener('change', (ev) => { o.querySelector('#pp-other-wrap').hidden = ev.target.value !== 'other'; })) && afterAction();
+}
+
+async function onRemovePrepass(key) {
+  const [kind, id] = key.split(':');
+  const p = (ctx.entry.prepasses || []).find((x) => (kind === 'litter' ? x.litter_id === id : x.pairing_id === id));
+  if (!p) return;
+  if (!(await confirmModal({ title: `Remove "Not this litter" on ${prepassName(p)}?`, message: 'They\'re in line for it again by their place. Nothing was ever counted as a pass.', confirmLabel: 'Remove' }))) return;
+  await actions.removePrepass(ctx.entry.id, kind === 'litter' ? { litter_id: id } : { pairing_id: id });
+  await afterAction();
 }
 
 // How their name shows on the public list (Spec §15.3), and what came of their
@@ -1695,7 +1758,9 @@ function litterChoices(e) {
       });
       const next = blocked ? null
         : nextOfferedTurn(ctx.kennelEntries, ctx.kennelOffers, ctx.litters, pups, ctx.sales, { ...opts, kennelId: ctx.kennel.id, opening: l });
-      return { litter: l, eligible, blocked, next };
+      // Families ahead of them whose whole turn is "Not this litter": passed first.
+      const passedFirst = blocked ? [] : passedBefore(e.id, ctx.kennelEntries, ctx.kennelOffers, ctx.litters, pups, ctx.sales, { ...opts, kennelId: ctx.kennel.id, opening: l });
+      return { litter: l, eligible, blocked, next, passedFirst };
     });
 }
 
@@ -1714,6 +1779,9 @@ async function onOfferLitter() {
         <input type="radio" name="ol" value="${esc(l.id)}"${c.blocked ? ' disabled' : ''}${!c.blocked && i === choices.indexOf(offerable[0]) ? ' checked' : ''}>
         <strong>${esc(litterLabel(l))}</strong> ${order}
         <div class="faint" style="margin-left:22px;">${c.blocked ? esc(c.blocked) : `${esc(picks)} · pups for them: ${esc(c.eligible.map(pupLabel).join(', '))}`}</div>
+        ${(c.passedFirst || []).map((a) => `<div class="field-hint" style="margin-left:22px;"><span class="badge badge-amber">Not this litter</span> ${esc(familyNameById(a.entry.id))} is ahead of them. ${esc(nextTurnPrepassNote(a.entry, a.litters, {
+          offers: ctx.kennelOffers.filter((o) => o.entry_id === a.entry.id), config: ctx.config, program: ctx.programs.get(a.entry.waitlist_program_id) || null, litterOf: litterLabel,
+          doing: 'Offering this turn records their turn as a pass', then: 'first' }))}</div>`).join('')}
       </label>`;
   };
   const turnLength = turnLengthText(ctx.config, ctx.programs.get(e.waitlist_program_id) || null);
@@ -1737,7 +1805,15 @@ async function onOfferLitter() {
       }
       turn = await actions.offerTo(c.litter.id, e.id, { note, outOfOrder: Boolean(note) });
     }
-  }) && (await afterAction(), await emailFamilies(offerSpecs({ next: turn })));
+  }) && (await afterAction(), await reportPassedFirst(turn), await emailFamilies(offerSpecs({ next: turn })));
+}
+
+// Families passed on the way to this turn ("Not this litter" to their whole turn,
+// §16.2): always said, so a pass never happens out of her sight.
+async function reportPassedFirst(turn) {
+  if (!turn?.auto_passed?.length) return;
+  const lines = describeOfferChanges({ auto_passed: turn.auto_passed }, { nameOf: familyNameById, litterOf: (id) => { const l = ctx.litters.find((x) => x.id === id); return l ? litterLabel(l) : 'a litter'; } });
+  await alertModal({ title: 'Passed first', message: [...lines, `Then the turn went to ${entryName(ctx.entry, ctx.contact)}.`].join('\n\n') });
 }
 
 // The turn-moves-on sentence for an outcome prompt: with automatic offers off for
@@ -2040,6 +2116,7 @@ function requestTimeline(e) {
   one(e.unpause_request, 'Asked to end their pause early', 'ending their pause early');
   one(e.listen_change_request, 'Asked to change which litters they wait for', 'their litters change');
   one(e.companion_request, 'Asked for their Companion link', 'their Companion link');
+  one(e.name_request, e.name_request ? `Asked to name ${e.name_request.from_name || 'their pup'} ${e.name_request.name}` : '', e.name_request?.decided === 'approved' ? `the name ${e.name_request.approved_name || e.name_request.name}` : 'the new name');
   if (e.pref_change_request?.requested_date) out.push([e.pref_change_request.requested_date, 'Asked to change their answers']);
   one(e.back_out_request, `Asked to back out${e.back_out_request?.reason?.label ? ` (${e.back_out_request.reason.label})` : ''}`, 'backing out');
   for (const r of e.extra_requests || []) {
@@ -2072,6 +2149,7 @@ function timelineHtml() {
     [e.removed_date, `Removed${e.removed_reason ? ` (${descriptor(WAITLIST_REMOVED_REASON, e.removed_reason).label.toLowerCase()})` : ''}`],
     ...offerTimeline(e),
     ...requestTimeline(e),
+    ...(e.prepasses || []).filter((p) => p.by === 'breeder').map((p) => [p.date, `You recorded "Not this litter" on ${prepassName(p)} for them`]),
     ...(e.merged_applications || []).map((x) => [x.date, `Merged a duplicate application${x.name ? ` from ${x.name}` : ''}${x.applied_date ? ` (applied ${fmtDate(x.applied_date)})` : ''}; it was deleted${x.fee_credit ? `, and its ${fmtMoney(x.fee_credit)} fee became a credit` : ''}`]),
     ...(e.pref_change_log || []).map((x) => [x.date, `${PREF_FIELD_LABEL[x.field] || x.field}: ${prefValueText(x.field, x.from)} → ${prefValueText(x.field, x.to)}${x.declined ? ' (they asked; you declined)' : x.by === 'request' ? ' (they asked)' : x.by === 'family' ? ' (they changed it)' : ''}`])
   ].filter(([d]) => d)
@@ -2370,6 +2448,7 @@ function renderDetails() {
   pane.querySelector('[data-act="dns"]')?.addEventListener('click', () => onAddDoNotSell().catch(fail));
   wireSuggestions(pane);
   wireDuplicates(pane);
+  pane.querySelectorAll('[data-unprepass]').forEach((b) => b.addEventListener('click', () => onRemovePrepass(b.dataset.unprepass).catch((err) => showError(err.message || String(err)))));
   // "Ready now?" answered for them (they told her by phone or message).
   pane.querySelector('[data-ready="yes"]')?.addEventListener('click', () => actions.recordReadyAnswer(e.id, { answer: 'yes', by: 'breeder' })
     .then(afterAction).catch((err) => showError(err.message || String(err))));
@@ -2464,11 +2543,13 @@ function interactButtons(e) {
   const lost = lostSale(e) ? b('restore', e.status === 'placed' ? 'Put back in line…' : 'Give their turn back…', 'btn-primary') : '';
   let main = '';
   switch (e.status) {
-    case 'applied': main = b('approve', 'Approve…', 'btn-primary'); break;
+    case 'applied': main = b('approve', 'Approve…', 'btn-primary') + b('decline', 'Decline…'); break;
     case 'approved': main = b('fee', e.fee_amount == null ? 'Add to the list…' : 'Fee received…', 'btn-primary'); break;
     case 'active': main = b('offer', 'Offer pups…', lost ? '' : 'btn-primary')
       // A side sale (Side Sale Spec): outside the turn order; not while they hold the turn or already buy one.
       + (!holdsTurn(ctx.offers, e.id) && !sideSaleOf(e, ctx.sales) ? b('side', 'Record a side sale…') : '')
+      // "Not this litter" for them (Spec §16.2), when they told her instead of tapping it.
+      + (hasPrepassTargets(e) ? b('prepass', 'Record "Not this litter"…') : '')
       + b('move', 'Move place…') + (canUndoFeeReceived(e, ctx.offers, kennelToday(ctx.kennel), ctx.sales) ? b('undofee', 'Undo fee received…') : ''); break;
     case 'declined': main = (canUndoDecline(e, kennelToday(ctx.kennel)) ? b('undo', 'Undo decline', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
     case 'expired': main = (canUndoExpire(e, kennelToday(ctx.kennel)) ? b('undo', 'Reopen application', 'btn-primary') : '') + b('reapply', 'Re-apply'); break;
@@ -2516,7 +2597,7 @@ function renderInteract() {
   wireSideSale(pane);
   wireSuggestions(pane);
   wireDuplicates(pane);
-  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, charges: () => onAddCharges(), communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel), portalearly: onPortalEarly };
+  const handlers = { offlist: () => onFamilyPageOnly(true), onlist: () => onFamilyPageOnly(false), side: onSideSale, offer: onOfferLitter, approve: onApprove, decline: () => onLeave('decline'), prepass: onRecordPrepass, fee: onFeeReceived, move: onMove, undo: onUndo, undofee: onUndoFee, reapply: onReapply, restore: onRestore, endsale: onEndSale, charges: () => onAddCharges(), communicate: onCommunicate, viewpage: () => openStatusPage(ctx.entry, ctx.kennel), portalearly: onPortalEarly };
   pane.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', () => handlers[btn.dataset.act]().catch((err) => showError(err.message || String(err))));
   });

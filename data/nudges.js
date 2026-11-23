@@ -1566,6 +1566,18 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         actions: [{ label: 'Open', run: async () => { location.href = href(e); } }]
       });
     }
+    // A new name for their pup (End-State guide §29): she reviews it on their page,
+    // where the name box and Approve / Decline are.
+    if (hasPendingRequest(e, 'name_request')) {
+      const r = e.name_request;
+      out.push({
+        key: `waitlist-name-request:${e.id}:${r.requested_date}`,
+        title: `${name(e)} asked for a new name for ${r.from_name || 'their pup'}`,
+        detail: `They'd like to call ${r.from_name || 'their pup'} "${r.name}". Review it on their page.${said(r.note)}`,
+        subjectHref: href(e),
+        actions: [{ label: 'Open', run: async () => { location.href = href(e); } }]
+      });
+    }
     // Pickup requests (Family Requests plan §4): a time or a cancel is decided here;
     // their own address needs a day, time and fee, so it opens their page.
     for (const r of pendingPickupRequests(e)) {

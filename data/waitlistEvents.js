@@ -41,8 +41,10 @@ import { arrivalDate } from './waitlistInbox.js';
 import { backOutReasons, BACK_OUT_OTHER } from './backOut.js';
 
 export const FAMILY_EVENT_KINDS = ['pick', 'pass', 'still_interested', 'pause_request', 'unpause', 'leave', 'listen', 'pref_change', 'prepass', 'unprepass', 'ready', 'companion_request', 'extra_request', 'extra_cancel',
-  'pickup_book', 'pickup_cancel', 'pickup_address', 'home_location', 'back_out'];
+  'pickup_book', 'pickup_cancel', 'pickup_address', 'home_location', 'back_out', 'name_request'];
 export const NOTE_MAX = 500;
+// The longest pup name a family may ask for (cloud/src/familyActions.js PUP_NAME_MAX).
+export const PUP_NAME_MAX = 40;
 
 const clean = (v) => String(v ?? '').trim().slice(0, NOTE_MAX);
 const ids = (v) => [...new Set((Array.isArray(v) ? v : []).filter((x) => typeof x === 'string' && x))];
@@ -78,6 +80,7 @@ export const activityId = (event) => `event-${event.seq}`;
 //   op 'pickup_request' { request }  → added to entry.pickup_requests (familyPickup.js)
 //   op 'home_location'  { place, miles } → where they live, on the entry
 //   op 'back_out_request' { request } → entry.back_out_request (backOut.js)
+//   op 'name_request'   { request }  → entry.name_request (a new name for their pup)
 // `date` is the day the family acted, in the kennel's time zone; `activity` the
 // line for their entry's activity ({ id, at, body }), or null.
 // Free changes (Free Changes plan §4) are decided HERE, against her records now
@@ -266,6 +269,17 @@ export function planFamilyEvent(event, ctx) {
       const r = reasons.find((x) => x.id === p.reason_id) || BACK_OUT_OTHER;
       return { op: 'back_out_request', date, activity: null, request: {
         requested_date: date, reason: { id: r.id, label: r.label, text: clean(p.reason_text).slice(0, 200) }, note: why
+      } };
+    }
+    case 'name_request': {
+      // A new name for their pup (End-State guide §29): the pup of the sale they were
+      // placed with (else their open one). Nothing changes until she approves it.
+      const sale = (entry.placed_sale_id && sales.find((x) => x.id === entry.placed_sale_id)) || ownSale();
+      const name = String(p.name ?? '').replace(/\s+/g, ' ').trim().slice(0, PUP_NAME_MAX);
+      if (!name) return skip('bad_payload');
+      if (!sale?.dog_id) return note(`Asked to name their pup ${name}, but they have no pup on record now, so nothing was recorded.`);
+      return { op: 'name_request', date, activity: null, request: {
+        requested_date: date, dog_id: sale.dog_id, from_name: pupName(sale.dog_id), name, note: clean(p.note)
       } };
     }
     case 'home_location': {
