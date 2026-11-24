@@ -1,17 +1,24 @@
 // dogs.js — Dog List screen. Uses the shared listView component with dog-specific
 // filters, columns, and row navigation.
-import { dogRepo } from '../data/dogRepo.js';
+import { dogRepo, keepsCollar } from '../data/dogRepo.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { createListView } from '../assets/listView.js';
 import { dogInScope } from '../data/kennelScope.js';
 import { badge, fmtDate, esc, param, wireActionMenu } from '../assets/ui.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
-import { descriptor, SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, EVENT_TYPES, dogListOrder, dogStatusOrder, dogSexOrder } from '../data/vocab.js';
+import { descriptor, SEX, DOG_STATUS, DISPOSITION, OWNERSHIP_TYPE, EVENT_TYPES, COLLAR_COLOR, dogListOrder, dogStatusOrder, dogSexOrder } from '../data/vocab.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { openEventForm } from '../assets/eventForm.js';
 import { breedingDogs, homeDogs, preventativeGaps } from '../data/dogCare.js';
 import { todayYMD } from '../data/dateUtils.js';
+
+// A puppy's collar (data/collarColor.js), drawn here from the vocab so the list doesn't
+// load that module: a dot for a collar she set, nothing otherwise.
+function collarDot(d) {
+  const c = keepsCollar(d) && COLLAR_COLOR.find((x) => x.value === d.collar_color);
+  return c ? `<span class="collar-dot" style="--collar:${c.hex}" role="img" aria-label="${c.label} collar"></span> ` : '';
+}
 
 const mount = document.getElementById('dog-list');
 const bucket = param('bucket');
@@ -118,7 +125,7 @@ async function init() {
     // Website (a ✓ when the dog shows on her KennelPort website) only where the
     // website link is offered, as on the dog page.
     columns: [
-      { header: 'Call name', sortable: true, sortFn: nameAsc, cell: (d) => `<strong>${esc(d.call_name)}</strong>` },
+      { header: 'Call name', sortable: true, sortFn: nameAsc, cell: (d) => `${collarDot(d)}<strong>${esc(d.call_name)}</strong>` },
       { header: 'Registered name', sortable: true, sortFn: registeredNameAsc, collapse: true, cell: (d) => d.registered_name ? esc(d.registered_name) : '<span class="faint">—</span>' },
       { header: 'Sex', sortable: true, sortFn: dogSexOrder, cell: (d) => sexBadge(d.sex) },
       { header: 'Registry', collapse: true, cell: (d) => d.registry ? esc(d.registry) : '<span class="faint">—</span>' },

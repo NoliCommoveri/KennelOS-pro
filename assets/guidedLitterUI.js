@@ -13,6 +13,7 @@
 // (assets/guidedShareUI.js, Pro-only, imported only when this edition has the
 // waitlist or Companion). Reads go through the repos; writes only through
 // guidedLitter.saveGuidedLitter.
+import { collarPickerHtml, readCollar } from '../data/collarColor.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { pairingRepo } from '../data/pairingRepo.js';
@@ -506,12 +507,15 @@ function screens(draft, data, ctx) {
             ${tile('sex', 'male', '♂ Boy', { selected: p.sex === 'male' })}
             ${tile('sex', 'female', '♀ Girl', { selected: p.sex === 'female' })}
           </div>
+          <p class="gl-q">Collar color</p>
+          ${collarPickerHtml('gl-pup-collar', p.collar_color || '')}
           ${field('Color and markings (optional)', input('gl-pup-color', p.color_markings, { placeholder: 'e.g. black with white chest' }))}
           ${field('Birth weight in ounces (optional)', input('gl-pup-oz', p.birth_oz, { type: 'number', min: 0, step: '0.1', inputmode: 'decimal' }))}`,
-        onTile: (value, root) => { p.call_name = val(root, 'gl-pup-name'); p.sex = value; return 'redraw'; },
+        onTile: (value, root) => { p.call_name = val(root, 'gl-pup-name'); p.collar_color = readCollar(root, 'gl-pup-collar') || ''; p.sex = value; return 'redraw'; },
         read: (root) => {
           p.call_name = val(root, 'gl-pup-name');
           p.color_markings = val(root, 'gl-pup-color');
+          p.collar_color = readCollar(root, 'gl-pup-collar') || '';
           p.birth_oz = val(root, 'gl-pup-oz');
         }
       };

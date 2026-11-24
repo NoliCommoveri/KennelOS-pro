@@ -41,6 +41,8 @@ import { renderTimeline } from '../assets/timeline.js';
 import { renderExpensePanel } from '../assets/expensePanel.js';
 import { openEventForm, openEventFromQuery } from '../assets/eventForm.js';
 import { renderPedigree } from '../assets/pedigree.js';
+import { collarDotHtml, collarLabel, isCollar, collarPickerHtml, readCollar } from '../data/collarColor.js';
+import { keepsCollar } from '../data/dogRepo.js';
 
 const OWNER_REQUIRED = ['external', 'leased_in'];
 
@@ -294,6 +296,7 @@ function renderView() {
       ${row('Date of birth', d.date_of_birth ? esc(fmtDate(d.date_of_birth)) + (d.dob_is_estimated ? ' <span class="faint">(est.)</span>' : '') : '')}
       ${row('Date of death', d.date_of_death ? esc(fmtDate(d.date_of_death)) : '')}
       ${row('Color / markings', esc(d.color_markings))}
+      ${row('Collar', isCollar(d.collar_color) ? `${collarDotHtml({ collar: d.collar_color, set: true })} ${esc(collarLabel(d.collar_color))}` : '')}
       ${row('Registry', esc(d.registry))}
       ${row('Registration #', esc(d.registration_number))}
       ${row('Other registrations', otherRegistrationsHtml(d.additional_registrations))}
@@ -368,6 +371,7 @@ function renderEdit() {
       ${field('DOB estimated', `<label class="check-inline"><input id="f-dob_is_estimated" type="checkbox"${d.dob_is_estimated ? ' checked' : ''}> approximate</label>`)}
       ${field('Date of death', clearableDate(`<input id="f-date_of_death" type="date" value="${esc(d.date_of_death)}">`, 'f-date_of_death'))}
       ${field('Color / markings', `<input id="f-color_markings" type="text" value="${esc(d.color_markings)}">`)}
+      ${keepsCollar(d) ? field('Collar color', `${collarPickerHtml('f-collar_color', d.collar_color || '')}<p class="hint" id="collar-clash" hidden></p>`, { wide: true, hint: 'The collar this puppy wears at home. Families see this color by its name on the waitlist.' }) : ''}
       ${field('Registry', `<input id="f-registry" type="text" value="${esc(d.registry)}">`)}
       ${field('Registration #', `<input id="f-registration_number" type="text" value="${esc(d.registration_number)}">`)}
       ${registrationsEditor(d.additional_registrations)}
@@ -405,6 +409,7 @@ function renderEdit() {
     <div id="form-warn"></div>`;
 
   wireTitlesEditor();
+  wireCollarClash();
 
   // Lives with offers the co-owners chosen above: re-draw as they change.
   document.getElementById('f-co_owner_contact_ids')?.addEventListener('change', () => {
@@ -559,6 +564,24 @@ function titlesEditor(d) {
   </div>`;
 }
 
+// Two littermates in the same collar: said under the picker as she picks (not blocked:
+// she may be mid-swap).
+function wireCollarClash() {
+  const pick = document.querySelector('.collar-pick');
+  const note = document.getElementById('collar-clash');
+  const litterId = ctx.draft?.litter_id || ctx.original?.litter_id;
+  if (!pick || !note || !litterId) return;
+  const check = async () => {
+    const mine = readCollar(document, 'f-collar_color');
+    const mates = (await dogRepo.getByLitter(litterId)).filter((x) => x.id !== ctx.original?.id && !x.is_archived);
+    const clash = mine ? mates.find((x) => x.collar_color === mine) : null;
+    note.hidden = !clash;
+    note.textContent = clash ? `${clash.call_name || 'A littermate'} already wears ${collarLabel(mine)}.` : '';
+  };
+  pick.addEventListener('change', check);
+  check();
+}
+
 function wireTitlesEditor() {
   const holder = document.getElementById('f-titles');
   if (!holder) return;
@@ -648,6 +671,7 @@ function readForm() {
     dob_is_estimated: document.getElementById('f-dob_is_estimated')?.checked || false,
     date_of_death: val('f-date_of_death'),
     color_markings: val('f-color_markings').trim(),
+    ...(document.querySelector('input[name="f-collar_color"]') ? { collar_color: readCollar(document, 'f-collar_color') } : {}),
     registry: val('f-registry').trim(),
     registration_number: val('f-registration_number').trim(),
     additional_registrations: readRegistrations(),

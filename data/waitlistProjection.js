@@ -46,6 +46,7 @@ import { EXTRAS_INTRO_DEFAULT, EXTRAS_INTRO_OLD_DEFAULT, FEATURED_LABEL_DEFAULT,
 import { portalEntryView, portalOn } from './portalFeed.js';
 import { familyPaymentsView } from './paymentSchedule.js';
 import { titlesByDogId, titleAbbrs } from './dogTitles.js';
+import { litterCollars, keepsCollar } from './collarColor.js';
 
 export const PROJECTION_FORMAT = 1;
 
@@ -147,9 +148,14 @@ function litterLink(litter, kennel) {
 // A pup as a family may see it: call name, sex, color, its registration (its live
 // sale's once sold, else the one it's planned for; null: undecided, either:
 // pupRegistrationOf), its registry ("AKC"; null when none), and its link. Nothing
-// else.
+// else. With its collar color (data/collarColor.js) when `collars` (its litter's, from
+// litterCollars) has one: `collar` and `collar_set` (false: a color picked for it, drawn
+// as a ring).
 const registryOf = (d) => orNull(String(d.registry ?? '').trim().slice(0, 30));
-const publicPup = (d, kennel, sales = []) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings), registration: orNull(pupRegistrationOf(d, sales)), registry: registryOf(d), ...pupLink(d, kennel) });
+const collarOf = (d, collars) => { const c = collars?.get(d.id); return c ? { collar: c.collar, collar_set: c.set } : {}; };
+const publicPup = (d, kennel, sales = [], collars = null) => ({ id: d.id, call_name: d.call_name || '', sex: orNull(d.sex), color: orNull(d.color_markings), registration: orNull(pupRegistrationOf(d, sales)), registry: registryOf(d), ...pupLink(d, kennel), ...collarOf(d, collars) });
+// A litter's collars: its pups still at home (collarColor.keepsCollar).
+const collarsForLitter = (dogs, litterId) => litterCollars(dogs.filter((d) => d.litter_id === litterId && !d.is_archived && keepsCollar(d)));
 
 // A litter's expected prices as a family on their turn may see them (her setting
 // turn_prices): per registration the pups of it are planned for (an undecided pup
@@ -556,6 +562,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       });
     }
     const open = kennelOffers.find((o) => o.litter_id === litter.id && o.outcome === 'open' && !isHeldPick(o)) || null;
+    const collars = collarsForLitter(pups, litter.id);
     litterViews[litter.id] = {
       label: litterLabel(litter, dogsById),
       // What a family's Available Puppies card shows (decided 2026-10-08): her
@@ -576,9 +583,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       pairing_id: orNull(litter.pairing_id),
       // Only available pups: what a turn is picked from (the turn card, the server's
       // automatic offers and the prices read this, never `reserved`).
-      pups: pups.filter((d) => isPupAvailable(d, sales)).sort(byId).map((d) => publicPup(d, kennel, sales)),
+      pups: pups.filter((d) => isPupAvailable(d, sales)).sort(byId).map((d) => publicPup(d, kennel, sales, collars)),
       // Already Reserved (E2): pups whose disposition is Placed, the website's rule.
-      reserved: pups.filter(isPupReserved).sort(byId).map((d) => publicPup(d, kennel, sales)),
+      reserved: pups.filter(isPupReserved).sort(byId).map((d) => publicPup(d, kennel, sales, collars)),
       open_offer_entry_id: open ? open.entry_id : null
     };
   }
@@ -657,7 +664,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Each record's own pup's sale (familySale): a family back on the list for a
     // second pup gets its first pup's cards only on that pup's record.
     saleFor: (entry) => familySale(entry, sales, familyOffers, live),
-    pickedPup: (id) => (dogsById.get(id) ? publicPup(dogsById.get(id), kennel, sales) : null),
+    pickedPup: (id) => (dogsById.get(id) ? publicPup(dogsById.get(id), kennel, sales, collarsForLitter(dogs, dogsById.get(id).litter_id)) : null),
     // The deposit for a family's pick: on its sale, else her listed one for the pup.
     depositFor: (o) => {
       const sale = o.sale_id ? sales.find((x) => x.id === o.sale_id) : null;

@@ -7,6 +7,7 @@
 // registration and the registry ("Will these puppies belong to any registry?",
 // starting on the dam's) are offered too (applied to all on the bulk form). Everything
 // else is edited later on Dog Detail.
+import { collarPickerHtml, readCollar } from '../data/collarColor.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { offerKeeperTests } from './keeperTests.js';
 import { baseFromLitter } from '../data/puppyDefaults.js';
@@ -82,6 +83,7 @@ export function openAddPuppyForm({ litter, dam, onSaved }) {
       <div class="field"><label>Registration</label>
         <select id="pf-registration">${registrationOptions('')}</select></div>
       ${registryField('Will this puppy belong to any registry, like AKC or CKC?', dam)}
+      <div class="field field-wide"><label>Collar color</label>${collarPickerHtml('pf-collar', '')}</div>
     </div>
     <div id="pf-error"></div>
     <div class="form-actions">
@@ -117,7 +119,7 @@ export function openAddPuppyForm({ litter, dam, onSaved }) {
       return;
     }
     try {
-      const puppy = await dogRepo.create({ ...base, call_name, sex, disposition, intended_registration, ...readRegistry(modal, intended_registration) });
+      const puppy = await dogRepo.create({ ...base, call_name, sex, disposition, intended_registration, collar_color: readCollar(modal, 'pf-collar'), ...readRegistry(modal, intended_registration) });
       close();
       await offerKeeperTests(puppy);
       if (openAfter) { location.href = `dog.html?id=${encodeURIComponent(puppy.id)}`; return; }

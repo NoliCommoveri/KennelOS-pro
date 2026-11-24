@@ -8,12 +8,12 @@ import { litterPupsOnParent, moveLitterPups } from '../data/pedigreeEdit.js';
 import { litterRepo, ReferenceBlockedError } from '../data/litterRepo.js';
 import { CapExceededError } from '../data/repoBase.js';
 import { pairingRepo } from '../data/pairingRepo.js';
-import { dogRepo } from '../data/dogRepo.js';
+import { dogRepo, keepsCollar } from '../data/dogRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { kennelRepo } from '../data/kennelRepo.js';
 import { extraChargesTotal } from '../data/extraCharges.js';
-import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, RELEASED_SALE_STATUSES, descriptor } from '../data/vocab.js';
+import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, RELEASED_SALE_STATUSES, COLLAR_COLOR, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { waitlistConfig, plannedOpening, deadlineLabel, timeLabel, HALF_HOURS } from '../data/waitlistRules.js';
@@ -870,6 +870,15 @@ async function renderRosterSection() {
   const puppies = await dogRepo.getByLitter(ctx.original.id);
   puppies.sort((a, b) => (a.call_name || '').localeCompare(b.call_name || '', undefined, { numeric: true }));
   const activePuppies = puppies.filter((d) => !d.is_archived);
+  // Collar colors (data/collarColor.js): her pups at home, each with its dot and a
+  // quick picker; two in the same collar are named above the list.
+  const atHome = activePuppies.filter(keepsCollar);
+  // Loaded when the roster draws, not with the page (tests/loadBudget.test.js).
+  const { litterCollars, collarDotHtml, sharedCollars, collarLabel } = await import('../data/collarColor.js');
+  const collars = litterCollars(atHome);
+  const collarSel = (d) => `<select class="collar-sel" data-collar-for="${esc(d.id)}" aria-label="Collar color for ${esc(d.call_name || 'this puppy')}">
+      <option value="">Collar…</option>${COLLAR_COLOR.map((c) => `<option value="${c.value}"${d.collar_color === c.value ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}</select>`;
+  const clashes = sharedCollars(atHome);
 
   const rowsHtml = puppies.length
     ? `<ul class="linked-list" style="margin:14px 0 0; padding:0; list-style:none;">` + puppies.map((d) => {
@@ -880,8 +889,8 @@ async function renderRosterSection() {
         const openBtn = hideArchive ? '' : `<a class="btn btn-sm" href="dog.html?id=${encodeURIComponent(d.id)}">Open →</a>`;
         return `
         <li class="row-between" style="padding:8px 0; border-top:1px solid var(--border);">
-          <span>${badge(SEX, d.sex)} <strong>${esc(d.call_name)}</strong>${d.registered_name ? ` <span class="faint">${esc(d.registered_name)}</span>` : ''} ${badge(DOG_STATUS, d.status)}${d.intended_registration ? ' ' + badge(REGISTRATION_TYPE, d.intended_registration) : ''}${d.registry ? ` <span class="faint">${esc(d.registry)}</span>` : ''}${archBadge}</span>
-          ${openBtn}
+          <span>${collars.has(d.id) ? collarDotHtml(collars.get(d.id)) + ' ' : ''}${badge(SEX, d.sex)} <strong>${esc(d.call_name)}</strong>${d.registered_name ? ` <span class="faint">${esc(d.registered_name)}</span>` : ''} ${badge(DOG_STATUS, d.status)}${d.intended_registration ? ' ' + badge(REGISTRATION_TYPE, d.intended_registration) : ''}${d.registry ? ` <span class="faint">${esc(d.registry)}</span>` : ''}${archBadge}</span>
+          <span class="pill-row">${keepsCollar(d) && !d.is_archived ? collarSel(d) : ''}${openBtn}</span>
         </li>`;
       }).join('') + `</ul>`
     : `<p class="muted" style="margin:14px 0 0;">No puppies recorded yet. Each puppy is an ordinary Dog record with this litter set.</p>`;
@@ -899,9 +908,17 @@ async function renderRosterSection() {
           <button class="btn btn-sm" id="btn-cascade-event"${activePuppies.length ? '' : ' disabled title="No puppies to log against."'}>+ Log event for whole litter</button>
         </div>
       </div>
+      ${clashes.length ? `<p class="hint" style="margin:10px 0 0;">${clashes.map(([v, list]) => `${esc(list.map((x) => x.call_name || 'A puppy').join(' and '))} both wear ${esc(collarLabel(v))}.`).join(' ')}</p>` : ''}
       ${rowsHtml}
+      ${atHome.length ? '<p class="faint small" style="margin:8px 0 0;">A hollow ring is a color picked for a puppy with no collar set. Families see the same dots on the waitlist.</p>' : ''}
     </section>`;
 
+  els.roster.querySelectorAll('[data-collar-for]').forEach((sel) => {
+    sel.addEventListener('change', async () => {
+      try { await dogRepo.update(sel.dataset.collarFor, { collar_color: sel.value || null }); renderRosterSection(); }
+      catch (e) { showError(e.message || String(e)); }
+    });
+  });
   const add = document.getElementById('btn-add-puppy');
   const addN = document.getElementById('btn-add-puppies');
   if (add && damHasBreed) add.onclick = () => openAddPuppyForm({ litter: ctx.original, dam, onSaved: refreshRosterAndCounts });

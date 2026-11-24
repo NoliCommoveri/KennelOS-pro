@@ -1404,3 +1404,18 @@ body:has(> .kels-fab) main { padding-bottom: 104px; }
 .esign-detail-list { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 4px 12px; margin: 6px 0 0; max-height: 260px; overflow: auto; }
 .esign-detail-list dt { color: var(--text-muted); overflow-wrap: anywhere; }
 .esign-detail-list dd { margin: 0; overflow-wrap: anywhere; }
+
+/* A puppy's collar color (data/collarColor.js): a filled dot for a collar she set (or
+   one its name gives), a hollow ring for a color picked for it. */
+.collar-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--collar, transparent); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18); vertical-align: -1px; flex: 0 0 auto; }
+.collar-dot.ring { background: transparent; box-shadow: inset 0 0 0 2.5px var(--collar); }
+.collar-dot.none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--border); position: relative; }
+.collar-dot.none::after { content: ""; position: absolute; left: 50%; top: 1px; bottom: 1px; width: 1.5px; background: var(--border); transform: translateX(-50%) rotate(45deg); }
+.collar-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.collar-opt { display: inline-flex; cursor: pointer; padding: 3px; border-radius: 50%; }
+.collar-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.collar-opt .collar-dot { width: 22px; height: 22px; }
+.collar-opt input:checked + .collar-dot { outline: 2px solid var(--text); outline-offset: 2px; }
+.collar-opt input:focus-visible + .collar-dot { outline: 2px solid var(--primary, #2f6a4f); outline-offset: 2px; }
+.collar-sel { font-size: 13px; padding: 2px 4px; max-width: 8.5em; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

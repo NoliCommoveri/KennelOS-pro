@@ -1,6 +1,7 @@
 // dogRepo.js — all Dexie access for the single Dog table (breeding stock,
 // puppies, and external dogs all live here; life-stage changes are `status`
 // updates on the same record, never a new row — CLAUDE.md).
+import { COLLAR_COLOR } from './vocab.js';
 import { db } from './db.js';
 import { makeRepo, nowIso, newId } from './repoBase.js';
 import { DOG_REFERENCES } from './referenceRegistry.js';
@@ -174,12 +175,15 @@ async function validateDog(candidate, existingId = null) {
 // the dog form, sale-side disposition offers, CSV import — lands the same
 // invariant, and a life-stage change out of 'puppy' clears any lingering value.
 // additional_registrations and titles (Dog Titles Field Plan §8.0) are normalized,
-// and country_of_origin trimmed, on every write that carries them.
+// country_of_origin trimmed and collar_color kept to a known color, on every write that
+// carries them.
 function withRegistrations(record) {
   const out = { ...record };
   if ('additional_registrations' in record) out.additional_registrations = normalizeRegistrations(record.additional_registrations);
   if ('titles' in record) out.titles = normalizeTitles(record.titles);
   if ('country_of_origin' in record) out.country_of_origin = String(record.country_of_origin ?? '').replace(/\s+/g, ' ').trim();
+  // A collar color is one of COLLAR_COLOR's or none (data/collarColor.js).
+  if ('collar_color' in record) out.collar_color = isCollar(record.collar_color) ? record.collar_color : null;
   return out;
 }
 
@@ -195,6 +199,16 @@ function nullDispositionIfNotPuppy(record) {
   return record.status !== 'puppy' && record.disposition != null
     ? { ...record, disposition: null }
     : record;
+}
+
+// A collar color is a puppy's at home (owner decision 2026-11-24): kept only while the
+// dog is a puppy and not external (collarColor.keepsCollar). Growing out of puppy, or
+// going to another home (external), sets it to null, here, for every writer. (Kept here
+// rather than imported from collarColor.js, which every page would then load.)
+export const keepsCollar = (record) => record?.status === 'puppy' && record?.ownership_type !== 'external';
+const isCollar = (v) => COLLAR_COLOR.some((c) => c.value === v);
+function nullCollarIfNotPup(record) {
+  return record.collar_color != null && !keepsCollar(record) ? { ...record, collar_color: null } : record;
 }
 
 export const dogRepo = {
@@ -232,7 +246,7 @@ export const dogRepo = {
     // Lite throws CapExceededError here when adding a new counting dog at the cap.
     await enforceDogCap({ candidate: data, existing: null, id: null });
     if (!livesWithOk(data)) data = { ...data, lives_with_contact_id: null };
-    return base.create(nullDispositionIfNotPuppy(data));
+    return base.create(nullCollarIfNotPup(nullDispositionIfNotPuppy(data)));
   },
 
   // `opts.capExcludeIds`: dogs about to go that the cap shouldn't count (a merge's
@@ -265,6 +279,7 @@ export const dogRepo = {
       changes = { ...changes, disposition: null };
     }
     if (!livesWithOk(merged)) changes = { ...changes, lives_with_contact_id: null };
+    if (merged.collar_color != null && !keepsCollar(merged)) changes = { ...changes, collar_color: null };
     return base.update(id, changes);
   },
 

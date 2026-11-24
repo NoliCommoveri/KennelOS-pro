@@ -288,6 +288,34 @@ export const WAITLIST_PROGRAM_ICON = [
   { value: 'paw',    label: 'Paw',       emoji: '🐾' }
 ];
 
+// A puppy's collar color (Dog.collar_color): the colored collar she uses at home to tell
+// littermates apart. Her pup lists and the waitlist family pages draw a dot of `hex`
+// beside its name (data/collarColor.js). The order is the one new pups are named by
+// (guidedLitter.COLLAR_COLORS). cloud/public/family/common.js keeps a copy of the hexes
+// (tests/familyPages.test.js fails if they drift).
+export const COLLAR_COLOR = [
+  { value: 'red', label: 'Red', hex: '#d4483b' },
+  { value: 'blue', label: 'Blue', hex: '#3b6fd8' },
+  { value: 'green', label: 'Green', hex: '#3a9a5b' },
+  { value: 'yellow', label: 'Yellow', hex: '#e8c13a' },
+  { value: 'purple', label: 'Purple', hex: '#8a5bc8' },
+  { value: 'orange', label: 'Orange', hex: '#ec8a2f' },
+  { value: 'pink', label: 'Pink', hex: '#ec8fb5' },
+  { value: 'black', label: 'Black', hex: '#222222' },
+  { value: 'white', label: 'White', hex: '#ffffff' },
+  { value: 'brown', label: 'Brown', hex: '#7a4f2e' },
+  { value: 'teal', label: 'Teal', hex: '#1f9a99' },
+  { value: 'lime', label: 'Lime', hex: '#9acd32' },
+  { value: 'navy', label: 'Navy', hex: '#24346b' },
+  { value: 'gray', label: 'Gray', hex: '#8c8f94' },
+  { value: 'gold', label: 'Gold', hex: '#c9a227' },
+  { value: 'silver', label: 'Silver', hex: '#bfc4c9' },
+  { value: 'maroon', label: 'Maroon', hex: '#7b1e2f' },
+  { value: 'lavender', label: 'Lavender', hex: '#b9a4e0' },
+  { value: 'mint', label: 'Mint', hex: '#8fdcb8' },
+  { value: 'coral', label: 'Coral', hex: '#f2836b' }
+];
+
 export const WAITLIST_LISTEN_MODE = [
   { value: 'all',      label: 'All litters',            badge: 'badge-gray' },
   { value: 'selected', label: 'Selected sires & dams only', badge: 'badge-blue' },

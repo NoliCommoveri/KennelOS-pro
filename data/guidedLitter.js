@@ -37,7 +37,7 @@ import { baseFromLitter } from './puppyDefaults.js';
 import { addDaysToYMD, todayYMD } from './dateUtils.js';
 import { similarNamed } from './dogSearch.js';
 import {
-  SEX, DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_DELIVERY_TYPE, descriptor
+  SEX, DISPOSITION, REGISTRATION_TYPE, PAIRING_METHOD, FEE_STRUCTURE, STUD_SERVICE_TYPE, LITTER_DELIVERY_TYPE, COLLAR_COLOR, descriptor
 } from './vocab.js';
 
 // 2: the parents-first order (a version-1 draft from the earlier order is dropped).
@@ -48,11 +48,8 @@ export const READY_DAYS_AFTER_WHELP = 56;
 export const DUE_DAYS_AFTER_BREEDING = 63;
 
 // Newborns usually wear a colored collar before they have names, so each new pup
-// starts named for one; she types over it.
-export const COLLAR_COLORS = [
-  'Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Orange', 'Pink', 'Black', 'White', 'Brown',
-  'Teal', 'Lime', 'Navy', 'Gray', 'Gold', 'Silver', 'Maroon', 'Lavender', 'Mint', 'Coral'
-];
+// starts named for one, and wearing it (collar_color), which stays when she renames it.
+export const COLLAR_COLORS = COLLAR_COLOR.map((c) => c.label);
 
 // A breeding that's over without a litter isn't one she's recording a birth of.
 const DEAD_PAIRING_STATUSES = ['not_pregnant', 'failed', 'cancelled'];
@@ -153,6 +150,7 @@ export function newPup(existingNames = []) {
     key: key(),
     id: null,
     call_name: color ? `${color} collar` : `Puppy ${existingNames.length + 1}`,
+    collar_color: color ? color.toLowerCase() : '',
     sex: '',
     color_markings: '',
     birth_oz: '',
@@ -172,6 +170,7 @@ export function pupFromDog(d) {
     call_name: d.call_name || '',
     sex: d.sex === 'unknown' ? '' : (d.sex || ''),
     color_markings: d.color_markings || '',
+    collar_color: d.collar_color || '',
     birth_oz: '',
     disposition: d.disposition || 'undecided',
     intended_registration: d.intended_registration || '',
@@ -641,6 +640,7 @@ function pupFields(pup, registry = null) {
   const reg = pupRegistry(pup, registry);
   if (reg) fields.registry = reg;
   for (const k of ['color_markings', 'microchip_id', 'url']) if (!blank(pup[k])) fields[k] = trimmed(pup[k]);
+  if (!blank(pup.collar_color)) fields.collar_color = pup.collar_color;
   return fields;
 }
 
