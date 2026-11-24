@@ -36,7 +36,7 @@
 import { familySale } from './familyExtras.js';
 import { carriedCreditsOf } from './receivedCredits.js';
 import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
-import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, PREF_FIELD_LABEL, prefValueText, turnIdOf, turnSpent, passReasonOf, sideSaleOf, changePhase, freeChanges, isHeldPick } from './waitlistRules.js';
+import { isPupAvailable, isListenOnly, listenChangeKind, prefChangeLines, PREF_CHANGE_FIELDS, PREF_FIELD_LABEL, prefValueText, turnIdOf, turnSpent, passReasonOf, sideSaleOf, changePhase, freeChanges, isHeldPick, pupGroups, turnGroups } from './waitlistRules.js';
 import { arrivalDate } from './waitlistInbox.js';
 import { backOutReasons, BACK_OUT_OTHER } from './backOut.js';
 
@@ -318,7 +318,7 @@ export function planFamilyEvent(event, ctx) {
 // and 'server_offer' { turn }.
 export const SERVER_EVENT_KINDS = ['server_close', 'server_offer'];
 export function planServerEvent(event, ctx) {
-  const { entry = null, offers = [], kennelOffers = [], pups = [], sales = [], litters = new Map(), litterLabel = () => 'the litter', pupName = () => 'a pup', timeZone = null } = ctx;
+  const { entry = null, offers = [], kennelOffers = [], pups = [], sales = [], litters = new Map(), litterLabel = () => 'the litter', pupName = () => 'a pup', timeZone = null, config = null } = ctx;
   const date = arrivalDate(event.createdAt, timeZone) || String(event.createdAt || '').slice(0, 10);
   const skip = (reason) => ({ op: 'skip', reason, date, activity: null });
   if (!SERVER_EVENT_KINDS.includes(event.kind)) return skip('unknown_kind');
@@ -351,7 +351,11 @@ export function planServerEvent(event, ctx) {
   if (sideSaleOf(entry, sales)) return why(`you'd recorded a side sale to them (${pupName(sideSaleOf(entry, sales).dog_id)}, waiting on the deposit)`);
   // A pick held for its deposit isn't a turn (isHeldPick).
   const open = kennelOffers.filter((o) => !o.is_archived && o.outcome === 'open' && !isHeldPick(o));
-  if (open.length) return why('another turn is open on your records');
+  // With turns at the same time, only a turn of theirs, or one holding the same pups'
+  // groups, stops it (waitlistRules.turnGroups).
+  const atOnce = Boolean(config && config.turns_at_once);
+  if (!atOnce && open.length) return why('another turn is open on your records');
+  if (atOnce && open.some((o) => o.entry_id === entry.id)) return why('they already hold a turn on your records');
   const turnRows = [];
   for (const r of rows) {
     const litter = litters.get(r.litter_id);
@@ -363,6 +367,10 @@ export function planServerEvent(event, ctx) {
     if (dogIds.length) turnRows.push({ offer_id: String(r.offer_id), litter_id: r.litter_id, dog_ids: dogIds });
   }
   if (!turnRows.length) return why('none of those pups is still available with picks open');
+  if (atOnce) {
+    const mine = new Set(turnRows.flatMap((r) => r.dog_ids.flatMap((id) => pupGroups(pups.find((d) => d.id === id)))));
+    if (open.some((o) => turnGroups({ offers: [o] }, pups).some((g) => mine.has(g)))) return why('another turn open on your records holds some of the same pups');
+  }
   return {
     op: 'server_offer', date,
     turn: { turn_id: String(p.turn_id), offered_date: p.offered_date || date, respond_by_date: p.respond_by_date, ...(p.respond_by_time ? { respond_by_time: p.respond_by_time } : {}), rows: turnRows },

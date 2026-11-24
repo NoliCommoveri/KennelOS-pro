@@ -530,6 +530,10 @@ ${group('turns', 'Turns & offers', 'Time to respond, passes, color matching, aut
           <label class="check-inline"><input id="wl-turn-prices" type="checkbox"${c.turn_prices !== false ? ' checked' : ''}> Show your expected prices on a family's turn</label>
           <span class="field-hint">From each litter's expected prices and deposits (Litter page), for males and females; pups planned for Full registration in their own section at their full price. Once a family picks, their page also shows the deposit with your payment instructions.</span>
         </div>
+        <div class="field field-wide">
+          <label class="check-inline"><input id="wl-at-once" type="checkbox"${c.turns_at_once ? ' checked' : ''}> Offer turns at the same time when families can't take the same pup</label>
+          <span class="field-hint">Pups go home sooner: a family who wants a boy picks while a girl family decides, and families waiting for different litters pick together. Anyone who could take the same pup still goes in order.</span>
+        </div>
         <div class="field field-wide"><label>Offer the next family automatically when…</label>
           ${WAITLIST_AUTO_OFFER_TRIGGER.map((t) => `<label class="check-inline"><input type="checkbox" data-wl-auto="${esc(t.value)}"${c.auto_offer_on.includes(t.value) ? ' checked' : ''}> ${esc(t.label)}</label>`).join('')}
           <span class="field-hint">Unticked: you make that offer yourself, with "Offer to them" or "Offer a litter…"; the app just tells you who's next.${isWaitlistOnlineOffered() ? ' With your list online, KennelOS also does the ticked ones while your phone is off: a turn whose deadline has passed is closed as no response (or no deposit), and a family\'s pass or leaving on their status page moves the turn on; the next family in line is offered and emailed. Your phone records it all at its next update.' : ''}</span>
@@ -782,6 +786,7 @@ async function onSaveWaitlist() {
     no_response_counts_as_pass: q('#wl-noresp').checked,
     color_matching: q('#wl-colors').checked,
     turn_prices: q('#wl-turn-prices').checked,
+    turns_at_once: q('#wl-at-once').checked,
     closed_dates: liveClosedDates([...els.config.querySelectorAll('[data-closed]')].map((x) => x.dataset.closed).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort(), todayYMD()),
     open_days: (() => { const d = [...els.config.querySelectorAll('[data-wl-open]')].filter((b) => b.checked).map((b) => Number(b.dataset.wlOpen)); return d.length === 7 ? null : d; })(),
     public_show_paused: q('#wl-show-paused').checked,

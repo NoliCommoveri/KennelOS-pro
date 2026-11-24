@@ -200,7 +200,8 @@ class Setup {
           ${field('Passes before they\'re removed', `<input id="ws-passes" type="number" min="1" step="1" value="${esc(c.max_passes)}">`)}
         </div>
         ${group('Rules', check('ws-noresp', 'No response by the deadline counts as a pass', c.no_response_counts_as_pass)
-          + check('ws-colors', 'Only offer pups in a color the family listed', c.color_matching))}
+          + check('ws-colors', 'Only offer pups in a color the family listed', c.color_matching)
+          + check('ws-atonce', 'Offer turns at the same time when families can\'t take the same pup (a boy family picks while a girl family decides)', c.turns_at_once))}
         ${group('Offer the next family automatically when…', `<p class="gl-q" style="margin-top:0;"><button type="button" class="gl-more" data-ws="all">All</button> <button type="button" class="gl-more" data-ws="none">None</button></p>${autos}`,
           'Unticked ones wait for you to tap "Offer to them".')}`,
       wire: (root) => {
@@ -215,6 +216,7 @@ class Setup {
         max_passes: numOrNull(root.querySelector('#ws-passes').value),
         no_response_counts_as_pass: root.querySelector('#ws-noresp').checked,
         color_matching: root.querySelector('#ws-colors').checked,
+        turns_at_once: root.querySelector('#ws-atonce').checked,
         auto_offer_on: [...root.querySelectorAll('[data-auto]:checked')].map((b) => b.dataset.auto)
       })) || true,
       reply: () => `${this.config.turn_hours != null ? `${this.config.turn_hours} hours` : `${this.config.respond_days} days`}, ${this.config.max_passes} passes`

@@ -313,6 +313,16 @@ function actionHtml(p, n) {
     case 'held':
       lines.push(`${n.familyLink(a.holder_id)} holds the turn (${esc(a.holder_litter_ids.map(n.litterName).join(', '))}) until ${esc(deadlineLabel(a.respond_by, a.respond_by_time, fmtDate))}.${nextAfterHolder()}`);
       break;
+    case 'at_once': {
+      // Turns at the same time: every turn joined or started, and the ones already open.
+      for (const j of a.joins) lines.push(`${n.familyLink(j.entry_id)}'s turn gains ${esc(n.pups(j.dog_ids))}: they're first in line for ${j.dog_ids.length === 1 ? 'that pup' : 'those pups'}. Their deadline restarts for the whole turn.`);
+      for (const t of a.starts) lines.push(`${n.familyLink(t.entry_id)} ${p.already_open ? 'can start a turn now' : 'gets a turn'}: ${littersWithPups(t.litters)}. Pick and pay by <strong>${esc(deadlineLabel(t.respond_by, t.respond_by_time, fmtDate))}</strong>.${t.prepassed.length ? ` They said "Not this litter" to ${esc(t.prepassed.map(n.litterName).join(', '))}, so that's recorded as passed.` : ''}`);
+      const still = a.holders.filter((h) => !a.joins.some((j) => j.turn_id === h.turn_id));
+      for (const h of still) lines.push(`${n.familyLink(h.entry_id)} is deciding (${esc(h.litter_ids.map(n.litterName).join(', '))}) until ${esc(deadlineLabel(h.respond_by, h.respond_by_time, fmtDate))}.`);
+      if (!a.joins.length && !a.starts.length) lines.push(a.holders.length ? 'Nobody else can start a turn until one of these ends: everyone left in line could take the same pups as a family ahead of them.' : 'Nobody on the list qualifies for any available pup in your open litters. "Left out" below says why.');
+      else if (p.already_open && a.starts.length) lines.push('Use "Offer to them" when you\'re ready.');
+      break;
+    }
     default:
       lines.push('Nobody on the list qualifies for any available pup in your open litters. "Left out" below says why.');
   }

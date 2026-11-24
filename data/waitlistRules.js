@@ -43,6 +43,10 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   online: false, // her list is published online (W2 Plan §5; only where isWaitlistOnlineOffered)
   online_form: false, // she takes applications through the online form (W2 Plan step 4)
   auto_offer_on: [], // which closings offer the next family by themselves (WAITLIST_AUTO_OFFER_TRIGGER); none = she offers
+  // Turns at the same time (docs/KennelOS_Split_Turns_Plan.md): a family starts their
+  // turn while others decide when nobody ahead of them, and no open turn, could take a
+  // pup they'd be offered (turnGroups). Off = one turn at a time (§16.1).
+  turns_at_once: false,
   no_response_counts_as_pass: true,
   color_matching: false,
   turn_prices: true, // a family's turn shows each litter's expected prices (males / females, full registration apart)
@@ -1393,11 +1397,17 @@ export function switchablePups(entry, litter, pups, sales, { currentDogId = null
 // a turn since (Spec §6.5; kennel-wide since turns, §16.1, because a later turn may
 // have listed this litter's pups). An offer made later and then voided doesn't
 // count — the turn never really moved on. `offers` are the kennel's.
-export function canSwitchAcceptedPick(offer, offers) {
+// With turns at the same time (`config.turns_at_once`, and `pups` given), only a later
+// turn that listed a pup in one of this offer's groups (pupGroups) stops it: a boy
+// turn offered after a girl family's deposit leaves their girls alone.
+export function canSwitchAcceptedPick(offer, offers, { pups = null, config = null } = {}) {
   if (!offer || offer.outcome !== 'accepted' || !offer.chosen_dog_id) return false;
+  const byGroup = Boolean(config && config.turns_at_once && pups);
+  const mine = byGroup ? groupsOfDogIds([...(offer.eligible_dog_ids || []), offer.chosen_dog_id], pups) : null;
   return !offers.some((o) => o.id !== offer.id && !o.is_archived && turnIdOf(o) !== turnIdOf(offer)
     && (o.kennel_id ? o.kennel_id === offer.kennel_id : o.litter_id === offer.litter_id)
-    && o.outcome !== 'voided' && (o.created_at || '') > (offer.created_at || ''));
+    && o.outcome !== 'voided' && (o.created_at || '') > (offer.created_at || '')
+    && (!byGroup || groupsOfDogIds([...(o.eligible_dog_ids || []), ...(o.chosen_dog_id ? [o.chosen_dog_id] : [])], pups).some((g) => mine.includes(g))));
 }
 
 // Can this closed pass / no response be undone (Spec §6.4)? The family must still be
@@ -1607,10 +1617,113 @@ export function turnLittersFor(entry, offers, litters, pups, sales, { today, con
 // → { entry, litters: [{ litter, eligibleDogs }] }
 export function nextTurn(entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null } = {}) {
   const kid = kennelId || litters.find(isPicksOpen)?.kennel_id || null;
+  if (kid && config.turns_at_once) return nextTurns(entries, offers, litters, pups, sales, { today, config, programsById, kennelId: kid })[0] || null;
   if (!kid || openTurns(offers, kid).length) return null;
   for (const entry of rankedList(entries, kid, programsById)) {
     const ls = turnLittersFor(entry, offers, litters.filter((l) => l.kennel_id === kid), pups, sales, { today, config });
     if (ls.length) return { entry, litters: ls };
+  }
+  return null;
+}
+
+// --- Turns at the same time (docs/KennelOS_Split_Turns_Plan.md) --------------------
+// The open litters' pups fall in groups, one per sex per litter ('<litter_id>:male').
+// A pup whose sex isn't recorded is in both of its litter's groups (only a family who'll
+// take either matches it). A family reaches the groups of the pups they'd be offered:
+// their sex in the litters they listen for, never narrowed by color, breed or placement
+// (those can change quickly; turns never split on them).
+const GROUP_SEXES = ['female', 'male'];
+export function pupGroups(dog) {
+  if (!dog) return [];
+  return (GROUP_SEXES.includes(dog.sex) ? [dog.sex] : GROUP_SEXES).map((s) => `${dog.litter_id}:${s}`);
+}
+const groupsOfDogs = (dogs) => [...new Set((dogs || []).flatMap(pupGroups))];
+function groupsOfDogIds(ids, pups) {
+  const byId = new Map((pups || []).map((d) => [d.id, d]));
+  return groupsOfDogs((ids || []).map((id) => byId.get(id)).filter(Boolean));
+}
+// The groups a family would reach on these litters ([{ litter, eligibleDogs }]): their
+// sex in each, whatever else they asked for.
+export function reachedGroups(entry, ls) {
+  const sexes = entry.pref_sex === 'male' || entry.pref_sex === 'female' ? [entry.pref_sex] : GROUP_SEXES;
+  return ls.flatMap(({ litter }) => sexes.map((s) => `${litter.id}:${s}`));
+}
+// The groups an open turn (openTurns' shape) holds: those of every pup its open rows
+// list, and its pick.
+export function turnGroups(turn, pups) {
+  return groupsOfDogIds((turn?.offers || []).filter((o) => o.outcome === 'open').flatMap((o) => [...(o.eligible_dog_ids || []), ...(o.chosen_dog_id ? [o.chosen_dog_id] : [])]), pups);
+}
+// "the girls in Litter A", "the girls and boys in Litter B": what a set of groups
+// covers, for her. `litterName(id)` names a litter.
+export function groupsText(groups, litterName = () => 'This litter') {
+  const by = new Map();
+  for (const g of groups || []) {
+    const i = g.lastIndexOf(':');
+    const lid = g.slice(0, i);
+    if (!by.has(lid)) by.set(lid, new Set());
+    by.get(lid).add(g.slice(i + 1));
+  }
+  return [...by.entries()].map(([lid, sx]) => `the ${sx.size > 1 ? 'girls and boys' : sx.has('female') ? 'girls' : 'boys'} in ${litterName(lid)}`).join(' and ');
+}
+
+// Every family who can start a turn now with turns at the same time, in list order:
+// none of the groups they reach is held by an open turn or reached by a family still
+// ahead of them (on the list, not held back, with a pup there and their turn there
+// unspent). → [{ entry, litters: [{ litter, eligibleDogs }] }]. A family whose whole
+// turn is "Not this litter" is listed when its turn has come (offerNextTurn passes them
+// at once) and never holds anyone up. `exclude`: entry ids read as gone. Litters may
+// carry a picks date they don't have yet (nextOfferedTurns' opening).
+export function nextTurns(entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null, exclude = [] } = {}) {
+  const kid = kennelId || litters.find(isPicksOpen)?.kennel_id || null;
+  if (!kid) return [];
+  const ls0 = litters.filter((l) => l.kennel_id === kid);
+  if (!config.turns_at_once) {
+    if (openTurns(offers, kid).length) return [];
+    for (const entry of rankedList(entries, kid, programsById)) {
+      if (exclude.includes(entry.id)) continue;
+      const ls = turnLittersFor(entry, offers, ls0, pups, sales, { today, config });
+      if (ls.length) return [{ entry, litters: ls }];
+    }
+    return [];
+  }
+  const turns = openTurns(offers, kid).filter((t) => !exclude.includes(t.entry_id));
+  const busy = new Set(turns.flatMap((t) => turnGroups(t, pups)));
+  const holders = new Set(turns.map((t) => t.entry_id));
+  const ahead = new Set();
+  const out = [];
+  for (const entry of rankedList(entries, kid, programsById)) {
+    if (exclude.includes(entry.id) || holders.has(entry.id)) continue;
+    const ls = turnLittersFor(entry, offers, ls0, pups, sales, { today, config });
+    if (!ls.length) continue;
+    const { offer, prepassed } = splitPrepassed(entry, ls);
+    const mine = reachedGroups(entry, offer.length ? offer : prepassed);
+    const free = mine.every((g) => !busy.has(g) && !ahead.has(g));
+    if (!offer.length) { if (free) out.push({ entry, litters: ls }); continue; }
+    if (free) { out.push({ entry, litters: ls }); mine.forEach((g) => busy.add(g)); } else mine.forEach((g) => ahead.add(g));
+  }
+  return out;
+}
+
+// Undoing a pass gives the family their turn back (waitlistActions.undoPass): the open
+// turns that gives way, voided (never a pass). Every other open turn, or with turns at
+// the same time only those holding a group the returning turn reaches. `offers`,
+// `litters`, `pups`: the kennel's.
+export function undoPassHolders(offer, entry, { offers = [], litters = [], pups = [], config = WAITLIST_CONFIG_DEFAULTS } = {}) {
+  const others = openTurns(offers, offer.kennel_id).filter((t) => t.id !== turnIdOf(offer));
+  if (!config.turns_at_once) return others;
+  const ls = turnOffers(offers, turnIdOf(offer)).map((o) => ({ litter: litters.find((l) => l.id === o.litter_id) })).filter((x) => x.litter);
+  const theirs = new Set(reachedGroups(entry, ls));
+  return others.filter((t) => turnGroups(t, pups).some((g) => theirs.has(g)));
+}
+
+// Can this family start a turn on these litters now alongside the open turns? '' when
+// they can, else the open turn in the way: { entry_id, groups } (the groups they share).
+export function overlapsOpenTurn(entry, ls, offers, pups, kennelId) {
+  const mine = new Set(reachedGroups(entry, ls));
+  for (const t of openTurns(offers, kennelId)) {
+    if (t.entry_id === entry.id) continue;
+    const shared = turnGroups(t, pups).filter((g) => mine.has(g));
+    if (shared.length) return { entry_id: t.entry_id, groups: shared };
   }
   return null;
 }
@@ -1622,6 +1735,7 @@ export function nextTurn(entries, offers, litters, pups, sales, { today, config 
 // → { entry, litters } or null (a turn is open, or nobody fits).
 export function nextOfferedTurn(entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null, opening = null } = {}) {
   const kid = kennelId || opening?.kennel_id || litters.find(isPicksOpen)?.kennel_id || null;
+  if (kid && config.turns_at_once) return nextOfferedTurns(entries, offers, litters, pups, sales, { today, config, programsById, kennelId: kid, opening })[0] || null;
   if (!kid || openTurns(offers, kid).length) return null;
   const ls = litters
     .filter((l) => l.kennel_id === kid)
@@ -1633,6 +1747,40 @@ export function nextOfferedTurn(entries, offers, litters, pups, sales, { today, 
   return null;
 }
 
+// With turns at the same time: the highest-ranked family ahead of `entryId`, not holding
+// a turn, who'd reach one of the groups their turn would (so their turn comes first),
+// if picks were open on `opening`; null when nobody is in the way.
+export function aheadInTheWay(entryId, entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null, opening = null } = {}) {
+  const kid = kennelId || opening?.kennel_id || litters.find(isPicksOpen)?.kennel_id || null;
+  const me = entries.find((e) => e.id === entryId);
+  if (!kid || !me) return null;
+  const ls = litters
+    .filter((l) => l.kennel_id === kid)
+    .map((l) => (opening && l.id === opening.id && !l.picks_opened_date ? { ...l, picks_opened_date: today } : l));
+  const holders = new Set(openTurns(offers, kid).map((t) => t.entry_id));
+  const mine = new Set(reachedGroups(me, splitPrepassed(me, turnLittersFor(me, offers, ls, pups, sales, { today, config })).offer));
+  for (const e of rankedList(entries, kid, programsById)) {
+    if (e.id === entryId) return null;
+    if (holders.has(e.id)) continue;
+    const { offer } = splitPrepassed(e, turnLittersFor(e, offers, ls, pups, sales, { today, config }));
+    if (offer.length && reachedGroups(e, offer).some((g) => mine.has(g))) return e;
+  }
+  return null;
+}
+
+// nextOfferedTurn for turns at the same time: every family who'd be offered a turn now
+// if picks were open on `opening`, in list order, leaving out those whose whole turn is
+// "Not this litter" (they'd be passed, not offered). → [{ entry, litters }].
+export function nextOfferedTurns(entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null, opening = null } = {}) {
+  const kid = kennelId || opening?.kennel_id || litters.find(isPicksOpen)?.kennel_id || null;
+  if (!kid) return [];
+  const ls = litters
+    .filter((l) => l.kennel_id === kid)
+    .map((l) => (opening && l.id === opening.id && !l.picks_opened_date ? { ...l, picks_opened_date: today } : l));
+  return nextTurns(entries, offers, ls, pups, sales, { today, config, programsById, kennelId: kid })
+    .filter((x) => splitPrepassed(x.entry, x.litters).offer.length);
+}
+
 // The families whose turn comes before `entryId`'s and is "Not this litter" in full
 // (§16.2), if picks were open on `opening`: ranked ahead of them, every litter of
 // their turn passed on ahead of time. Offering `entryId` their turn records these as
@@ -1641,6 +1789,20 @@ export function nextOfferedTurn(entries, offers, litters, pups, sales, { today, 
 // their turns haven't come). → [{ entry, litters, prepassed }]
 export function passedBefore(entryId, entries, offers, litters, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map(), kennelId = null, opening = null } = {}) {
   const kid = kennelId || opening?.kennel_id || litters.find(isPicksOpen)?.kennel_id || null;
+  if (kid && config.turns_at_once) {
+    // With turns at the same time: the families ahead of them whose turn has come and is
+    // "Not this litter" in full, and who'd have reached one of their groups.
+    const ls = litters
+      .filter((l) => l.kennel_id === kid)
+      .map((l) => (opening && l.id === opening.id && !l.picks_opened_date ? { ...l, picks_opened_date: today } : l));
+    const list = nextTurns(entries, offers, ls, pups, sales, { today, config, programsById, kennelId: kid });
+    const at = list.findIndex((x) => x.entry.id === entryId);
+    if (at < 0) return [];
+    const mine = new Set(reachedGroups(list[at].entry, splitPrepassed(list[at].entry, list[at].litters).offer));
+    return list.slice(0, at).filter((x) => !splitPrepassed(x.entry, x.litters).offer.length)
+      .filter((x) => reachedGroups(x.entry, x.litters).some((g) => mine.has(g)))
+      .map((x) => ({ entry: x.entry, litters: x.litters, prepassed: splitPrepassed(x.entry, x.litters).prepassed }));
+  }
   if (!kid || openTurns(offers, kid).length) return [];
   const ls = litters
     .filter((l) => l.kennel_id === kid)
@@ -1661,13 +1823,20 @@ export function passedBefore(entryId, entries, offers, litters, pups, sales, { t
 // else the reason, in her words. The offer dialog and offerTo both ask it, so the
 // list she picks from and the action never disagree (K6-7). `nameOf(entryId)`
 // names the family holding a turn; `readyText(entry)` words a ready-check hold.
-export function offerBlocker(entry, litter, { offers = [], pups = [], sales = [], today, config = WAITLIST_CONFIG_DEFAULTS, nameOf = () => 'Another family', readyText = null } = {}) {
+// With turns at the same time, a turn open on other pups doesn't stop it; one that
+// lists pups in the groups theirs would (overlapsOpenTurn) does. `litters`: the
+// kennel's, so their turn's other open litters count too.
+export function offerBlocker(entry, litter, { offers = [], pups = [], sales = [], litters = [], today, config = WAITLIST_CONFIG_DEFAULTS, nameOf = () => 'Another family', readyText = null, litterName = null } = {}) {
   if (!isOnList(entry) || isFamilyPageOnly(entry)) return 'Only families on the list can be offered a turn.';
   if (!litter || litter.is_archived) return 'That litter is archived.';
   if (litter.waitlist_off) return `${litter.nickname || 'This litter'} is kept off the waitlist (Non-Waitlist Sales). Put it back on the waitlist from its page first.`;
   if (heldPickOf(offers, entry.id)) return 'They have a pup held for them until their deposit is in. Settle that first.';
-  const [held] = openTurns(offers, litter.kennel_id);
-  if (held) return held.entry_id === entry.id ? 'They hold the turn now.' : `${nameOf(held.entry_id)} holds the turn now; one family at a time.`;
+  const open = openTurns(offers, litter.kennel_id);
+  if (config.turns_at_once) {
+    if (open.some((t) => t.entry_id === entry.id)) return 'They hold a turn now.';
+  } else if (open.length) {
+    return open[0].entry_id === entry.id ? 'They hold the turn now.' : `${nameOf(open[0].entry_id)} holds the turn now; one family at a time.`;
+  }
   if (turnSpent(offers, litter.id, entry.id)) return 'They\'ve already had their turn on this litter.';
   if (sideSaleOf(entry, sales)) return 'They\'re buying a pup from you already (a side sale). Settle or cancel it first.';
   if (isReadyHeld(entry, today, config)) return readyText ? readyText(entry) : 'They\'re not ready for a pup yet.';
@@ -1677,6 +1846,16 @@ export function offerBlocker(entry, litter, { offers = [], pups = [], sales = []
   const litterPups = pups.filter((d) => d.litter_id === litter.id);
   if (!litterPups.some((d) => isPupAvailable(d, sales))) return 'No pups available yet.';
   if (!eligiblePupsFor(entry, litter, litterPups, sales, { today, config }).length) return 'No available pup matches what they want.';
+  if (config.turns_at_once && open.length) {
+    const ls = [litter, ...litters.filter((l) => l.id !== litter.id && l.kennel_id === litter.kennel_id && isPicksOpen(l))]
+      .map((l) => ({ litter: l, eligibleDogs: eligiblePupsFor(entry, l, pups, sales, { today, config }) }))
+      .filter((x) => x.eligibleDogs.length && !turnSpent(offers, x.litter.id, entry.id));
+    const hit = overlapsOpenTurn(entry, ls, offers, pups, litter.kennel_id);
+    if (hit) {
+      const nameOfLitter = litterName || ((id) => [litter, ...litters].find((l) => l.id === id)?.nickname || 'this litter');
+      return `${nameOf(hit.entry_id)} is choosing from ${groupsText(hit.groups, nameOfLitter)} now. Offer once their turn ends.`;
+    }
+  }
   return '';
 }
 
@@ -1693,6 +1872,36 @@ export function joinsOpenTurn(turn, litter, entries, offers, pups, sales, { toda
     return entry.id === turn.entry_id ? eligible : [];
   }
   return [];
+}
+
+// joinsOpenTurn for turns at the same time: each group of a litter whose picks open
+// while turns are open joins the turn whose holder is first in line for it (the
+// highest-ranked family reaching it, their turn on it unspent), unless they said "Not
+// this litter" to it. A pup whose sex isn't recorded joins only when both its groups
+// go to the same turn. → [{ turn, dogs }] (each turn's joining pups; none = it waits).
+export function joinsOpenTurns(turns, litter, entries, offers, pups, sales, { today, config = WAITLIST_CONFIG_DEFAULTS, programsById = new Map() } = {}) {
+  const ranked = rankedList(entries, litter.kennel_id, programsById);
+  const holderOf = new Map();
+  for (const g of GROUP_SEXES.map((s) => `${litter.id}:${s}`)) {
+    for (const entry of ranked) {
+      const t = turns.find((x) => x.entry_id === entry.id);
+      if (turnSpent(offers, litter.id, entry.id) && !t) continue;
+      const eligible = eligiblePupsFor(entry, litter, pups, sales, { today, config });
+      if (!eligible.length || !reachedGroups(entry, [{ litter }]).includes(g)) continue;
+      if (t && !turnOffers(offers, t.id).some((o) => o.litter_id === litter.id) && !prepassFor(entry, litter)) holderOf.set(g, { t, entry, eligible });
+      break;
+    }
+  }
+  const out = new Map();
+  for (const [g, { t, eligible }] of holderOf) {
+    for (const d of eligible) {
+      const gs = pupGroups(d);
+      if (!gs.includes(g) || !gs.every((x) => holderOf.get(x)?.t === t)) continue;
+      if (!out.has(t.id)) out.set(t.id, { turn: t, dogs: [] });
+      if (!out.get(t.id).dogs.includes(d)) out.get(t.id).dogs.push(d);
+    }
+  }
+  return [...out.values()];
 }
 
 // Open turns whose respond-by date has passed: one per turn. `today` is a date, or

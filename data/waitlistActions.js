@@ -55,7 +55,7 @@ import {
   waitlistConfig, openDays, businessDays, closedDates, liveClosedDates, feeForEntry, feeDueDate, anchorDate, canUndoRemoval, canUndoWithdrawal, canUndoDecline, canUndoExpire, canUndoFeeReceived, passToForgive,
   respondByDate, respondBy, deadlineKey, isTimeOfDay, countsAsPass, shouldRemoveForPasses, maxPassesFor, passesUsed, isPupAvailable,
   turnSpent, eligiblePupsFor, isAwaitingDeposit, canSwitchAcceptedPick, undoPassBlocker, autoOffers, closingTrigger,
-  prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, turnLittersFor, joinsOpenTurn,
+  prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, nextTurns, turnLittersFor, joinsOpenTurn, joinsOpenTurns, aheadInTheWay, undoPassHolders,
   splitPrepassed, prepassFor, prepassTargets, passReasonOf, passedBefore, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit, sideSaleInOrderAt,
   turnIsEmpty, emptiedTurns, turnRespondBy, turnDeadline, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
   FAMILY_DETAIL_KEYS, isHeldPick
@@ -688,6 +688,24 @@ export const offerNextTurn = atomic(async function offerNextTurn(kennelId, { tod
   }
 });
 
+// Every turn that can start now (turns at the same time: offerNextTurn until nobody
+// else can). → { turns: [turn], auto_passed }. One at a time, it's offerNextTurn's one.
+export const offerStartableTurns = atomic(async function offerStartableTurns(kennelId, { today } = {}) {
+  today ??= await kennelDay(kennelId);
+  const turns = [];
+  const autoPassed = [];
+  const once = !waitlistConfig(await kennelRepo.getById(kennelId)).turns_at_once;
+  for (let i = 0; i < 100; i++) {
+    const r = await offerNextTurn(kennelId, { today });
+    if (!r) break;
+    autoPassed.push(...(r.auto_passed || []));
+    if (r.none) break;
+    turns.push(r);
+    if (once) break;
+  }
+  return { turns, auto_passed: autoPassed };
+});
+
 // Who'd get the next turn in this kennel, without offering it (Kels's Review my
 // waitlist: "Next in line is…"): nextTurn on the kennel's records. → { entry,
 // litters: [{ litter, eligibleDogs }] } or null (a turn is open, or nobody fits).
@@ -755,9 +773,23 @@ export const offerTo = atomic(async function offerTo(litterId, entryId, { today,
   today ??= kennelToday(c.kennel);
   const entry = c.entries.find((e) => e.id === entryId);
   if (!entry) throw new Error('Only families on the list can be offered a turn.');
-  const blocker = offerBlocker(entry, litter, { offers: c.offers, pups: c.pups, sales: c.sales, today, config: c.config });
+  const holderNames = new Map();
+  for (const t of openTurns(c.offers, c.kennel.id)) {
+    const h = c.entries.find((e) => e.id === t.entry_id);
+    if (h) holderNames.set(h.id, entryName(h, h.contact_id ? await contactRepo.getById(h.contact_id) : null));
+  }
+  const blocker = offerBlocker(entry, litter, {
+    offers: c.offers, pups: c.pups, sales: c.sales, litters: c.litters, today, config: c.config,
+    nameOf: (id) => holderNames.get(id) || 'Another family',
+    litterName: (id) => { const l = c.litters.find((x) => x.id === id); return l ? c.litterLabel(l) : 'this litter'; }
+  });
   if (blocker) throw new Error(blocker);
-  const next = nextOfferedTurn(c.entries, c.offers, c.litters, c.pups, c.sales, { ...ruleOpts(c, today), opening: litter });
+  // With turns at the same time, out of turn means a family ahead of them would reach
+  // the same pups (aheadInTheWay); otherwise, anyone but the one next in line.
+  const inTheWay = c.config.turns_at_once ? aheadInTheWay(entryId, c.entries, c.offers, c.litters, c.pups, c.sales, { ...ruleOpts(c, today), opening: litter }) : null;
+  const next = c.config.turns_at_once
+    ? (inTheWay ? { entry: inTheWay } : null)
+    : nextOfferedTurn(c.entries, c.offers, c.litters, c.pups, c.sales, { ...ruleOpts(c, today), opening: litter });
   if (next && next.entry.id !== entryId) {
     const nextName = entryName(next.entry, next.entry.contact_id ? await contactRepo.getById(next.entry.contact_id) : null);
     if (!outOfOrder) {
@@ -801,6 +833,7 @@ export const openPicks = atomic(async function openPicks(litterId, { date } = {}
   if (!before.picks_opened_date) await litterRepo.update(litterId, { picks_opened_date: date });
   const litter = await litterRepo.getById(litterId);
   const c = await kennelContext(litter.kennel_id);
+  if (c.config.turns_at_once) return openPicksAtOnce(c, litter, date);
   const [open] = openTurns(c.offers, c.kennel.id);
   if (!open) return offerNextTurn(litter.kennel_id, { today: date });
   const eligible = joinsOpenTurn(open, litter, c.entries, c.offers, c.pups, c.sales, ruleOpts(c, date));
@@ -808,6 +841,13 @@ export const openPicks = atomic(async function openPicks(litterId, { date } = {}
   const entry = c.entries.find((e) => e.id === open.entry_id);
   // They passed on it ahead of time: it doesn't join; their next turn records it.
   if (entry && prepassFor(entry, litter)) return null;
+  return joinTurn(c, open, litter, eligible, date);
+});
+
+// The litter's pups `eligible` join an open turn (§16.1 rule 5): its deadline restarts
+// for the whole turn, never earlier than it was (joinRespondBy). → the turn, `joined`.
+async function joinTurn(c, open, litter, eligible, date) {
+  const entry = c.entries.find((e) => e.id === open.entry_id);
   const program = entry ? c.programsById.get(entry.waitlist_program_id) || null : null;
   const due = joinRespondBy(open, turnStart(c.kennel, date), c.config, program);
   const rows = [];
@@ -821,7 +861,22 @@ export const openPicks = atomic(async function openPicks(litterId, { date } = {}
     offered_date: date, ...dueFields(due), eligible_dog_ids: eligible.map((d) => d.id), outcome: 'open'
   }));
   return { ...turnView(rows), joined: true };
-});
+}
+
+// Open picks with turns at the same time: each of the litter's groups joins the open
+// turn whose holder is first in line for it (joinsOpenTurns), then every family who
+// can now start is offered their turn. → the first turn joined or offered, with the
+// rest in `more` ([turn]); `{ none: true, auto_passed }` or null as offerNextTurn.
+async function openPicksAtOnce(c, litter, date) {
+  const done = [];
+  for (const { turn, dogs } of joinsOpenTurns(openTurns(c.offers, c.kennel.id), litter, c.entries, c.offers, c.pups, c.sales, ruleOpts(c, date))) {
+    done.push(await joinTurn(c, turn, litter, dogs, date));
+  }
+  const r = await offerStartableTurns(litter.kennel_id, { today: date });
+  done.push(...r.turns);
+  if (!done.length) return r.auto_passed.length ? { none: true, auto_passed: r.auto_passed } : null;
+  return { ...done[0], more: done.slice(1), auto_passed: [...(done[0].auto_passed || []), ...r.auto_passed] };
+}
 
 // Stop making new offers on this litter. An open turn stays open until she records
 // how it ended.
@@ -833,25 +888,30 @@ export const closePicks = atomic(async function closePicks(litterId) {
 // it closed: accepted / passed / no_response / no_deposit / left. With automatic
 // offers on for that moment, the next turn is offered now; otherwise (the default)
 // nobody is offered and who's next is returned so the page can tell her.
-// Returns { next, waiting, auto_passed } — at most one of next / waiting set.
-// `waiting.prepassed_litter_ids` names the litters that family said "Not this
-// litter" to, so the page can say offering them records a pass.
+// Returns { next, more, waiting, auto_passed }: `next` the turn offered (with turns at
+// the same time, `more` the others offered with it), `waiting` who could be offered
+// when the moment isn't automatic ([] or one family; with turns at the same time,
+// everyone who can start). Each `waiting` row's `prepassed_litter_ids` names the
+// litters that family said "Not this litter" to, so the page can say offering them
+// records a pass.
 async function moveTurnOn(kennelId, { today, trigger } = {}) {
   const c = await kennelContext(kennelId);
   today ??= kennelToday(c.kennel);
   if (autoOffers(c.config, trigger)) {
-    const r = await offerNextTurn(kennelId, { today });
-    return { next: r && !r.none ? r : null, waiting: null, auto_passed: r?.auto_passed || [] };
+    // With turns at the same time, every family who can start now is offered.
+    const r = await offerStartableTurns(kennelId, { today });
+    return { next: r.turns[0] || null, more: r.turns.slice(1), waiting: [], auto_passed: r.auto_passed };
   }
-  const n = nextTurn(c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today));
-  if (!n) return { next: null, waiting: null, auto_passed: [] };
-  const { prepassed } = splitPrepassed(n.entry, n.litters);
+  const ns = nextTurns(c.entries, c.offers, c.litters, c.pups, c.sales, ruleOpts(c, today));
   return {
-    next: null, auto_passed: [],
-    waiting: {
-      entry_id: n.entry.id, litter_ids: n.litters.map((x) => x.litter.id),
-      ...(prepassed.length ? { prepassed_litter_ids: prepassed.map((x) => x.litter.id) } : {})
-    }
+    next: null, more: [], auto_passed: [],
+    waiting: ns.map((n) => {
+      const { prepassed } = splitPrepassed(n.entry, n.litters);
+      return {
+        entry_id: n.entry.id, litter_ids: n.litters.map((x) => x.litter.id),
+        ...(prepassed.length ? { prepassed_litter_ids: prepassed.map((x) => x.litter.id) } : {})
+      };
+    })
   };
 }
 
@@ -859,7 +919,8 @@ async function moveTurnOn(kennelId, { today, trigger } = {}) {
 async function finishTurn(result, kennelId, today, trigger) {
   const moved = await moveTurnOn(kennelId, { today, trigger });
   result.next = moved.next;
-  if (moved.waiting) result.waiting = [...(result.waiting || []), moved.waiting];
+  if (moved.more.length) result.offered = [...(result.offered || []), ...moved.more];
+  if (moved.waiting.length) result.waiting = [...(result.waiting || []), ...moved.waiting];
   if (moved.auto_passed.length) result.auto_passed = [...(result.auto_passed || []), ...moved.auto_passed];
   return result;
 }
@@ -893,7 +954,8 @@ async function releaseOpenOffers(entryId, { date = todayYMD(), why, exceptOfferI
   if (voided.length && moveOn) {
     const moved = await moveTurnOn(voided[0].kennel_id, { today: date, trigger: 'left' });
     if (moved.next) offered.push(moved.next);
-    if (moved.waiting) waiting.push(moved.waiting);
+    offered.push(...moved.more);
+    waiting.push(...moved.waiting);
     autoPassed.push(...moved.auto_passed);
   }
   return { voided, offered, waiting, auto_passed: autoPassed, side_released: sideReleased };
@@ -1011,7 +1073,7 @@ export const changePick = atomic(async function changePick(offerId, { chosenDogI
   date ??= await kennelDay(offer.kennel_id);
   const c = await litterContext(offer.litter_id);
   const accepted = offer.outcome === 'accepted';
-  if (accepted && !canSwitchAcceptedPick(offer, await waitlistOfferRepo.getByKennel(offer.kennel_id))) {
+  if (accepted && !canSwitchAcceptedPick(offer, await waitlistOfferRepo.getByKennel(offer.kennel_id), { pups: c.pups, config: c.config })) {
     throw new Error('Another family has been offered a turn since, so the pup can\'t be switched here. Change it on the sale.');
   }
   if (!accepted && !isAwaitingDeposit(offer)) throw new Error('They haven\'t picked a pup yet.');
@@ -1371,7 +1433,8 @@ export const endEmptiedTurns = atomic(async function endEmptiedTurns({ kennelId 
     if (moveOn) {
       const moved = await moveTurnOn(kid, { today: date, trigger: 'left' });
       if (moved.next) result.offered.push(moved.next);
-      if (moved.waiting) result.waiting.push(moved.waiting);
+      result.offered.push(...moved.more);
+      result.waiting.push(...moved.waiting);
       result.auto_passed.push(...moved.auto_passed);
     }
   }
@@ -1431,7 +1494,8 @@ export const undoPass = atomic(async function undoPass(offerId, { today } = {}) 
   if (!rows.length) {
     throw new Error('They said "Not this litter" to every litter of that turn on their status page, so there\'s no turn to give back. If they\'ve changed their mind, use "Changed their mind…" on that litter.');
   }
-  const holders = openTurns(c.offers, c.kennel.id).filter((t) => t.id !== turnIdOf(offer));
+  // With turns at the same time, only a turn holding a group theirs would is in the way.
+  const holders = undoPassHolders(offer, entry, { offers: c.offers, litters: c.litters, pups: c.pups, config: c.config });
   if (holders.some((t) => t.offers.some(isAwaitingDeposit))) {
     throw new Error('The family holding the turn now has already picked a pup. Record their deposit or void their offer first.');
   }

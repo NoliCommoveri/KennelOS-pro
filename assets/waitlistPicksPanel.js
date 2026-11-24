@@ -18,7 +18,7 @@ import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
 import * as actions from '../data/waitlistActions.js';
 import {
-  waitlistConfig, litterQueue, nextTurn, openTurns, turnOffers, turnIdOf, eligiblePupsFor, isPupAvailable,
+  waitlistConfig, litterQueue, nextTurn, nextTurns, splitPrepassed, undoPassHolders, openTurns, turnOffers, turnIdOf, eligiblePupsFor, isPupAvailable,
   overallPositions, entryName, describeOfferChanges, soonFamiliesForLitter, whelpNotes,
   isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker, autoOffers, autoOfferSummary, closingTrigger,
   nextTurnPrepassNote, familyPagePlan, isFamilyPageOnly, isTurnOverdue, deadlineLabel, turnLengthText, plannedOpening, isHeldPick } from '../data/waitlistRules.js';
@@ -116,7 +116,7 @@ export async function openPicksFromCheckin(litter) {
       : 'Nobody on the list is eligible for the available pups yet. The litter page shows who\'s next.' };
   }
   const said = offeredMessage(turn, await freshEntries(litter), familyName, d.litterName);
-  if (!turn.none) await offerEmails(offerSpecs({ next: turn }));
+  if (!turn.none) await offerEmails(offerSpecs({ next: turn, offered: (turn.more || []).filter((t) => !t.joined) }));
   return said;
 }
 
@@ -135,8 +135,12 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
   const available = d.pups.filter((p) => isPupAvailable(p, d.sales));
   const queue = litterQueue(d.entries, litter, d.pups, d.sales, opts);
   const positions = overallPositions(d.entries, litter.kennel_id, d.programsById, { sales: d.allSales, dogs: d.dogsById });
-  // The litter's turn; a pick held for its deposit (isHeldPick) only when no turn is open.
-  const open = d.offers.find((o) => o.outcome === 'open' && !o.is_archived && !isHeldPick(o)) || d.offers.find((o) => o.outcome === 'open' && !o.is_archived) || null;
+  // The litter's turns (more than one with turns at the same time); a pick held for its
+  // deposit (isHeldPick) only when no turn is open.
+  const turnRows = d.offers.filter((o) => o.outcome === 'open' && !o.is_archived && !isHeldPick(o));
+  const opens = turnRows.length ? turnRows : d.offers.filter((o) => o.outcome === 'open' && !o.is_archived).slice(0, 1);
+  const open = opens[0] || null;
+  const atOnce = Boolean(d.config.turns_at_once);
   // The turn open in the kennel (at most one since §16.1; older offers may leave more).
   const kennelTurns = openTurns(d.kennelOffers, litter.kennel_id);
   const otherLitters = (offer) => turnOffers(d.kennelOffers, turnIdOf(offer)).filter((o) => o.outcome === 'open' && o.litter_id !== offer.litter_id).map((o) => d.litterName(o.litter_id));
@@ -164,9 +168,8 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     return;
   }
 
-  // --- The open offer ---
-  let openHtml = '';
-  if (open) {
+  // --- The open offers: one card each, its buttons inside it ---
+  const openCard = (open) => {
     const entry = entriesById.get(open.entry_id);
     const live = entry ? eligiblePupsFor(entry, litter, d.pups, d.sales, opts) : [];
     const overdue = isTurnOverdue(open, kennelNow(d.kennel));
@@ -174,8 +177,8 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     // Her request (W2 Plan §8): the family's status-page link, to send by Messenger.
     const copyBtn = entry && statusLinkFor(entry, d.kennel)
       ? '<button class="btn btn-sm" data-pk="copy-link" title="Their status page, to send by Messenger or text">Copy status link</button>' : '';
-    openHtml = `
-      <div class="card" style="margin:12px 0 0;background:var(--surface-2, transparent);">
+    return `
+      <div class="card" data-turn-card="${esc(open.id)}" style="margin:12px 0 0;background:var(--surface-2, transparent);">
         <p style="margin:0 0 6px;"><strong>${entry ? familyLink(entry) : 'A family'}'s turn</strong> since ${esc(fmtDate(open.offered_date))}
           · pick and pay by <strong>${esc(deadlineLabel(open.respond_by_date, open.respond_by_time, fmtDate))}</strong>${overdue ? ' <span class="badge badge-red">Deadline passed</span>' : ` · ${countdownHtml(zonedInstant(open.respond_by_date, open.respond_by_time, d.kennel?.time_zone || null), { label: 'ends in', done: 'deadline reached' })}`}</p>
         ${otherLitters(open).length ? `<p class="muted" style="margin:0 0 6px;">Their turn also covers ${esc(otherLitters(open).join(', '))}: they pick one pup from any of them, or pass on all of them.</p>` : ''}
@@ -198,7 +201,8 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
           ${copyBtn}
         </div>`}
       </div>`;
-  }
+  };
+  const openHtml = opens.map(openCard).join('');
 
   // --- Who's next (picks open, no turn open in the kennel) ---
   let nextHtml = '';
@@ -210,7 +214,23 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     return note ? `<p class="field-hint" style="margin:6px 0 0;"><span class="badge badge-amber">Not this litter</span> ${esc(note)}</p>` : '';
   };
   const heldElsewhere = !open ? kennelTurns[0] : null;
-  if (heldElsewhere) {
+  if (atOnce && picksOpen) {
+    // Turns at the same time: the turns open on other litters, then every family who
+    // can start now, each with Offer to them.
+    const here = new Set(opens.map((o) => turnIdOf(o)));
+    const elsewhere = kennelTurns.filter((t) => !here.has(t.id)).map((t) => {
+      const holder = entriesById.get(t.entry_id);
+      return `<p class="muted" style="margin:12px 0 0;">${holder ? familyLink(holder) : 'Another family'} is deciding on ${esc(t.offers.map((o) => d.litterName(o.litter_id)).join(', '))} until ${esc(deadlineLabel(t.respond_by_date, t.respond_by_time, fmtDate))}.</p>`;
+    }).join('');
+    const starters = nextTurns(d.entries, d.kennelOffers, d.kennelLitters, d.kennelPups, d.kennelSales, { ...opts, kennelId: litter.kennel_id });
+    const startHtml = starters.map((n) => {
+      const ls = splitPrepassed(n.entry, n.litters).offer;
+      const mine = (ls.length ? ls : n.litters).find((x) => x.litter.id === litter.id) || (ls.length ? ls : n.litters)[0];
+      return `<p style="margin:12px 0 0;">${kennelTurns.length || starters.length > 1 ? 'Can start now' : 'Next turn'}: <strong>${familyLink(n.entry)}</strong> <span class="muted">(${esc((ls.length ? ls : n.litters).map((x) => d.litterName(x.litter.id)).join(', '))})</span> <button class="btn btn-sm btn-primary" data-pk-offer="${esc(mine.litter.id)}|${esc(n.entry.id)}">Offer to them</button></p>${prepassNoteHtml(n)}`;
+    }).join('');
+    nextHtml = elsewhere + (startHtml || (opens.length || kennelTurns.length ? `<p class="muted" style="margin:12px 0 0;">Nobody else can start yet: everyone else in line could take a pup a family ahead of them is choosing from.</p>`
+      : `<p class="muted" style="margin:12px 0 0;">${available.length ? 'Nobody else on the list is eligible for the pups still available.' : 'Every pup in this litter is spoken for.'}</p>`));
+  } else if (heldElsewhere) {
     const holder = entriesById.get(heldElsewhere.entry_id);
     nextHtml = `<p class="muted" style="margin:12px 0 0;">${holder ? familyLink(holder) : 'Another family'} holds the turn (${esc(heldElsewhere.offers.map((o) => d.litterName(o.litter_id)).join(', '))}) until ${esc(deadlineLabel(heldElsewhere.respond_by_date, heldElsewhere.respond_by_time, fmtDate))}. One family at a time across your open litters: the next turn is worked out when theirs closes.</p>`;
   } else if (picksOpen && !open) {
@@ -239,7 +259,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
           history.map((o) => {
             const e = entriesById.get(o.entry_id);
             const pup = o.chosen_dog_id ? pupsById.get(o.chosen_dog_id) : null;
-            const act = canSwitchAcceptedPick(o, d.kennelOffers)
+            const act = canSwitchAcceptedPick(o, d.kennelOffers, { pups: d.kennelPups, config: d.config })
               ? `<button class="btn btn-sm" data-pk-change="${esc(o.id)}" title="Allowed until the next family is offered this litter">Change pup…</button>`
               : !undoPassBlocker(o, e, today) ? `<button class="btn btn-sm" data-pk-undo="${esc(o.id)}" title="Erase this and give them their turn back">Undo…</button>` : '';
             return `<tr><td>${e ? familyLink(e) : none}</td><td>${esc(fmtDate(o.offered_date))}</td><td>${badge(WAITLIST_OFFER_OUTCOME, o.outcome)}${pup ? ` ${esc(pup.call_name)}` : ''}${o.outcome_date ? ` <span class="faint">${esc(fmtDate(o.outcome_date))}</span>` : ''}</td><td>${o.counts_as_pass ? '<span class="badge badge-amber">Counts</span>' : none}</td><td>${act}</td></tr>`;
@@ -263,7 +283,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
           : `<button class="btn btn-primary btn-sm" data-pk="open"${available.length ? '' : ' disabled title="No pups available to offer."'}>Open picks</button>`}</div>
       </div>
       <p class="field-hint" style="margin:6px 0 0;">${picksOpen
-        ? `Picks opened ${esc(fmtDate(litter.picks_opened_date))}. One family at a time across all your open litters, in list order; each turn shows every pup they match in every open litter, and only passing on all of them counts as a pass. Families with no matching pup, paused, or listening only for other sires or dams are skipped and nothing is held against them. A pup is only theirs once the deposit is in. ${autoOfferSummary(d.config)} Nothing is sent automatically, so tell each family yourself.`
+        ? `Picks opened ${esc(fmtDate(litter.picks_opened_date))}. ${atOnce ? 'Families who can\'t take the same pup pick at the same time; anyone who could goes in list order' : 'One family at a time across all your open litters, in list order'}; each turn shows every pup they match in every open litter, and only passing on all of them counts as a pass. Families with no matching pup, paused, or listening only for other sires or dams are skipped and nothing is held against them. A pup is only theirs once the deposit is in. ${autoOfferSummary(d.config)} Nothing is sent automatically, so tell each family yourself.`
         : `${plannedLine}${available.length} pup${available.length === 1 ? '' : 's'} available. Opening picks offers the next turn (${esc(turnLengthText(d.config, null))} to pick and pay the deposit), or, while a family holds a turn, adds this litter to it when they're first in line for it.`}</p>
       ${openHtml}
       ${nextHtml}
@@ -290,7 +310,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
       : { title: 'Picks are open', message: heldElsewhere || kennelTurns.length
         ? 'Another family holds the turn and isn\'t first in line for this litter, so it waits for the next turn.'
         : 'Nobody on the list is eligible for the available pups yet. A family is offered as soon as one becomes eligible and you tap "Offer to them".' });
-    if (turn && !turn.none) await offerEmails(offerSpecs({ next: turn }));
+    if (turn && !turn.none) await offerEmails(offerSpecs({ next: turn, offered: (turn.more || []).filter((t) => !t.joined) }));
   });
   // A side sale (Side Sale Spec): a pup of this litter to a family on the list.
   on('side', async () => {
@@ -325,13 +345,22 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     ? 'The turn moves to the next eligible family.'
     : 'Nobody is offered automatically; you\'ll see who\'s next.');
 
-  if (open) {
+  // Each family deciding about this litter, as many as are open: their card's buttons.
+  mount.querySelectorAll('[data-pk-offer]').forEach((btn) => btn.addEventListener('click', run(async () => {
+    const [lid, eid] = btn.dataset.pkOffer.split('|');
+    const turn = await actions.offerTo(lid, eid);
+    await alertModal(offeredMessage(turn, await freshEntries(litter), familyName, d.litterName));
+    await offerEmails(offerSpecs({ next: turn }));
+  })));
+  for (const open of opens) {
+    const card = mount.querySelector(`[data-turn-card="${CSS.escape(open.id)}"]`);
+    const on = (key, fn) => card?.querySelector(`[data-pk="${key}"]`)?.addEventListener('click', run(fn));
     const entry = entriesById.get(open.entry_id);
     const name = entry ? familyName(entry) : 'this family';
     const pickedName = open.chosen_dog_id ? (pupsById.get(open.chosen_dog_id)?.call_name || 'their pup') : '';
     // Not wrapped in run(): copying writes nothing.
     const link = entry ? statusLinkFor(entry, d.kennel) : null;
-    mount.querySelector('[data-pk="copy-link"]')?.addEventListener('click', (ev) => { if (link) copyLink(link, ev.currentTarget, { title: `${name}'s status page` }); });
+    card?.querySelector('[data-pk="copy-link"]')?.addEventListener('click', (ev) => { if (link) copyLink(link, ev.currentTarget, { title: `${name}'s status page` }); });
     on('accept', async () => {
       const live = eligiblePupsFor(entry, litter, d.pups, d.sales, opts);
       const out = await pickDialog({ offer: open, name, pups: live, pupLabel });
@@ -393,7 +422,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     const o = d.offers.find((x) => x.id === btn.dataset.pkUndo);
     const entry = entriesById.get(o.entry_id);
     const name = familyName(entry);
-    const holding = kennelTurns.find((t) => t.id !== turnIdOf(o));
+    const [holding] = undoPassHolders(o, entry, { offers: d.kennelOffers, litters: d.kennelLitters, pups: d.kennelPups, config: d.config });
     const holder = holding ? entriesById.get(holding.entry_id) : null;
     const res = await undoPassDialog({ offer: o, name, holderName: holder ? familyName(holder) : null, removed: entry.status === 'removed' });
     if (!res) return;
@@ -467,12 +496,18 @@ function offeredMessage(turn, entriesById, familyName, litterName) {
   });
   const say = (title, line) => ({ title, message: [...passed, line].join('\n\n') });
   if (turn.none) return say('No turn offered', 'Nobody else on the list is eligible for the pups available right now.');
-  const e = entriesById.get(turn.entry_id);
-  const name = e ? familyName(e) : 'the next family';
-  const litters = (turn.litter_ids || []).map(litterName).join(', ');
-  return turn.joined
-    ? say('Added to their turn', `${name} is first in line for this litter too, so it joined their turn (${litters}). Their deadline restarted: until ${deadlineLabel(turn.respond_by_date, turn.respond_by_time, fmtDate)}. Let them know.`)
-    : say('Turn offered', `It's ${name}'s turn (${litters}). They have until ${deadlineLabel(turn.respond_by_date, turn.respond_by_time, fmtDate)} to pick a pup from any of these and send the deposit, or pass. Let them know.`);
+  // Opening picks with turns at the same time can join or start several (`more`).
+  const lineOf = (t) => {
+    const e = entriesById.get(t.entry_id);
+    const name = e ? familyName(e) : 'the next family';
+    const litters = (t.litter_ids || []).map(litterName).join(', ');
+    return t.joined
+      ? `${name} is first in line for this litter too, so it joined their turn (${litters}). Their deadline restarted: until ${deadlineLabel(t.respond_by_date, t.respond_by_time, fmtDate)}. Let them know.`
+      : `It's ${name}'s turn (${litters}). They have until ${deadlineLabel(t.respond_by_date, t.respond_by_time, fmtDate)} to pick a pup from any of these and send the deposit, or pass. Let them know.`;
+  };
+  const all = [turn, ...(turn.more || [])];
+  if (all.length > 1) return { title: 'Turns offered', message: [...passed, ...all.map(lineOf)].join('\n\n') };
+  return say(turn.joined ? 'Added to their turn' : 'Turn offered', lineOf(turn));
 }
 
 // describeOfferChanges, with names from a fresh read: an accept or a removal may

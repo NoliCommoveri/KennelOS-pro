@@ -424,7 +424,7 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
       ${carriedHint}${creditHint}
       ${carried.length
         ? '<p class="field-hint">Creates the Sale (price and deposit from the litter\'s expected amounts). You can still switch the pup until the next family is offered a turn.</p>'
-        : `<p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this litter. No deposit by then counts as no response.</p>`}`,
+        : `<p class="field-hint">Creates a Sale (deposit pending, price and deposit from the litter's expected amounts) to hold the pup. It isn't theirs until the deposit arrives${offer.respond_by_date ? `, by <strong>${esc(deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate))}</strong>` : ''}. Until then you can switch the pup, and nobody else is offered this pup. No deposit by then counts as no response.</p>`}`,
     onConfirm: async (o) => {
       const chosenDogId = o.querySelector('#pk-dog').value;
       const date = o.querySelector('#pk-date').value || day;

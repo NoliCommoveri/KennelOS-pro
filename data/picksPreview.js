@@ -12,7 +12,7 @@
 import {
   waitlistConfig, rankedList, overallPositions, isPupAvailable, pupMatchesPrefs,
   eligiblePupsFor, isManuallyPaused, isReadyHeld, readyFromDate, readyCheck, isListeningFor,
-  turnSpent, turnLittersFor, openTurns, joinsOpenTurn, splitPrepassed, prepassFor,
+  turnSpent, turnLittersFor, openTurns, joinsOpenTurn, joinsOpenTurns, nextTurns, splitPrepassed, prepassFor,
   respondByDate, respondBy, joinRespondBy, countsAsPass, passesUsed, shouldRemoveForPasses, maxPassesFor, kennelBreeds, resolveBreed,
   WHELP_NOTE_FIELDS, isSideSalePending, sideSaleOf, pupClaims
 } from './waitlistRules.js';
@@ -118,9 +118,11 @@ export function withEitherAs(entries, eitherAs) {
 // open litter, leaving out a family whose turn would be "Not this litter" in full
 // (K6b-6): [{ entry_id, litter_ids }], at most NEXT_AFTER_SHOWN.
 //   | { kind: 'none', auto_passed }
+//   | { kind: 'at_once', holders, joins, starts, auto_passed }   (turns at the same time)
 // auto_passed: [{ entry_id, litter_ids, counted, used, max, removed }]
 function simulateOpen({ entries, offers, litters, pups, sales, programsById, config, today, kennelId, litterId, alreadyOpen }) {
   const opts = { today, config, programsById, kennelId };
+  if (config.turns_at_once) return simulateAtOnce({ entries, offers, litters, pups, sales, programsById, config, today, kennelId, litterId, alreadyOpen });
   const target = litters.find((l) => l.id === litterId);
   const [open] = openTurns(offers, kennelId);
   if (open) {
@@ -164,6 +166,53 @@ function simulateOpen({ entries, offers, litters, pups, sales, programsById, con
     autoPassed.push({ entry_id: next.entry.id, litter_ids: prepassed.map((x) => x.litter.id), counted: counts, used: passesUsed(next.entry, simOffers), max: maxPassesFor(config, program), removed });
   }
   return { kind: 'none', auto_passed: autoPassed };
+}
+
+// openPicks with turns at the same time, on copies: the litter's groups join the open
+// turns whose holders are first in line for them, then every family who can start is
+// offered (a whole "Not this litter" turn passed on the way). With picks already open,
+// who'd be offered now. → { kind: 'at_once',
+//   holders: [{ entry_id, turn_id, litter_ids, respond_by, respond_by_time }] (open now),
+//   joins: [{ entry_id, turn_id, dog_ids }],
+//   starts: [{ entry_id, litters: [{ litter_id, dog_ids }], prepassed, respond_by, respond_by_time }],
+//   auto_passed }
+function simulateAtOnce({ entries, offers, litters, pups, sales, programsById, config, today, kennelId, litterId, alreadyOpen }) {
+  const opts = { today, config, programsById, kennelId };
+  const target = litters.find((l) => l.id === litterId);
+  const open = openTurns(offers, kennelId);
+  let simEntries = entries;
+  let simOffers = offers;
+  const joins = [];
+  const starts = [];
+  const autoPassed = [];
+  if (!alreadyOpen && target) {
+    for (const { turn, dogs } of joinsOpenTurns(open, target, entries, offers, pups, sales, opts)) {
+      joins.push({ entry_id: turn.entry_id, turn_id: turn.id, dog_ids: dogs.map((d) => d.id) });
+      simOffers = [...simOffers, { id: `preview-join-${turn.id}`, entry_id: turn.entry_id, litter_id: target.id, kennel_id: kennelId, turn_id: turn.id, outcome: 'open', eligible_dog_ids: dogs.map((d) => d.id) }];
+    }
+  }
+  for (let guard = 0; guard <= entries.length * 2; guard++) {
+    const [next] = nextTurns(simEntries, simOffers, litters, pups, sales, opts);
+    if (!next) break;
+    const program = programsById.get(next.entry.waitlist_program_id) || null;
+    const { offer, prepassed } = splitPrepassed(next.entry, next.litters);
+    if (offer.length) {
+      const due = respondBy(today, config, program);
+      starts.push({ entry_id: next.entry.id, litters: offer.map((x) => ({ litter_id: x.litter.id, dog_ids: x.eligibleDogs.map((d) => d.id) })), prepassed: prepassed.map((x) => x.litter.id), respond_by: due.date, respond_by_time: due.time });
+      simOffers = [...simOffers, ...offer.map((x, i) => ({ id: `preview-start-${guard}-${i}`, entry_id: next.entry.id, litter_id: x.litter.id, kennel_id: kennelId, turn_id: `preview-start-${guard}`, outcome: 'open', eligible_dog_ids: x.eligibleDogs.map((d) => d.id) }))];
+      continue;
+    }
+    const counts = countsAsPass('passed', { config, program });
+    simOffers = [...simOffers, ...prepassed.map((x, i) => ({ id: `preview-${guard}-${i}`, entry_id: next.entry.id, litter_id: x.litter.id, kennel_id: kennelId, turn_id: `preview-${guard}`, outcome: 'passed', counts_as_pass: counts && i === 0 }))];
+    const removed = shouldRemoveForPasses(next.entry, simOffers, config, program);
+    if (removed) simEntries = simEntries.map((e) => (e.id === next.entry.id ? { ...e, status: 'removed' } : e));
+    autoPassed.push({ entry_id: next.entry.id, litter_ids: prepassed.map((x) => x.litter.id), counted: counts, used: passesUsed(next.entry, simOffers), max: maxPassesFor(config, program), removed });
+  }
+  return {
+    kind: 'at_once',
+    holders: open.map((t) => ({ entry_id: t.entry_id, turn_id: t.id, litter_ids: t.offers.map((o) => o.litter_id), respond_by: t.respond_by_date, respond_by_time: t.respond_by_time || null })),
+    joins, starts, auto_passed: autoPassed
+  };
 }
 
 const NEXT_AFTER_SHOWN = 3;
@@ -218,7 +267,7 @@ export function previewPicks(data, { litterId, today, view = 'combined', eitherA
   const seen = withEitherAs(entries, eitherAs);
   const ranked = rankedList(seen, kennelId, programsById);
   const positions = overallPositions(entries, kennelId, programsById, { sales, dogs });
-  const [openTurn] = openTurns(kennelOffers, kennelId);
+  const kennelTurns = openTurns(kennelOffers, kennelId);
   const contactsById = new Map(contacts.map((c) => [c.id, c]));
   const breeds = kennelBreeds(kennel, dogs);
 
@@ -227,7 +276,8 @@ export function previewPicks(data, { litterId, today, view = 'combined', eitherA
   const turnOrder = [];
   for (const entry of ranked) {
     const ls = turnLittersFor(entry, kennelOffers, shown, pups, sales, opts);
-    const holds = openTurn && openTurn.entry_id === entry.id;
+    const openTurn = kennelTurns.find((t) => t.entry_id === entry.id) || null;
+    const holds = Boolean(openTurn);
     if (!ls.length && !holds) continue;
     const { offer, prepassed } = splitPrepassed(entry, ls);
     const program = programsById.get(entry.waitlist_program_id) || null;
@@ -261,7 +311,7 @@ export function previewPicks(data, { litterId, today, view = 'combined', eitherA
         const families = offered ? ranked.filter((e) => !turnSpent(kennelOffers, litter.id, e.id)
           && eligiblePupsFor(e, litter, pups, sales, opts).some((d) => d.id === dog.id))
           .map((e) => ({ entry_id: e.id, prepassed: Boolean(prepassFor(e, litter)) })) : [];
-        const holder = offered && openTurn ? openTurn.offers.find((o) => o.litter_id === litter.id && (o.eligible_dog_ids || []).includes(dog.id)) : null;
+        const holder = offered ? kennelTurns.flatMap((t) => t.offers).find((o) => o.litter_id === litter.id && (o.eligible_dog_ids || []).includes(dog.id)) || null : null;
         // The family holding the turn on it is first in its line.
         if (holder) families.unshift({ entry_id: holder.entry_id, prepassed: false, holds_turn: true });
         return {

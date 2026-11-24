@@ -56,7 +56,7 @@ import {
   describeOfferChanges, isAwaitingDeposit, switchablePups, canSwitchAcceptedPick, undoPassBlocker,
   kennelBreeds, resolveBreed, prefChangeEffect, autoOffers, closingTrigger, listenParentChoices,
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
-  sideSaleOf, sideSaleInOrder, boughtOutOfOrder, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
+  sideSaleOf, sideSaleInOrder, boughtOutOfOrder, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, aheadInTheWay, undoPassHolders, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
   familyDetails, contactForEmail, deadlineLabel, isHeldPick, turnDeadline, prepassTargets, passReasons, passedBefore, nextTurnPrepassNote } from '../data/waitlistRules.js';
 import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
 import { canShareFiles, shareOrDownload, shareFailText } from '../assets/pdfShare.js';
@@ -1770,12 +1770,17 @@ function litterChoices(e) {
     .filter((l) => isWaitlistLitter(l, ctx.kennel))
     .map((l) => {
       const eligible = eligiblePupsFor(e, l, kennelLitterPups(l), ctx.sales, opts);
+      const atOnce = Boolean(ctx.config.turns_at_once);
       const blocked = offerBlocker(e, l, {
-        offers: ctx.kennelOffers, pups: kennelLitterPups(l), sales: ctx.sales, today, config: ctx.config,
-        nameOf: familyNameById, readyText: (x) => readyHoldText(x, today, ctx.config)
+        offers: ctx.kennelOffers, pups: atOnce ? pups : kennelLitterPups(l), sales: ctx.sales, litters: ctx.litters, today, config: ctx.config,
+        nameOf: familyNameById, readyText: (x) => readyHoldText(x, today, ctx.config), litterName: (id) => litterLabel(ctx.litters.find((x) => x.id === id) || {})
       });
+      // With turns at the same time, "next" is the family ahead who'd reach the same
+      // pups (their turn comes first), else this family.
+      const inTheWay = !blocked && atOnce ? aheadInTheWay(e.id, ctx.kennelEntries, ctx.kennelOffers, ctx.litters, pups, ctx.sales, { ...opts, kennelId: ctx.kennel.id, opening: l }) : null;
       const next = blocked ? null
-        : nextOfferedTurn(ctx.kennelEntries, ctx.kennelOffers, ctx.litters, pups, ctx.sales, { ...opts, kennelId: ctx.kennel.id, opening: l });
+        : atOnce ? { entry: inTheWay || e }
+          : nextOfferedTurn(ctx.kennelEntries, ctx.kennelOffers, ctx.litters, pups, ctx.sales, { ...opts, kennelId: ctx.kennel.id, opening: l });
       // Families ahead of them whose whole turn is "Not this litter": passed first.
       const passedFirst = blocked ? [] : passedBefore(e.id, ctx.kennelEntries, ctx.kennelOffers, ctx.litters, pups, ctx.sales, { ...opts, kennelId: ctx.kennel.id, opening: l });
       return { litter: l, eligible, blocked, next, passedFirst };
@@ -1946,7 +1951,7 @@ async function onOfferOutcome(offer, outcome) {
     return;
   }
   if (outcome === 'undo') {
-    const holder = openTurns(ctx.kennelOffers, ctx.kennel.id).find((t) => t.id !== turnIdOf(offer));
+    const [holder] = undoPassHolders(offer, e, { offers: ctx.kennelOffers, litters: ctx.litters, pups: [...ctx.dogsById.values()], config: ctx.config });
     const res = await undoPassDialog({ offer, name, holderName: holder ? familyNameById(holder.entry_id) : null, removed: e.status === 'removed' });
     if (!res) return;
     await afterAction();
@@ -2014,10 +2019,10 @@ function offerButtons(o, today) {
     ];
   } else if (o.outcome === 'open') {
     list = [btn('pick', 'Picked a pup…', true), btn('passed', 'Passed'), btn('no_response', 'No response'), btn('voided', 'Void')];
-  } else if (o.outcome === 'accepted' && (canSwitchAcceptedPick(o, ctx.kennelOffers) || canSendPlaced(o))) {
+  } else if (o.outcome === 'accepted' && (canSwitchAcceptedPick(o, ctx.kennelOffers, { pups: [...ctx.dogsById.values()], config: ctx.config }) || canSendPlaced(o))) {
     list = [
       ...(canSendPlaced(o) ? [btn('send', 'Send contract & invoice…', true, 'Their deposit is in; the message thanks them for it')] : []),
-      ...(canSwitchAcceptedPick(o, ctx.kennelOffers) ? [btn('change', 'Change pup…', false, 'Allowed until the next family is offered a turn')] : [])
+      ...(canSwitchAcceptedPick(o, ctx.kennelOffers, { pups: [...ctx.dogsById.values()], config: ctx.config }) ? [btn('change', 'Change pup…', false, 'Allowed until the next family is offered a turn')] : [])
     ];
   } else if (isPrepassedRow(o)) {
     // Closed by their own "Not this litter": only they can take it back.

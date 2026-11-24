@@ -25,7 +25,8 @@ import {
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
   rankedList, turnLittersFor, turnIdOf, isSideSalePending, passReasons, splitPrepassed, upcomingItems, plannedHeats, showUpcoming, isListeningFor, placeHidden, prefPlaces, whelpNotes, readyCheck, publicIntroText,
   messengerLink, embedOrigins, publicSelected, publicSourceName, isPupReserved, pupRegistrationOf, maxPassesFor, isWaitlistLitter, isPicksOpen, isFamilyPageOnly, LISTEN_LIVE_LITTER,
-  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening, statusPopupTexts, changePhase, freeChanges, isHeldPick, countsAsPass
+  isTimeOfDay, turnHours, awakeHours, fromMinutes, plannedOpening, statusPopupTexts, changePhase, freeChanges, isHeldPick, countsAsPass,
+  reachedGroups, turnGroups
 } from './waitlistRules.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
@@ -336,6 +337,9 @@ function entryView(entry, ctx) {
         ...(isTimeOfDay(o.respond_by_time) ? { respond_by_time: o.respond_by_time } : {}),
         eligible_dog_ids: [...(o.eligible_dog_ids || [])],
         picked_dog_id: orNull(o.chosen_dog_id),
+        // Server only, with turns at the same time: the pup groups this row holds
+        // (waitlistRules.turnGroups), which other families' turns mustn't reach.
+        ...(ctx.config.turns_at_once && !o.direct ? { groups: ctx.rowGroups(o) } : {}),
         // Server only (never shown): a side sale, not a turn (Side Sale Spec §6).
         ...(o.direct ? { direct: true } : {}),
         // Server only: a pick held for its deposit after their turn ended (isHeldPick).
@@ -610,7 +614,11 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       // …in hours, when she counts turns in hours (turnHours); absent = days.
       ...(turnHours(config, program) != null ? { respond_hours: turnHours(config, program) } : {}),
       litters: Object.fromEntries(offer.map((x) => [x.litter.id, x.eligibleDogs.map((d) => d.id).sort()])),
-      prepassed: prepassed.map((x) => x.litter.id)
+      prepassed: prepassed.map((x) => x.litter.id),
+      // With turns at the same time: the pup groups their turn would reach (their sex in
+      // each litter they'd be offered), so the server starts a turn only where nobody
+      // ahead reaches the same (waitlistRules.nextTurns).
+      ...(config.turns_at_once ? { groups: reachedGroups(e, offer) } : {})
     });
   }
 
@@ -659,6 +667,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   const creditMemo = new Map();
   const ctx = {
     config, contactsById, programsById, offers: familyOffers, today, upcoming, phase: changePhase(litters, kennel.id),
+    rowGroups: (o) => turnGroups({ offers: [o] }, dogs),
     picksOpen: new Set(Object.entries(litterViews).filter(([, l]) => l.picks_open).map(([id]) => id)),
     positions: overallPositions(live, kennel.id, programsById, { sales, dogs: dogsById }), prefPlaces: prefPlaces(live, kennel.id, programsById, config, { sales, dogs: dogsById }), matches, litterLabels, hidden, notes,
     // Each record's own pup's sale (familySale): a family back on the list for a
@@ -801,6 +810,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       closed_dates: liveClosedDates(closedDates(config), today),
       max_passes: Number(config.max_passes),
       auto_offer_on: [...config.auto_offer_on],
+      // Turns at the same time (docs/KennelOS_Split_Turns_Plan.md): the server's
+      // automatic offers start every turn that can, as her device does.
+      ...(config.turns_at_once ? { turns_at_once: true } : {}),
       // What the server sends by itself while her phone is off (W2 step 7): her
       // wording for those emails, and whether to send reminders at all.
       email_templates: serverEmailTemplates(config),
