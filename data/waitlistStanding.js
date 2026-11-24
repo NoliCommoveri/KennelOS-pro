@@ -2,11 +2,12 @@
 // 2026-11-22), shown in place of what they want on the public list, its copied text
 // and her Waitlist: their turn on an open-picks litter closed (Passed / No response /
 // No deposit - expired: a closed row keeps the sale its pick made) or no available
-// pup there matches them (No matches). null while they hold a turn or a pick, are
+// pup there matches them (No matches; only while one of those litters still has a pup
+// available, so a litter whose pups are all spoken for says nothing). null while they hold a turn or a pick, are
 // paused or buying through a side sale, when no litter's picks are open, or when
 // they're still in line for a pup. Its own module so the app shell doesn't load it.
 // Labels: waitlistRules.PICKS_STANDING_LABEL. Pure.
-import { WAITLIST_CONFIG_DEFAULTS, isPicksOpen, isOnList, heldPickOf, sideSaleOf, isPaused, turnLittersFor } from './waitlistRules.js';
+import { WAITLIST_CONFIG_DEFAULTS, isPicksOpen, isOnList, heldPickOf, sideSaleOf, isPaused, turnLittersFor, isPupAvailable } from './waitlistRules.js';
 
 // `pups`: the kennel's dogs (array or Map). → 'passed' | 'no_response' | 'no_deposit' | 'no_match' | null
 export function picksStanding(entry, { offers = [], litters = [], pups = [], sales = [], today, config = WAITLIST_CONFIG_DEFAULTS } = {}) {
@@ -19,6 +20,8 @@ export function picksStanding(entry, { offers = [], litters = [], pups = [], sal
     .sort((a, b) => String(b.outcome_date || '').localeCompare(String(a.outcome_date || '')) || String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
   if (last) return last.outcome === 'passed' ? 'passed' : last.sale_id ? 'no_deposit' : 'no_response';
   const dogList = pups instanceof Map ? [...pups.values()] : (pups || []);
+  // Every pup in the open litters spoken for: nobody is short a match, so say nothing.
+  if (!dogList.some((d) => ids.has(d.litter_id) && isPupAvailable(d, sales))) return null;
   return turnLittersFor(entry, offers, open, dogList, sales, { today, config }).length ? null : 'no_match';
 }
 

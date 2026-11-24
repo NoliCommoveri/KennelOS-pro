@@ -1214,9 +1214,10 @@ export function familyPagePlan(litter, { pups = [], sales = [], entries = [], of
 }
 export const waitlistLitters = (kennel, litters) => (litters || []).filter((l) => isWaitlistLitter(l, kennel));
 
-// A born litter with no pup left to offer: every pup gone, kept, reserved or sold
-// (a released sale frees it). Undecided pups, or none recorded yet, keep it. Derived.
-const SPOKEN_FOR_DISPOSITIONS = ['keeping', 'placed'];
+// A born litter with no pup left to offer: every pup gone, kept, reserved, on a health
+// hold or sold (a released sale frees it). A held pup she later marks Available is
+// offered when picks open. Undecided pups, or none recorded yet, keep it. Derived.
+const SPOKEN_FOR_DISPOSITIONS = ['keeping', 'placed', 'health_hold'];
 export function isLitterSpokenFor(litter, dogs = [], sales = []) {
   if (!litter || litter.status === 'expected') return false;
   const pups = dogs.filter((d) => d.litter_id === litter.id && !d.is_archived);
