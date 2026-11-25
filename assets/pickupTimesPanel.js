@@ -20,10 +20,11 @@ import { pickupLocations, cleanSlots, makeSlots, timeRange, slotBookings, ruleFo
 import { monthOf, shiftMonth, monthGridDates, weekdayHeads } from '../data/calendarMath.js';
 import { kennelChargeList } from '../data/extraCharges.js';
 import { waitlistConfig } from '../data/waitlistRules.js';
-import { bookPickupTimeForSale, editPickupTime } from '../data/waitlistActions.js';
+import { editPickupTime } from '../data/waitlistActions.js';
 import { kennelToday } from '../data/dateUtils.js';
 import { esc, fmtDate, confirmModal, alertModal } from './ui.js';
 import { afterPickupApproval } from './waitlistUI.js';
+import { setPickupDialog } from './setPickupDialog.js';
 
 // The month she's looking at, per litter, kept while she stays on the page.
 const shownMonth = new Map();
@@ -272,6 +273,9 @@ export async function renderPickupTimesPanel({ mount, litter, onChange = async (
         ${extras.map((x) => `<option value="x:${esc(x.id)}"${ruleValue === `x:${x.id}` ? ' selected' : ''}>Requires: ${esc(x.label)}${x.family_can_request ? '' : ' (families can\'t ask for it)'}</option>`).join('')}
       </select></div>`}
       ${items.length ? `<ul class="cal-day-list">${items.map(timeRow).join('')}</ul>` : '<p class="faint">No times of yours on this day yet.</p>'}
+      ${!past && buyerSales.length ? `<div class="field" style="margin-top:10px;"><label for="pt-elsewho">Another time or place this day for</label>
+        <span style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;"><select id="pt-elsewho" style="flex:1; min-width:0;">${buyerOptions()}</select><button type="button" class="btn btn-sm" id="pt-else">Set pickup…</button></span>
+        <span class="field-hint">One of your places or any address, with the transport fee.</span></div>` : ''}
       ${dayOthers.length || dayAddresses.length ? `<h3 style="margin:12px 0 0; font-size:15px;">Other pickups and drop-offs</h3><ul class="cal-day-list">${dayOthers.map(otherRow).join('')}${dayAddresses.map(addressRow).join('')}</ul>` : ''}
       ${past ? '' : `<details style="margin-top:10px;"${items.length ? '' : ' open'}><summary><strong>Add a time</strong></summary>
         <div class="form-grid" style="margin-top:6px;">
@@ -292,8 +296,16 @@ export async function renderPickupTimesPanel({ mount, litter, onChange = async (
     const close = async () => { overlay.remove(); if (changed) await refresh(); };
     const fail = (err) => { const el = overlay.querySelector('#pt-err'); el.textContent = err.message || String(err); el.hidden = false; };
     // Booking: the pup's pickup at that time, then her say on any charge it would replace.
-    const book = async (saleId, slotId) => {
-      const res = await bookPickupTimeForSale(saleId, slotId);
+    // Booking opens Set their pickup (the family page's dialog): the time she tapped,
+    // or another time or place on this day; the fee; her drive checked. Then her say on
+    // any charge it would replace.
+    const book = async (saleId, slotId, mode = null) => {
+      const sale = buyerSales.find((x) => x.id === saleId);
+      const res = await setPickupDialog({ saleId, name: contacts.get(sale?.buyer_contact_id)?.name || pupName.get(sale?.dog_id) || 'their', slotId, mode, day: date });
+      if (!res) {
+        if (changed) await close();
+        return;
+      }
       changed = true;
       overlay.remove();
       await afterPickupApproval(res);
@@ -326,10 +338,11 @@ export async function renderPickupTimesPanel({ mount, litter, onChange = async (
         changed = true;
         shownMonth.set(litter.id, monthOf(res.slot.date));
         overlay.remove();
-        for (const m of res.moved) if (m.boardingKept && m.sale) await afterPickupApproval({ sale: m.sale, boardingKept: m.boardingKept });
+        for (const m of res.moved) if ((m.boardingKept || m.fee?.offer) && m.sale) await afterPickupApproval({ sale: m.sale, boardingKept: m.boardingKept, fee: m.fee });
         await refresh();
       } catch (err) { fail(err); }
     }));
+    overlay.querySelector('#pt-else')?.addEventListener('click', () => book(overlay.querySelector('#pt-elsewho').value, null, 'other').catch(fail));
     overlay.querySelectorAll('[data-book-go]').forEach((b) => b.addEventListener('click', () => {
       const slotId = b.dataset.bookGo;
       book(overlay.querySelector(`#pt-who-${CSS.escape(slotId)}`).value, slotId).catch(fail);

@@ -40,6 +40,22 @@ export function transportQuote(oneWay, config = {}) {
   return { ...out, fee, text: `${base} × ${money(rate)} = ${money(fee)}` };
 }
 
+// The transport fee for a pickup at one of her places (pickupSlots.pickupLocations):
+// its set fee, else the fee per mile on its miles from her standard location (the
+// standard itself 0). → { fee, text } or null when there's no figure (no set fee, and
+// no miles or no fee per mile).
+export function placeFee(place, config = {}) {
+  if (!place) return null;
+  if (Number.isFinite(place.transport_fee)) {
+    return { fee: place.transport_fee, text: place.transport_fee > 0 ? `${place.label}'s set fee` : `${place.label}: no charge` };
+  }
+  const m = Number.isFinite(place.miles) ? place.miles : place.is_standard ? 0 : null;
+  if (m == null) return null;
+  const q = transportQuote(m, config);
+  if (q.fee == null) return null;
+  return { fee: q.fee, text: q.fee > 0 ? `${place.label}, ${q.text}` : `${place.label}: no charge` };
+}
+
 // "about 340 miles" for a family and the transport options email.
 export const aboutMiles = (m) => `about ${miles(m)}`;
 

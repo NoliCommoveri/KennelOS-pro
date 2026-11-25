@@ -888,6 +888,17 @@ export async function reportEmptiedTurns(result) {
 // or a cancel: nothing she typed on the sale changes without
 // her say. Her own boarding charge was kept: replace it with standard boarding?
 // A transport fee is still on the sale: remove it?
+// Her drive around a pickup (Set their pickup, the litter calendar's Book): her pickups
+// already booked too close, a warning she may save past (someone else may cover one),
+// and her open times it leaves no drive to, ticked unless she's unticked them (`keep`,
+// a Set of ids). → html; tick boxes carry data-drive-open.
+export function driveWarningHtml({ booked = [], open = [], perMile = 0, miles = 0, keep = new Set(), verb = 'Save' }) {
+  const mins = (b) => Math.round(perMile * ((Number(miles) || 0) + (Number(b.miles) || 0)));
+  return `${booked.length ? `<div class="inline-warn" style="margin:8px 0;"><strong>Already booked:</strong> ${booked.map((b) => `${esc(b.time)} at ${esc(b.label)}${b.who ? ` (${esc(b.who)})` : ''}, ${mins(b)} min drive between`).join('; ')}. ${esc(verb)} anyway if someone else is covering one of them.</div>` : ''}
+    ${open.length ? `<div class="inline-warn" style="margin:8px 0;"><strong>Remove these open times?</strong> You can't get to them around this pickup.
+      ${open.map((x) => `<label class="check-inline" style="display:flex; margin-top:4px;"><input type="checkbox" data-drive-open="${esc(x.id)}"${keep.has(x.id) ? '' : ' checked'}> ${esc(fmtDate(x.date))}, ${esc(x.time)} at ${esc(x.label)}</label>`).join('')}</div>` : ''}`;
+}
+
 export async function afterPickupApproval(res) {
   const b = res.boardingKept;
   if (b && await confirmModal({
@@ -895,6 +906,13 @@ export async function afterPickupApproval(res) {
     message: `This pickup date has standard boarding: ${b.days} day${b.days === 1 ? '' : 's'} at ${fmtMoney(b.rate)} = ${fmtMoney(b.amount)}. The sale already has your own boarding charge (${boardingChargeText(res.sale, fmtMoney)}), so it was kept.`,
     confirmLabel: 'Use standard boarding', cancelLabel: 'Keep mine'
   })) await applyPickupBoarding(res.sale.id, b, b.rate);
+  // A place's fee, when the sale had a fee of her own (waitlistActions.applyPlaceFee).
+  const offer = res.fee?.offer;
+  if (offer && await confirmModal({
+    title: offer.fee > 0 ? `Use the ${fmtMoney(offer.fee)} transport fee?` : 'Take off the transport fee?',
+    message: `Their sale has a ${fmtMoney(offer.current)} transport fee. This pickup is ${offer.fee > 0 ? fmtMoney(offer.fee) : 'no charge'} (${offer.text}).`,
+    confirmLabel: offer.fee > 0 ? `Use ${fmtMoney(offer.fee)}` : 'Take it off', cancelLabel: `Keep ${fmtMoney(offer.current)}`
+  })) await setTransportFee(res.sale.id, offer.fee);
   if (res.transportFeeLeft && await confirmModal({
     title: 'Remove the transport fee?',
     message: `Their sale still has a ${fmtMoney(res.transportFeeLeft)} transport fee from an earlier drop-off plan.`,

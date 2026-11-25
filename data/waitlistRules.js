@@ -87,6 +87,7 @@ export const WAITLIST_CONFIG_DEFAULTS = Object.freeze({
   transport_min_home_miles: 0, // families may suggest their own place only living this far away; 0 = any family
   pickup_change_days: 2, // a family may change or cancel their pickup time until this many days before
   boarding_rate: null, // her standard boarding, $ per day, for a pickup date marked "standard boarding applies"
+  pickup_minutes_per_mile: 1.5, // her drive to a pickup place and back: minutes per mile, one way, blacked out before and after (pickupSlots.driveClash); 0 = off
   // Backing out (Family Requests plan §7; backOut.js):
   back_out_reasons: null, // [{ id, label }]; null = BACK_OUT_REASONS_DEFAULT ("Something else" always added)
   back_out_policy: [], // [{ reason_id, from_weeks?, until_weeks?, outcome: 'keep' | 'move' }]; first row that fits suggests
@@ -139,6 +140,7 @@ export function waitlistConfigProblem(c) {
   if (!atLeast0(c.boarding_rate)) return 'The boarding rate can\'t be negative.';
   if (!atLeast0(c.mileage_free_under) || !atLeast0(c.transport_far_miles) || !atLeast0(c.transport_min_home_miles)) return 'Miles can\'t be negative.';
   if (!atLeast0(c.pickup_change_days)) return 'Days before pickup can\'t be negative.';
+  if (!atLeast0(c.pickup_minutes_per_mile)) return 'Drive minutes per mile can\'t be negative.';
   return '';
 }
 

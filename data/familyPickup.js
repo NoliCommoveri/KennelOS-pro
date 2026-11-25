@@ -11,7 +11,7 @@
 // `home_miles` on the entry (measured once), and `own_place_override` (true/false)
 // when she decides by hand.
 import { familySale } from './familyExtras.js';
-import { pickupLocations, familySlots, slotBookings, changeUntil, timeRange, dateRules } from './pickupSlots.js';
+import { pickupLocations, familySlots, slotBookings, changeUntil, timeRange, dateRules, busyWindows, drivePerMile } from './pickupSlots.js';
 import { kennelChargeList, saleExtraCharges } from './extraCharges.js';
 import { readyDateOf, pickupFor } from './goHome.js';
 import { addDaysToYMD } from './dateUtils.js';
@@ -72,7 +72,11 @@ export function familyPickupView({ entry, sales, offers = [], dogsById, litters,
   const litterPups = new Set([...dogsById.values()].filter((d) => d.litter_id === pup.litter_id).map((d) => d.id));
   const bookings = slotBookings(events.filter((e) => litterPups.has(e.subject_id)), entries, { live: (en) => Boolean(familySale(en, sales, offers, entries)) });
   const from = pickupFrom(sale, litter, events, { earlyDays: PICKUP_EARLY_DAYS });
-  const slots = litter ? familySlots({ slots: litter.pickup_slots, locations, bookings, from, today, mine: mine || pendingSlot }) : [];
+  // Her other pickups (any litter, any family but this one) black out the times she
+  // couldn't drive to in between.
+  const live = (en) => Boolean(familySale(en, sales, offers, entries));
+  const busy = busyWindows({ events, entries, litters, locations, today, live }).filter((b) => b.dog_id !== pup.id && b.entry_id !== entry.id);
+  const slots = litter ? familySlots({ slots: litter.pickup_slots, locations, bookings, from, today, mine: mine || pendingSlot, busy, perMile: drivePerMile(config) }) : [];
   const days = Number(config.pickup_change_days) || 0;
   let booked = null;
   if (pickup) {

@@ -41,9 +41,10 @@ import { dogRepo } from './dogRepo.js';
 import { saleRepo } from './saleRepo.js';
 import { familySale, pupBirthDate, withExtraRequest } from './familyExtras.js';
 import { withPickupRequest, pickupFrom, pickupWish, pendingPickupRequests } from './familyPickup.js';
-import { pickupLocations, timeRange, ruleFor, standardBoarding, slotBookings, familySlots, cleanSlots } from './pickupSlots.js';
+import { pickupLocations, timeRange, ruleFor, standardBoarding, slotBookings, familySlots, cleanSlots, placeMiles, busyWindows, openTimes, driveClashes, drivePerMile, parseClock } from './pickupSlots.js';
 import { pickupFor, PICKUP_TITLE, DROPOFF_TITLE, BOARDING_TITLE } from './goHome.js';
 import { eventRepo } from './eventRepo.js';
+import { placeFee } from './transportFee.js';
 import { kennelChargeList, kennelChargeGroups, chargeFromPriceList, saleExtraCharges } from './extraCharges.js';
 import { expectedPricing } from './saleDefaults.js';
 import { todayYMD, kennelToday, kennelNow, addDaysToYMD } from './dateUtils.js';
@@ -2170,6 +2171,37 @@ export const clearTransportFee = atomic(async function clearTransportFee(saleId)
   return saleRepo.update(saleId, { transport_fee: null });
 });
 
+// Put a transport fee on a sale (her choice after a pickup: a place's fee instead of
+// the one on the sale). 0 or blank takes it off.
+export const setTransportFee = atomic(async function setTransportFee(saleId, fee) {
+  return saleRepo.update(saleId, { transport_fee: Number(fee) > 0 ? Math.round(Number(fee) * 100) / 100 : null });
+});
+
+// A pickup at one of her places brings its transport fee (pickupSlots.placeFee: a set
+// fee, else her fee per mile on its miles), put on the sale when nothing of hers is
+// there: no fee, or the fee an earlier place brought (`before`). A fee of her own is
+// kept and offered. → { set, text } | { offer: { fee, text, current } } | null (no figure)
+async function applyPlaceFee(saleId, place, config, before = null) {
+  const pf = placeFee(place, config);
+  if (!pf) return null;
+  const want = pf.fee > 0 ? pf.fee : null;
+  const sale = await saleRepo.getById(saleId);
+  const current = Number(sale.transport_fee) > 0 ? Number(sale.transport_fee) : null;
+  if (current === want) return { set: want, text: pf.text };
+  if (current == null || (before != null && current === before)) {
+    await saleRepo.update(saleId, { transport_fee: want });
+    return { set: want, text: pf.text };
+  }
+  return { offer: { fee: pf.fee, text: pf.text, current } };
+}
+
+// The fee the place of a pickup event at one of her times brings, or null.
+function slotPlaceFee(event, litter, places, config) {
+  const slot = event?.details?.pickup_slot_id ? (litter?.pickup_slots || []).find((x) => x.id === event.details.pickup_slot_id) : null;
+  const f = slot ? placeFee(places.find((l) => l.id === slot.location_id), config) : null;
+  return f && f.fee > 0 ? f.fee : null;
+}
+
 // A deferred boarding charge she put on the sale herself (not one a pickup set).
 const ownBoarding = (sale) => Number(sale.deferred_boarding_amount) > 0 && !sale.boarding_from_pickup;
 
@@ -2180,8 +2212,9 @@ const decidePickup = (entry, requestId, decision, date) =>
 // her booking for them): checks the time is still on the litter and has room among the
 // bookings already confirmed (`upcoming`, this family's own, aside: K8-14), replaces
 // their pickups still to come, applies the date's standard boarding (her own boarding
-// charge kept → boardingKept) and logs the pickup event with `details.pickup_slot_id`.
-// → { event, boarding, boardingKept }
+// charge kept → boardingKept), logs the pickup event with `details.pickup_slot_id`
+// and brings the place's transport fee (applyPlaceFee → fee).
+// → { event, boarding, boardingKept, fee }
 async function bookSlot(sale, slotId, upcoming, goneText, fullText) {
   const kennel = await kennelRepo.getById(sale.kennel_id);
   const dog = await dogRepo.getById(sale.dog_id);
@@ -2193,7 +2226,10 @@ async function bookSlot(sale, slotId, upcoming, goneText, fullText) {
     && e.details?.pickup_slot_id === slot.id && !mine.has(e.id)).length;
   const places = Math.max(1, Number(slot.capacity) || 1);
   if (taken >= places) throw new Error(fullText(taken, places));
-  const place = pickupLocations(kennel).find((l) => l.id === slot.location_id);
+  const herPlaces = pickupLocations(kennel);
+  const config = waitlistConfig(kennel);
+  const place = herPlaces.find((l) => l.id === slot.location_id);
+  const before = upcoming.map((e) => slotPlaceFee(e, litter, herPlaces, config)).find((f) => f != null) ?? null;
   for (const e of upcoming) await eventRepo.archive(e.id);
   await clearPickupBoarding(sale);
   let boarding = null;
@@ -2214,7 +2250,8 @@ async function bookSlot(sale, slotId, upcoming, goneText, fullText) {
     ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
     details: { dropoff_method: 'Local pickup', placement_time: timeRange(slot), ...(place ? { location: `${place.label}, ${place.address}` } : {}), pickup_slot_id: slot.id }
   });
-  return { event, boarding, boardingKept };
+  const fee = await applyPlaceFee(sale.id, place, config, before);
+  return { event, boarding, boardingKept, fee };
 }
 
 // The family's open sale, its pup and their pickups still to come (on or after `date`).
@@ -2226,63 +2263,187 @@ async function pickupContext(entry, date) {
   return { sale, upcoming };
 }
 
-// The pickup times she can book for a family herself (the family's page): every time
-// on their pup's litter from today on, at any of her places (not only those shown to
+// What she needs to set a family's pickup herself (the family's page): every time on
+// their pup's litter from today on, at any of her places (not only those shown to
 // families), with how many places are left (confirmed bookings and requests still
-// waiting, as on the status page), and the time they hold now. → { slots: [{ id,
-// date, start_time, end_time, left, location }], current: slot id | null, from }
+// waiting, as on the status page) and `clash` when it's too close to another of her
+// pickups for the drive (pickupSlots.driveClash); the time they hold now; their
+// pickup set some other way (`custom`); her places with their miles and fee; her
+// other pickups (`busy`, for checking a time she types) and drive minutes per mile;
+// the transport fee on their sale. → { slots: [{ id, date, start_time, end_time,
+// left, location, clash }], current: slot id | null, custom: event | null, from,
+// places, busy, perMile, saleFee }
 export async function pickupTimeChoices(entryId, { today } = {}) {
   const entry = await load(entryId);
   today ??= await kennelDay(entry.kennel_id);
   const { sale, upcoming } = await pickupContext(entry, today);
-  const [kennel, dog] = await Promise.all([kennelRepo.getById(sale.kennel_id), dogRepo.getById(sale.dog_id)]);
-  const litter = dog?.litter_id ? await litterRepo.getById(dog.litter_id) : null;
-  if (!litter) return { slots: [], current: null, from: null };
-  const pups = new Set((await dogRepo.getByLitter(litter.id)).map((d) => d.id));
-  const events = (await eventRepo.getByType('placement')).filter((e) => pups.has(e.subject_id));
-  const [entries, offers, allSales] = await Promise.all([waitlistEntryRepo.getByKennel(entry.kennel_id), waitlistOfferRepo.getByKennel(entry.kennel_id), saleRepo.getAll()]);
-  const bookings = slotBookings(events, entries, { live: (en) => Boolean(familySale(en, allSales, offers, entries)) });
+  return choicesFor(sale, entry, upcoming, today);
+}
+
+// The same for any open sale of hers (the litter's pickup calendar), its waitlist
+// record when it has one.
+export async function pickupChoicesForSale(saleId, { today } = {}) {
+  const sale = await saleRepo.getById(saleId);
+  if (!saleRepo.isOpenSale(sale) || !sale.dog_id) throw new Error('That sale isn\'t open, so there\'s no pickup to plan.');
+  today ??= await kennelDay(sale.kennel_id);
+  const entry = await entryOfSale(sale);
+  const upcoming = (await eventRepo.getForSubject('dog', sale.dog_id)).filter((e) => pickupFor(sale)(e) && e.event_date >= today);
+  return choicesFor(sale, entry, upcoming, today);
+}
+
+// A sale's waitlist record, or null (a buyer from outside the waitlist).
+async function entryOfSale(sale) {
+  const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(sale.kennel_id), waitlistOfferRepo.getByKennel(sale.kennel_id)]);
+  const sales = await saleRepo.getAll();
+  return entries.find((e) => !e.is_archived && familySale(e, sales, offers, entries)?.id === sale.id) || null;
+}
+
+async function choicesFor(sale, entry, upcoming, today) {
+  const kennelId = sale.kennel_id;
+  const [kennel, dog] = await Promise.all([kennelRepo.getById(kennelId), dogRepo.getById(sale.dog_id)]);
+  const config = waitlistConfig(kennel);
+  const locations = pickupLocations(kennel);
+  const places = locations.map((l) => ({ ...l, miles_known: placeMiles(l), fee: placeFee(l, config) }));
+  const litters = (await litterRepo.getAll()).filter((l) => l.kennel_id === kennelId);
+  const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) || await litterRepo.getById(dog.litter_id) : null;
+  const [events, entries, allSales, offers] = await Promise.all([eventRepo.getByType('placement'), waitlistEntryRepo.getByKennel(kennelId), saleRepo.getAll(), waitlistOfferRepo.getByKennel(kennelId)]);
+  const live = (en) => Boolean(familySale(en, allSales, offers, entries));
+  const busy = busyWindows({ events, entries, litters, locations, today, live }).filter((b) => b.dog_id !== sale.dog_id && (!entry || b.entry_id !== entry.id));
+  const perMile = drivePerMile(config);
   const current = upcoming.find((e) => e.details?.pickup_slot_id)?.details.pickup_slot_id || null;
+  const custom = current ? null : upcoming.sort((a, b) => a.event_date.localeCompare(b.event_date))[0] || null;
   const from = pickupFrom(sale, litter, await eventRepo.getForSubject('dog', sale.dog_id));
-  const slots = familySlots({ slots: litter.pickup_slots, locations: pickupLocations(kennel), bookings, today: addDaysToYMD(today, -1), mine: current, allPlaces: true });
-  return { slots, current, from };
+  const saleFee = Number(sale.transport_fee) > 0 ? Number(sale.transport_fee) : null;
+  const waiting = entry ? pendingPickupRequests(entry).length : 0;
+  if (!litter) return { slots: [], current: null, custom, from: null, places, busy, perMile, saleFee, openTimes: [], config, waiting };
+  const litterPups = new Set((await dogRepo.getAll()).filter((d) => d.litter_id === litter.id).map((d) => d.id));
+  const bookings = slotBookings(events.filter((e) => litterPups.has(e.subject_id)), entries, { live });
+  const slots = familySlots({ slots: litter.pickup_slots, locations, bookings, today: addDaysToYMD(today, -1), mine: current, allPlaces: true, busy, perMile, markClash: true });
+  const named = await namedBusy(busy, entries);
+  const open = openTimes({ litters, locations, bookings: slotBookings(events, entries, { live }), today });
+  return { slots, current, custom, from, places, busy: named, perMile, saleFee, openTimes: open, config, waiting };
+}
+
+// Her other pickups, each with whose it is (the pup's name, or the family waiting).
+async function namedBusy(busy, entries) {
+  const names = new Map((await dogRepo.getAll()).map((d) => [d.id, d.call_name]));
+  const contactsById = new Map((await contactRepo.getAll()).map((c) => [c.id, c.name]));
+  return busy.map((b) => ({ ...b, who: b.dog_id ? names.get(b.dog_id) || '' : contactsById.get(entries.find((en) => en.id === b.entry_id)?.contact_id) || 'a family (waiting)' }));
 }
 
 // Book one of her pickup times for a family herself (when they told her instead of
 // choosing on their status page): as approving their request for it, and any pickup
 // request of theirs still waiting is closed (`closed_by: 'breeder_booked'`), since
-// this booking answers it. → { entry, sale, event, boarding, boardingKept, transportFeeLeft }
-export const bookPickupTime = atomic(async function bookPickupTime(entryId, slotId, { date } = {}) {
+// this booking answers it. `fee` (when given): the transport fee she set with it,
+// put on the sale in place of the place's. → { entry, sale, event, boarding,
+// boardingKept, transportFeeLeft, fee }
+export const bookPickupTime = atomic(async function bookPickupTime(entryId, slotId, { date, fee } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const { sale } = await pickupContext(entry, date);
-  return bookSale(sale, slotId, date, entry);
+  return withTypedFee(await bookSale(sale, slotId, date, entry), sale.id, fee);
 });
+
+// Her own pickup or drop-off for a family, not at one of her times (the family's
+// page, Set their pickup): the day, start and end time, one of her places
+// (`location_id`) or an `address`, how (Local pickup, Ground transport…), the miles
+// one way (an address; her places have their own) and the transport fee (blank leaves
+// the sale's as it is, 0 takes it off). Any pickup still to come is replaced (with
+// its pickup-set boarding), and a pickup request still waiting is closed.
+// → { entry, sale, event }
+export const setOwnPickup = atomic(async function setOwnPickup(entryId, details = {}, { date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  const { sale, upcoming } = await pickupContext(entry, date);
+  return ownPickup(sale, entry, upcoming, details, date);
+});
+
+// The same for any open sale of hers (the litter's pickup calendar), closing its
+// waitlist record's waiting requests when it has one.
+export const setOwnPickupForSale = atomic(async function setOwnPickupForSale(saleId, details = {}, { date } = {}) {
+  const sale = await saleRepo.getById(saleId);
+  if (!saleRepo.isOpenSale(sale) || !sale.dog_id) throw new Error('That sale isn\'t open, so there\'s no pickup to plan.');
+  date ??= await kennelDay(sale.kennel_id);
+  const upcoming = (await eventRepo.getForSubject('dog', sale.dog_id)).filter((e) => pickupFor(sale)(e) && e.event_date >= date);
+  return ownPickup(sale, await entryOfSale(sale), upcoming, details, date);
+});
+
+async function ownPickup(sale, entry, upcoming, { day, start_time = '', end_time = '', location_id = null, address = '', method = 'Local pickup', miles = null, fee = '' } = {}, date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day || '')) throw new Error('Choose the day.');
+  const hm = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (start_time && !hm.test(start_time)) throw new Error('Set the time.');
+  if (end_time && (!start_time || !hm.test(end_time) || end_time <= start_time)) throw new Error('The end time has to be after the start time.');
+  const kennel = await kennelRepo.getById(sale.kennel_id);
+  const place = location_id ? pickupLocations(kennel).find((l) => l.id === location_id) : null;
+  if (location_id && !place) throw new Error('That pickup place isn\'t on your list any more.');
+  const where = place ? `${place.label}, ${place.address}` : String(address || '').trim();
+  if (!where) throw new Error('Choose one of your places or type the address.');
+  const m = place ? placeMiles(place) : (miles === '' || miles == null || !(Number(miles) >= 0) ? null : Math.round(Number(miles) * 10) / 10);
+  for (const e of upcoming) await eventRepo.archive(e.id);
+  await clearPickupBoarding(sale);
+  const event = await eventRepo.create({
+    subject_type: 'dog', subject_id: sale.dog_id, event_type: 'placement', event_date: day, title: method === 'Local pickup' ? PICKUP_TITLE : DROPOFF_TITLE,
+    ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
+    details: {
+      dropoff_method: method, ...(start_time ? { placement_time: timeRange({ start_time, end_time: end_time || start_time }), start_time } : {}),
+      ...(end_time ? { end_time } : {}), location: where, ...(place ? { location_id: place.id } : {}), ...(m != null ? { miles: m } : {})
+    }
+  });
+  if (fee !== null && fee !== undefined && String(fee).trim() !== '') await setTransportFee(sale.id, fee);
+  const updated = await closeWaitingPickups(entry, date);
+  return { entry: updated, sale: await saleRepo.getById(sale.id), event };
+}
+
+// Remove her open times (Set their pickup: ones she can't drive to around a pickup).
+// A time someone has booked or asked for since is kept. → how many were removed
+export const removeOpenPickupTimes = atomic(async function removeOpenPickupTimes(slotIds) {
+  const ids = new Set(slotIds || []);
+  if (!ids.size) return 0;
+  const held = new Set((await eventRepo.getByType('placement')).filter((e) => !e.is_archived && e.details?.pickup_slot_id).map((e) => e.details.pickup_slot_id));
+  for (const en of await waitlistEntryRepo.getAll()) for (const r of en.pickup_requests || []) if (r && !r.decided && r.kind === 'slot') held.add(r.slot_id);
+  let removed = 0;
+  for (const litter of await litterRepo.getAll()) {
+    const slots = cleanSlots(litter.pickup_slots);
+    const keep = slots.filter((s) => !ids.has(s.id) || held.has(s.id));
+    if (keep.length === slots.length) continue;
+    removed += slots.length - keep.length;
+    await litterRepo.update(litter.id, { pickup_slots: keep });
+  }
+  return removed;
+});
+
+// A family's pickup requests still waiting, closed because she set their pickup.
+async function closeWaitingPickups(entry, date) {
+  if (!entry || !pendingPickupRequests(entry).length) return entry;
+  const requests = (entry.pickup_requests || []).map((r) => (r && !r.decided ? { ...r, decided: 'closed', decided_date: date, closed_by: 'breeder_booked' } : r));
+  return waitlistEntryRepo.update(entry.id, { pickup_requests: requests });
+}
 
 // The same from the litter's pickup calendar, for any open sale of one of its pups
 // (a buyer from the waitlist or not). Their waitlist record, when they have one, gets
 // its waiting pickup requests closed as above (entry: null when none).
-export const bookPickupTimeForSale = atomic(async function bookPickupTimeForSale(saleId, slotId, { date } = {}) {
+export const bookPickupTimeForSale = atomic(async function bookPickupTimeForSale(saleId, slotId, { date, fee } = {}) {
   const sale = await saleRepo.getById(saleId);
   if (!saleRepo.isOpenSale(sale) || !sale.dog_id) throw new Error('That sale isn\'t open, so there\'s no pickup to plan.');
   date ??= await kennelDay(sale.kennel_id);
-  const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(sale.kennel_id), waitlistOfferRepo.getByKennel(sale.kennel_id)]);
-  const sales = await saleRepo.getAll();
-  const entry = entries.find((e) => !e.is_archived && familySale(e, sales, offers, entries)?.id === sale.id) || null;
-  return bookSale(sale, slotId, date, entry);
+  const res = await bookSale(sale, slotId, date, await entryOfSale(sale));
+  return withTypedFee(res, sale.id, fee);
 });
+
+// The transport fee she typed with a booking, in place of the place's (blank: none typed).
+async function withTypedFee(res, saleId, fee) {
+  if (fee === undefined || fee === null || String(fee).trim() === '') return res;
+  const after = await setTransportFee(saleId, fee);
+  return { ...res, sale: after, transportFeeLeft: null, fee: { set: Number(after.transport_fee) || null, text: 'the fee you set' } };
+}
 
 async function bookSale(sale, slotId, date, entry) {
   const upcoming = (await eventRepo.getForSubject('dog', sale.dog_id)).filter((e) => pickupFor(sale)(e) && e.event_date >= date);
-  const { event, boarding, boardingKept } = await bookSlot(sale, slotId, upcoming, 'That pickup time isn\'t on the litter any more.',
+  const { event, boarding, boardingKept, fee } = await bookSlot(sale, slotId, upcoming, 'That pickup time isn\'t on the litter any more.',
     (taken, places) => `That time is full: ${taken} of its ${places} place${places === 1 ? ' is' : 's are'} already booked. Choose another, or give the time more places.`);
-  let updated = entry;
-  if (entry && pendingPickupRequests(entry).length) {
-    const requests = (entry.pickup_requests || []).map((r) => (r && !r.decided ? { ...r, decided: 'closed', decided_date: date, closed_by: 'breeder_booked' } : r));
-    updated = await waitlistEntryRepo.update(entry.id, { pickup_requests: requests });
-  }
+  const updated = await closeWaitingPickups(entry, date);
   const after = await saleRepo.getById(sale.id);
-  return { entry: updated, sale: after, event, boarding, boardingKept, transportFeeLeft: Number(after.transport_fee) > 0 ? Number(after.transport_fee) : null };
+  return { entry: updated, sale: after, event, boarding, boardingKept, fee, transportFeeLeft: !fee && Number(after.transport_fee) > 0 ? Number(after.transport_fee) : null };
 }
 
 // Change one of her pickup times (the litter's pickup calendar): its day, start and end,
@@ -2292,7 +2453,8 @@ async function bookSale(sale, slotId, date, entry) {
 // own is kept → boardingKept), and families' requests still waiting for it carry the
 // new day, time and place, so their status pages show the change at the next sync.
 // Refused when fewer places than families already holding it. → { litter, slot,
-// moved: [{ event, sale, boarding, boardingKept }], requests: n }
+// A new place brings its transport fee to each sale holding the time (applyPlaceFee).
+// moved: [{ event, sale, boarding, boardingKept, fee }], requests: n }
 export const editPickupTime = atomic(async function editPickupTime(litterId, slotId, changes = {}) {
   const litter = await litterRepo.getById(litterId);
   const slots = cleanSlots(litter?.pickup_slots);
@@ -2330,7 +2492,13 @@ export const editPickupTime = atomic(async function editPickupTime(litterId, slo
         else if (b) { await applyPickupBoarding(sale.id, b, rate); boarding = b; }
       }
     }
-    moved.push({ event, sale: sale ? await saleRepo.getById(sale.id) : null, boarding, boardingKept });
+    // A new place brings its fee (a fee of her own is kept and offered).
+    let fee = null;
+    if (sale && next.location_id !== old.location_id) {
+      const before = placeFee(pickupLocations(kennel).find((l) => l.id === old.location_id), waitlistConfig(kennel));
+      fee = await applyPlaceFee(sale.id, place, waitlistConfig(kennel), before && before.fee > 0 ? before.fee : null);
+    }
+    moved.push({ event, sale: sale ? await saleRepo.getById(sale.id) : null, boarding, boardingKept, fee });
   }
   for (const en of waiting) {
     await waitlistEntryRepo.update(en.id, { pickup_requests: en.pickup_requests.map((r) => (r && !r.decided && r.kind === 'slot' && r.slot_id === slotId
@@ -2350,7 +2518,7 @@ export const editPickupTime = atomic(async function editPickupTime(litterId, slo
 // or clear. → { entry, sale, event, boarding, boardingKept, transportFeeLeft }
 // `time`: the drop-off time for their own place (free text); left out (null), the
 // time they asked for, if any. '' means none.
-export const approvePickupRequest = atomic(async function approvePickupRequest(entryId, requestId, { date, when = null, time = null, method = 'Ground transport', fee = null } = {}) {
+export const approvePickupRequest = atomic(async function approvePickupRequest(entryId, requestId, { date, when = null, time = null, method = 'Ground transport', fee = null, miles = undefined } = {}) {
   const entry = await load(entryId);
   date ??= await kennelDay(entry.kennel_id);
   const req = loadPickupRequest(entry, requestId);
@@ -2361,19 +2529,21 @@ export const approvePickupRequest = atomic(async function approvePickupRequest(e
   let event = null;
   let boarding = null;
   let boardingKept = null;
+  let placeFeeRes = null;
   if (req.kind === 'slot') {
-    ({ event, boarding, boardingKept } = await bookSlot(sale, req.slot_id, upcoming, 'That pickup time isn\'t on the litter any more. Decline it, and they can choose another.',
+    ({ event, boarding, boardingKept, fee: placeFeeRes } = await bookSlot(sale, req.slot_id, upcoming, 'That pickup time isn\'t on the litter any more. Decline it, and they can choose another.',
       (taken, places) => `That time is full: ${taken} of its ${places} place${places === 1 ? ' is' : 's are'} already booked. Decline this request so they can choose another time, or give the time more places on the litter's Pickup times first.`));
   } else if (req.kind === 'address') {
     const day = when || req.date;
     const at = time ?? (req.start_time ? timeRange({ start_time: req.start_time }) : '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day || '')) throw new Error('Choose the day for the drop-off.');
+    const dropMiles = miles === undefined ? req.miles : miles === '' || miles == null ? null : Number(miles);
     for (const e of upcoming) await eventRepo.archive(e.id);
     await clearPickupBoarding(sale);
     event = await eventRepo.create({
       subject_type: 'dog', subject_id: sale.dog_id, event_type: 'placement', event_date: day, title: method === 'Local pickup' ? PICKUP_TITLE : DROPOFF_TITLE,
       ...(sale.buyer_contact_id ? { related_contact_id: sale.buyer_contact_id } : {}),
-      details: { dropoff_method: method, ...(at ? { placement_time: at } : {}), location: req.address }
+      details: { dropoff_method: method, ...(at ? { placement_time: at } : {}), ...(parseClock(at) ? { start_time: parseClock(at) } : {}), location: req.address, ...(Number.isFinite(dropMiles) ? { miles: dropMiles } : {}) }
     });
     if (fee != null && fee !== '' && Number.isFinite(Number(fee))) await saleRepo.update(sale.id, { transport_fee: Math.round(Number(fee) * 100) / 100 });
   } else {
@@ -2382,8 +2552,8 @@ export const approvePickupRequest = atomic(async function approvePickupRequest(e
   }
   const updated = await waitlistEntryRepo.update(entryId, { pickup_requests: decidePickup(entry, requestId, 'approved', date) });
   const after = await saleRepo.getById(sale.id);
-  const transportFeeLeft = req.kind !== 'address' && Number(after.transport_fee) > 0 ? Number(after.transport_fee) : null;
-  return { entry: updated, sale: after, event, boarding, boardingKept, transportFeeLeft };
+  const transportFeeLeft = req.kind !== 'address' && !placeFeeRes && Number(after.transport_fee) > 0 ? Number(after.transport_fee) : null;
+  return { entry: updated, sale: after, event, boarding, boardingKept, transportFeeLeft, fee: placeFeeRes };
 });
 
 // Each sale's pickupWish: what its family asked for and she hasn't decided, for a

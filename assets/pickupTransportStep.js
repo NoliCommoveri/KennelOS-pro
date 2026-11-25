@@ -67,7 +67,7 @@ export async function askPickupTransport(chat, kennel) {
     cancelLabel: 'Skip this',
     submit: async (root) => {
       const q = (s) => root.querySelector(s);
-      const row = { id: std.id || crypto.randomUUID(), label: q('#pt-label').value.trim(), address: q('#pt-address').value.trim(), notes: q('#pt-notes').value.trim(), is_standard: true, show_to_families: q('#pt-show').checked };
+      const row = { ...std, id: std.id || crypto.randomUUID(), label: q('#pt-label').value.trim(), address: q('#pt-address').value.trim(), notes: q('#pt-notes').value.trim(), is_standard: true, show_to_families: q('#pt-show').checked };
       const placeProblem = locationsProblem([row]);
       if (placeProblem) return placeProblem;
       const fresh = await kennelRepo.getById(kennel.id);

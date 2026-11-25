@@ -1140,7 +1140,7 @@ function applyToDogsPanel() {
 // standard location, the start of every mileage figure: a public place near her,
 // never her house), and the settings that work out a transport fee and decide who
 // may suggest their own meetup place. Pickup times are set per litter.
-function placeRow(l = { id: '', label: '', address: '', notes: '', is_standard: false, show_to_families: true }) {
+function placeRow(l = { id: '', label: '', address: '', notes: '', is_standard: false, show_to_families: true, miles: null, transport_fee: null }) {
   return `<div class="pl-row" data-pl-id="${esc(l.id)}" style="border-top:1px solid var(--border); padding:8px 0;">
       <div style="display:flex; gap:8px; align-items:center;">
         <input class="pl-label" type="text" value="${esc(l.label)}" placeholder="e.g. Library parking lot" aria-label="Name" style="flex:1; min-width:0;">
@@ -1148,6 +1148,10 @@ function placeRow(l = { id: '', label: '', address: '', notes: '', is_standard: 
       </div>
       <input class="pl-address" type="text" value="${esc(l.address)}" placeholder="Street, city, state" aria-label="Address" style="margin-top:6px; width:100%;">
       <input class="pl-notes" type="text" value="${esc(l.notes)}" placeholder="Notes for families (optional), e.g. by the north entrance" aria-label="Notes" style="margin-top:6px; width:100%;">
+      <div style="display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:6px; align-items:center;">
+        <label class="check-inline">Miles from your standard location <input class="pl-miles" type="number" min="0" step="0.1" inputmode="decimal" value="${esc(l.miles ?? '')}" style="width:6em;"></label>
+        <label class="check-inline">Set transport fee $ <input class="pl-fee" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(l.transport_fee ?? '')}" placeholder="by miles" style="width:6em;"></label>
+      </div>
       <div style="display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:6px;">
         <label class="check-inline"><input type="radio" name="pl-standard" class="pl-standard"${l.is_standard ? ' checked' : ''}> Standard location</label>
         <label class="check-inline"><input type="checkbox" class="pl-show"${l.show_to_families ? ' checked' : ''}> Show to families</label>
@@ -1165,6 +1169,7 @@ function pickupCard(k) {
     <section class="card" data-ks="pickup">
       <h2 style="margin-top:0;">Pickup places</h2>
       <p class="field-hint">Where families pick up their puppies. Your <strong>standard location</strong> is where every mileage figure starts: use a public place near you, not your home address. Set pickup times on each litter's page.</p>
+      <p class="field-hint">A place's <strong>set transport fee</strong> goes on the sale when a family picks up there; leave it blank to charge your fee per mile on its miles. Its miles also block off your drive time, so families never book a time you can't make.</p>
       <div id="pl-list">${(places.length ? places : [{ id: '', label: '', address: '', notes: '', is_standard: true, show_to_families: true }]).map(placeRow).join('')}</div>
       <button type="button" class="btn btn-sm" data-pl="add">+ Add a place</button>
       <h2>Transport fee</h2>
@@ -1179,6 +1184,7 @@ function pickupCard(k) {
         ${n('tr-home', c.transport_min_home_miles || '', 'Families can suggest their own place only if they live at least', 'miles away', 'Blank or 0: any family can. Above 0, City / state becomes a required question on your application form.')}
         ${n('tr-change', c.pickup_change_days, 'Families can change their pickup time until', 'days before')}
         ${n('tr-board', c.boarding_rate, 'Standard boarding rate', '$ per day', 'For a pickup date you mark "standard boarding applies" on a litter: charged from when the pup could go home until that day, and logged as a stay.')}
+        ${n('tr-drive', c.pickup_minutes_per_mile, 'Drive time', 'minutes per mile', 'Blocks off this long for each mile before and after a pickup at a place that far from your standard location, so your other times stay reachable. 0 turns it off.')}
       </div>
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-pickup">Save</button></div>
     </section>`;
@@ -1189,7 +1195,8 @@ async function onSavePickup() {
   const card = els.config.querySelector('[data-ks="pickup"]');
   const rows = [...card.querySelectorAll('.pl-row')].map((el) => ({
     id: el.dataset.plId || crypto.randomUUID(), label: el.querySelector('.pl-label').value, address: el.querySelector('.pl-address').value,
-    notes: el.querySelector('.pl-notes').value, is_standard: el.querySelector('.pl-standard').checked, show_to_families: el.querySelector('.pl-show').checked
+    notes: el.querySelector('.pl-notes').value, is_standard: el.querySelector('.pl-standard').checked, show_to_families: el.querySelector('.pl-show').checked,
+    miles: el.querySelector('.pl-miles').value, transport_fee: el.querySelector('.pl-fee').value
   }));
   const problem = locationsProblem(rows);
   if (problem) { showError(problem); return; }
@@ -1199,7 +1206,7 @@ async function onSavePickup() {
     ...(kennel.waitlist_config || {}),
     mileage_rate: val('#tr-rate'), mileage_basis: card.querySelector('input[name="tr-basis"]:checked')?.value || 'round_trip',
     mileage_free_under: val('#tr-free') || 0, transport_far_miles: val('#tr-far'), transport_min_home_miles: val('#tr-home') || 0,
-    pickup_change_days: val('#tr-change') ?? 2, boarding_rate: val('#tr-board')
+    pickup_change_days: val('#tr-change') ?? 2, boarding_rate: val('#tr-board'), pickup_minutes_per_mile: val('#tr-drive') ?? 1.5
   };
   const configProblem = waitlistConfigProblem(waitlist_config);
   if (configProblem) { showError(configProblem); return; }

@@ -1,9 +1,12 @@
 // pickupSlots.js — her pickup places and times, and what a family may book
 // (docs/KennelOS_Family_Requests_Plan.md §4). Pure: no db.
 //
-// Kennel.pickup_locations = [{ id, label, address, notes, is_standard, show_to_families }]:
-// exactly one is her standard location (the start of every mileage figure; a public
-// place near her, never her house). Litter.pickup_slots = [{ id, date, start_time,
+// Kennel.pickup_locations = [{ id, label, address, notes, is_standard, show_to_families,
+// miles, transport_fee }]: exactly one is her standard location (the start of every
+// mileage figure; a public place near her, never her house). `miles` (one way from the
+// standard location; blank = unknown, the standard itself 0) times her drive and
+// works out a fee; `transport_fee` is a set fee for a pickup there (0 = free; blank =
+// from the miles at her fee per mile). Litter.pickup_slots = [{ id, date, start_time,
 // end_time, location_id, capacity }] — times are per litter (plan D10; stored on the
 // litter rather than in a table of their own). A booking is a `placement` event on
 // the pup with `details.pickup_slot_id`; a family's request waits on their entry
@@ -13,6 +16,12 @@ import { addDaysToYMD, addOpenDays } from './dateUtils.js';
 const text = (v) => String(v ?? '').trim();
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const HM = /^([01]\d|2[0-3]):[0-5]\d$/;
+// A figure ≥ 0 (miles to the tenth, money to the cent), or null.
+const figure = (v, places) => {
+  if (v == null || String(v).trim() === '' || !Number.isFinite(Number(v)) || Number(v) < 0) return null;
+  const f = 10 ** places;
+  return Math.round(Number(v) * f) / f;
+};
 
 // --- Her places ----------------------------------------------------------------------
 
@@ -20,7 +29,8 @@ export function pickupLocations(kennel) {
   const list = Array.isArray(kennel?.pickup_locations) ? kennel.pickup_locations : [];
   const out = list.filter((l) => l && text(l.label) && text(l.address)).map((l) => ({
     id: text(l.id) || crypto.randomUUID(), label: text(l.label).slice(0, 80), address: text(l.address).slice(0, 300),
-    notes: text(l.notes).slice(0, 500), is_standard: l.is_standard === true, show_to_families: l.show_to_families !== false
+    notes: text(l.notes).slice(0, 500), is_standard: l.is_standard === true, show_to_families: l.show_to_families !== false,
+    miles: figure(l.miles, 1), transport_fee: figure(l.transport_fee, 2)
   }));
   // Exactly one standard: the first marked, else the first.
   const std = out.findIndex((l) => l.is_standard);
@@ -29,6 +39,12 @@ export function pickupLocations(kennel) {
 }
 
 export const standardLocation = (kennel) => pickupLocations(kennel).find((l) => l.is_standard) || null;
+
+// How far a place is from her standard location, one way: what she typed, the
+// standard location itself 0, else null (unknown).
+export const placeMiles = (place) => (place && Number.isFinite(place.miles) ? place.miles : place?.is_standard ? 0 : null);
+
+// The transport fee for a pickup at one of her places: transportFee.placeFee.
 
 // What's wrong with places she typed, or ''.
 export function locationsProblem(rows) {
@@ -89,6 +105,21 @@ export function slotConflicts(existing, made) {
   return out;
 }
 
+// A pickup's free-text time ("10:00 AM", "10:00 AM–10:30 AM", "14:30", "2pm") →
+// its start as 'HH:MM', or null.
+export function parseClock(value) {
+  const m = /(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?/i.exec(String(value ?? ''));
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = m[2] ? Number(m[2]) : 0;
+  const ap = (m[3] || '').toLowerCase().replace(/\./g, '');
+  if (!m[2] && !ap) return null; // a bare number isn't a time
+  if (min > 59 || h > 23 || (ap && (h < 1 || h > 12))) return null;
+  if (ap === 'pm' && h < 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
 // "10:00 AM–10:30 AM".
 export function timeRange(slot) {
   const f = (t) => {
@@ -118,16 +149,107 @@ export function slotBookings(events, entries, { live = () => true } = {}) {
 // room left. Their own booking's time is always kept. → [{ id, date, start_time,
 // end_time, left, location: { id, label, address, notes } }]
 // `allPlaces`: every place of hers, not only those shown to families (her own booking).
-export function familySlots({ slots, locations, bookings, from = null, today, mine = null, allPlaces = false }) {
+// `busy` + `perMile`: her other pickups (busyWindows, without this family's own) and
+// her drive time; a time too close to one of them (driveClash) is left out, or with
+// `markClash` (her own booking) kept with `clash` set to that pickup.
+export function familySlots({ slots, locations, bookings, from = null, today, mine = null, allPlaces = false, busy = [], perMile = 0, markClash = false }) {
   const shown = new Map(locations.filter((l) => allPlaces || l.show_to_families).map((l) => [l.id, l]));
   return cleanSlots(slots).filter((s) => shown.has(s.location_id) && s.date > today && (!from || s.date >= from))
     .map((s) => {
       const left = s.capacity - (bookings.get(s.id) || 0) + (s.id === mine ? 1 : 0);
       const l = shown.get(s.location_id);
-      return { id: s.id, date: s.date, start_time: s.start_time, end_time: s.end_time, left, location: { id: l.id, label: l.label, address: l.address, notes: l.notes } };
+      const clash = s.id === mine ? null : driveClash({ ...s, place_id: l.id, miles: placeMiles(l) }, busy, perMile);
+      return { id: s.id, date: s.date, start_time: s.start_time, end_time: s.end_time, left, location: { id: l.id, label: l.label, address: l.address, notes: l.notes }, ...(markClash ? { clash } : {}), _clash: clash };
     })
-    .filter((s) => s.left > 0 || s.id === mine);
+    .filter((s) => (s.left > 0 && (markClash || !s._clash)) || s.id === mine)
+    .map(({ _clash, ...s }) => s);
 }
+
+// --- Her drive (owner, 2026-11-25) ---------------------------------------------------
+// Every pickup takes her there and back: `waitlist_config.pickup_minutes_per_mile`
+// (default 1.5; 0 = off) for each mile, one way, from her standard location. Two
+// pickups on a day at different places need the drive to one plus the drive to the
+// other between them, so a time that close to one of her pickups is blacked out.
+
+export const DRIVE_MINUTES_PER_MILE = 1.5;
+export const drivePerMile = (config) => {
+  const v = config?.pickup_minutes_per_mile;
+  return v == null || v === '' || !Number.isFinite(Number(v)) ? DRIVE_MINUTES_PER_MILE : Math.max(0, Number(v));
+};
+
+// Where she'll be, and when, from `today` on: each pickup at one of her times (its
+// time and place), each pickup or drop-off she set at a time of day (details
+// start_time / end_time, and location_id or miles; a flight nanny takes her nowhere),
+// and each family's request still waiting for one of her times (on a record `live`
+// says still has an open sale). → [{ date, start, end (minutes), place_id | null,
+// miles, label, time, dog_id | null, entry_id | null }]
+export function busyWindows({ events = [], entries = [], litters = [], locations = [], today = '', live = () => true }) {
+  const slots = new Map();
+  for (const l of litters) for (const s of cleanSlots(l?.pickup_slots)) slots.set(s.id, s);
+  const places = new Map(locations.map((l) => [l.id, l]));
+  const out = [];
+  const add = (date, start, end, place, extra) => out.push({
+    date, start: minutes(start), end: minutes(end), place_id: place?.id || null, miles: extra.miles ?? placeMiles(place) ?? 0,
+    label: place?.label || extra.label || 'a drop-off', time: timeRange({ start_time: start, end_time: end }), dog_id: extra.dog_id || null, entry_id: extra.entry_id || null
+  });
+  for (const e of events) {
+    if (!e || e.is_archived || e.event_type !== 'placement' || !(e.event_date >= today)) continue;
+    const d = e.details || {};
+    const slot = d.pickup_slot_id ? slots.get(d.pickup_slot_id) : null;
+    if (slot) { add(slot.date, slot.start_time, slot.end_time, places.get(slot.location_id), { dog_id: e.subject_id }); continue; }
+    if (d.dropoff_method === 'Flight nanny') continue;
+    const start = HM.test(d.start_time || '') ? d.start_time : parseClock(d.placement_time);
+    if (!start) continue;
+    const end = HM.test(d.end_time || '') && d.end_time > start ? d.end_time : start;
+    const place = d.location_id ? places.get(d.location_id) : null;
+    add(e.event_date, start, end, place, { miles: place ? undefined : (Number.isFinite(d.miles) ? d.miles : 0), label: text(d.location).split(',')[0], dog_id: e.subject_id });
+  }
+  for (const en of entries) {
+    if (!en || en.is_archived || !live(en)) continue;
+    for (const r of en.pickup_requests || []) {
+      const slot = r && !r.decided && r.kind === 'slot' ? slots.get(r.slot_id) : null;
+      if (slot && slot.date >= today) add(slot.date, slot.start_time, slot.end_time, places.get(slot.location_id), { entry_id: en.id });
+    }
+  }
+  return out;
+}
+
+// The first of `busy` that a time ({ date, start_time, end_time, place_id, miles })
+// can't fit beside: the same day, somewhere else (another place, or an address), and
+// closer than perMile × (its miles + that one's) before its start or after its end.
+// → that window, or null (also when perMile is 0).
+export function driveClash({ date, start_time, end_time, place_id = null, miles = 0 }, busy, perMile) {
+  const rate = Number(perMile);
+  if (!(rate > 0) || !HM.test(start_time || '')) return null;
+  const s = minutes(start_time);
+  const e = HM.test(end_time || '') && end_time > start_time ? minutes(end_time) : s;
+  return (busy || []).find((b) => {
+    if (b.date !== date || (place_id && b.place_id === place_id)) return false;
+    const gap = rate * ((Number(miles) || 0) + (Number(b.miles) || 0));
+    return s < b.end + gap && b.start - gap < e;
+  }) || null;
+}
+
+// Every one of `busy` a time can't fit beside (driveClash, all of them).
+export function driveClashes(time, busy, perMile) {
+  return (busy || []).filter((b) => driveClash(time, [b], perMile));
+}
+
+// Her open times (nobody holds a place: `bookings`, slotBookings over every litter)
+// from `today` on, on every litter. → [{ id, litter_id, date, start_time, end_time,
+// place_id, miles, label, time }]: what Set their pickup offers to remove when a pickup
+// leaves no time to drive to them.
+export function openTimes({ litters = [], locations = [], bookings = new Map(), today = '' }) {
+  const places = new Map(locations.map((l) => [l.id, l]));
+  return litters.flatMap((l) => cleanSlots(l?.pickup_slots).filter((s) => s.date >= today && !(bookings.get(s.id) > 0)).map((s) => {
+    const p = places.get(s.location_id);
+    return { id: s.id, litter_id: l.id, date: s.date, start_time: s.start_time, end_time: s.end_time, start: minutes(s.start_time), end: minutes(s.end_time),
+      place_id: s.location_id, miles: placeMiles(p) ?? 0, label: p?.label || 'a place', time: timeRange(s) };
+  }));
+}
+
+// "your 10:00 AM–10:30 AM pickup at Exit 12" for her screens.
+export const clashText = (b) => `your ${b.time} ${b.place_id ? 'pickup' : 'drop-off'} at ${b.label}`;
 
 // --- Rules per pickup date (Family Requests plan §4) -----------------------------------
 // Litter.pickup_date_rules = [{ date, requires_list_id? , boarding? }]: on that date a

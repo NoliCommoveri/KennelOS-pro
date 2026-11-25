@@ -503,6 +503,14 @@ class Review {
         await this.chat.say('Done.');
       }
     }
+    const offer = res.fee?.offer;
+    if (offer) {
+      await this.chat.say(esc(`Their sale has a ${fmtMoney(offer.current)} transport fee. This pickup is ${offer.fee > 0 ? fmtMoney(offer.fee) : 'no charge'} (${offer.text}). Use that instead?`));
+      if ((await this.chat.choose([{ label: offer.fee > 0 ? `Use ${fmtMoney(offer.fee)}` : 'Take it off', value: 'yes', primary: true }, { label: `Keep ${fmtMoney(offer.current)}`, value: 'no' }])) === 'yes') {
+        await actions.setTransportFee(res.sale.id, offer.fee);
+        await this.chat.say('Done.');
+      }
+    }
     if (res.transportFeeLeft) {
       await this.chat.say(`Their sale still has a ${esc(fmtMoney(res.transportFeeLeft))} transport fee from an earlier drop-off plan. Remove it?`);
       if ((await this.chat.choose([{ label: 'Remove it', value: 'yes', primary: true }, { label: 'Keep it', value: 'no' }])) === 'yes') {

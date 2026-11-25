@@ -20,6 +20,7 @@ import { pickupFor } from './goHome.js';
 import { pickupFrom } from './familyPickup.js';
 import { saleExtraCharges } from './extraCharges.js';
 import { addDaysToYMD } from './dateUtils.js';
+import { parseClock } from './pickupSlots.js';
 import { RELEASED_SALE_STATUSES, isOpenSale } from './vocab.js';
 import { testNameAndResult } from './healthTestLog.js';
 
@@ -67,20 +68,8 @@ const newestFirst = (a, b) => String(b ?? '').localeCompare(String(a ?? ''));
 
 // --- times in her time zone ------------------------------------------------------
 
-// A pickup's free-text time ("10:00 AM", "10:00 AM–10:30 AM", "14:30", "2pm") →
-// its start as 'HH:MM', or null.
-export function parseClock(text) {
-  const m = /(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?/i.exec(String(text ?? ''));
-  if (!m) return null;
-  let h = Number(m[1]);
-  const min = m[2] ? Number(m[2]) : 0;
-  const ap = (m[3] || '').toLowerCase().replace(/\./g, '');
-  if (!m[2] && !ap) return null; // a bare number isn't a time
-  if (min > 59 || h > 23 || (ap && (h < 1 || h > 12))) return null;
-  if (ap === 'pm' && h < 12) h += 12;
-  if (ap === 'am' && h === 12) h = 0;
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-}
+// A pickup's free-text time → 'HH:MM' (pickupSlots.parseClock, kept here for its callers).
+export { parseClock };
 
 // 'HH:MM' → "10:00 AM", as pickupSlots.timeRange writes them.
 export function clockText(hhmm) {

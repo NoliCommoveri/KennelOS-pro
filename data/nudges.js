@@ -1593,7 +1593,9 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
               const money = (v) => `$${Number(v).toFixed(2)}`;
               const board = res.boarding ? ` Standard boarding applies: ${res.boarding.days} day${res.boarding.days === 1 ? '' : 's'}, ${money(res.boarding.amount)}, on their sale and logged as a stay.`
                 : res.boardingKept ? ` This date has standard boarding (${res.boardingKept.days} days, ${money(res.boardingKept.amount)}), but the sale already has your own boarding charge, so it was kept; change it on their entry or the sale if you like.` : '';
-              const fee = res.transportFeeLeft ? ` Their ${money(res.transportFeeLeft)} transport fee is still on the sale; take it off there if it no longer applies.` : '';
+              const fee = res.transportFeeLeft ? ` Their ${money(res.transportFeeLeft)} transport fee is still on the sale; take it off there if it no longer applies.`
+                : res.fee?.offer ? ` This pickup is ${res.fee.offer.fee > 0 ? money(res.fee.offer.fee) : 'no charge'} (${res.fee.offer.text}); their sale keeps your ${money(res.fee.offer.current)} transport fee, so change it there if you like.`
+                : res.fee?.set != null ? ` Transport fee ${money(res.fee.set)} (${res.fee.text}) is on their sale.` : '';
               return { title: 'Approved', message: `${r.kind === 'cancel' ? 'Their pickup is off the calendar.' : `It's on the pup's calendar as their pickup.`}${board}${fee} Let them know.`, emails: emails('request_approved') };
             } },
             { label: 'Decline', run: async () => { await declinePickupRequest(e.id, r.id, { date: today }); return { title: 'Declined', message: 'Nothing changed. Let them know.', emails: emails('request_declined') }; } }

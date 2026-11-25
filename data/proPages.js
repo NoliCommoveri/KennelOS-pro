@@ -86,6 +86,7 @@ export const PRO_ONLY_STANDALONE = [
   'assets/sideSaleUI.js',
   // The Litter page's pickup times (Family Requests plan §4), imported the same way.
   'assets/pickupTimesPanel.js',
+  'assets/setPickupDialog.js',
   // The Kennel page's "Online list" card (Waitlist W2 Plan §9), imported only when
   // editionFlags.waitlist is on and the waitlist online is offered.
   'assets/waitlistOnlineUI.js',
