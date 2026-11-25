@@ -52,6 +52,32 @@ export function testMatchTokensOf(e) {
   return tokens;
 }
 
+// Is this a one-day (instant) event? Only these are to-dos: spans (boarding,
+// heat cycles, medication) run on the board, not on Upcoming/Overdue.
+function isInstant(e) {
+  return descriptor(EVENT_TYPES, e.event_type).duration === 'instant';
+}
+
+// Where an instant event stands (EVENT_DUE_STATES), or null for a done event,
+// a span, or a past event logged before completion existed. `is_done` is
+// tri-state on purpose: true = done, false = still to do, absent = an older
+// event. Only an explicit false goes overdue, so years of history never flood
+// Overdue; an older event dated today or later still shows as due/upcoming.
+export function eventDueState(e, today = todayYMD()) {
+  if (!e || e.is_archived || e.is_done === true || !isInstant(e)) return null;
+  if (e.event_date > today) return 'upcoming';
+  if (e.event_date === today) return 'due';
+  return e.is_done === false && !descriptor(EVENT_TYPES, e.event_type).noOverdue ? 'overdue' : null;
+}
+
+// Marking an event done clears its pending reminder when that reminder was a
+// heads-up for the event (dated on or before it). A reminder set after the
+// event — a booster due next year on today's vaccination — is a follow-up and stays.
+export function doneReminderChanges(e) {
+  if (!e?.reminder_date || e.reminder_dismissed) return {};
+  return e.reminder_date <= e.event_date ? { reminder_dismissed: true } : {};
+}
+
 function validateEvent(candidate) {
   for (const f of REQUIRED_FIELDS) {
     if (candidate[f] == null || candidate[f] === '') {
@@ -73,9 +99,25 @@ function validateEvent(candidate) {
 export const HistoryEvent = {
   ...base,
 
+  // An instant event logged for today or earlier is done (she's recording what
+  // happened); one dated ahead is a to-do until she marks it done. A caller may
+  // pass is_done to say otherwise (the event form's Done toggle). Spans carry none.
   async create(data) {
     validateEvent(data);
+    if (data.is_done == null && isInstant(data)) data = { ...data, is_done: data.event_date <= todayYMD() };
     return base.create(data);
+  },
+
+  // Mark a to-do done: it leaves Upcoming/Overdue, and its heads-up reminder
+  // goes with it (dismissed, so it can be restored from Reminders).
+  async markDone(id) {
+    const existing = await db.events.get(id);
+    return HistoryEvent.update(id, { is_done: true, ...doneReminderChanges(existing) });
+  },
+
+  // Back to a to-do (the event form's toggle, or an undo).
+  markToDo(id) {
+    return HistoryEvent.update(id, { is_done: false });
   },
 
   async update(id, changes) {
@@ -123,14 +165,24 @@ export const HistoryEvent = {
 
   // Upcoming Deliverables (Stage4.5 Addendum §D2) — a SEPARATE read from the
   // board: instant-duration events (drop-offs, scheduled vet visits, scheduled
-  // surgeries, …) at or after today, across every subject type. This never
-  // fuses with getBoardRows — that's the load-bearing distinction (§C4/§D2).
+  // surgeries, …) at or after today and not yet done, across every subject type.
+  // This never fuses with getBoardRows — that's the load-bearing distinction (§C4/§D2).
   async getUpcoming() {
     const today = todayYMD();
     const rows = await db.events
       .where('event_date').aboveOrEqual(today)
-      .and((e) => !e.is_archived)
-      .and((e) => descriptor(EVENT_TYPES, e.event_type).duration === 'instant')
+      .and((e) => !e.is_archived && e.is_done !== true && isInstant(e))
+      .toArray();
+    return rows.sort((a, b) => (a.event_date < b.event_date ? -1 : a.event_date > b.event_date ? 1 : 0));
+  },
+
+  // Overdue — instant events dated before today still marked to do (is_done
+  // explicitly false; see eventDueState). Sibling of getUpcoming, oldest first.
+  async getOverdue() {
+    const today = todayYMD();
+    const rows = await db.events
+      .where('event_date').below(today)
+      .and((e) => eventDueState(e, today) === 'overdue')
       .toArray();
     return rows.sort((a, b) => (a.event_date < b.event_date ? -1 : a.event_date > b.event_date ? 1 : 0));
   },
@@ -155,7 +207,7 @@ export const HistoryEvent = {
     const today = todayYMD();
     const rows = await db.events
       .where('event_type').equals('placement')
-      .and((e) => !e.is_archived)
+      .and((e) => !e.is_archived && e.is_done !== true)
       .and((e) => e.event_date >= today)
       .toArray();
     return rows.sort((a, b) => (a.event_date < b.event_date ? -1 : a.event_date > b.event_date ? 1 : 0));

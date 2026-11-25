@@ -87,7 +87,7 @@ export const SYNC_REGISTRY = Object.freeze({
     rows: ALL,
     cloud: [
       'subject_type', 'subject_id', 'event_type', 'event_date', 'event_end_date',
-      'title', 'reminder_date', 'reminder_dismissed', 'related_dog_id',
+      'title', 'reminder_date', 'reminder_dismissed', 'is_done', 'related_dog_id',
       'related_contact_id', 'details',
       // A test or title that came on a Dog Card: `<dog public id>:<the sender's event
       // id>`, so a card sent again updates it (Shared Dogs Plan §3.5). Random ids only.

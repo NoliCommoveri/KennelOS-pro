@@ -545,6 +545,14 @@ export const FEE_STRUCTURE = [
   { value: 'other',          label: 'Other',          badge: 'badge-gray' }
 ];
 
+// Where a scheduled (instant) event stands, derived by eventRepo.eventDueState from
+// event_date and is_done — never stored. Done events carry no state.
+export const EVENT_DUE_STATES = [
+  { value: 'overdue',  label: 'Overdue',   badge: 'badge-red' },
+  { value: 'due',      label: 'Due today', badge: 'badge-amber' },
+  { value: 'upcoming', label: 'Upcoming',  badge: 'badge-blue' }
+];
+
 export const STUD_SERVICE_STATUS = [
   { value: 'arranged', label: 'Arranged', badge: 'badge-blue' },
   { value: 'in_progress', label: 'In progress', badge: 'badge-amber' },
@@ -934,6 +942,8 @@ export const EVENT_TYPES = [
   // reminder_date is the "entries close" date. Judge/club are free text with
   // suggestions from values already logged (eventForm.js LOGGED_VALUE_FIELDS).
   { value: 'show',               label: 'Show',               badge: 'badge-purple',  subjects: ['dog'], duration: 'instant',
+    // A show is finished on the Shows page (results, scratched), never ticked done: it never goes overdue.
+    noOverdue: true,
     relatedContact: 'Handler', editionFlag: 'shows', titleFrom: 'show_name',
     fields: [
       { key: 'entry_status', label: 'Entry status', type: 'select', options: SHOW_ENTRY_STATUS, default: 'planned' },

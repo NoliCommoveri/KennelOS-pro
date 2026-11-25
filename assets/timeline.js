@@ -1,9 +1,9 @@
 // timeline.js — renders a subject's Event History (Event list, newest first)
 // with add/edit/archive/delete. Reused for dogs now; pairings/litters later.
-import { HistoryEvent } from '../data/eventRepo.js';
+import { HistoryEvent, eventDueState } from '../data/eventRepo.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
-import { EVENT_TYPES, descriptor } from '../data/vocab.js';
+import { EVENT_TYPES, EVENT_DUE_STATES, descriptor } from '../data/vocab.js';
 import { esc, badge, fmtDate, fmtMoney, todayYMD, confirmModal, alertModal } from './ui.js';
 import { openEventForm } from './eventForm.js';
 
@@ -78,7 +78,9 @@ export function renderTimeline(opts) {
     }
     const today = todayYMD();
     body.innerHTML = `<ul class="timeline">` + visible.map((ev, i) => {
-      const upcoming = ev.event_date > today;
+      // A future span keeps its Upcoming tint; an instant to-do shows where it stands.
+      const state = eventDueState(ev, today) || (ev.event_date > today ? 'upcoming' : null);
+      const upcoming = !!state;
       const summary = detailsSummary(ev);
       const contactName = ev.related_contact_id ? contactsById.get(ev.related_contact_id)?.name : '';
       const relatedLabel = descriptor(EVENT_TYPES, ev.event_type).relatedContact;
@@ -86,7 +88,7 @@ export function renderTimeline(opts) {
       const meta = [summary, contactName ? `${esc(contactLabel)}: ${esc(contactName)}` : '', ev.notes ? esc(ev.notes) : '']
         .filter(Boolean).join(' — ');
       return `<li class="timeline-item${upcoming ? ' event-upcoming' : ''}${ev.is_archived ? ' row-archived' : ''}" data-idx="${i}">
-        <div class="timeline-date">${dateCell(ev, today)}${upcoming ? ' <span class="badge badge-amber">Upcoming</span>' : ''}</div>
+        <div class="timeline-date">${dateCell(ev, today)}${state ? ` ${badge(EVENT_DUE_STATES, state)}` : ''}</div>
         <div class="timeline-main">
           <div>${badge(EVENT_TYPES, ev.event_type)} <strong>${esc(ev.title)}</strong>${costByEvent.has(ev.id) ? ` <span class="faint">${esc(fmtMoney(costByEvent.get(ev.id)))}</span>` : ''}</div>
           ${meta ? `<div class="muted" style="font-size:14px;">${meta}</div>` : ''}

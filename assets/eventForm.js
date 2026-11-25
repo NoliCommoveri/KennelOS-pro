@@ -16,7 +16,7 @@
 // a field `default` seeds a NEW event's empty detail; `titleFrom` auto-fills the
 // title from a details field until the user types their own; and
 // `prefill.event_date` seeds a new event's date.
-import { HistoryEvent } from '../data/eventRepo.js';
+import { HistoryEvent, doneReminderChanges } from '../data/eventRepo.js';
 import { TEST_TYPE_FIELDS, testResultSuggestions } from '../data/healthTestLog.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
@@ -192,6 +192,9 @@ export async function openEventForm(opts) {
     title: event?.title || prefill?.title || '',
     details: { ...(event?.details || prefill?.details || {}) },
     reminder_date: event?.reminder_date || '',
+    // Done or still to do (instant types only). Follows the date — today or
+    // earlier is done, ahead is to do — until she ticks the box herself.
+    is_done: event ? (event.is_done ?? (event.event_date || '') <= todayYMD()) : null,
     cost: linkedExpense?.amount ?? '',
     expenseCategory: linkedExpense?.category || defaultExpenseCategoryFor(event?.event_type || prefill?.event_type || types[0].value),
     notes: event?.notes || '',
@@ -200,6 +203,8 @@ export async function openEventForm(opts) {
     // like time_of_day — stay shared across every target). Empty otherwise.
     perTargetDetails: {}
   };
+  let doneTouched = false;
+  if (draft.is_done == null) draft.is_done = draft.event_date <= todayYMD();
 
   // A vet typed as plain text (KennelAssistant, or logged before the picker)
   // preselects the contact of that name, so saving links it. No match leaves
@@ -344,7 +349,8 @@ export async function openEventForm(opts) {
           <select id="ef-type">${typeOptions}</select></div>
         <div class="field"><label>${isSpan ? 'Start date' : 'Date'} <span class="req">*</span></label>
           <input id="ef-date" type="date" value="${esc(draft.event_date)}">
-          <span class="field-hint">Future dates are allowed (e.g. a scheduled surgery).</span></div>
+          ${isSpan ? '<span class="field-hint">Future dates are allowed (e.g. a scheduled surgery).</span>' : `<label class="check-inline" style="margin-top:6px;"><input id="ef-done" type="checkbox"${draft.is_done ? ' checked' : ''}> Done</label>
+          <span class="field-hint">Untick for something still to do: it stays on Today until it's done.</span>`}</div>
         ${isSpan ? `<div class="field"><label>End date</label>
           <input id="ef-end-date" type="date" value="${esc(draft.event_end_date)}">
           <span class="field-hint">Leave blank for an open-ended/ongoing stay.</span></div>` : ''}
@@ -368,6 +374,13 @@ export async function openEventForm(opts) {
         <button class="btn" data-act="cancel">Cancel</button>
       </div>`;
 
+    const doneEl = modal.querySelector('#ef-done');
+    doneEl?.addEventListener('change', () => { doneTouched = true; draft.is_done = doneEl.checked; });
+    modal.querySelector('#ef-date').addEventListener('change', (e) => {
+      if (doneTouched || !doneEl) return;
+      draft.is_done = e.target.value <= todayYMD();
+      doneEl.checked = draft.is_done;
+    });
     modal.querySelector('#ef-type').addEventListener('change', (e) => {
       // The category the old type suggested — captured before we switch types so
       // we can tell an untouched default from a deliberate override.
@@ -538,6 +551,14 @@ export async function openEventForm(opts) {
       reminder_date: draft.reminder_date || null,
       notes: draft.notes
     };
+    if (descriptor(EVENT_TYPES, draft.event_type).duration === 'instant') {
+      basePayload.is_done = !!draft.is_done;
+      // Ticking Done on a to-do clears its heads-up reminder, as marking it done
+      // from Today does — unless she set that reminder in this same save.
+      if (isEdit && draft.is_done && event.is_done !== true && (event.reminder_date || null) === basePayload.reminder_date) {
+        Object.assign(basePayload, doneReminderChanges({ ...event, event_date: basePayload.event_date }));
+      }
+    }
     const amount = draft.cost === '' ? null : Number(draft.cost);
     if (amount != null && !Number.isFinite(amount)) { showError('Cost must be a number.'); return; }
     try {

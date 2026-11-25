@@ -11,7 +11,7 @@
 // Every card is collapsible (cardShell in assets/ui.js): a chevron button in
 // the header toggles its body, and a card with no rows to show starts
 // collapsed (isEmpty) instead of an expanded empty-state message.
-import { eventRepo } from '../data/eventRepo.js';
+import { eventRepo, eventDueState } from '../data/eventRepo.js';
 import { getAwayBoardRows } from '../data/awayBoard.js';
 import { computeNudges } from '../data/nudges.js';
 import { isDismissed, dismiss } from '../data/nudgeState.js';
@@ -21,7 +21,7 @@ import { pairingRepo } from '../data/pairingRepo.js';
 import { saleRepo } from '../data/saleRepo.js';
 import { contactRepo } from '../data/contactRepo.js';
 import { dogsInScope, inScopeOnly, subjectInScope } from '../data/kennelScope.js';
-import { EVENT_TYPES, DOG_STATUS, DISPOSITION, SHOW_ENTRY_STATUS } from '../data/vocab.js';
+import { EVENT_TYPES, EVENT_DUE_STATES, DOG_STATUS, DISPOSITION, SHOW_ENTRY_STATUS } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { isReadOnly } from '../data/demoMode.js';
 import { esc, badge, fmtDate, cardShell, alertModal, confirmModal } from '../assets/ui.js';
@@ -281,28 +281,50 @@ function watchForNudgeChanges() {
 
 // --- 2. Due outs / Upcoming -------------------------------------------------
 
+function upcomingRow(ev, today, readOnly) {
+  const contact = ev.related_contact_id ? ctx.contactsById.get(ev.related_contact_id)?.name : '';
+  // A due-out is THIS event, not a next one — deep-links to open it
+  // directly (edit mode) on the subject's page.
+  const openHref = subjectHref(ev, `&openEvent=${encodeURIComponent(ev.id)}`);
+  const state = eventDueState(ev, today);
+  const stateBadge = state === 'overdue' || state === 'due' ? `${badge(EVENT_DUE_STATES, state)} ` : '';
+  // Done only once it's due: ticking off next week's vet visit early is an edit.
+  const doneBtn = !readOnly && (state === 'overdue' || state === 'due')
+    ? `<button class="btn btn-sm btn-primary" data-done="${esc(ev.id)}">Done ✓</button>` : '';
+  return `<li class="row-between" style="padding:9px 0; border-top:1px solid var(--border);">
+    <div style="min-width:0;"><a href="${subjectHref(ev)}"><strong>${esc(subjectLabel(ev))}</strong></a> — ${badge(EVENT_TYPES, ev.event_type)} ${esc(ev.title || '')}${contact ? ` <span class="muted">· ${esc(contact)}</span>` : ''}</div>
+    <div class="pill-row" style="align-items:center; justify-content:flex-end; flex:0 0 auto;">
+      <span class="muted" style="font-size:13px; white-space:nowrap;">${stateBadge}${esc(fmtDate(ev.event_date))}</span>
+      ${doneBtn}
+      <a class="btn btn-sm" href="${esc(openHref)}">Open →</a>
+    </div>
+  </li>`;
+}
+
+// `rows`: overdue to-dos first (oldest first), then today onward.
 function renderUpcoming(rows) {
   const isEmpty = !rows.length;
+  const today = todayYMD();
+  const readOnly = isReadOnly();
   const inner = rows.length
     ? `<ul class="linked-list" style="margin:6px 0 0; padding:0; list-style:none;">
-        ${rows.map((ev) => {
-          const contact = ev.related_contact_id ? ctx.contactsById.get(ev.related_contact_id)?.name : '';
-          // A due-out is THIS event, not a next one — deep-links to open it
-          // directly (edit mode) on the subject's page.
-          const openHref = subjectHref(ev, `&openEvent=${encodeURIComponent(ev.id)}`);
-          return `<li class="row-between" style="padding:9px 0; border-top:1px solid var(--border);">
-            <div style="min-width:0;"><a href="${subjectHref(ev)}"><strong>${esc(subjectLabel(ev))}</strong></a> — ${badge(EVENT_TYPES, ev.event_type)} ${esc(ev.title || '')}${contact ? ` <span class="muted">· ${esc(contact)}</span>` : ''}</div>
-            <div class="pill-row" style="align-items:center; justify-content:flex-end; flex:0 0 auto;">
-              <span class="muted" style="font-size:13px; white-space:nowrap;">${esc(fmtDate(ev.event_date))}</span>
-              <a class="btn btn-sm" href="${esc(openHref)}">Open →</a>
-            </div>
-          </li>`;
-        }).join('')}
+        ${rows.map((ev) => upcomingRow(ev, today, readOnly)).join('')}
       </ul>`
     : `<div class="empty-state">Nothing scheduled from today onward.</div>`;
-  const title = `Due outs &amp; upcoming${rows.length ? ` <span class="muted" style="font-size:14px;">(${rows.length})</span>` : ''}`;
-  const body = `<p class="field-hint">Everything scheduled from today onward — drop-offs, vet visits, surgeries.</p>${inner}`;
+  const overdue = rows.filter((e) => eventDueState(e, today) === 'overdue').length;
+  const title = `Due outs &amp; upcoming${rows.length ? ` <span class="muted" style="font-size:14px;">(${rows.length}${overdue ? `, ${overdue} overdue` : ''})</span>` : ''}`;
+  const body = `<p class="field-hint">Drop-offs, vet visits and surgeries still to do. Tap Done when it's handled.</p>${inner}`;
   upcomingEl.innerHTML = cardShell(title, body, { key: 'upcoming', isEmpty, marginTop: true });
+  upcomingEl.querySelectorAll('[data-done]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await eventRepo.markDone(btn.dataset.done);
+        renderUpcoming(rows.filter((e) => e.id !== btn.dataset.done));
+        renderReminders();
+      } catch (e) { btn.disabled = false; showError(e.message || String(e)); }
+    });
+  });
 }
 
 // --- 2b. Upcoming shows (Show Tracking Spec §5.3, Pro-only) -------------------
@@ -572,14 +594,15 @@ async function main() {
   const loading = document.getElementById('today-loading');
   if (loading) loading.hidden = false;
 
-  const [allDogs, litters, pairings, sales, contacts, upcoming, boardRows] = await Promise.all([
+  const [allDogs, litters, pairings, sales, contacts, upcoming, boardRows, overdue] = await Promise.all([
     dogRepo.getAll({ includeArchived: true }),
     litterRepo.getAll({ includeArchived: false }),
     pairingRepo.getAll({ includeArchived: false }),
     saleRepo.getAll({ includeArchived: false }),
     contactRepo.getAll({ includeArchived: true }),
     eventRepo.getUpcoming(),
-    getAwayBoardRows()
+    getAwayBoardRows(),
+    eventRepo.getOverdue()
   ]);
   ctx.dogsById = new Map(allDogs.map((d) => [d.id, d]));
   ctx.pairingsById = new Map(pairings.map((p) => [p.id, p]));
@@ -606,15 +629,16 @@ async function main() {
   watchForNudgeChanges();
   renderAvailable(scopedDogs, scopedLitters);
   const scopedUpcoming = upcoming.filter(eventInScope);
+  const scopedOverdue = overdue.filter(eventInScope);
   if (editionFlags.shows) {
     // Shows get their own card and leave the Due outs card (decision 8). The
     // filter is here, not in getUpcoming(), so the Upcoming page still lists them.
     const horizon = addDaysToYMD(todayYMD(), SHOWS_WINDOW_DAYS);
     renderShows(scopedUpcoming.filter((e) => e.event_type === 'show'
       && e.event_date <= horizon && e.details?.entry_status !== 'scratched'));
-    renderUpcoming(scopedUpcoming.filter((e) => e.event_type !== 'show'));
+    renderUpcoming([...scopedOverdue, ...scopedUpcoming].filter((e) => e.event_type !== 'show'));
   } else {
-    renderUpcoming(scopedUpcoming);
+    renderUpcoming([...scopedOverdue, ...scopedUpcoming]);
   }
   // boardRows arrive already scoped — getAwayBoardRows() owns that, so board.js,
   // today.js, and dashboard.js can't disagree about who is away.
