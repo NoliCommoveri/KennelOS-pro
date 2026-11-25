@@ -27,6 +27,7 @@ const text = (v) => String(v ?? '').trim();
 //   paymentText    her payment instructions (the waitlist's, D21)
 //   contractLabel  the contract form's label, e.g. "Pet home contract"
 //   contractLink   its prefilled signing link
+//   contractByEmail  the contract comes in its own email to sign (Firma's), no link here
 //   invoice        true when the invoice PDF goes with the message
 //   depositCredit  what credits already paid of the deposit, formatted: "Deposit: $450
 //                  (after $50 already credited)"
@@ -58,6 +59,8 @@ export function depositRequestMessage(p = {}) {
   if (text(p.paymentText) && (!paid || text(p.balance))) lines.push('', `${paid ? 'How to pay the balance' : pay.length ? 'Or pay' : 'How to pay'}: ${text(p.paymentText)}`);
   if (text(p.contractLink)) {
     lines.push('', `Please review and sign your ${text(p.contractLabel) || 'contract'}. The details are already filled in:`, text(p.contractLink));
+  } else if (p.contractByEmail) {
+    lines.push('', `Your ${text(p.contractLabel) || 'contract'} comes in its own email to sign online, with the details already filled in.`);
   }
   if (p.invoice) lines.push('', 'Your invoice is attached.');
   if (text(p.pupPhotos)) lines.push('', `Photos of ${pup || 'your puppy'}: ${text(p.pupPhotos)}`);
@@ -66,9 +69,10 @@ export function depositRequestMessage(p = {}) {
   if (text(p.finalMethods) && (text(p.schedule) || text(p.balance))) lines.push(`For the final payment: ${text(p.finalMethods)}`);
   lines.push('', 'Let me know if you have any questions.', '', 'Thank you!');
   if (text(p.kennelName)) lines.push(text(p.kennelName));
+  const contract = Boolean(text(p.contractLink) || p.contractByEmail);
   const what = paid
-    ? (text(p.contractLink) ? 'contract' : 'invoice')
-    : `deposit${text(p.contractLink) ? ' and contract' : ''}`;
+    ? (contract ? 'contract' : 'invoice')
+    : `deposit${contract ? ' and contract' : ''}`;
   const subject = pup ? `${pup}: your ${what}` : `Your puppy: ${what}`;
   return { subject, body: lines.join('\n') };
 }

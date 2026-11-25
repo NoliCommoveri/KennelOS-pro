@@ -542,10 +542,15 @@ export const REGISTRY_TABLES = Object.freeze(Object.keys(SYNC_REGISTRY));
 // findings, temperament notes, notes/note) is private; every other declared
 // key is cloud; an UNDECLARED key is private. EVENT_TYPES is the complete list
 // (not edition-filtered), so a Pro-only type's keys classify the same in Lite.
+// Keys the app writes itself on a type with no form field for them: a Note her
+// puppy portal left (portalFeedSync.noteFact, `portal_fact`: which fact, and the
+// sale's id), so every device's Today shows it (nudges.portalFactNudges). The
+// fact's value stays in the Note's private `notes` (owner decision 2026-11-25).
+const APP_DETAIL_CLOUD_KEYS = { note: ['portal_fact', 'sale_id'] };
 const DETAILS_CLOUD_KEYS = new Map(
   EVENT_TYPES.map((t) => [
     t.value,
-    new Set((t.fields || []).filter((f) => f.type !== 'textarea').map((f) => f.key))
+    new Set([...(t.fields || []).filter((f) => f.type !== 'textarea').map((f) => f.key), ...(APP_DETAIL_CLOUD_KEYS[t.value] || [])])
   ])
 );
 

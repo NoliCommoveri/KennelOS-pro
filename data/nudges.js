@@ -84,6 +84,14 @@ import { ourStudPairingIds, studParents, pickDue, serviceDate, boardingEndedUpda
 import { reviewTitle } from './integrationEvents.js';
 import { heatForecast, heatBasisText, preventativeGaps, monthOf, monthName } from './dogCare.js';
 
+// A button that opens a page. Its run never settles, so the caller (Today, Kels's
+// review) doesn't redraw or report on a page that's already leaving: on an installed
+// iPhone app that left a white screen until she force-closed the app.
+const go = (href) => () => {
+  location.href = href;
+  return new Promise(() => {});
+};
+
 const TERMINAL_PAIRING_STATUSES = ['cancelled', 'failed'];
 
 // Pre-whelp: still expecting a litter, not yet resolved one way or the other.
@@ -219,7 +227,7 @@ export function deceasedDogNudges(dogs, { pairings, sales, dogsById, littersById
         detail: `The sale is "${descriptor(SALE_STATUS, s.status).label}".`,
         subjectHref: `sale.html?id=${encodeURIComponent(s.id)}`,
         actions: [
-          { label: 'Open the sale', run: async () => { location.href = `sale.html?id=${encodeURIComponent(s.id)}`; } }
+          { label: 'Open the sale', run: go(`sale.html?id=${encodeURIComponent(s.id)}`) }
         ]
       });
     }
@@ -331,7 +339,7 @@ export async function computeNudges() {
   const liveExpectedLitter = (l) => l.status === 'expected' && !l.is_archived;
   const pairingIdsWithLitter = new Set(litters.filter((l) => !liveExpectedLitter(l)).map((l) => l.pairing_id).filter(Boolean));
   const expectedLitterByPairing = new Map(litters.filter((l) => liveExpectedLitter(l) && l.pairing_id).map((l) => [l.pairing_id, l]));
-  const recordBirth = (l) => ({ label: 'Record the birth', run: async () => { location.href = `kels.html?task=record-litter&litter=${encodeURIComponent(l.id)}`; } });
+  const recordBirth = (l) => ({ label: 'Record the birth', run: go(`kels.html?task=record-litter&litter=${encodeURIComponent(l.id)}`) });
   const littersByIdAll = new Map(litters.map((l) => [l.id, l]));
   // Breedings of our stud to somebody else's dam (linked to an outgoing stud
   // service): the litter is the dam's owner's, so no rule asks her to record it.
@@ -418,7 +426,7 @@ export async function computeNudges() {
       detail: studPartnerLabel(s, dogsById),
       subjectHref: `stud-service.html?id=${encodeURIComponent(s.id)}`,
       actions: [
-        { label: 'Create pairing', run: async () => { location.href = `pairing.html?new=1&stud_service=${encodeURIComponent(s.id)}`; } }
+        { label: 'Create pairing', run: go(`pairing.html?new=1&stud_service=${encodeURIComponent(s.id)}`) }
       ]
     });
   }
@@ -444,7 +452,7 @@ export async function computeNudges() {
       detail: ev.event_end_date ? `Heat concluded ${ev.event_end_date}.` : `Heat started ${ev.event_date}, with no end date logged.`,
       subjectHref: `dog.html?id=${encodeURIComponent(damId)}`,
       actions: [
-        { label: 'Create pairing', run: async () => { location.href = `pairing.html?new=1&dam=${encodeURIComponent(damId)}`; } }
+        { label: 'Create pairing', run: go(`pairing.html?new=1&dam=${encodeURIComponent(damId)}`) }
       ]
     });
   }
@@ -465,7 +473,7 @@ export async function computeNudges() {
       detail: `Predicted around ${h.next} (${heatBasisText(h)}).`,
       subjectHref: `dog.html?id=${encodeURIComponent(h.dog.id)}`,
       actions: [
-        { label: 'Log heat', run: async () => { location.href = `dog.html?id=${encodeURIComponent(h.dog.id)}&logEvent=heat_cycle&logDate=${overdue ? today : h.next}`; } }
+        { label: 'Log heat', run: go(`dog.html?id=${encodeURIComponent(h.dog.id)}&logEvent=heat_cycle&logDate=${overdue ? today : h.next}`) }
       ]
     });
   }
@@ -482,7 +490,7 @@ export async function computeNudges() {
       detail: `Not logged yet this month: ${names.length > 6 ? `${names.slice(0, 6).join(', ')} and ${names.length - 6} more` : names.join(', ')}.`,
       subjectHref: 'dogs.html?logEvent=preventative&from=today',
       actions: [
-        { label: 'Log', run: async () => { location.href = 'dogs.html?logEvent=preventative&from=today'; } }
+        { label: 'Log', run: go('dogs.html?logEvent=preventative&from=today') }
       ]
     });
   }
@@ -516,7 +524,7 @@ export async function computeNudges() {
       detail: `Expected ${p.expected_due_date}. The litter starts as "Expected" until the pups arrive.`,
       subjectHref: `pairing.html?id=${encodeURIComponent(p.id)}`,
       actions: [
-        { label: 'Create litter', run: async () => { location.href = `litter.html?new=1&pairing=${encodeURIComponent(p.id)}`; } }
+        { label: 'Create litter', run: go(`litter.html?new=1&pairing=${encodeURIComponent(p.id)}`) }
       ]
     });
   }
@@ -548,7 +556,7 @@ export async function computeNudges() {
       subjectHref: `pairing.html?id=${encodeURIComponent(p.id)}`,
       actions: [
         { label: 'Mark whelped', run: async () => { await pairingRepo.update(p.id, { status: 'whelped' }); } },
-        { label: 'Create litter', run: async () => { location.href = `litter.html?new=1&pairing=${encodeURIComponent(p.id)}`; } }
+        { label: 'Create litter', run: go(`litter.html?new=1&pairing=${encodeURIComponent(p.id)}`) }
       ]
     });
   }
@@ -637,7 +645,7 @@ export async function computeNudges() {
         detail: 'The pairing is marked Whelped but has no litter yet.',
         subjectHref: `pairing.html?id=${encodeURIComponent(p.id)}`,
         actions: [
-          { label: 'Create litter', run: async () => { location.href = `litter.html?new=1&pairing=${encodeURIComponent(p.id)}`; } }
+          { label: 'Create litter', run: go(`litter.html?new=1&pairing=${encodeURIComponent(p.id)}`) }
         ]
       });
     }
@@ -661,7 +669,7 @@ export async function computeNudges() {
       detail: `The litter should be ready to go home about now (bred ${serviceDate(s)}).`,
       subjectHref: `stud-service.html?id=${encodeURIComponent(s.id)}`,
       actions: [
-        { label: 'Add the puppy', run: async () => { location.href = `dog.html?new=1&pick=${encodeURIComponent(s.id)}`; } },
+        { label: 'Add the puppy', run: go(`dog.html?new=1&pick=${encodeURIComponent(s.id)}`) },
         { label: 'Not getting one', run: async () => { await studServiceRepo.update(s.id, { pick_status: 'waived' }); } }
       ]
     });
@@ -844,13 +852,11 @@ export async function computeNudges() {
         const wish = wishes.get(s2.id) || null;
         const wishDetails = wish ? Object.fromEntries(Object.entries({ placement_time: wish.time, location: wish.location, dropoff_method: wish.method }).filter(([, v]) => v)) : {};
         const wishText = wish ? ` They asked for ${[wish.date, wish.time].filter(Boolean).join(', ') || 'a time'}${wish.location ? ` at ${wish.location}` : ''} on their status page: Schedule pickup fills it in.` : '';
-        const logPickup = (label) => ({ label, run: async () => {
-          location.href = dogHref({
-            logEvent: 'placement', logDate: wish?.date && wish.date >= today ? wish.date : start, logTitle: wish?.method === 'Local pickup' || !wish ? PICKUP_TITLE : DROPOFF_TITLE,
-            ...(s2.buyer_contact_id ? { logContact: s2.buyer_contact_id } : {}),
-            ...(Object.keys(wishDetails).length ? { logDetails: JSON.stringify(wishDetails) } : {})
-          });
-        } });
+        const logPickup = (label) => ({ label, run: go(dogHref({
+          logEvent: 'placement', logDate: wish?.date && wish.date >= today ? wish.date : start, logTitle: wish?.method === 'Local pickup' || !wish ? PICKUP_TITLE : DROPOFF_TITLE,
+          ...(s2.buyer_contact_id ? { logContact: s2.buyer_contact_id } : {}),
+          ...(Object.keys(wishDetails).length ? { logDetails: JSON.stringify(wishDetails) } : {})
+        })) });
         if (issue.kind === 'boarding') {
           const end = boardingEnd(s2, start);
           nudges.push({
@@ -858,7 +864,7 @@ export async function computeNudges() {
             title: `${name}'s sale includes boarding (${boardingChargeText(s2)}). Log the boarding?`,
             detail: `${family} is paying for ${name} to stay with you after the ready date (${issue.readyDate}), but no boarding is logged.`,
             subjectHref: `sale.html?id=${encodeURIComponent(s2.id)}`,
-            actions: [{ label: 'Log boarding', run: async () => { location.href = dogHref({ logEvent: 'boarding', logDate: start, logTitle: BOARDING_TITLE, ...(end ? { logEnd: end } : {}), logDetails: JSON.stringify({ stay_at: 'with_us', boarding_reason: 'Deferred pickup' }) }); } }]
+            actions: [{ label: 'Log boarding', run: go(dogHref({ logEvent: 'boarding', logDate: start, logTitle: BOARDING_TITLE, ...(end ? { logEnd: end } : {}), logDetails: JSON.stringify({ stay_at: 'with_us', boarding_reason: 'Deferred pickup' }) })) }]
           });
         } else if (issue.kind === 'schedule') {
           nudges.push({
@@ -875,7 +881,7 @@ export async function computeNudges() {
             detail: `The sale to ${family} still isn't marked Delivered.`,
             subjectHref: `sale.html?id=${encodeURIComponent(s2.id)}`,
             actions: [
-              { label: 'Yes, mark delivered', run: async () => { location.href = `sale.html?id=${encodeURIComponent(s2.id)}&deliver=1`; } },
+              { label: 'Yes, mark delivered', run: go(`sale.html?id=${encodeURIComponent(s2.id)}&deliver=1`) },
               logPickup('No, new pickup date')
             ]
           });
@@ -914,7 +920,7 @@ export async function computeNudges() {
           detail: `${track.label} requirements met${progress.completedOn ? ` on ${progress.completedOn}` : ''}.`,
           subjectHref: `dog.html?id=${encodeURIComponent(d.id)}`,
           actions: [
-            { label: 'Log title', run: async () => { location.href = `dog.html?${qs.toString()}`; } }
+            { label: 'Log title', run: go(`dog.html?${qs.toString()}`) }
           ]
         });
       }
@@ -964,7 +970,7 @@ export function depositOverdueNudges(today, sales, dogsById = new Map(), contact
       detail: `Nothing happens by itself. If it came, record it on the sale; to give them more time, change the deposit due date there. Or cancel the sale${prior ? ` and ${pup} goes back to ${descriptor(DISPOSITION, prior)?.label.toLowerCase() || prior}` : ''}.`,
       subjectHref: href,
       actions: [
-        { label: 'Open the sale', run: async () => { location.href = href; } },
+        { label: 'Open the sale', run: go(href) },
         { label: 'Cancel the sale', run: async () => {
           const { cancelPendingSale } = await import('./pendingSale.js');
           const r = await cancelPendingSale(s.id, { date: today });
@@ -1006,7 +1012,7 @@ export function paymentDueNudges(today, sales, statements, dogsById = new Map(),
     const family = contactsById.get(s.buyer_contact_id)?.name || 'The buyer';
     const pup = dogsById.get(s.dog_id)?.call_name || 'their pup';
     const href = `sale.html?id=${encodeURIComponent(s.id)}`;
-    const open = [{ label: 'Open the sale', run: async () => { location.href = href; } }];
+    const open = [{ label: 'Open the sale', run: go(href) }];
     for (const d of st.dueDates) {
       if (!(d.owed > 0) || !d.date) continue;
       const what = d.isFinal ? (st.dueDates.length > 1 ? 'final payment' : 'payment') : d.label;
@@ -1112,7 +1118,7 @@ export function extraDueNudges(today, sales, events, dogsById, contactsById, ken
           title: `${who}'s ${stepLabel(x, st)} for ${pup} ${due < today ? `was due ${due}` : due === today ? 'is due today' : `is due ${due}`}`,
           detail: `${st.amount ? `$${st.amount.toFixed(2)}. ` : ''}Make the invoice from the sale (it has its own line), and put the day it's paid on the sale.`,
           subjectHref: `sale.html?id=${encodeURIComponent(s.id)}`,
-          actions: [{ label: 'Open the sale', run: async () => { location.href = `sale.html?id=${encodeURIComponent(s.id)}`; } }]
+          actions: [{ label: 'Open the sale', run: go(`sale.html?id=${encodeURIComponent(s.id)}`) }]
         });
       }
     }
@@ -1172,6 +1178,11 @@ async function followUpNudges(today, sales, events, dogsById, kennelsById) {
 // shows each one for PORTAL_FACT_SHOWN_DAYS, dismissable, so a change never lands
 // unseen. She undoes it on the pup or its sale.
 export const PORTAL_FACT_SHOWN_DAYS = 14;
+const PORTAL_FACT_WORDS = {
+  picked_up: 'Your puppy portal recorded their pickup.',
+  microchip: 'Your puppy portal set the microchip.',
+  died: 'Your puppy portal recorded a death.'
+};
 export function portalFactNudges(events, dogsById, today) {
   return (events || [])
     .filter((e) => !e.is_archived && e.event_type === 'note' && e.details?.portal_fact && e.event_date && addDaysToYMD(e.event_date, PORTAL_FACT_SHOWN_DAYS) >= today && dogsById.has(e.subject_id))
@@ -1181,9 +1192,10 @@ export function portalFactNudges(events, dogsById, today) {
       return {
         key: `portal-fact:${e.id}`,
         title: `From your puppy portal: ${pup.call_name || 'a pup'}`,
-        detail: `${e.notes || ''} If that's wrong, change it on ${e.details.portal_fact === 'picked_up' ? 'the sale and the pickup' : 'the dog'}.`,
+        // `notes` (the fact's value) stays on the device that applied it: elsewhere, the fact in words.
+        detail: `${e.notes || PORTAL_FACT_WORDS[e.details.portal_fact] || ''} If that's wrong, change it on ${e.details.portal_fact === 'picked_up' ? 'the sale and the pickup' : 'the dog'}.`,
         subjectHref: href,
-        actions: [{ label: 'Open', run: async () => { location.href = href; } }]
+        actions: [{ label: 'Open', run: go(href) }]
       };
     });
 }
@@ -1219,7 +1231,7 @@ export function policiesNudges(kennels, { online = true, scopedTo = null } = {})
       title: kennels.filter((x) => x.is_own_kennel && !x.is_archived).length > 1 ? `Add your waitlist policies for ${k.kennel_name || 'your kennel'}` : 'Add your waitlist policies',
       detail: 'Families on your list see them, and applicants tick that they\'ve read them. Until you add one, your application doesn\'t ask.',
       subjectHref: `kennel.html?id=${encodeURIComponent(k.id)}&open=policies#waitlist-settings`,
-      actions: [{ label: 'Add policies', run: async () => { location.href = `kennel.html?id=${encodeURIComponent(k.id)}&open=policies#waitlist-settings`; } }]
+      actions: [{ label: 'Add policies', run: go(`kennel.html?id=${encodeURIComponent(k.id)}&open=policies#waitlist-settings`) }]
     }));
 }
 
@@ -1257,7 +1269,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
       title: list.length === 1 ? `New waitlist application from ${name(newest)}` : `${list.length} new waitlist applications`,
       detail: 'Review and approve or decline.',
       subjectHref: `waitlist.html?kennel=${encodeURIComponent(kennelId)}`,
-      actions: [{ label: 'Review', run: async () => { location.href = `waitlist.html?kennel=${encodeURIComponent(kennelId)}`; } }]
+      actions: [{ label: 'Review', run: go(`waitlist.html?kennel=${encodeURIComponent(kennelId)}`) }]
     });
   }
 
@@ -1272,7 +1284,7 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
       title: `${name(p.b)} may have applied twice`,
       detail: `${name(p.b)} (applied ${p.b.applied_date || 'undated'}) and ${name(p.a)} (applied ${p.a.applied_date || 'undated'}) have ${matchReasonText(p)} on one waitlist. If they're one family, merge them and keep one. Dismiss if they're not the same.`,
       subjectHref: `waitlist-entry.html?id=${encodeURIComponent(p.b.id)}`,
-      actions: [{ label: 'Compare', run: async () => { location.href = `waitlist-entry.html?id=${encodeURIComponent(p.b.id)}`; } }]
+      actions: [{ label: 'Compare', run: go(`waitlist-entry.html?id=${encodeURIComponent(p.b.id)}`) }]
     });
   }
 
@@ -1529,7 +1541,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         detail: `Send it from the Companion page (Current families), then mark it sent so their status page says so.${said(r.note)}`,
         subjectHref: href(e),
         actions: [
-          { label: 'Open Companion', run: async () => { location.href = 'companion.html?type=family'; } },
+          { label: 'Open Companion', run: go('companion.html?type=family') },
           { label: 'Mark sent', run: async () => { await markCompanionLinkSent(e.id, { date: today }); return { title: 'Marked sent', message: `${name(e)}'s status page now says their link was sent.` }; } },
           { label: 'Decline', run: async () => { await declineCompanionRequest(e.id, { date: today }); return { title: 'Declined', message: 'Their status page says you didn\'t send one. Let them know why.' }; } }
         ]
@@ -1550,7 +1562,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
             return { title: 'Approved', message: cancel ? `${r.name} is off their sale. Let them know.` : `${r.name} is on their sale${res.charge?.payments ? ', with its payment plan' : ''}. Let them know.`, emails: emails('request_approved') };
           } },
           { label: 'Decline', run: async () => { await declineExtraRequest(e.id, r.id, { date: today }); return { title: 'Declined', message: 'Nothing changed on their sale. Let them know.', emails: emails('request_declined') }; } },
-          { label: 'Open', run: async () => { location.href = href(e); } }
+          { label: 'Open', run: go(href(e)) }
         ]
       });
     }
@@ -1563,7 +1575,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         title: `${name(e)} asked to back out`,
         detail: `Their reason: ${r.reason?.label || ''}${r.reason?.text ? `: "${r.reason.text}"` : ''}. Nothing changes until you decide on their page: cancel the sale and keep what they paid, or put them back in line.${said(r.note)}`,
         subjectHref: href(e),
-        actions: [{ label: 'Open', run: async () => { location.href = href(e); } }]
+        actions: [{ label: 'Open', run: go(href(e)) }]
       });
     }
     // A new name for their pup (End-State guide §29): she reviews it on their page,
@@ -1575,7 +1587,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         title: `${name(e)} asked for a new name for ${r.from_name || 'their pup'}`,
         detail: `They'd like to call ${r.from_name || 'their pup'} "${r.name}". Review it on their page.${said(r.note)}`,
         subjectHref: href(e),
-        actions: [{ label: 'Open', run: async () => { location.href = href(e); } }]
+        actions: [{ label: 'Open', run: go(href(e)) }]
       });
     }
     // Pickup requests (Family Requests plan §4): a time or a cancel is decided here;
@@ -1584,7 +1596,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
       const emails = (kind, extra = {}) => [{ entryId: e.id, kind, extra: { request: { field: 'pickup_request', request: r }, ...extra } }];
       const actions = r.kind === 'address'
         ? [
-            { label: 'Open', run: async () => { location.href = href(e); } },
+            { label: 'Open', run: go(href(e)) },
             ...(r.far ? [{ label: 'Send transport options', run: async () => ({ title: 'Transport options', message: 'Edit the email, then send it.', emails: [{ entryId: e.id, kind: 'transport_options', extra: Number.isFinite(r.miles) ? { distance: r.miles } : {} }] }) }] : [])
           ]
         : [
@@ -1616,7 +1628,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         detail: `"${m.subject}" waited more than a day for a connection, so it wasn't sent by itself: its dates or details may be out of date. Send it as written, or don't and write them a new one.`,
         subjectHref: href(e),
         actions: [
-          { label: 'Open', run: async () => { location.href = href(e); } },
+          { label: 'Open', run: go(href(e)) },
           { label: 'Send as written', run: async () => { await retryEmail(e.id, m.id); return { title: 'Sending', message: 'It goes with the next sync.' }; } },
           { label: 'Don\'t send', run: async () => { await dropEmail(e.id, m.id); } }
         ]
@@ -1633,7 +1645,7 @@ async function statusPageNudges(entries, offers, { today, litters, dogsById, ken
         detail: unread.slice(-3).map((m) => clip(m.body)).join(' · '),
         subjectHref: href(e),
         actions: [
-          { label: 'Open', run: async () => { location.href = href(e); } },
+          { label: 'Open', run: go(href(e)) },
           { label: 'Mark read', run: async () => { await markMessagesRead(e.id); } }
         ]
       });

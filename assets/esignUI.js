@@ -454,6 +454,17 @@ export function sendWithFirma({ contract, form, facts, signer, emailChoice = tru
   });
 }
 
+// What a send through Firma with its emails on did, for the alert after it: the
+// Contract page's Send for signature and the waitlist's Review sale & send.
+export function firmaSentMessage(sent) {
+  return (sent.countersignFirst
+    ? 'Firma emails you the contract to read and sign first. Once you have, it emails them theirs. When you both have, the contract is marked Signed by itself, and its signed copy opens from it.'
+    : sent.countersign
+    ? 'Firma emailed them the signing link. Once they\'ve signed, Firma emails you to sign it too (or tap Countersign on the contract). When you both have, it\'s marked Signed by itself, and its signed copy opens from it.'
+    : 'Firma emailed them the signing link. When they sign, the contract is marked Signed by itself, and its signed copy opens from it.')
+    + (sent.keepCopy ? ' KennelOS also emails them a link to the signed copy, within the hour after the last signature.' : '');
+}
+
 // Her own signing page (D32), in a new tab. → false when the browser blocked it.
 export async function openCountersign(ref) {
   return openInNewTab(countersignLink(ref).then((r) => r.url));

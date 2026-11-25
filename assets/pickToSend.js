@@ -15,8 +15,10 @@
 // deposit_request_sent_date and logs the message on the family's entry. Nothing
 // goes to a server: the PDF and the link are made on her device. The one
 // exception is a Firma template of hers (e-sign, plan §2.3a, D30): Continue on
-// step 2 sends it through Firma then (assets/esignUI.js, which marks the contract
-// Sent), and its signing link goes in the message, Firma's own email off.
+// step 2 sends it through Firma then, the same send as the Contract page's
+// (assets/esignUI.js, which marks the contract Sent): Firma emails each signer
+// in turn, her too when she signs, and the message says the contract comes from
+// Firma. Unticking Firma's email puts the signing link in the message instead.
 // Pro-only (proPages.PRO_ONLY_STANDALONE): only the waitlist family page opens it.
 import { saleRepo } from '../data/saleRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
@@ -38,7 +40,7 @@ import { depositPaid, getSaleStatement } from '../data/incomeView.js';
 import { photoLink } from '../data/waitlistProjection.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { deadlineLabel } from '../data/waitlistRules.js';
-import { esc, fmtDate, fmtMoney, promptModal } from './ui.js';
+import { esc, fmtDate, fmtMoney, promptModal, alertModal } from './ui.js';
 import { REGISTRATION_TYPE, CONTRACT_FORM_TYPE, descriptor } from '../data/vocab.js';
 
 const numOrNull = (v) => (String(v ?? '').trim() === '' ? null : Number(v));
@@ -70,7 +72,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
     let contract = null;     // the contract being sent (made at step 2)
     let addOns = null;       // the sale's separate agreements' facts, for the form list
     let chosen = null;       // { form, url, values } or null for no contract
-    const firmaSent = new Map(); // template id → its signing link, sent from this modal
+    const firmaSent = new Map(); // template id → { url (its signing link when Firma doesn't email), emailed }, sent from this modal
     let pickedFormId = null; // step 2's radio: null until she picks ('' = no contract)
     const openKinds = new Set(); // step 2's unfolded kinds, kept across redraws
     let showAll = false;
@@ -281,13 +283,15 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
             if (isFirmaForm(form)) {
               // Sent now, through Firma (it counts), once per template in this modal.
               if (!firmaSent.has(form.template_id)) {
-                const { sendWithFirma } = await import('./esignUI.js');
-                const sent = await sendWithFirma({ contract, form, facts, signer: contact || facts.buyer, emailChoice: false });
+                const { sendWithFirma, firmaSentMessage } = await import('./esignUI.js');
+                const sent = await sendWithFirma({ contract, form, facts, signer: contact || facts.buyer });
                 if (!sent) { next.disabled = false; return; }
                 contract = sent.contract;
-                firmaSent.set(form.template_id, sent.signingLink || '');
+                firmaSent.set(form.template_id, { url: sent.emailed ? '' : (sent.signingLink || ''), emailed: sent.emailed });
+                if (sent.emailed) await alertModal({ title: 'Sent for e-signature', message: firmaSentMessage(sent) });
               }
-              chosen = { form, url: firmaSent.get(form.template_id), values: [], firma: true };
+              const f = firmaSent.get(form.template_id);
+              chosen = { form, url: f.url, emailed: f.emailed, values: [], firma: true };
             } else chosen = { form, ...buildSignatureLink(form, facts) };
           }
           message = null;
@@ -345,7 +349,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
           depositDue: offer.respond_by_date ? deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate) : '',
           depositPaid: depositPaid(sale) ? (sale.deposit_date ? fmtDate(sale.deposit_date) : true) : money.depositPaid,
           payAccount, paymentText,
-          contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '',
+          contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '', contractByEmail: Boolean(chosen?.emailed),
           invoice: true,
           pupPhotos: photoLink(dog?.url) || '',
           balance: money.balance, balanceDue: money.balanceDue, schedule: money.schedule,

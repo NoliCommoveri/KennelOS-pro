@@ -27,6 +27,7 @@ import { newPayment } from './paymentSchedule.js';
 //              each part is paid via (a fee still at it isn't one she typed),
 //              depositOwed: what's left of the deposit, from the sale's statement }
 // An 'update' may carry a `review` too (applied, but something to check).
+export const SIGNED_REASON = 'Everyone has signed, and it\'s marked Signed. Its signed copy opens from the contract.';
 export function planIntegrationEvent(event, record, ctx = {}) {
   if (!record || record.is_archived) return { op: 'skip', reason: 'not_found' };
   const p = event.payload || {};
@@ -36,7 +37,9 @@ export function planIntegrationEvent(event, record, ctx = {}) {
   switch (event.kind) {
     case 'contract.signed':
       if (record.status === 'signed') return { op: 'skip', reason: 'already' };
-      if (['draft', 'sent'].includes(record.status || 'draft')) return { op: 'update', changes: { status: 'signed', signed_date: date } };
+      // Applied, and left on Today too: she hears it was signed where she works (an
+      // alert only says "go look"). Done takes it off.
+      if (['draft', 'sent'].includes(record.status || 'draft')) return { op: 'update', changes: { status: 'signed', signed_date: date }, review: { reason: SIGNED_REASON } };
       return review(`The contract is ${record.status}.`);
     case 'contract.declined':
       if (record.status === 'declined') return { op: 'skip', reason: 'already' };

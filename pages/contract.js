@@ -642,7 +642,7 @@ async function sendForSignature(c) {
     };
     const signer = facts.buyer || facts.partner;
     if (isFirmaForm(choice.form)) {
-      const { sendWithFirma } = await import('../assets/esignUI.js');
+      const { sendWithFirma, firmaSentMessage } = await import('../assets/esignUI.js');
       const sent = await sendWithFirma({ contract, form: choice.form, facts, signer });
       if (!sent) return;
       if (contract.id === c.id) show(sent.contract);
@@ -660,12 +660,7 @@ async function sendForSignature(c) {
             : 'The contract is already marked Sent. When they sign, it\'s marked Signed by itself.'
         });
       } else {
-        await alertModal({ title: 'Sent for e-signature', message: (sent.countersignFirst
-          ? 'You sign this one first: tap Sign first here now. Firma has them sign after you. When you both have, this contract is marked Signed by itself, and its signed copy opens from here.'
-          : sent.countersign
-          ? 'Firma emailed them the signing link. Once they\'ve signed, tap Countersign here to sign it too. When you both have, this contract is marked Signed by itself, and its signed copy opens from here.'
-          : 'Firma emailed them the signing link. When they sign, this contract is marked Signed by itself, and its signed copy opens from here.')
-          + (sent.keepCopy ? ' KennelOS also emails them a link to the signed copy, within the hour after the last signature.' : '') });
+        await alertModal({ title: 'Sent for e-signature', message: firmaSentMessage(sent) });
       }
       if (contract.id !== c.id) show(sent.contract);
       return;
