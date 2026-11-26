@@ -35,7 +35,7 @@ import { CLOUD_DATA_CHANGED_EVENT } from './settings.js';
 import { RELEASED_SALE_STATUSES } from './vocab.js';
 import { pickupEvent } from './goHome.js';
 import { statusPageLink } from './cloud/cloudConfig.js';
-import { buildPortalFeed, portalTakes, feedCopy, pickupEventFor, zonedParts, clockText } from './portalFeed.js';
+import { buildPortalFeed, portalTakes, feedCopy, pickupEventFor, zonedParts, clockText, FEED_EVENT_TYPES } from './portalFeed.js';
 import { sendFamilyFeed, linkStatus, websiteLinkOffered, KennelportError } from './kennelportApi.js';
 import { getWebsiteLink, notePortalSent, noteWebsiteAnswer, clearWebsiteLink } from './kennelportLinkStore.js';
 import { licenseOk, turnPortalOff } from './kennelportLink.js';
@@ -62,9 +62,9 @@ async function records(kennel) {
     contactRepo.getAll({ includeArchived: true }),
     waitlistEntryRepo.getByKennel(kennel.id),
     litterRepo.getAll(),
-    // Pickups, training stays (a family's go-home is after them), shots, deworming
-    // and vet visits (and surgeries, which name her vet).
-    Promise.all(['placement', 'boarding', 'vaccination', 'preventative', 'vet_visit', 'surgery'].map((t) => eventRepo.getByType(t))).then((l) => l.flat())
+    // Every type the feed reads (portalFeed.js FEED_EVENT_TYPES): pickups, stays, shots,
+    // deworming, vet visits, surgeries, screening tests and the pup's own health tests.
+    Promise.all(FEED_EVENT_TYPES.map((t) => eventRepo.getByType(t))).then((l) => l.flat())
   ]);
   return { sales, contracts, dogs, contacts, entries, litters, events };
 }

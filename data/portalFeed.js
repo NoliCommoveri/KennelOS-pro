@@ -39,8 +39,9 @@ export const PLACEMENT_KEYS = ['id', 'puppy_id', 'puppy_name', 'contract_signed_
 export const VOIDED_KEYS = ['reason', 'on'];
 export const HEALTH_KEYS = ['id', 'type', 'given_on', 'name', 'notes'];
 // What a KennelPort may take beyond format 1's first fields (its facts' `portal_takes`):
-// a placement's `registration` (its sale's) and screening tests as health records.
-// Sent only to a site that lists them, since it refuses a field it doesn't know.
+// a placement's `registration` (its sale's), sent only to a site that lists it, since
+// it refuses a field it doesn't know. Screening and health tests go to every site, like
+// shots (every KennelPort takes them since 2026-11-23); the two names stay listed.
 export const PORTAL_TAKES = ['registration', 'screening', 'health_tests'];
 export const PORTAL_REGISTRATIONS = ['limited', 'full', 'co_own', 'none'];
 export const portalTakes = (site) => (Array.isArray(site?.portal_takes) ? site.portal_takes.filter((x) => PORTAL_TAKES.includes(x)) : []);
@@ -177,20 +178,23 @@ export function saleEndDay(sale, today) {
   return d > today ? today : d;
 }
 
-// The puppy's shots, deworming (her preventatives), vet visits and, for a site that
-// takes them (`screening`), screening tests, newest first: what was given and when. A
-// vaccine's lot and next due date go as its notes; a vet visit's findings never go;
-// a screening test goes as its test and result ("Fecal: Negative"), nothing else.
-// For a site that takes them (`health_tests`), the pup's own genetic, OFA / PennHIP and
-// breed-specific tests go too, each result as one record named by test and result
+// The puppy's shots, deworming (her preventatives), vet visits, screening tests and
+// its own health tests, newest first, all alike (the owner, 2026-11-26): what was given
+// and when. A vaccine's lot and next due date go as its notes; a vet visit's findings
+// never go; a screening test goes as its test and result ("Fecal: Negative"), nothing
+// else. The pup's own genetic, OFA / PennHIP and breed-specific tests go each result
+// as one record named by test and result
 // ("PRA-prcd: Clear", healthTestLog.testNameAndResult), never the lab, notes or its
 // Normal/Abnormal flag; one with no result yet doesn't go. She can remove any one from
 // the family's portal.
 const HEALTH_TYPE = { vaccination: 'vaccine', preventative: 'deworming', vet_visit: 'vet_visit', screening_test: 'screening', genetic_test: 'health_test', ofa_pennhip: 'health_test', breed_specific_test: 'health_test' };
-export function healthOf(dogId, events, today, { screening = false, tests = false } = {}) {
+// The event types a feed reads (portalFeedSync.js loads only these): pickups, training
+// stays (a family's go-home is after them), surgeries (they name her vet) and every
+// health type above, so a type added there is loaded too.
+export const FEED_EVENT_TYPES = Object.freeze(['placement', 'boarding', 'surgery', ...Object.keys(HEALTH_TYPE)]);
+export function healthOf(dogId, events, today) {
   return (events || []).filter((e) => !e.is_archived && e.subject_type === 'dog' && e.subject_id === dogId && HEALTH_TYPE[e.event_type] && ymd(e.event_date) && e.event_date <= today
-    && (screening || e.event_type !== 'screening_test')
-    && (HEALTH_TYPE[e.event_type] !== 'health_test' || (tests && testNameAndResult(e).name && testNameAndResult(e).result)))
+    && (HEALTH_TYPE[e.event_type] !== 'health_test' || (testNameAndResult(e).name && testNameAndResult(e).result)))
     .sort((a, b) => newestFirst(a.event_date, b.event_date) || String(a.id).localeCompare(String(b.id)))
     .slice(0, PORTAL_MAX.health)
     .map((e) => {
@@ -304,7 +308,7 @@ export function buildPortalFeed({
     const released = RELEASED_SALE_STATUSES.includes(sale.status);
     // A released sale's health stops at its end (K7-1): a returned pup's next home's
     // vet visits never reach this family.
-    const health = healthOf(pup.id, events, released ? saleEndDay(sale, today) : today, { screening: takes.includes('screening'), tests: takes.includes('health_tests') });
+    const health = healthOf(pup.id, events, released ? saleEndDay(sale, today) : today);
     // Resting (an archived Delivered sale): stands in `now` and is never sent.
     const keep = !resting && ((!released && sale.status !== 'delivered')
       || addDaysToYMD(lastDay(sale, contract, goHome) || today, PORTAL_KEEP_DAYS) >= today);
