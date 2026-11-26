@@ -31,7 +31,10 @@ import { contactRepo } from '../data/contactRepo.js';
 import { dogRepo } from '../data/dogRepo.js';
 import { litterRepo } from '../data/litterRepo.js';
 import { waitlistProgramRepo } from '../data/waitlistProgramRepo.js';
-import { paidBesidesCredits, getSaleFeeCredit, getSaleCredits, getEntryCredit, feeCreditAmount, feeCreditSplit } from '../data/incomeView.js';
+import { paidBesidesCredits, getSaleFeeCredit, getSaleCredits, getEntryCredit, feeCreditAmount, feeCreditSplit, getSaleStatement } from '../data/incomeView.js';
+import { accountRepo } from '../data/accountRepo.js';
+import { duePieces } from '../data/paymentSchedule.js';
+import { methodSavings, discountForPayment, methodDiscount } from '../data/discounts.js';
 import { newCredit, CREDIT_USE_VALUES, carriedCreditsOf } from '../data/receivedCredits.js';
 import { CREDIT_USES, PAYMENT_METHODS } from '../data/vocab.js';
 import { saveCredit } from '../data/waitlistActions.js';
@@ -449,6 +452,56 @@ export async function pickDialog({ offer, name, pups, pupLabel }) {
   return ok ? out : null;
 }
 
+// --- Deposit received: Paid via, and the discount with it (Payment Methods plan D31) ---
+// What the deposit dialogs need: her Payment service accounts, her kennel and the
+// sale's statement (the deposit with its service fee, what it covers).
+export async function depositViaContext(sale, kennelId) {
+  if (!sale || !editionFlags.accounts) return null;
+  const [accounts, kennel, loaded] = await Promise.all([
+    accountRepo.getAll(), kennelId ? kennelRepo.getById(kennelId) : null, getSaleStatement(sale)
+  ]);
+  const live = accounts.filter((a) => a.account_type === 'payment_service' && !a.is_archived);
+  return live.length ? { accounts: live, kennel, st: loaded?.statement || null, sale } : null;
+}
+// The deposit's whole amount and the line under the fields ("$515.00, includes a $15.00
+// service fee"), from the statement.
+export function depositExpectedText(ctx) {
+  const dep = ctx?.st?.deposit;
+  if (!dep) return '';
+  const fee = (ctx.st.charges || []).filter((c) => c.part === 'deposit' && c.component === 'service_fee').reduce((t, c) => t + c.amount, 0);
+  return ` Expected deposit: ${esc(fmtMoney(dep.amount))}${fee > 0 ? `, includes a ${esc(fmtMoney(fee))} service fee (enter the deposit without it)` : ''}.`;
+}
+export function depositViaHtml(ctx) {
+  if (!ctx) return '';
+  const had = ctx.sale.deposit_paid_via_account_id || '';
+  const disc = discountForPayment(ctx.sale, 'deposit');
+  return `<div class="field"><label for="dv-account">Paid via</label><select id="dv-account"><option value="">—</option>${ctx.accounts.map((a) => `<option value="${esc(a.id)}"${a.id === had ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+    <div class="field field-wide" id="dv-disc"${disc ? '' : ' hidden'}><label class="check-inline"><input type="checkbox" id="dv-disc-on"${disc ? ' checked' : ''}> <span id="dv-disc-text">${disc ? esc(`${disc.label}: ${fmtMoney(disc.amount)} off`) : ''}</span></label></div>`;
+}
+// Wire it; → read() gives { paidVia, discount } for confirmDeposit / confirmSideDeposit.
+export function wireDepositVia(o, ctx) {
+  if (!ctx) return () => ({});
+  let discount = null;
+  const had = discountForPayment(ctx.sale, 'deposit');
+  const sel = o.querySelector('#dv-account');
+  const refresh = () => {
+    const account = ctx.accounts.find((a) => a.id === sel.value) || null;
+    const pieces = ctx.st ? duePieces(ctx.st, 'deposit') : [];
+    const owed = Math.round(pieces.reduce((t, x) => t + x.owed, 0) * 100) / 100;
+    discount = editionFlags.costCover && methodDiscount(ctx.kennel)
+      ? methodSavings({ kennel: ctx.kennel, account, sale: ctx.sale, st: ctx.st, pieces, amount: owed }) : null;
+    const before = !o.querySelector('#dv-disc').hidden;
+    if (!discount && had && account?.id === ctx.sale.deposit_paid_via_account_id) discount = had;
+    o.querySelector('#dv-disc').hidden = !discount;
+    // A discount that just applied starts ticked.
+    if (discount && !before) o.querySelector('#dv-disc-on').checked = true;
+    if (discount) o.querySelector('#dv-disc-text').textContent = `${discount.label}: ${fmtMoney(discount.amount)} off${owed > 0 ? `. They send ${fmtMoney(Math.round((owed - discount.amount) * 100) / 100)}.` : ''}`;
+  };
+  sel.addEventListener('change', refresh);
+  refresh();
+  return () => ({ paidVia: sel.value || null, discount: discount && o.querySelector('#dv-disc-on').checked ? discount : null });
+}
+
 // The deposit for their pick arrived: they're placed and the turn moves on.
 // `sale` (the held Sale, may be null) prefills the amount. "Date received" is the
 // sale's deposit date, else today: never a credit's date (Payment Schedule plan
@@ -472,6 +525,8 @@ export async function depositDialog({ offer, name, pupName, sale }) {
   const otherClaims = offer.chosen_dog_id
     ? pupClaims(offer.chosen_dog_id, { sales: await saleRepo.getByDog(offer.chosen_dog_id), offers: await waitlistOfferRepo.getAll() }).filter((c) => c.sale_id !== offer.sale_id && c.offer_id !== offer.id).length
     : 0;
+  const via = await depositViaContext(sale, offer.kennel_id);
+  let readVia = () => ({});
   const ok = await formModal({
     title: `${name}'s deposit received`,
     confirmLabel: 'Deposit received',
@@ -479,13 +534,14 @@ export async function depositDialog({ offer, name, pupName, sale }) {
       <div class="form-grid">
         <div class="field"><label>Date received</label><input id="dp-date" type="date" value="${esc((sale && sale.deposit_date) || day)}"></div>
         <div class="field"><label>Amount</label><input id="dp-amount" type="number" min="0" step="0.01" value="${esc(sale?.deposit_amount ?? '')}"></div>
+        ${depositViaHtml(via)}
       </div>
-      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${creditHint}</p>`,
+      <p class="field-hint">Marks the sale deposit paid and the pup placed, and moves ${esc(name)} off the list as placed. Any other open offers they have are voided.${via ? depositExpectedText(via) : sale && sale.deposit_amount != null ? ` Expected deposit: ${esc(fmtMoney(sale.deposit_amount))}.` : ''}${creditHint}</p>`,
     onConfirm: async (o) => {
       const when = o.querySelector('#dp-date').value || day;
-      res = await confirmDeposit(offer.id, { date: when, amount: o.querySelector('#dp-amount').value });
+      res = await confirmDeposit(offer.id, { date: when, amount: o.querySelector('#dp-amount').value, ...readVia() });
     }
-  });
+  }, (o) => { readVia = wireDepositVia(o, via); });
   return ok ? res : null;
 }
 

@@ -137,7 +137,11 @@ export const PRO_ONLY_STANDALONE = [
   // vendored jsPDF they load on demand.
   'assets/invoiceDoc.js', 'assets/invoicePdf.js', 'vendor/jspdf.umd.min.js',
   // A family's money for its invoices and receipts (Payment Schedule plan §6).
-  'data/familyMoney.js',
+  'data/familyMoney.js', 'data/familyPayMethods.js',
+  // Covering payment costs (Payment Methods plan §5, Phase 4): the Kennel page's card,
+  // its calculator and the Read about… popups, imported only when editionFlags.costCover
+  // is on. Its pure core (data/costCover.js) stays shared: the money code reads it.
+  'data/costCoverCalc.js', 'assets/costCoverUI.js',
   // The Invoice / Receipt generator modal, opened from Financials and a Sale's
   // page — both import it dynamically only when editionFlags.invoicing is on.
   'assets/invoiceGenerator.js',

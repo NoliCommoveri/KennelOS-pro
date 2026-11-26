@@ -30,6 +30,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { feeRate, rateLabel } from '../data/processingFees.js';
 import { sharedReferrals, sharedTransport, referralLinkInput } from '../data/referralShare.js';
 import { paymentLink } from '../data/paymentLinks.js';
+import { FAMILY_LABEL_MAX } from '../data/payMethods.js';
 import { isReadOnly } from '../data/demoMode.js';
 import { editionFlags } from '../data/editionConfig.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
@@ -211,15 +212,13 @@ function shareHint(type) {
     : 'Shows the link, code and instructions as "Recommended for your puppy" on a family\'s Companion page and their waitlist status page, and in the follow-up note a week after a pup goes home.';
 }
 
-const chargesBack = (a) => editionFlags.extraCharges && a.account_type === 'payment_service' && !!a.fee_charge_back;
-
 // A sales channel's fee (Good Dog, Stripe…): the rate, whether she usually passes
 // it on, and her note on it.
 function feeHtml(a) {
   const rate = feeRate(a);
   if (!rate && !a.fee_note) return '';
   return `<div class="acct-section"><div class="acct-section-title">Processing fee</div>
-    ${rate ? `<div class="acct-row"><span class="acct-v"><strong>${esc(rateLabel(rate))}</strong> <span class="muted">per sale${a.fee_passed_to_buyer_default ? ' · usually passed to the buyer' : ''}${chargesBack(a) ? ' · charged back on a deposit' : ''}</span></span></div>` : ''}
+    ${rate ? `<div class="acct-row"><span class="acct-v"><strong>${esc(rateLabel(rate))}</strong> <span class="muted">per sale${a.fee_passed_to_buyer_default && a.account_type === 'marketplace' ? ' · in my price there' : ''}</span></span></div>` : ''}
     ${a.fee_note ? `<div class="acct-instructions">${esc(a.fee_note)}</div>` : ''}
   </div>`;
 }
@@ -360,6 +359,7 @@ function openForm(existing = null) {
     <div class="form-grid">
       ${field('Payment link', `<input id="af-pay-link" type="url" value="${esc(a.payment_link)}" placeholder="https://buy.stripe.com/…">`, { wide: true })}
       ${field('Payment instructions', `<textarea id="af-pay-instructions" placeholder="e.g. Zelle to payments@yourkennel.com, with your puppy's name in the memo.">${esc(a.payment_instructions)}</textarea>`, { wide: true, hint: 'Written for the buyer: they go in the message.' })}
+      ${editionFlags.payMethods ? field('What families see it as', `<input id="af-family-label" type="text" maxlength="${FAMILY_LABEL_MAX}" value="${esc(a.family_label)}" placeholder="e.g. Card, Zelle, PayPal">`, { hint: 'The name on their status page when they choose how to pay. Blank: the name above.' }) : ''}
     </div>
     <div id="af-stripe"></div>
     </div>
@@ -368,9 +368,7 @@ function openForm(existing = null) {
     <div class="form-grid">
       ${field('Fee percentage', `<input id="af-fee-percent" type="number" min="0" max="99.99" step="0.01" value="${esc(a.fee_percent)}" placeholder="e.g. 6.25">`, { hint: 'Percent of the sale price.' })}
       ${field('Fixed fee ($)', `<input id="af-fee-fixed" type="number" min="0" step="0.01" value="${esc(a.fee_fixed)}" placeholder="e.g. 5.00">`, { hint: 'Added on top, per sale.' })}
-      <div class="field field-wide"><label class="check-inline"><input id="af-fee-passed" type="checkbox"${a.fee_passed_to_buyer_default ? ' checked' : ''}> I usually pass this fee on to the buyer in a higher price</label></div>
-      ${editionFlags.extraCharges ? `<div class="field field-wide" id="af-chargeback-field"${a.account_type === 'payment_service' ? '' : ' hidden'}><label class="check-inline"><input id="af-fee-chargeback" type="checkbox"${a.fee_charge_back ? ' checked' : ''}> Charge this fee back to the buyer</label>
-        <span class="field-hint">For a payment option only some buyers choose (PayPal or Zelle sent as business…). When a deposit is paid through this account, the sale offers to add the fee to the balance as its own invoice line.</span></div>` : ''}
+      <div class="field field-wide" id="af-passed-field"${a.account_type === 'marketplace' ? '' : ' hidden'}><label class="check-inline"><input id="af-fee-passed" type="checkbox"${a.fee_passed_to_buyer_default ? ' checked' : ''}> When I sell through it, my price there includes its fee</label></div>
       ${field('About the fee', `<input id="af-fee-note" type="text" value="${esc(a.fee_note)}" placeholder="e.g. card payments only; bank transfer is free">`, { wide: true, hint: 'Private — just for you.' })}
     </div>
     <div class="form-grid" style="margin-top:14px;">
@@ -402,8 +400,7 @@ function openForm(existing = null) {
     $('#af-share-hint').textContent = shareHint($('#af-type').value);
     $('#af-forms-section').hidden = !isFormService();
     $('#af-pay-section').hidden = !isPaymentService();
-    const chargeBack = $('#af-chargeback-field');
-    if (chargeBack) chargeBack.hidden = !isPaymentService();
+    $('#af-passed-field').hidden = $('#af-type').value !== 'marketplace';
   });
   $('#af-form-add').addEventListener('click', (e) => {
     formsBox.insertAdjacentHTML('beforeend', formRowHtml());
@@ -513,12 +510,15 @@ function openForm(existing = null) {
       notes: $('#af-notes').value.trim(),
       fee_percent: numberOrNull($('#af-fee-percent').value),
       fee_fixed: numberOrNull($('#af-fee-fixed').value),
-      fee_passed_to_buyer_default: $('#af-fee-passed').checked,
+      // Only a marketplace's price has its fee in it (Payment Methods plan D8).
+      fee_passed_to_buyer_default: $('#af-type').value === 'marketplace' && $('#af-fee-passed').checked,
       fee_note: val('#af-fee-note')
     };
     // The payment link belongs to a Payment service only; another type leaves it stored.
     if (isPaymentService()) {
-      if ($('#af-fee-chargeback')) data.fee_charge_back = $('#af-fee-chargeback').checked;
+      // Charging the fee back stopped (D8): cleared on save, never set.
+      if (a.fee_charge_back) data.fee_charge_back = false;
+      if ($('#af-family-label')) data.family_label = val('#af-family-label').slice(0, FAMILY_LABEL_MAX) || null;
       data.payment_link = val('#af-pay-link');
       data.payment_instructions = $('#af-pay-instructions').value.trim();
     }

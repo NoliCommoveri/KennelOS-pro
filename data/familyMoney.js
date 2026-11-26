@@ -172,7 +172,7 @@ export const defaultPick = (source, doc) => (source === 'waitlist' ? 'fee' : sou
 
 // Footnote markers on a sale invoice without a schedule (the deposit's refundability *,
 // the standing due-date note **). With a schedule the dates are the schedule's, so no **.
-const FOOTNOTE = { deposit: '*', balance: '**', transport: '**', boarding: '**' };
+const FOOTNOTE = { deposit: '*', balance: '**', transport: '**', boarding: '**', service_fee: '**' };
 
 // What an invoice or receipt says, in numbers. `lines` (invoice): [{ ref, amount? }],
 // `amount` a typed partial; `money` (receipt): [{ ref, key? }]. Dates are YYYY-MM-DD;
@@ -189,31 +189,48 @@ export function documentLines(account, { doc = 'invoice', lines = [], money = []
       if (!m) continue;
       const pays = m.pays.filter((p) => !pick.key || p.key === pick.key);
       if (pays.length) items.push(m);
-      for (const p of pays) rows.push({ label: p.label, date: m.date || null, method: m.method || '', amount: p.amount, credited: m.credited, ref: m.ref });
+      // A discount (Payment Methods plan §5.4) prints as its own line, by its name.
+      for (const p of pays) rows.push({ label: p.label, date: m.date || null, method: m.method || '', amount: p.amount, credited: m.credited, ...(m.kind === 'discount' ? { discount: true } : {}), ref: m.ref });
     }
     const credited = sum(rows.filter((r) => r.credited));
-    const paid = sum(rows.filter((r) => !r.credited));
-    const totals = credited > 0
-      ? [...(paid > 0 ? [{ label: 'Paid', amount: paid }] : []), { label: 'Credited', amount: credited }, { label: 'Total', amount: cents(paid + credited), total: true }]
+    const discounted = sum(rows.filter((r) => r.discount));
+    const paid = sum(rows.filter((r) => !r.credited && !r.discount));
+    const totals = credited > 0 || discounted > 0
+      ? [...(paid > 0 ? [{ label: 'Paid', amount: paid }] : []), ...(credited > 0 ? [{ label: 'Credited', amount: credited }] : []),
+        ...(discounted > 0 ? [{ label: 'Discounts', amount: discounted }] : []), { label: 'Total', amount: cents(paid + credited + discounted), total: true }]
       : [{ label: 'Total paid', amount: paid, total: true }];
     return { rows, totals, items, summary: [...summaryBase, { label: 'Still owed', amount: account.owed }] };
   }
   const rows = [];
   let subtotal = 0;
   const less = { fee: 0, credit: 0, other: 0 };
+  // Her discounts (§5.4): each its own credit line, by its name.
+  const lessDiscounts = new Map();
   let due = 0;
   const picked = lines.map((l) => ({ l, c: account.charges.find((c) => c.ref === l.ref) })).filter((x) => x.c)
     .sort((a, b) => account.charges.indexOf(a.c) - account.charges.indexOf(b.c));
   const byDue = new Map();
   for (const { l, c } of picked) {
     const partial = l.amount != null && l.amount !== '' && num(l.amount) > 0;
-    const amount = partial ? cents(num(l.amount)) : c.amount;
+    // A line prints less what credits paid of it (the application fee credited, credits
+    // for funds received): "Deposit (less application fee credit) $350", so the money
+    // the family paid reads as it was paid, never the fee twice (owner, 2026-11-26).
+    // A line credits paid in full keeps its whole amount, the credit taken off below.
+    const all = partial ? [] : c.paid.filter((x) => x.kind === 'fee' || x.kind === 'credit');
+    const credits = cents(c.amount - sum(all)) > 0 ? all : [];
+    const creditedAmt = cents(sum(credits));
+    const amount = partial ? cents(num(l.amount)) : cents(c.amount - creditedAmt);
     subtotal += amount;
     if (partial) due += amount;
     else {
-      for (const x of c.paid) less[x.kind === 'fee' ? 'fee' : x.kind === 'credit' ? 'credit' : 'other'] += x.amount;
+      for (const x of c.paid) {
+        if (credits.includes(x)) continue;
+        if (x.kind === 'discount') lessDiscounts.set(x.label, cents((lessDiscounts.get(x.label) || 0) + x.amount));
+        else less[x.kind === 'fee' ? 'fee' : x.kind === 'credit' ? 'credit' : 'other'] += x.amount;
+      }
       due += c.owed;
     }
+    const net = creditedAmt > 0 ? (credits.every((x) => x.kind === 'fee') ? 'application fee credit' : 'credits') : '';
     const owed = partial ? amount : c.owed;
     // A combined due date's charges print as one line, whichever of them it falls on.
     const group = c.combined && c.source === 'sale' ? byDue.get(c.dueId) : null;
@@ -221,10 +238,11 @@ export function documentLines(account, { doc = 'invoice', lines = [], money = []
       group.amount = cents(group.amount + amount);
       group.owed = cents(group.owed + owed);
       group.partial = group.partial || partial;
+      group.net = group.net || net;
       continue;
     }
     const row = {
-      label: c.label, ref: c.ref, amount, partial, owed,
+      label: c.label, ref: c.ref, amount, partial, owed, net,
       marker: c.source === 'sale' && !account.hasSchedule ? (FOOTNOTE[c.component] || '') : '',
       dueDate: c.dueDate || null, dueId: c.dueId, source: c.source, combined: Boolean(c.combined && c.source === 'sale')
     };
@@ -235,14 +253,15 @@ export function documentLines(account, { doc = 'invoice', lines = [], money = []
     rows.push(row);
   }
   for (const r of rows) {
-    r.label = `${r.label}${r.partial ? ' (partial)' : ''}`;
+    r.label = `${r.label}${r.net ? ` (less ${r.net})` : ''}${r.partial ? ' (partial)' : ''}`;
     r.dueText = !r.partial && r.owed <= 0 ? 'Paid' : r.dueDate ? '' : r.dueId === 'deposit' ? 'Immediately' : r.source === 'sale' ? 'Date not set yet' : '';
-    delete r.owed; delete r.dueId; delete r.source;
+    delete r.owed; delete r.dueId; delete r.source; delete r.net;
   }
   const totals = [
     { label: 'Subtotal', amount: cents(subtotal) },
     ...(less.fee > 0 ? [{ label: 'Less application fee credit', amount: -cents(less.fee) }] : []),
     ...(less.credit > 0 ? [{ label: 'Less credit for funds already received', amount: -cents(less.credit) }] : []),
+    ...[...lessDiscounts].map(([label, amount]) => ({ label: `Less ${label}`, amount: -amount })),
     ...(less.other > 0 ? [{ label: 'Less amount already collected', amount: -cents(less.other) }] : []),
     { label: 'Balance', amount: cents(due), total: true }
   ];
@@ -251,7 +270,13 @@ export function documentLines(account, { doc = 'invoice', lines = [], money = []
     rows, totals,
     summary: [...summaryBase, { label: 'This invoice', amount: cents(due) }, { label: 'Still owed after it', amount: cents(Math.max(account.owed - due, 0)) }],
     hasFinal: owedLines.some(({ c }) => c.isFinal),
-    finalOnly: owedLines.length > 0 && owedLines.every(({ c }) => c.isFinal)
+    finalOnly: owedLines.length > 0 && owedLines.every(({ c }) => c.isFinal),
+    // Only the deposit: its invoice lists her deposit methods (Payment Methods plan §4).
+    depositOnly: owedLines.length > 0 && owedLines.every(({ c }) => c.dueId === 'deposit'),
+    // What it asks for, charge by charge: its "How to pay" in parts when the charges
+    // take different methods (Payment Methods plan D25, payMethods.payGroups).
+    pieces: owedLines.map(({ l, c }) => ({ key: c.key, component: c.component,
+      owed: l.amount != null && l.amount !== '' && num(l.amount) > 0 ? cents(num(l.amount)) : c.owed }))
   };
 }
 
@@ -319,6 +344,15 @@ export async function loadFamilyAccount({ entryId = null, saleId = null } = {}) 
     sale?.dog_id ? dogRepo.getById(sale.dog_id) : null
   ]);
   return { entry, sale, loaded, kennel, contact, dog, account: familyAccount({ entry, statement: loaded?.statement || null, sale }) };
+}
+
+// A sale's family record (a list family or a family-page-only record), or null for a
+// buyer without a status page. Her payment methods off for that family follow the
+// sale (Payment Methods plan §2.4, §4).
+export async function saleFamilyEntry(sale) {
+  if (!sale || !editionFlags.waitlist) return null;
+  const [entries, offers, sales] = await Promise.all([waitlistEntryRepo.getAll(), waitlistOfferRepo.getAll(), saleRepo.getAll({ includeArchived: true })]);
+  return entries.find((e) => !e.is_archived && entrySale(e, sales, offers, entries)?.id === sale.id) || null;
 }
 
 // The generator's families: every waitlist family with a fee or a sale, and every sale

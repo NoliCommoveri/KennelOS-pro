@@ -361,12 +361,16 @@ export const FEE_CREDIT_POLICY = [
 ];
 
 // Where a fee credited to the purchase price counts (waitlist_config.fee_credit_toward):
-// off the rest of the price (the balance), or toward the deposit (any of the fee
+// off the rest of the price (the balance) at the first payment after the deposit, off
+// it at the final payment (owner, 2026-11-26), or toward the deposit (any of the fee
 // beyond the deposit then comes off the balance).
 export const FEE_CREDIT_TOWARD = [
-  { value: 'balance', label: 'The remaining purchase price' },
+  { value: 'balance', label: 'The purchase price, first payment after the deposit' },
+  { value: 'final', label: 'The purchase price, final payment' },
   { value: 'deposit', label: 'The deposit' }
 ];
+// A fee credit's `toward` as stored on a sale's credit: 'deposit', 'final' or 'balance'.
+export const feeCreditToward = (v) => (v === 'deposit' || v === 'final' ? v : 'balance');
 
 // What a family's credit for funds already received (WaitlistEntry.received_credits)
 // may pay toward, in the order it's used. Every use is ticked on a new credit.
@@ -665,6 +669,8 @@ export const INVOICE_LINE_LABELS = {
   transport: 'Transport Fee',
   boarding: 'Boarding Fee',
   stud_fee: 'Stud Fee',
+  // Never printed as is: each service fee prints its own label (costCover.SERVICE_FEE_LABELS).
+  service_fee: 'Service Fee',
   // Never printed as is: each extra charge prints its own name (§21.2).
   extra: 'Extra Charge'
 };
@@ -1120,6 +1126,10 @@ export const INCOME_COMPONENTS = [
   // fee charged back… One component per charge, all under this one heading.
   { value: 'extra',     label: 'Extra charges',     badge: 'badge-blue' },
   { value: 'stud_fee',  label: 'Stud fees',         badge: 'badge-purple' },
+  // Service fees covering what getting paid costs her (Payment Methods plan §5.1,
+  // costCover.js): one per kind of charge on a sale (`service_fee_<kind>`) or a stud
+  // service, each printed with its own label.
+  { value: 'service_fee', label: 'Service fees',    badge: 'badge-blue' },
   { value: 'pick',      label: 'Pick value (est.)', badge: 'badge-neutral' },
   { value: 'application_fee', label: 'Application fees', badge: 'badge-green' },
   // A NEGATIVE line: what a sales channel (Good Dog, Stripe…) kept of a sale's
@@ -1128,5 +1138,9 @@ export const INCOME_COMPONENTS = [
   { value: 'processing_fee', label: 'Processing fees', badge: 'badge-red' },
   // A NEGATIVE line: money given back on a sale that ended (Sale.refund_amount,
   // canRecordRefund), on the refund's date. Never on an invoice or a receivable.
-  { value: 'refund', label: 'Refunds', badge: 'badge-red' }
+  { value: 'refund', label: 'Refunds', badge: 'badge-red' },
+  // A NEGATIVE line: a discount she gave on a sale (Sale.discounts, Payment Methods plan
+  // §5.4), on its date, so earned income is what she received. Invoices print it as its
+  // own credit line instead.
+  { value: 'discount', label: 'Discounts', badge: 'badge-red' }
 ];

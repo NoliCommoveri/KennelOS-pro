@@ -384,12 +384,13 @@ class Setup {
   // --- 3c. Vendor and third-party accounts (Pro, Accounts) ------------------------------
   // The Accounts page's records: her registry, marketplaces, payment services,
   // suppliers, labs… Kels asks only what the app uses: the name and type, a website,
-  // the fee a marketplace or payment service takes, a payment service's link, and
-  // (extraCharges) whether only some families pay that way and she charges them its
-  // fee (Account.fee_charge_back). Logins and referral codes stay on the Accounts page.
+  // the fee a marketplace or payment service takes, and a payment service's link. It
+  // no longer asks about charging a fee back (Payment Methods plan D8). Logins and
+  // referral codes stay on the Accounts page.
   async accounts({ standalone = false } = {}) {
     const { accountRepo } = await import('../data/accountRepo.js');
-    const chargeBack = !!editionFlags.extraCharges;
+    // Charging a fee back to families stopped (Payment Methods plan D8): never asked.
+    const chargeBack = false;
     const load = async () => (await accountRepo.getAll()).filter((a) => !a.is_archived).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     let list = await load();
     const lines = () => `<ul>${list.map((a) => `<li>${esc(accountLine(a, { chargeBack }))}</li>`).join('')}</ul>`;
@@ -497,6 +498,7 @@ class Setup {
           if (typed && !link) return 'That link doesn\'t look like a web address. Copy it from the service and paste it here.';
           changes.payment_link = link;
           if (q('#ks-ac-back')) changes.fee_charge_back = q('#ks-ac-back').checked;
+          else if (a?.fee_charge_back) changes.fee_charge_back = false;
         }
         return a ? accountRepo.update(a.id, changes) : accountRepo.create(changes);
       },

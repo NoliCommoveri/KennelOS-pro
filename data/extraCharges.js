@@ -427,7 +427,11 @@ export const paymentFeeFor = (paymentId) => `payment:${paymentId}`;
 // The fee to charge back for one payment ({ id, amount, date, account_id }) made
 // through an account set to charge its fee back, or null: no such account, no usable
 // rate, or nothing to charge. → null | { fee_for, label, amount }
+// Charging a fee back stopped (Payment Methods plan D8: a fee by payment method is a
+// surcharge): nothing new is ever offered. CHARGE_BACK_ON keeps the rule readable.
+export const CHARGE_BACK_ON = false;
 export function paymentFeeChargeBack(payment, account) {
+  if (!CHARGE_BACK_ON) return null;
   if (!payment?.id || !account?.fee_charge_back) return null;
   const rate = feeRate(account);
   if (!isUsableRate(rate)) return null;
@@ -441,6 +445,7 @@ export function paymentFeeChargeBack(payment, account) {
 // paid (the statement's), since a payment that paid the last of it has no later
 // payment for its fee to ride on. → [{ fee_for, label, amount }]
 export function feeChargeBackOffers(sale, accountsById, { depositPaid = false, remaining = 0 } = {}) {
+  if (!CHARGE_BACK_ON) return [];
   if (!sale || sale.fee_passed_to_buyer) return []; // the fee is already in the price
   const get = (id) => (id ? accountsById?.get?.(id) || null : null);
   const out = [];
@@ -461,6 +466,8 @@ export function feeChargeBackOffers(sale, accountsById, { depositPaid = false, r
 // → the sale's charges, changed or the same array.
 export function chargesWithPaymentFee(sale, paymentId, payment, account) {
   const had = Array.isArray(sale?.extra_charges) ? sale.extra_charges : [];
+  // A charged-back line already on a sale stays as she recorded it (D8): the sale is her record.
+  if (!CHARGE_BACK_ON) return had;
   const key = paymentFeeFor(paymentId);
   const i = had.findIndex((x) => x?.fee_for === key);
   if (i < 0) return had;
@@ -476,6 +483,7 @@ export function chargesWithPaymentFee(sale, paymentId, payment, account) {
 // `depositPaid` is the caller's read of the sale (incomeView's rule).
 // → null | { fee_for: 'deposit', label, amount }
 export function depositFeeChargeBack(sale, account, depositPaid) {
+  if (!CHARGE_BACK_ON) return null;
   // Not when the fee is already passed to the buyer in the price: that would charge it twice.
   if (!sale || sale.fee_passed_to_buyer || !account?.fee_charge_back || !depositPaid) return null;
   const rate = feeRate(account);

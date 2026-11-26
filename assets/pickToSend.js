@@ -21,6 +21,7 @@
 // Firma. Unticking Firma's email puts the signing link in the message instead.
 // Pro-only (proPages.PRO_ONLY_STANDALONE): only the waitlist family page opens it.
 import { saleRepo } from '../data/saleRepo.js';
+import { kennelRepo } from '../data/kennelRepo.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { feeRate, rateLabel, processingFee, priceToNet, netOf, saleFeeEstimate } from '../data/processingFees.js';
 import { dogRepo } from '../data/dogRepo.js';
@@ -40,6 +41,9 @@ import { depositPaid, getSaleStatement } from '../data/incomeView.js';
 import { photoLink } from '../data/waitlistProjection.js';
 import { todayYMD } from '../data/dateUtils.js';
 import { deadlineLabel } from '../data/waitlistRules.js';
+import { hasOwnList, finalMethodsText, offFor } from '../data/payMethods.js';
+import { payMessageText, pickerOrder } from '../data/familyPayMethods.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { esc, fmtDate, fmtMoney, promptModal, alertModal } from './ui.js';
 import { REGISTRATION_TYPE, CONTRACT_FORM_TYPE, descriptor } from '../data/vocab.js';
 
@@ -63,6 +67,15 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
   const forms = await loadContractForms();
   const accounts = await accountRepo.getAll({ includeArchived: true });
   const accountsById = new Map(accounts.map((a) => [a.id, a]));
+  // Her deposit methods first, those off for this family left out (Payment Methods
+  // plan §4), the one already set kept.
+  const payKennel = editionFlags.payMethods ? await kennelRepo.getById(entry?.kennel_id || offer?.kennel_id) : null;
+  const depositViaChoices = (current) => {
+    const live = accounts.filter((a) => a.account_type === 'payment_service' && (!a.is_archived || a.id === current));
+    const kept = pickerOrder(live, payKennel ? 'deposit' : null, payKennel, entry);
+    const cur = live.find((a) => a.id === current);
+    return cur && !kept.includes(cur) ? [cur, ...kept] : kept;
+  };
   const pupName = dog?.call_name || 'their pup';
   const who = contact ? splitName(contact.name)[0] : '';
 
@@ -123,8 +136,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
             : offer.respond_by_date ? `Due by ${deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate)}${offer.side ? '' : ', the end of their turn'}.` : '')}
           ${field('Transport fee', `<input id="ps-transport" type="number" min="0" step="0.01" value="${esc(s.transport_fee ?? '')}">`)}
           ${field('Sold through', `<select id="ps-channel">${channelOptions}</select>`, 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.')}
-          ${field('Deposit paid via', `<select id="ps-deposit-via"><option value="">— not set —</option>${accounts
-            .filter((a) => a.account_type === 'payment_service' && (!a.is_archived || a.id === s.deposit_paid_via_account_id))
+          ${field('Deposit paid via', `<select id="ps-deposit-via"><option value="">— not set —</option>${depositViaChoices(s.deposit_paid_via_account_id)
             .map((a) => { const r = feeRate(a); return `<option value="${esc(a.id)}"${a.id === s.deposit_paid_via_account_id ? ' selected' : ''}>${esc(a.name)}${r ? ` (${esc(rateLabel(r))})` : ''}</option>`; }).join('')}</select>`, 'The Payment service the deposit is paid through (Stripe, Zelle…): its link goes in the message, and its fee is estimated on the deposit.')}
           ${field('Processing fee', `<input id="ps-fee" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount ?? '')}">`, rate ? `Suggested from ${rateLabel(rate)} of the price. Change it to what was actually charged.` : 'What the marketplace or payment service keeps of this sale.')}
           <div class="field field-wide">
@@ -316,6 +328,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
     // exactly the deposit still owed after credits (plan §4, step 6; Waitlist Fixes
     // K8-1), kept on the sale and reused while open.
     let payAccount = null;
+    let payListed = false;   // her deposit methods are in the message (Payment Methods plan §4)
     let stripeNote = '';
     async function paymentAccount(statement) {
       const deposit = statement?.deposit ? statement.deposit.owed : (Number(sale.deposit_amount) || 0);
@@ -343,17 +356,26 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         const statement = got?.statement || null;
         payAccount = await paymentAccount(statement);
         const money = depositMessageMoney(statement, { money: fmtMoney, date: fmtDate, depositDate: sale.deposit_date || null });
+        // Her deposit methods once she lists them (Payment Methods plan §4), less the
+        // ones off for this family: in place of the one account and her text, which
+        // follows them. A one-time Stripe link made above still goes first.
+        const listKennel = editionFlags.payMethods ? (got?.kennel || payKennel) : null;
+        const listed = Boolean(listKennel) && hasOwnList(listKennel, 'deposit');
+        const owed = statement?.deposit ? statement.deposit.owed : (Number(sale.deposit_amount) || 0);
+        const methods = listed ? payMessageText('deposit', listKennel, accounts, entry, { amount: owed > 0 ? owed : null }) : '';
+        payListed = Boolean(listed);
+        if (listed && !(stripeNote && payAccount && payAccount.payment_link === sale.payment_link_url)) payAccount = null;
         message = depositRequestMessage({
           who, pupName: dog?.call_name || '', litterLabel,
           deposit: money.deposit, depositCredit: money.depositCredit,
           depositDue: offer.respond_by_date ? deadlineLabel(offer.respond_by_date, offer.respond_by_time, fmtDate) : '',
           depositPaid: depositPaid(sale) ? (sale.deposit_date ? fmtDate(sale.deposit_date) : true) : money.depositPaid,
-          payAccount, paymentText,
+          payAccount, paymentText, methods,
           contractLabel: chosen ? descriptor(CONTRACT_FORM_TYPE, chosen.form.form_type).label.toLowerCase() : '', contractLink: chosen?.url || '', contractByEmail: Boolean(chosen?.emailed),
           invoice: true,
           pupPhotos: photoLink(dog?.url) || '',
           balance: money.balance, balanceDue: money.balanceDue, schedule: money.schedule,
-          finalMethods: String(got?.kennel?.final_payment_methods || '').trim(),
+          finalMethods: listKennel ? finalMethodsText(listKennel, accounts, { off: offFor(entry) }) : String(got?.kennel?.final_payment_methods || '').trim(),
           kennelName
         });
       }
@@ -366,7 +388,7 @@ export async function openPickToSend({ offer, entry, contact, litterLabel = '', 
         ${sentLine}
         ${stripeNote ? `<p class="field-hint">${esc(stripeNote)}</p>` : ''}
         ${paidNow ? '<p class="field-hint">Their deposit is already in, so the message thanks them for it and asks for nothing now. The invoice shows it as paid.</p>' : ''}
-        ${payAccount || paidNow ? '' : '<p class="field-hint">To put a payment link in the message, set <strong>Deposit paid via</strong> in step 1 (Back) to a Payment service account with a link (Accounts page).</p>'}
+        ${payAccount || paidNow || payListed ? '' : '<p class="field-hint">To put a payment link in the message, set <strong>Deposit paid via</strong> in step 1 (Back) to a Payment service account with a link (Accounts page).</p>'}
         <div class="field"><label for="ps-subject">Subject</label><input id="ps-subject" type="text" value="${esc(message.subject)}"></div>
         <div class="field"><label for="ps-body">Message</label><textarea id="ps-body" rows="14" style="width:100%; font-family:inherit;">${esc(message.body)}</textarea></div>
         <p class="field-hint">${share

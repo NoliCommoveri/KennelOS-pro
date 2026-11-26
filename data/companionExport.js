@@ -43,6 +43,7 @@ import { todayYMD } from './dateUtils.js';
 import { getCompanionSettings } from './settings.js';
 import { accountRepo } from './accountRepo.js';
 import { editionFlags } from './editionConfig.js';
+import { finalMethodsText, offFor } from './payMethods.js';
 import { sharedReferrals } from './referralShare.js';
 
 export const COMPANION_BUNDLE_VERSION = 1;
@@ -387,7 +388,11 @@ export async function buildFamilyBundle(contact) {
         own: payView.own,
         received: payView.received,
         next: payView.next,
-        finalMethods: String(stmt.kennel?.final_payment_methods || '').trim()
+        // Her final methods by name once she lists them, less the family's turned-off
+        // ones (Payment Methods plan §4), else her text.
+        finalMethods: editionFlags.payMethods
+          ? finalMethodsText(stmt.kennel, await accountRepo.getAll({ includeArchived: true }), { off: offFor(await (await import('./familyMoney.js')).saleFamilyEntry(sale)) })
+          : String(stmt.kennel?.final_payment_methods || '').trim()
       } : null;
 
       // Deferred Pickup Boarding section — pinned to the top of the event history,

@@ -39,6 +39,7 @@ import { litterRepo } from './litterRepo.js';
 import { pairingRepo } from './pairingRepo.js';
 import { dogRepo } from './dogRepo.js';
 import { saleRepo } from './saleRepo.js';
+import { depositPayChanges } from './discounts.js';
 import { familySale, pupBirthDate, withExtraRequest } from './familyExtras.js';
 import { withPickupRequest, pickupFrom, pickupWish, pendingPickupRequests } from './familyPickup.js';
 import { pickupLocations, timeRange, ruleFor, standardBoarding, slotBookings, familySlots, cleanSlots, placeMiles, busyWindows, openTimes, driveClashes, drivePerMile, parseClock } from './pickupSlots.js';
@@ -1180,7 +1181,9 @@ export const forgivePass = atomic(async function forgivePass(offerId, { today } 
 // pass), and the next turn comes up. Returns the same shape as recordOutcome.
 // `paidDate` (default `date`): when the money came in, for the sale's deposit_date
 // (she enters it; never a credit's date, plan §3.2a).
-export const confirmDeposit = atomic(async function confirmDeposit(offerId, { date, amount, paidDate = null } = {}) {
+// `paidVia` / `discount` (Payment Methods plan D31): the account the deposit came
+// through and the discount given with it (discounts.depositPayChanges).
+export const confirmDeposit = atomic(async function confirmDeposit(offerId, { date, amount, paidDate = null, paidVia = null, discount = null } = {}) {
   const offer = await loadOpenOffer(offerId);
   date ??= await kennelDay(offer.kennel_id);
   if (!isAwaitingDeposit(offer) || !offer.sale_id) throw new Error('Record which pup they picked first.');
@@ -1189,7 +1192,7 @@ export const confirmDeposit = atomic(async function confirmDeposit(offerId, { da
   if (!sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) {
     throw new Error('The sale holding their pick was cancelled or archived. Void this offer, or open the sale and fix it first.');
   }
-  const saleChanges = { deposit_date: paidDate || date };
+  const saleChanges = { deposit_date: paidDate || date, ...depositPayChanges(sale, { paidVia, discount }) };
   if (sale.status === 'deposit_pending') saleChanges.status = 'deposit_paid';
   if (amount !== undefined && amount !== null && amount !== '') saleChanges.deposit_amount = Number(amount);
   const result = { offer: null, sale: null, removed: false, passes: null, next: null, voided: [], offered: [], waiting: [] };
@@ -1292,7 +1295,7 @@ export const recordSideSale = atomic(async function recordSideSale(entryId, { do
 // No turn moves on, unless a turn ended here: their own (a turn the server gave
 // them while her phone was off, moved on as `accepted`) or one left with no pup
 // (moved on as `left`). → { sale, entry, resolved, ended, next, waiting, auto_passed }
-export const confirmSideDeposit = atomic(async function confirmSideDeposit(saleId, { date, amount, paidDate = null } = {}) {
+export const confirmSideDeposit = atomic(async function confirmSideDeposit(saleId, { date, amount, paidDate = null, paidVia = null, discount = null } = {}) {
   const sale = await saleRepo.getById(saleId);
   if (!sale || !sale.side_entry_id) throw new Error('That isn\'t a side sale.');
   date ??= await kennelDay((await waitlistEntryRepo.getById(sale.side_entry_id))?.kennel_id);
@@ -1301,7 +1304,7 @@ export const confirmSideDeposit = atomic(async function confirmSideDeposit(saleI
   if (entry.is_archived || entry.status !== 'active') {
     throw new Error('This family is no longer on the list, so the side sale can\'t go ahead. Cancel it, or open the sale to end it.');
   }
-  const changes = { deposit_date: paidDate || date };
+  const changes = { deposit_date: paidDate || date, ...depositPayChanges(sale, { paidVia, discount }) };
   if (sale.status === 'deposit_pending') changes.status = 'deposit_paid';
   if (amount !== undefined && amount !== null && amount !== '') changes.deposit_amount = Number(amount);
   const saved = await saleRepo.update(sale.id, changes);
@@ -1323,6 +1326,16 @@ export const setSideSaleInOrder = atomic(async function setSideSaleInOrder(saleI
   if (!sale || !sale.side_entry_id) throw new Error('That isn\'t a side sale.');
   if (sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) throw new Error('That side sale was cancelled or archived.');
   return saleRepo.update(sale.id, { side_in_order: Boolean(on) });
+});
+
+// Turn payment methods off for one family (Payment Methods plan §2.4, D3): `ids`,
+// the accounts off for every payment still ahead of them. Ids only, never a reason.
+// Works on list families and family-page-only records alike.
+export const setPayMethodsOff = atomic(async function setPayMethodsOff(entryId, ids = []) {
+  const entry = await waitlistEntryRepo.getById(entryId);
+  if (!entry) throw new Error('This family no longer exists.');
+  const list = [...new Set((ids || []).filter((id) => typeof id === 'string' && id))];
+  return waitlistEntryRepo.update(entry.id, { pay_methods_off: list.length ? list : null });
 });
 
 // Cancel a side sale (hers, or its deposit never came): the sale is cancelled and the

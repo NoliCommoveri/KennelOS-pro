@@ -199,7 +199,10 @@ export function renderInvoicePdf(d, JsPDF) {
     font('normal', 10);
     const noteLines = d.pay.note ? wrap(d.pay.note, width - 24) : [];
     const methodRows = d.pay.methods.length ? Math.ceil(d.pay.methods.length / 3) : 0;
-    const payH = 16 + lineH(10) + d.pay.rows.length * lineH(10) + methodRows * lineH(10) + noteLines.length * lineH(10) + 10;
+    // Her methods by kind of charge (D25): a heading per group over its tick boxes.
+    const groups = d.pay.groups || [];
+    const groupH = groups.reduce((t, g) => t + lineH(10) + 4 + Math.ceil(g.methods.length / 3) * lineH(10), 0);
+    const payH = 16 + (groups.length && noteLines.length ? 6 : 0) + lineH(10) + d.pay.rows.length * lineH(10) + methodRows * lineH(10) + groupH + noteLines.length * lineH(10) + 10;
     room(payH + 10);
     pdf.setDrawColor(...LINE);
     pdf.roundedRect(m, y, width, payH, 4, 4);
@@ -213,7 +216,7 @@ export function renderInvoicePdf(d, JsPDF) {
       font('normal', 10);
       pdf.text(pdfText(v), m + 140, py);
     }
-    d.pay.methods.forEach((method, i) => {
+    const boxes = (list) => list.forEach((method, i) => {
       const col = i % 3;
       if (col === 0) py += lineH(10);
       const x = m + 12 + col * ((width - 24) / 3);
@@ -222,9 +225,16 @@ export function renderInvoicePdf(d, JsPDF) {
       font('normal', 10);
       pdf.text(pdfText(method), x + 13, py);
     });
+    boxes(d.pay.methods);
+    for (const g of groups) {
+      py += lineH(10) + 4;
+      font('bold', 9.5, GRAY);
+      pdf.text(pdfText(g.head), m + 12, py);
+      boxes(g.methods);
+    }
     if (noteLines.length) {
       font('normal', 10, GRAY);
-      pdf.text(noteLines, m + 12, py + lineH(10));
+      pdf.text(noteLines, m + 12, py + lineH(10) + (groups.length ? 6 : 0));
     }
     y += payH + 14;
   }

@@ -33,7 +33,9 @@ import { editionFlags } from '../data/editionConfig.js';
 import { kennelChargeList, readPriceList, readChargeGroups } from '../data/extraCharges.js';
 import { priceListHtml, wirePriceList, readPriceListForm } from '../assets/priceListEditor.js';
 import { savedSchedules, readSavedSchedules } from '../data/paymentSchedule.js';
-import { stepsEditorHtml, wireStepsEditor, readStepsEditor } from '../assets/paymentScheduleUI.js';
+import { PAY_STAGES, PAY_STAGE_LABELS, CHARGE_KINDS, CHARGE_KIND_LABELS, payMethodRows, readPayMethods, finalOwnList, feeAccountFromList, hasOwnList, methodLabel, CASH_ACCOUNT, takesPayments } from '../data/payMethods.js';
+
+import { stepsEditorHtml, wireStepsEditor, readStepsEditor, readPriority } from '../assets/paymentScheduleUI.js';
 import { isWaitlistOnlineOffered } from '../data/cloud/cloudConfig.js';
 import { pickupLocations, locationsProblem } from '../data/pickupSlots.js';
 import { MILEAGE_BASIS } from '../data/transportFee.js';
@@ -117,6 +119,8 @@ const SECTIONS = [
   { key: 'extra-charges', label: 'Extra charges price list', when: (k) => k.is_own_kennel && editionFlags.extraCharges },
   { key: 'nudges', label: 'Lifecycle nudges', when: (k) => k.is_own_kennel },
   { key: 'payment-schedules', label: 'Payment schedules', when: (k) => k.is_own_kennel },
+  { key: 'cost-cover', label: 'Covering payment costs', when: (k) => k.is_own_kennel && editionFlags.costCover },
+  { key: 'discounts', label: 'Discounts', when: (k) => k.is_own_kennel && editionFlags.costCover },
   { key: 'logo', label: 'Logo', when: () => true },
   { key: 'tests', label: 'Preferred tests', when: (k) => k.is_own_kennel },
   { key: 'puppy-record', label: 'Puppy Record fields', when: (k) => k.is_own_kennel && editionFlags.puppyRecord },
@@ -410,8 +414,9 @@ function renderConfig() {
   const asked = openFirst;
   if (asked) { openWaitlistGroups.add(asked); openFirst = null; }
   // The waitlist online's card moved to the waitlist's Publish list page (2026-10-08).
-  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + paymentSchedulesCard(kennel) + waitlistCard(kennel) + pickupCard(kennel);
+  els.config.innerHTML = nudgeCard(kennel) + testsCard(kennel) + feedingScheduleCard() + puppyRecordCard(kennel) + extraChargesCard(kennel) + paymentSchedulesCard(kennel) + (editionFlags.costCover ? '<div id="cost-cover-slot"></div><div id="discounts-slot"></div>' : '') + waitlistCard(kennel) + pickupCard(kennel);
   wireConfig();
+  if (editionFlags.costCover) mountCostCover();
   if (asked) els.config.querySelector(`details[data-wl-group="${CSS.escape(asked)}"]`)?.scrollIntoView({ block: 'start' });
 }
 let openFirst = param('open');
@@ -492,11 +497,13 @@ ${group('fees', 'Fees & payment', 'Application fee, when it is due, how families
           <span class="field-hint">Blank = no pay-by date, so nothing ever expires.</span></div>
         <div class="field field-wide"><label>Payment instructions</label><textarea id="wl-instructions" placeholder="Venmo @…, Zelle …, or a check to …">${esc(c.payment_instructions)}</textarea>
           <span class="field-hint">What you tell approved families about paying the fee.</span></div>
-        ${editionFlags.accounts ? `<div class="field"><label>Fee paid online via</label><select id="wl-fee-account"><option value="">— not online —</option>${paymentServices
+        ${editionFlags.accounts && payMethodsOffered() && hasOwnList(k, 'fee') ? `<div class="field field-wide"><label>How families pay the fee</label>
+          <span class="field-hint">${esc((k.pay_methods.fee || []).map((id) => paymentServices.find((a) => a.id === id)).filter((a) => a && !a.is_archived).map(methodLabel).join(', ') || 'None')}: set under <strong>Payment schedules › How families pay</strong>. Your payment instructions above show under them as Additional Payment Instructions.</span></div>` : ''}
+        ${editionFlags.accounts && !(payMethodsOffered() && hasOwnList(k, 'fee')) ? `<div class="field"><label>Fee paid online via</label><select id="wl-fee-account"><option value="">— not online —</option>${paymentServices
             .filter((a) => !a.is_archived || a.id === k.waitlist_fee_account_id)
             .map((a) => `<option value="${esc(a.id)}"${a.id === k.waitlist_fee_account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
-          <span class="field-hint">A Payment service account (Accounts page). Families get a Pay button with its link; with Stripe connected on this device, a Stripe checkout for the exact fee that KennelOS records as received when they pay.</span></div>
-        <div class="field"><label>Ask for the fee</label><select id="wl-fee-when">
+          <span class="field-hint">A Payment service account (Accounts page). Families get a Pay button with its link; with Stripe connected on this device, a Stripe checkout for the exact fee that KennelOS records as received when they pay.</span></div>` : ''}
+        ${editionFlags.accounts ? `<div class="field"><label>Ask for the fee</label><select id="wl-fee-when">
             <option value="apply"${c.fee_link_when !== 'approved' ? ' selected' : ''}>At the end of the online application</option>
             <option value="approved"${c.fee_link_when === 'approved' ? ' selected' : ''}>Once I approve them</option></select>
           <span class="field-hint">Paid before you approve them: approving puts them on the list from the day they paid.</span></div>` : ''}
@@ -994,13 +1001,13 @@ async function onSaveCharges() {
 // sale's schedule from (none is ever applied by itself, D23), each a name and its due
 // dates by age or pickup, and what she takes for the final payment. Stored as
 // Kennel.payment_schedules and Kennel.final_payment_methods.
-function savedScheduleHtml(x = { id: '', name: '', steps: null }) {
+function savedScheduleHtml(x = { id: '', name: '', steps: null, priority: null }) {
   return `<div class="pss-item" data-pss-id="${esc(x.id || '')}" style="border-top:1px solid var(--border); padding:10px 0;">
       <div style="display:flex; gap:8px; align-items:center;">
         <input class="pss-name" type="text" maxlength="80" value="${esc(x.name)}" placeholder="e.g. Transported pup" aria-label="Schedule name" style="flex:1; min-width:0; font-weight:600;">
         <button type="button" class="btn btn-sm" data-act="pss-remove" aria-label="Remove this saved schedule">✕</button>
       </div>
-      <div class="pss-steps">${stepsEditorHtml(x.steps, { saved: true })}</div>
+      <div class="pss-steps">${stepsEditorHtml(x.steps, { saved: true, priority: x.priority })}</div>
     </div>`;
 }
 
@@ -1013,9 +1020,84 @@ function paymentSchedulesCard(k) {
       <button type="button" class="btn btn-sm" data-act="pss-add">+ New saved schedule</button>
       <div class="field" style="margin-top:14px;"><label for="pss-final">How the final payment is paid (optional)</label>
         <input id="pss-final" type="text" maxlength="200" value="${esc(k.final_payment_methods || '')}" placeholder="e.g. Cash or Zelle only">
-        <span class="field-hint">Shown with the final payment. Earlier payments follow your usual payment instructions.</span></div>
+        <span class="field-hint">${payMethodsOffered() && hasOwnList(k, 'final') ? 'Shown to families under your Final methods below, as Additional Payment Instructions.' : 'Shown with the final payment. Earlier payments follow your usual payment instructions.'}</span></div>
       <div class="form-actions"><button class="btn btn-primary btn-sm" data-act="save-payment-schedules">Save</button></div>
+      ${payMethodsOffered() ? payMethodsHtml(k) : ''}
     </section>`;
+}
+
+// How families pay (Payment Methods plan §2.2): which of her Payment service accounts
+// families choose from for each payment, in the order they see them. Stored as
+// Kennel.pay_methods; a payment with none ticked works as before (her text).
+const payMethodsOffered = () => editionFlags.payMethods && editionFlags.accounts;
+function payMethodsHtml(k) {
+  const rows = payMethodRows(k, paymentServices);
+  const rowHtml = ({ account: a, stages, kinds }) => `<div class="pm-row" data-pm-id="${esc(a.id)}" style="border-top:1px solid var(--border); padding:8px 0;">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span style="flex:1; min-width:0;"><strong>${esc(methodLabel(a))}</strong>${a.family_label && a.family_label.trim() !== a.name ? ` <span class="faint">${esc(a.name)}</span>` : ''}${takesPayments(a) ? '' : ' <span class="faint">(no link or instructions yet)</span>'}</span>
+        ${editionFlags.costCover ? `<label class="check-inline" style="font-size:13px;"><input type="checkbox" data-pm-discounted${a.discounted_method === true ? ' checked' : ''}> Discounted</label>` : ''}
+        <button type="button" class="btn btn-sm" data-act="pm-up" aria-label="Move ${esc(methodLabel(a))} up">↑</button>
+        <button type="button" class="btn btn-sm" data-act="pm-down" aria-label="Move ${esc(methodLabel(a))} down">↓</button>
+      </div>
+      <div style="display:flex; gap:4px 14px; flex-wrap:wrap; margin-top:4px;">${PAY_STAGES.map((st) => `<label class="check-inline"><input type="checkbox" data-pm-stage="${st}"${stages.has(st) ? ' checked' : ''}> ${esc(PAY_STAGE_LABELS[st])}</label>`).join('')}</div>
+      <div class="faint" style="display:flex; gap:4px 14px; flex-wrap:wrap; margin-top:2px; font-size:13px;"><span>Pays for:</span>${CHARGE_KINDS.map((k) => `<label class="check-inline"><input type="checkbox" data-pm-kind="${k}"${kinds.has(k) ? ' checked' : ''}> ${esc(CHARGE_KIND_LABELS[k])}</label>`).join('')}</div>
+    </div>`;
+  const hasCash = paymentServices.some((a) => !a.is_archived && /^cash\b/i.test(String(a.name || '').trim()));
+  return `
+      <h3 style="font-size:15px; margin:18px 0 4px;">How families pay</h3>
+      <p class="field-hint" style="margin-top:0;">Families pick one of these on their status page, for each payment you tick it for, in this order. A payment with none ticked shows your payment instructions, as now. <strong>Pays for</strong> sets what it can pay after the deposit: untick Boarding on everything but Cash and boarding is cash only. A payment covering charges with different methods shows families each part with its own choices.${editionFlags.costCover ? ' <strong>Discounted</strong>: families paying this way get your payment-method discount (Discounts).' : ''} Add or change accounts on the <a href="accounts.html">Accounts</a> page.</p>
+      <div id="pm-list">${rows.length ? rows.map(rowHtml).join('') : '<p class="field-hint">No Payment service accounts yet.</p>'}</div>
+      <label class="check-inline" style="margin-top:8px;"><input type="checkbox" id="pm-final-own"${finalOwnList(k) ? ' checked' : ''}> The final payment takes only the methods ticked for Final, whatever it's for</label>
+      <div class="form-actions">
+        <button class="btn btn-primary btn-sm" data-act="save-pay-methods">Save</button>
+        ${hasCash ? '' : '<button type="button" class="btn btn-sm" data-act="pm-add-cash">+ Add Cash</button>'}
+      </div>`;
+}
+
+function wirePayMethods(card) {
+  const list = card.querySelector('#pm-list');
+  if (!list) return;
+  list.addEventListener('click', (ev) => {
+    const row = ev.target.closest('.pm-row');
+    if (!row) return;
+    if (ev.target.closest('[data-act="pm-up"]') && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+    if (ev.target.closest('[data-act="pm-down"]') && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+  });
+  card.querySelector('[data-act="save-pay-methods"]')?.addEventListener('click', onSavePayMethods);
+  card.querySelector('[data-act="pm-add-cash"]')?.addEventListener('click', async () => {
+    clearError();
+    try {
+      // Cash is an account like any other (D7): instructions, no fee.
+      await accountRepo.create({ ...CASH_ACCOUNT });
+      paymentServices = (await accountRepo.getAll({ includeArchived: true })).filter((a) => a.account_type === 'payment_service');
+      renderConfig();
+    } catch (err) { showError(err.message || String(err)); }
+  });
+}
+
+async function onSavePayMethods() {
+  clearError();
+  const card = els.config.querySelector('[data-ks="payment-schedules"]');
+  const rows = [...card.querySelectorAll('.pm-row')].map((el) => ({
+    id: el.dataset.pmId, stages: [...el.querySelectorAll('[data-pm-stage]:checked')].map((c) => c.dataset.pmStage),
+    kinds: [...el.querySelectorAll('[data-pm-kind]:checked')].map((c) => c.dataset.pmKind)
+  }));
+  const pay_methods = readPayMethods(rows, { finalOwn: card.querySelector('#pm-final-own')?.checked === true });
+  // Older builds and the Stripe fee links read one fee account: keep it in step.
+  const feeId = feeAccountFromList(pay_methods.fee, paymentServices);
+  // Her Discounted ticks (Payment Methods plan D14) live on each account.
+  const ticks = editionFlags.costCover ? [...card.querySelectorAll('.pm-row')].map((el) => ({ id: el.dataset.pmId, on: el.querySelector('[data-pm-discounted]')?.checked === true })) : [];
+  try {
+    for (const t of ticks) {
+      const a = paymentServices.find((x) => x.id === t.id);
+      if (a && (a.discounted_method === true) !== t.on) await accountRepo.update(a.id, { discounted_method: t.on });
+    }
+    if (ticks.length) paymentServices = (await accountRepo.getAll({ includeArchived: true })).filter((a) => a.account_type === 'payment_service');
+    await kennelRepo.update(kennel.id, { pay_methods, ...(feeId ? { waitlist_fee_account_id: feeId } : {}) });
+    await reloadKennel();
+    renderConfig();
+    flashSaved('save-pay-methods');
+  } catch (err) { showError(err.message || String(err)); }
 }
 
 function wirePaymentSchedules() {
@@ -1032,13 +1114,15 @@ function wirePaymentSchedules() {
     if (ev.target.closest('[data-act="pss-remove"]')) ev.target.closest('.pss-item').remove();
   });
   card.querySelector('[data-act="save-payment-schedules"]').addEventListener('click', onSavePaymentSchedules);
+  wirePayMethods(card);
 }
 
 async function onSavePaymentSchedules() {
   clearError();
   const card = els.config.querySelector('[data-ks="payment-schedules"]');
   const rows = [...card.querySelectorAll('.pss-item')].map((el) => ({
-    id: el.dataset.pssId || null, name: el.querySelector('.pss-name').value, steps: readStepsEditor(el.querySelector('.pss-steps'))
+    id: el.dataset.pssId || null, name: el.querySelector('.pss-name').value, steps: readStepsEditor(el.querySelector('.pss-steps')),
+    priority: readPriority(el.querySelector('.pss-steps'))
   }));
   const { list, error } = readSavedSchedules(rows);
   if (error) { showError(error); return; }
@@ -1047,6 +1131,44 @@ async function onSavePaymentSchedules() {
     await reloadKennel();
     renderConfig();
     flashSaved('save-payment-schedules');
+  } catch (err) { showError(err.message || String(err)); }
+}
+
+// Covering payment costs (Payment Methods plan §5.1–§5.3): service fees or payment-fee
+// prices, a rule per kind of charge and the calculator. Pro-only, its own module
+// (assets/costCoverUI.js), loaded with what the calculator starts from.
+let costCoverData = null;
+let costCoverSaved = false; // flash Saved once the card is back after a save
+let discountsSaved = false;
+async function mountCostCover() {
+  const slot = els.config.querySelector('#cost-cover-slot');
+  if (!slot) return;
+  try {
+    const [ui, accounts, sales, litters, studs] = await Promise.all([
+      import('../assets/costCoverUI.js'),
+      editionFlags.accounts ? accountRepo.getAll({ includeArchived: true }) : [],
+      costCoverData?.sales || saleRepo.getAll(), costCoverData?.litters || litterRepo.getAll(), costCoverData?.studs || studServiceRepo.getAll()
+    ]);
+    costCoverData = { accounts, sales, litters, studs };
+    if (!slot.isConnected) return;
+    slot.innerHTML = ui.costCoverCardHtml(kennel, costCoverData);
+    ui.wireCostCoverCard(slot.querySelector('[data-ks="cost-cover"]'), {
+      kennel,
+      onError: showError,
+      onSaved: async () => { clearError(); await reloadKennel(); costCoverSaved = true; renderConfig(); }
+    });
+    if (costCoverSaved) { costCoverSaved = false; flashSaved('save-cost-cover'); }
+    // Discounts (Payment Methods plan §5.4), the same module.
+    const dslot = els.config.querySelector('#discounts-slot');
+    if (dslot) {
+      dslot.innerHTML = ui.discountsCardHtml(kennel);
+      ui.wireDiscountsCard(dslot.querySelector('[data-ks="discounts"]'), {
+        kennel,
+        onError: showError,
+        onSaved: async () => { clearError(); await reloadKennel(); discountsSaved = true; renderConfig(); }
+      });
+      if (discountsSaved) { discountsSaved = false; flashSaved('save-discounts'); }
+    }
   } catch (err) { showError(err.message || String(err)); }
 }
 

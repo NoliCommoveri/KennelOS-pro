@@ -88,6 +88,21 @@ function normalizeLinks(candidate) {
   return candidate;
 }
 
+// A contract signed (e-sign or recorded signed) fixes its sale's or stud service's
+// cost-cover amounts where they are (Payment Methods plan §5.2, D17): a later price
+// change leaves them. Written through the plain repo plumbing: the sale's and stud
+// service's own repos add nothing this needs.
+const coverTables = { sales: makeRepo('sales'), stud_services: makeRepo('stud_services') };
+async function fixCoverWhenSigned(c) {
+  if (c?.status !== 'signed') return;
+  const [table, id, kinds] = c.related_sale_id ? ['sales', c.related_sale_id, undefined]
+    : c.related_stud_service_id ? ['stud_services', c.related_stud_service_id, ['stud']] : [];
+  if (!table) return;
+  const { frozenCover } = await import('./costCover.js');
+  const changes = frozenCover(await coverTables[table].getById(id), kinds);
+  if (changes) await coverTables[table].update(id, changes);
+}
+
 export const contractRepo = {
   ...base,
 
@@ -97,7 +112,9 @@ export const contractRepo = {
     // Kennel scope (Multi-Kennel Scope Spec §4.3) — inherited from whatever the
     // contract documents (its sale, stud service, or dog).
     await assertOwnKennel(record.kennel_id, 'Contract');
-    return base.create(record);
+    const saved = await base.create(record);
+    await fixCoverWhenSigned(saved);
+    return saved;
   },
 
   async update(id, changes) {
@@ -106,7 +123,7 @@ export const contractRepo = {
     const merged = normalizeLinks({ ...existing, ...changes });
     validateContract(merged);
     const normalized = Object.fromEntries(RESERVATION_FIELDS.filter((f) => f in merged).map((f) => [f, merged[f]]));
-    return base.update(id, {
+    const saved = await base.update(id, {
       ...changes,
       related_dog_id: merged.related_dog_id,
       related_contact_id: merged.related_contact_id,
@@ -114,6 +131,8 @@ export const contractRepo = {
       related_stud_service_id: merged.related_stud_service_id ?? null,
       ...normalized
     });
+    if (existing.status !== 'signed') await fixCoverWhenSigned(saved);
+    return saved;
   },
 
   // Contract is a leaf (CONTRACT_REFERENCES is empty), so base.hardDelete never

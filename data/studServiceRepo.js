@@ -15,6 +15,7 @@ import { contactRepo } from './contactRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { getStudTripsMigrated, markStudTripsMigrated, hasSampleData } from './settings.js';
 import { travellingDogId, studBoardingFor, studBoardingPrefill } from './studRules.js';
+import { editionFlags } from './editionConfig.js';
 
 const base = makeRepo('stud_services', STUD_SERVICE_REFERENCES);
 
@@ -31,6 +32,17 @@ function validateStudService(candidate) {
   }
 }
 
+// Covering payment costs (Payment Methods plan §5.2, costCover.js): our stud on an
+// outside dam (her stud fee is income) copies her stud rule when it's made.
+async function withNewCover(data) {
+  if (!editionFlags.costCover || 'cost_cover_amounts' in data || !data.kennel_id) return data;
+  const [kennel, ours] = await Promise.all([db.kennels.get(data.kennel_id), data.our_dog_id ? db.dogs.get(data.our_dog_id) : null]);
+  if (ours?.sex !== 'male') return data;
+  const { coverForNewStud } = await import('./costCover.js'); // only once she's set it up: the light pages never load it for this
+  const cover = coverForNewStud(kennel);
+  return cover ? { ...data, cost_cover_amounts: cover } : data;
+}
+
 export const studServiceRepo = {
   ...base,
 
@@ -40,6 +52,7 @@ export const studServiceRepo = {
     // Kennel scope (Multi-Kennel Scope Spec §4.3) — inherited from OUR dog, never
     // the partner's: the partner is by definition somebody else's.
     await assertOwnKennel(data.kennel_id, 'Stud service');
+    data = await withNewCover(data);
     const saved = await base.create(data);
     // Auto-tag the referral source as a Stud referrer (canonical FK stays
     // stud_services.referred_by_contact_id; this is a convenience role label).

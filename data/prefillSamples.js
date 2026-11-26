@@ -237,17 +237,21 @@ function lines(sample, facts, v) {
     title: 'The payment plan',
     note: 'From the sale\'s payment schedule. Each amount is what\'s still owed by that date, after the money already in.',
     lines: [
-      L('payment1Amount', '1st payment', { math: dueMath(earlier[0]), sources: dueSrc(earlier[0]), why: st.hasSchedule ? 'The plan has no payment before the final one.' : noPlan }),
-      L('payment1Due', '1st payment due', { math: earlier[0] ? `${whenWords(earlier[0].step)}: ${earlier[0].date}` : '', sources: earlier[0] ? [`due:${earlier[0].id}`] : [], why: st.hasSchedule ? 'The plan has no payment before the final one.' : noPlan }),
-      L('payment2Amount', '2nd payment', { math: dueMath(earlier[1]), sources: dueSrc(earlier[1]), why: st.hasSchedule ? 'The plan has no second payment before the final one.' : noPlan }),
-      L('payment2Due', '2nd payment due', { math: earlier[1] ? `${whenWords(earlier[1].step)}: ${earlier[1].date}` : '', sources: earlier[1] ? [`due:${earlier[1].id}`] : [], why: st.hasSchedule ? 'The plan has no second payment before the final one.' : noPlan }),
+      ...['1st', '2nd', '3rd', '4th'].flatMap((nth, k) => {
+        const d = earlier[k];
+        const why = st.hasSchedule ? (k ? `The plan has no ${nth} payment before the final one.` : 'The plan has no payment before the final one.') : noPlan;
+        return [
+          L(`payment${k + 1}Amount`, `${nth} payment`, { math: dueMath(d), sources: dueSrc(d), why }),
+          L(`payment${k + 1}Due`, `${nth} payment due`, { math: d ? `${whenWords(d.step)}: ${d.date}` : '', sources: d ? [`due:${d.id}`] : [], why })
+        ];
+      }),
       L('finalPaymentAmount', 'Final payment', { math: st.hasSchedule ? dueMath(last) : `With no plan, everything left after the deposit: ${f2(last?.owed)}.`, sources: st.hasSchedule ? dueSrc(last) : ['due:none', 'price', 'transport', 'boarding', 'extra', ...MONEY_ROWS] }),
       L('finalPaymentDue', 'Final payment due', { math: st.hasSchedule ? `At pickup: ${last?.date}` : s.balance_due_date ? `The sale's balance due date: ${s.balance_due_date}` : `At pickup: ${last?.date}`, sources: st.hasSchedule ? [`due:${last?.id}`, 'pickup'] : ['due:none', 'pickup'] })
     ]
   };
   const owedDeposit = st.deposit?.owed || 0;
-  const planSum = r2(st.paid + owedDeposit + earlier.slice(0, 2).reduce((t, d) => t + d.owed, 0) + (last?.owed || 0));
-  plan.check = `${f2(st.paid)} paid${owedDeposit > 0 ? ` + ${f2(owedDeposit)} deposit still due` : ''}${earlier.slice(0, 2).map((d) => ` + ${f2(d.owed)}`).join('')} + ${f2(last?.owed)} final = ${f2(planSum)}, the total.`;
+  const planSum = r2(st.paid + owedDeposit + earlier.slice(0, 4).reduce((t, d) => t + d.owed, 0) + (last?.owed || 0));
+  plan.check = `${f2(st.paid)} paid${owedDeposit > 0 ? ` + ${f2(owedDeposit)} deposit still due` : ''}${earlier.slice(0, 4).map((d) => ` + ${f2(d.owed)}`).join('')} + ${f2(last?.owed)} final = ${f2(planSum)}, the total.`;
   return [purchase, addOns, whole, plan];
 }
 

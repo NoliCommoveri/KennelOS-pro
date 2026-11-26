@@ -17,6 +17,9 @@
 // sit in the header's ⋯ menu. Application
 // answers follow her own form (Spec §15.1, data/waitlistForm.js). Every multi-step
 // write goes through data/waitlistActions.js. Pro-only page (proPages.js).
+import { finalMethodsText, offFor, methodLabel, PAY_STAGE_LABELS } from '../data/payMethods.js';
+import { familyMethodRows, stagesAhead, stagesLeftEmpty, stageWords, payMessageText } from '../data/familyPayMethods.js';
+import { discountWarning } from '../data/discounts.js';
 import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { waitlistEntryRepo, ReferenceBlockedError } from '../data/waitlistEntryRepo.js';
 import { waitlistOfferRepo } from '../data/waitlistOfferRepo.js';
@@ -70,7 +73,7 @@ import {
 import { addDaysToYMD } from '../data/dateUtils.js';
 import { getEntryCredit, getSaleStatement } from '../data/incomeView.js';
 import { loadFamilyAccount, familyDocs } from '../data/familyMoney.js';
-import { savedSchedules } from '../data/paymentSchedule.js';
+import { savedSchedules, duePieces } from '../data/paymentSchedule.js';
 import { accountRepo } from '../data/accountRepo.js';
 import { paymentsCardHtml, wirePaymentsCard, askAboutNewFees } from '../assets/paymentScheduleUI.js';
 import { creditsOf, carriedCreditsOf } from '../data/receivedCredits.js';
@@ -353,12 +356,30 @@ function paymentReminders() {
   const st = ctx.payments?.statement;
   if (!st || st.ended || st.deposit?.owed > 0) return [];
   const pup = dogName(ctx.payments.sale.dog_id);
-  return st.dueDates.filter((d) => d.owed > 0).map((d) => ({
+  // Due dates on the same day are one payment to the family (Payment Schedule plan D44).
+  const owed = st.dueDates.filter((d) => d.owed > 0);
+  const groups = [];
+  for (const d of owed) {
+    const g = d.date ? groups.find((x) => x.date === d.date) : null;
+    if (g) Object.assign(g, { owed: Math.round((g.owed + d.owed) * 100) / 100, isFinal: g.isFinal || d.isFinal, ids: [...g.ids, d.id], label: `${g.label} and ${d.label}` });
+    else groups.push({ ...d, ids: [d.id] });
+  }
+  return groups.map((d) => ({
     due: d,
     pup,
     name: d.step.label ? String(d.step.label) : d.isFinal ? 'final payment' : 'payment',
     when: d.date ? `by ${fmtDate(d.date)}` : d.step.due === 'at_pickup' ? 'at pickup' : 'on a date not set yet'
   }));
+}
+
+// How to pay one stage in her message (Payment Methods plan §4): her list for it,
+// less what's off for this family, then her text; with no list, her text as before
+// (`before`, when it reads differently from `other`).
+// `pieces`: what that payment is for (its charges' own methods, D25).
+function payHow(stage, e, amount, other, before = other, pieces = null) {
+  if (!payMethodsOffered()) return before || '';
+  const text = payMessageText(stage, ctx.kennel, ctx.paymentAccounts, e, { amount, other, pieces });
+  return text === String(other || '').trim() ? (before || '') : text;
 }
 
 function suggestedText(e) {
@@ -371,7 +392,8 @@ function suggestedText(e) {
     const by = turnRespondBy(open);
     const picked = open.find((o) => o.chosen_dog_id);
     if (picked) {
-      return `Hi ${first}, this is ${kennel}. We're holding ${dogName(picked.chosen_dog_id)} for you! Please send your deposit${by ? ` by ${fmtDate(by)}` : ''} to confirm.${ctx.config.payment_instructions ? `\n\n${ctx.config.payment_instructions}` : ''}${linkLine}`;
+      const how = payHow('deposit', e, ctx.payments?.statement?.deposit?.owed ?? null, ctx.config.payment_instructions);
+      return `Hi ${first}, this is ${kennel}. We're holding ${dogName(picked.chosen_dog_id)} for you! Please send your deposit${by ? ` by ${fmtDate(by)}` : ''} to confirm.${how ? `\n\n${how}` : ''}${linkLine}`;
     }
     const names = open.map((o) => { const l = ctx.litters.find((x) => x.id === o.litter_id); return l ? litterLabel(l) : 'a litter'; }).join(', ');
     return `Hi ${first}, this is ${kennel}. Good news: it's your turn on our waitlist! You can pick a pup from ${names}. Please let us know your pick and send your deposit${by ? ` by ${fmtDate(by)}` : ''}, or tell us if you'd like to pass this time.${linkLine}`;
@@ -379,12 +401,17 @@ function suggestedText(e) {
   // Their next payment on the sale (a text is hers to send, so it can carry the amount).
   const nextPay = paymentReminders()[0];
   if (nextPay) {
-    const how = nextPay.due.isFinal && String(ctx.kennel.final_payment_methods || '').trim() ? `Final payment: ${String(ctx.kennel.final_payment_methods).trim()}` : ctx.config.payment_instructions;
+    const finalText = String(ctx.kennel.final_payment_methods || '').trim();
+    const how = payHow(nextPay.due.isFinal ? 'final' : 'payments', e, nextPay.due.owed,
+      nextPay.due.isFinal && finalText ? finalText : ctx.config.payment_instructions,
+      nextPay.due.isFinal && finalText ? `Final payment: ${finalText}` : ctx.config.payment_instructions,
+      nextPay.due.ids.flatMap((id) => duePieces(ctx.payments.statement, id)));
     return `Hi ${first}, this is ${kennel}. A friendly reminder that your ${nextPay.name} of ${fmtMoney(nextPay.due.owed)} for ${nextPay.pup} is due ${nextPay.when}.${how ? `\n\n${how}` : ''}${linkLine}`;
   }
   if (e.status === 'approved') {
     const fee = e.fee_amount != null ? fmtMoney(e.fee_amount) : '';
-    return `Hi ${first}, this is ${kennel}. You're approved for our waitlist!${fee ? ` Your application fee of ${fee} is due${e.fee_due_date ? ` by ${fmtDate(e.fee_due_date)}` : ''}, and you join the list as soon as it's received.` : ''}${ctx.config.payment_instructions ? `\n\n${ctx.config.payment_instructions}` : ''}${linkLine}`;
+    const how = payHow('fee', e, e.fee_amount, ctx.config.payment_instructions);
+    return `Hi ${first}, this is ${kennel}. You're approved for our waitlist!${fee ? ` Your application fee of ${fee} is due${e.fee_due_date ? ` by ${fmtDate(e.fee_due_date)}` : ''}, and you join the list as soon as it's received.` : ''}${how ? `\n\n${how}` : ''}${linkLine}`;
   }
   if (e.status === 'active') {
     const pos = overallPositions(ctx.kennelEntries, ctx.kennel.id, ctx.programs, numbering()).get(e.id);
@@ -954,7 +981,7 @@ function paymentsHtml() {
   if (!ctx.payments) return '';
   return `<section class="card" data-payments>${paymentsCardHtml(ctx.payments, {
     accountsById: new Map(ctx.paymentAccounts.map((a) => [a.id, a])),
-    finalMethods: ctx.kennel?.final_payment_methods || ''
+    finalMethods: finalMethodsText(ctx.kennel, ctx.paymentAccounts), kennel: ctx.kennel
   })}<p class="field-hint" style="margin:8px 0 0;"><a href="sale.html?id=${encodeURIComponent(ctx.payments.sale.id)}">Open the sale</a></p></section>`;
 }
 
@@ -1282,6 +1309,54 @@ async function onSideSaleOrder() {
   if (!ok) return;
   await actions.setSideSaleInOrder(sale.id, on);
   await afterAction();
+}
+
+// --- Payment methods for this family (Payment Methods plan §2.4, Phase 2) ------------
+
+// Her methods on any of her How families pay lists, or ones already off for them.
+const payMethodsOffered = () => editionFlags.payMethods && editionFlags.accounts;
+function payMethodsMenuOn(e) {
+  if (!payMethodsOffered()) return false;
+  return familyMethodRows(ctx.kennel, ctx.paymentAccounts, e).length > 0 || offFor(e).length > 0;
+}
+
+// One switch per method, off for every payment still ahead of them (D3). Turning off
+// the last method for a payment still ahead warns; she can still save.
+async function onPayMethods() {
+  const e = ctx.entry;
+  const name = entryName(e, ctx.contact);
+  const rows = familyMethodRows(ctx.kennel, ctx.paymentAccounts, e);
+  const ahead = stagesAhead(e, ctx.payments?.statement || null);
+  const offNow = (overlay) => [...overlay.querySelectorAll('[data-pm]')].filter((b) => !b.checked).map((b) => b.dataset.pm);
+  // Ids off that aren't on her lists any more stay off (she can't see them here).
+  const hidden = offFor(e).filter((id) => !rows.some((r) => r.account.id === id));
+  const row = (r) => `<label class="check-inline" style="display:flex; gap:8px; align-items:flex-start; padding:6px 0;">
+      <input type="checkbox" data-pm="${esc(r.account.id)}"${r.off ? '' : ' checked'}>
+      <span><strong>${esc(methodLabel(r.account))}</strong>${methodLabel(r.account) !== String(r.account.name || '').trim() ? ` <span class="faint">${esc(r.account.name)}</span>` : ''}
+        <br><span class="faint">${esc(r.stages.map((st) => PAY_STAGE_LABELS[st]).join(' · '))}</span></span></label>`;
+  const warnHtml = (overlay) => {
+    const off = [...offNow(overlay), ...hidden];
+    const empty = stagesLeftEmpty(ctx.kennel, ctx.paymentAccounts, ahead, off);
+    // A payment-method discount stays open to every family (Payment Methods plan §2.4, §5.4).
+    const disc = editionFlags.costCover ? discountWarning(ctx.kennel, rows.map((r) => r.account), off) : '';
+    return `${empty.length ? `<div class="inline-warn">They'll see "Message ${esc(ctx.kennel.kennel_name)} to pay" for their ${esc(stageWords(empty))}.</div>` : ''}${disc ? `<div class="inline-warn">${esc(disc)}</div>` : ''}`;
+  };
+  const ok = await formModal({
+    title: `How ${name} can pay`,
+    bodyHtml: `<p class="faint" style="margin-top:0;">Untick a method to take it off every payment still ahead for them: their page, your messages and invoices. Note why in their notes.</p>
+      ${rows.length ? rows.map(row).join('') : '<p>None of your methods are on How families pay.</p>'}
+      <div data-pm-warn></div>`,
+    confirmLabel: 'Save',
+    onConfirm: async (overlay) => {
+      await actions.setPayMethodsOff(e.id, [...offNow(overlay), ...hidden]);
+    }
+  }, (overlay) => {
+    const warn = overlay.querySelector('[data-pm-warn]');
+    const draw = () => { warn.innerHTML = warnHtml(overlay); };
+    overlay.addEventListener('change', draw);
+    draw();
+  });
+  if (ok) await afterAction();
 }
 
 // "Keep off the list (family page only)" (E3): one tap, undoable.
@@ -2332,6 +2407,7 @@ async function renderHeaderActions() {
         ${reservationHref(e) ? `<a role="menuitem" href="${esc(reservationHref(e))}" title="A reservation agreement for this family, with their preferences picked">Reservation agreement…</a><hr>` : ''}
         ${link ? '<button type="button" role="menuitem" id="btn-newlink" title="Make a new link; the old one stops working">New status link…</button><hr>' : ''}
         ${liveSideSale(e) && !isFamilyPageOnly(e) ? `<button type="button" role="menuitem" id="btn-sideorder" title="How the public list shows this side sale">${sideSaleInOrder(liveSideSale(e)) ? 'Show as a plain row on the public list…' : 'Show as Pup selected on the public list…'}</button><hr>` : ''}
+        ${payMethodsMenuOn(e) ? `<button type="button" role="menuitem" id="btn-paymethods" title="Turn payment methods off for this family">Payment methods…${offFor(e).length ? ` (${offFor(e).length} off)` : ''}</button><hr>` : ''}
         ${isLiveEntry(e) ? '<button type="button" role="menuitem" id="btn-samefamily" title="They applied twice: merge the two and delete one">Same family as another application…</button><hr>' : ''}
         <button type="button" role="menuitem" id="btn-archive">${e.is_archived ? 'Unarchive' : 'Archive'}</button>
         <button type="button" role="menuitem" id="btn-delete"${blockers.length ? ' disabled' : ''} title="${esc(delTitle)}">Delete…</button>
@@ -2339,6 +2415,7 @@ async function renderHeaderActions() {
     </div>`;
   wireActionMenu(document.getElementById('entry-manage'));
   document.getElementById('btn-newlink')?.addEventListener('click', () => onNewLink().catch((err) => showError(err.message || String(err))));
+  document.getElementById('btn-paymethods')?.addEventListener('click', () => onPayMethods().catch((err) => showError(err.message || String(err))));
   document.getElementById('btn-samefamily')?.addEventListener('click', () => onSameFamily().catch((err) => showError(err.message || String(err))));
   document.getElementById('btn-sideorder')?.addEventListener('click', () => onSideSaleOrder().catch((err) => showError(err.message || String(err))));
   document.getElementById('btn-archive').onclick = async () => {
@@ -2449,7 +2526,7 @@ function renderDetails() {
   pane.querySelector('[data-act="edit"]').addEventListener('click', startEdit);
   const fail = (err) => showError(err.message || String(err));
   const payCard = pane.querySelector('[data-payments]');
-  if (payCard) wirePaymentsCard(payCard, { loaded: ctx.payments, accounts: ctx.paymentAccounts, savedList: savedSchedules(ctx.kennel), onChanged: () => afterAction() });
+  if (payCard) wirePaymentsCard(payCard, { loaded: ctx.payments, accounts: ctx.paymentAccounts, savedList: savedSchedules(ctx.kennel), offIds: offFor(ctx.entry), kennel: ctx.kennel, onChanged: () => afterAction() });
   pane.querySelector('[data-act="credit-add"]').addEventListener('click', () => onAddCredit().catch(fail));
   pane.querySelectorAll('[data-credit-edit]').forEach((b) => b.addEventListener('click', () => onAddCredit(creditsOf(ctx.entry).find((c) => c.id === b.dataset.creditEdit)).catch(fail)));
   pane.querySelectorAll('[data-credit-remove]').forEach((b) => b.addEventListener('click', () => onRemoveCredit(b.dataset.creditRemove).catch(fail)));

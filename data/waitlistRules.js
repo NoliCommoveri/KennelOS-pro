@@ -167,7 +167,7 @@ export const waitlistIsSetUp = (kennel) => Object.keys(kennel?.waitlist_config |
 // `pickup`: her standard pickup location (pickupSlots.standardLocation), or null.
 export function waitlistSummaryLines(config, { programs = [], online = false, fmtMoney = (n) => `$${n}`, pickup = null } = {}) {
   const c = config;
-  const policy = { credited_to_purchase: c.fee_credit_toward === 'deposit' ? 'credited toward the deposit' : 'credited to the purchase price', non_refundable: 'non-refundable', refundable: 'refundable' }[c.fee_credit_policy] || '';
+  const policy = { credited_to_purchase: c.fee_credit_toward === 'deposit' ? 'credited toward the deposit' : c.fee_credit_toward === 'final' ? 'credited toward the final payment' : 'credited to the purchase price', non_refundable: 'non-refundable', refundable: 'refundable' }[c.fee_credit_policy] || '';
   const lines = [];
   lines.push(c.fee_amount != null && Number(c.fee_amount) > 0
     ? `Application fee: ${fmtMoney(c.fee_amount)}${policy ? `, ${policy}` : ''}${c.fee_due_days ? `, due within ${c.fee_due_days} day${Number(c.fee_due_days) === 1 ? '' : 's'} of approval` : ''}.`

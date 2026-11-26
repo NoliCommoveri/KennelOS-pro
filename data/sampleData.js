@@ -93,6 +93,15 @@ export async function seedSampleData() {
     ],
     preferred_breeds: [BREED, BOXER],
     promote_nudge_enabled: true, promote_age_male_months: 14, promote_age_female_months: 11,
+    // Covering payment costs (Payment Methods plan §5.1): a 2.5% service fee on the
+    // puppy price, so the sample sales show the line.
+    cost_cover: { show: 'service_fee', rules: [{ id: 'puppy', applies_to: 'puppy', percent: 2.5 }] },
+    // Discounts (Payment Methods plan §5.4): the service fee back for paying by Zelle or
+    // cash (the accounts ticked Discounted below), and a repeat-buyer discount.
+    discounts: [
+      { id: 'sample-method-discount', kind: 'method', label: 'Bank or cash discount', takes_back: true },
+      { id: 'sample-repeat-buyer', kind: 'own', label: 'Welcome back', amount: 150, suggest: 'repeat_buyer' }
+    ],
     // Her usual extras (guide §21.2): what a sale's "Add an extra charge" offers.
     extra_charge_list: [
       { id: crypto.randomUUID(), label: 'Gold photo package', amount: 150, group: 'Photo packages' },
@@ -1003,11 +1012,31 @@ export async function seedSampleData() {
         referral_code: 'THORNPUP', referral_instructions: 'Use code THORNPUP at checkout for 30% off your first Autoship order of the food your puppy is already eating.',
         // Shown to families as "Recommended for your puppy" (Integrations plan §3);
         // with Maple's sale delivered a month ago, Today's follow-up note carries it.
-        share_with_families: true }
-    ]) {
+        share_with_families: true },
+      // How families pay (Payment Methods plan §2): her Payment service accounts,
+      // cash included (D7). Sample handles, not real ones.
+      { name: 'Zelle', account_type: 'payment_service', family_label: 'Zelle', discounted_method: true,
+        payment_instructions: 'Zelle to payments@thornfield.example, with your puppy\'s name in the memo.' },
+      { name: 'Cash App', account_type: 'payment_service', family_label: 'Cash App', payment_link: 'https://cash.app/$ThornfieldSample' },
+      { name: 'PayPal (business)', account_type: 'payment_service', family_label: 'PayPal', payment_link: 'https://paypal.me/ThornfieldSample',
+        fee_percent: 3.49, fee_fixed: 0.49 },
+      // payMethods.CASH_ACCOUNT, written out: the sample data loads on the first-run path.
+      { name: 'Cash', account_type: 'payment_service', family_label: 'Cash', payment_instructions: 'Cash at pickup', discounted_method: true }
+    ].filter((d) => d.account_type !== 'payment_service' || editionFlags.payMethods)) {
       const saved = await accountRepo.create(data);
       manifest.accounts.push(saved.id);
       accountIds.set(saved.name, saved.id);
+    }
+    // Which of them families choose from for each payment: everything but cash before
+    // pickup, cash or Zelle for the final payment.
+    if (editionFlags.payMethods) {
+      const id = (n) => accountIds.get(n);
+      await kennelRepo.update(thornfield.id, { pay_methods: {
+        fee: [id('Zelle'), id('Cash App'), id('PayPal (business)')],
+        deposit: [id('Zelle'), id('Cash App'), id('PayPal (business)')],
+        payments: [id('Zelle'), id('Cash App'), id('PayPal (business)')],
+        final: [id('Zelle'), id('Cash')]
+      } });
     }
     // Cedar's sale went through Good Dog, its fee passed on in the price: the
     // Sale page shows the fee and what's netted, and Financials' earned income
@@ -1160,6 +1189,11 @@ async function seedWaitlist(manifest, r) {
     fee_received_date: daysFromToday(-130), fee_amount: 300, fee_credit_policy: 'credited_to_purchase', fee_payment_method: 'Zelle',
     pref_sex: 'female', ready_timing: 'asap', application: app('Rachel Kim', 'rachel.kim@example.com')
   });
+  // PayPal turned off for Rachel (Payment Methods plan §2.4): her page offers the rest.
+  if (editionFlags.payMethods) {
+    const paypal = (await accountRepo.getAll()).find((a) => a.name === 'PayPal (business)');
+    if (paypal) await waitlistEntryRepo.update(rachelEntry.id, { pay_methods_off: [paypal.id] });
+  }
 
   const alders = await contact({ name: 'Ben & Kate Alder', email: 'alders@example.com' });
   await entry({

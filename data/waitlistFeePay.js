@@ -3,7 +3,6 @@
 // Pay link, and what a paid fee does to their entry. The network half (making the
 // Stripe links, checking them) is waitlistFeeLinks.js. Used by the projection
 // (waitlistProjection.js), so nothing here touches the database.
-import { feeRate, priceToNet } from './processingFees.js';
 import { paymentLink } from './paymentLinks.js';
 import { waitlistConfig } from './waitlistRules.js';
 
@@ -15,12 +14,11 @@ export function feeAccountOf(kennel, accounts = []) {
   return a && a.account_type === 'payment_service' ? a : null;
 }
 
-// What the family pays for a fee of `fee`: the fee itself, or with the card fee
-// on top when the account usually passes it on. → { charge, passed }
-export function feeCharge(fee, account) {
-  const rate = feeRate(account);
-  const grossed = account?.fee_passed_to_buyer_default && rate ? priceToNet(fee, rate) : null;
-  return grossed != null && grossed > fee ? { charge: grossed, passed: true } : { charge: Number(fee), passed: false };
+// What the family pays for a fee of `fee`: the fee itself. A card fee is never
+// added on top (Payment Methods plan D8: that's a surcharge), whatever the account's
+// "passed to the buyer" default says. → { charge, passed }
+export function feeCharge(fee /* , account */) {
+  return { charge: Number(fee), passed: false };
 }
 
 const isStripe = (url) => {

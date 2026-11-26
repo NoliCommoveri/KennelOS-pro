@@ -9,6 +9,7 @@ import { SALE_REFERENCES } from './referenceRegistry.js';
 import { assertOwnKennel } from './kennelScope.js';
 import { contactRepo } from './contactRepo.js';
 import { isOpenSale, saleEndReasonsFor, REFUNDABLE_SALE_STATUSES } from './vocab.js';
+import { editionFlags } from './editionConfig.js';
 
 const base = makeRepo('sales', SALE_REFERENCES);
 
@@ -63,6 +64,21 @@ function withRefund(record) {
   return { ...record, ...REFUND_FIELDS };
 }
 
+// Covering payment costs (Payment Methods plan §5.2, costCover.js): a sale made in the
+// app copies her rules (the pup's litter's puppy rule first), so a later rule change
+// never rewrites it. Restores and sync never come through here, and a caller that
+// passes cost_cover_amounts (even null) keeps its own.
+async function withNewCover(data) {
+  if (!editionFlags.costCover || 'cost_cover_amounts' in data || !data.kennel_id) return data;
+  const kennel = await db.kennels.get(data.kennel_id);
+  if (!kennel?.cost_cover?.show) return data;
+  const dog = data.dog_id ? await db.dogs.get(data.dog_id) : null;
+  const litter = dog?.litter_id ? await db.litters.get(dog.litter_id) : null;
+  const { coverForNewSale } = await import('./costCover.js'); // only once she's set it up: the light pages never load it for this
+  const cover = coverForNewSale(kennel, litter);
+  return cover ? { ...data, cost_cover_amounts: cover } : data;
+}
+
 export const saleRepo = {
   ...base,
 
@@ -73,6 +89,7 @@ export const saleRepo = {
     // the dog being placed, so a kennel-B dog sold while scoped to A still files
     // under B.
     await assertOwnKennel(data.kennel_id, 'Sale');
+    data = await withNewCover(data);
     const saved = await base.create(data);
     // Auto-tag the referral source as a Buyer referrer (a stored role on the
     // Contact — the canonical FK stays sales.referred_by_contact_id, this is just

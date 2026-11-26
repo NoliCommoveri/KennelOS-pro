@@ -17,7 +17,7 @@ import {
 } from '../data/waitlistRules.js';
 import { DISPOSITION, REGISTRATION_TYPE, SEX, WAITLIST_PREF_SEX, PLACEMENT_PURPOSE, registrationsForPurposes, cleanPurposes, descriptor } from '../data/vocab.js';
 import { esc, fmtDate, todayYMD, alertModal, confirmModal } from './ui.js';
-import { formModal } from './waitlistUI.js';
+import { formModal, depositViaContext, depositViaHtml, depositExpectedText, wireDepositVia } from './waitlistUI.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
 import { entryDoNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
 
@@ -151,20 +151,25 @@ export async function sideDepositDialog({ sale, name, pupName }) {
   const [sales, offers] = await Promise.all([saleRepo.getByDog(sale.dog_id), waitlistOfferRepo.getAll()]);
   const others = pupClaims(sale.dog_id, { sales, offers }).filter((c) => c.sale_id !== sale.id);
   let res = null;
+  // How it was paid, and the discount with it (Payment Methods plan D31).
+  const entry = sale.side_entry_id ? await waitlistEntryRepo.getById(sale.side_entry_id) : null;
+  const via = await depositViaContext(sale, sale.kennel_id || entry?.kennel_id);
+  let readVia = () => ({});
   const ok = await formModal({
     title: `Deposit from ${name}`,
     confirmLabel: 'Record the deposit',
     bodyHtml: `<div class="form-grid">
         <div class="field"><label>Deposit received</label><input id="sd-date" type="date" value="${esc(todayYMD())}"></div>
         <div class="field"><label>Amount</label><input id="sd-amount" type="number" min="0" step="0.01" value="${sale.deposit_amount != null ? esc(sale.deposit_amount) : ''}"></div>
+        ${depositViaHtml(via)}
       </div>
       ${others.length ? `<div class="inline-warn">${others.length === 1 ? 'Another family also has a claim' : 'Other families also have claims'} on ${esc(pupName)}. Recording this deposit ends ${others.length === 1 ? 'it' : 'them'}: a side sale is cancelled (they keep their place), a turn pick is let go (their turn stays open on the pups left).</div>` : ''}
-      <p class="field-hint">${esc(pupName)} becomes theirs and ${esc(name)} is placed. No turn moves on.</p>`,
+      <p class="field-hint">${esc(pupName)} becomes theirs and ${esc(name)} is placed. No turn moves on.${depositExpectedText(via)}</p>`,
     onConfirm: async (o) => {
       const date = o.querySelector('#sd-date').value || todayYMD();
-      res = await actions.confirmSideDeposit(sale.id, { date, paidDate: date, amount: o.querySelector('#sd-amount').value });
+      res = await actions.confirmSideDeposit(sale.id, { date, paidDate: date, amount: o.querySelector('#sd-amount').value, ...readVia() });
     }
-  });
+  }, (o) => { readVia = wireDepositVia(o, via); });
   return ok ? res : null;
 }
 

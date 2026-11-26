@@ -25,6 +25,9 @@ const text = (v) => String(v ?? '').trim();
 //                  (plan §4): its payment link and instructions, before hers
 //   paymentLink    a bare link to pay online, when there's no payAccount
 //   paymentText    her payment instructions (the waitlist's, D21)
+//   methods        her deposit methods for this family, one line each (Payment Methods
+//                  plan §4, payMethods.payMessageText): "How to pay", with her
+//                  text under them as Additional Payment Instructions
 //   contractLabel  the contract form's label, e.g. "Pet home contract"
 //   contractLink   its prefilled signing link
 //   contractByEmail  the contract comes in its own email to sign (Firma's), no link here
@@ -56,7 +59,9 @@ export function depositRequestMessage(p = {}) {
   }
   const pay = paid ? [] : p.payAccount ? paymentLines(p.payAccount) : text(p.paymentLink) ? [`Pay online: ${text(p.paymentLink)}`] : [];
   if (pay.length) lines.push('', ...pay);
-  if (text(p.paymentText) && (!paid || text(p.balance))) lines.push('', `${paid ? 'How to pay the balance' : pay.length ? 'Or pay' : 'How to pay'}: ${text(p.paymentText)}`);
+  const methods = paid ? '' : text(p.methods);
+  if (methods) lines.push('', `${pay.length ? 'Or pay' : 'How to pay'}:`, methods);
+  if (text(p.paymentText) && (!paid || text(p.balance))) lines.push('', `${paid ? 'How to pay the balance' : methods ? 'Additional Payment Instructions' : pay.length ? 'Or pay' : 'How to pay'}: ${text(p.paymentText)}`);
   if (text(p.contractLink)) {
     lines.push('', `Please review and sign your ${text(p.contractLabel) || 'contract'}. The details are already filled in:`, text(p.contractLink));
   } else if (p.contractByEmail) {

@@ -15,6 +15,7 @@ import { kennelRepo } from '../data/kennelRepo.js';
 import { extraChargesTotal } from '../data/extraCharges.js';
 import { LITTER_STATUS, PAIRING_STATUS, DOG_STATUS, SEX, SALE_STATUS, REGISTRATION_TYPE, FOSTER_DIRECTION, FOSTER_COMP_MODEL, FOSTER_SPLIT_BASIS, WHELPED_OR_LATER, LITTER_DELIVERY_TYPE, RELEASED_SALE_STATUSES, COLLAR_COLOR, descriptor } from '../data/vocab.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { coverRules, litterCover } from '../data/costCover.js';
 import { websiteLinkOffered } from '../data/kennelportApi.js';
 import { waitlistConfig, plannedOpening, deadlineLabel, timeLabel, HALF_HOURS } from '../data/waitlistRules.js';
 import { litterMarked, LIVE_LITTER_STATUSES } from '../data/siteExport.js';
@@ -225,6 +226,7 @@ function renderView() {
       ${row('Expected deposit (female)', esc(money(l.expected_deposit_female)))}
       ${row('Full registration surcharge (female)', esc(money(l.full_reg_surcharge_female)))}
       ${row('Full registration deposit surcharge (female)', esc(money(l.full_reg_deposit_surcharge_female)))}
+      ${coverOffered(l) ? row('Payment costs on the price', esc(coverText(l))) : ''}
       ${row('Notes', l.notes ? esc(l.notes).replace(/\n/g, '<br>') : '')}
       ${editionFlags.feedingSchedule ? row('Feeding schedule override', l.feeding_schedule_override ? esc(l.feeding_schedule_override).replace(/\n/g, '<br>') : '') : ''}
     </dl>`;
@@ -328,6 +330,7 @@ function renderEdit() {
       ${field('Expected deposit (female)', `<input id="f-expected_deposit_female" type="number" min="0" step="0.01" value="${esc(l.expected_deposit_female)}">`, { hint: 'Prefills a new sale\'s deposit amount when the puppy sold is female. Still editable per sale.' })}
       ${field('Full registration surcharge (female)', `<input id="f-full_reg_surcharge_female" type="number" min="0" step="0.01" value="${esc(l.full_reg_surcharge_female)}">`, { hint: 'Added to the expected price when a female is sold with Full registration (or intended Full, on a shared price list).' })}
       ${field('Full registration deposit surcharge (female)', `<input id="f-full_reg_deposit_surcharge_female" type="number" min="0" step="0.01" value="${esc(l.full_reg_deposit_surcharge_female)}">`, { hint: 'Added to the expected deposit when a female is sold with Full registration.' })}
+      ${coverOffered(l) ? coverField(l) : ''}
       ${editionFlags.includeArchivedToggles ? `<div class="field field-wide">
         <label class="check-inline"><input id="picker-archived" type="checkbox"${ctx.pickerArchived ? ' checked' : ''}> Include archived dogs/pairings/contacts in the pickers above</label>
       </div>` : ''}
@@ -439,6 +442,8 @@ function readForm() {
     full_reg_surcharge_female: val('f-full_reg_surcharge_female'),
     full_reg_deposit_surcharge_male: val('f-full_reg_deposit_surcharge_male'),
     full_reg_deposit_surcharge_female: val('f-full_reg_deposit_surcharge_female'),
+    // Only read when it rendered (Pro, with a way chosen), else kept.
+    cost_cover: document.getElementById('f-cost_cover_how') ? readCoverField() : (ctx.draft.cost_cover ?? null),
     notes: val('f-notes'),
     // Absent from the DOM in Lite (editionFlags.feedingSchedule off) — falls
     // back to the stored draft value rather than being clobbered to '' by val().
@@ -562,6 +567,39 @@ function cancel() {
   renderTimelineSection();
   renderExpensesSection();
   renderIncomeSection();
+}
+
+// Covering payment costs (Payment Methods plan §5.2): the litter's own puppy rule
+// (Litter.cost_cover), when her kennel has a way chosen. Her usual rule otherwise.
+const coverOffered = (l) => editionFlags.costCover && Boolean(coverRules(ctx.kennelsById?.get(l?.kennel_id)).show);
+function usualCoverText(l) {
+  const r = coverRules(ctx.kennelsById?.get(l?.kennel_id)).rules.puppy;
+  return r ? (r.percent ? `${r.percent}%` : money(r.amount)) : 'none';
+}
+function coverText(l) {
+  const own = litterCover(l);
+  if (!own) return `Your usual (${usualCoverText(l)})`;
+  return own.none ? 'None for this litter' : own.percent ? `${own.percent}%` : money(own.amount);
+}
+function coverField(l) {
+  const own = litterCover(l);
+  const how = !own ? '' : own.none ? 'none' : own.percent ? 'percent' : 'amount';
+  return field('Payment costs on the price', `<div style="display:flex; gap:8px;">
+      <select id="f-cost_cover_how">
+        <option value=""${how === '' ? ' selected' : ''}>Your usual (${esc(usualCoverText(l))})</option>
+        <option value="percent"${how === 'percent' ? ' selected' : ''}>Percent</option>
+        <option value="amount"${how === 'amount' ? ' selected' : ''}>Amount</option>
+        <option value="none"${how === 'none' ? ' selected' : ''}>None for this litter</option>
+      </select>
+      <input id="f-cost_cover_value" type="number" min="0" step="0.01" value="${esc(own?.percent ?? own?.amount ?? '')}" aria-label="Percent or amount" style="width:100px;">
+    </div>`, { hint: 'Added to each pup\'s price on a new sale from this litter, to cover what getting paid costs you. Set on the Kennel page under Covering payment costs.' });
+}
+function readCoverField() {
+  const how = document.getElementById('f-cost_cover_how').value;
+  const v = Number(document.getElementById('f-cost_cover_value').value);
+  if (how === 'none') return { none: true };
+  if ((how === 'percent' || how === 'amount') && Number.isFinite(v) && v > 0) return { [how]: v };
+  return null;
 }
 
 // Empty numeric strings become null so we don't persist '' where a number belongs.

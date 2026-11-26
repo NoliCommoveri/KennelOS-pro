@@ -21,6 +21,9 @@ import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 import { ourRole, travellingDogId, studBoardingFor, studBoardingPrefill, studFeeExpenseDue, studFeeExpense } from '../data/studRules.js';
 import { expenseRepo } from '../data/expenseRepo.js';
 import { todayYMD } from '../data/dateUtils.js';
+import { studCover, handCoverStart } from '../data/costCover.js';
+import { kennelRepo } from '../data/kennelRepo.js';
+import { editionFlags } from '../data/editionConfig.js';
 import { eventRepo } from '../data/eventRepo.js';
 import { openEventForm } from '../assets/eventForm.js';
 
@@ -190,6 +193,7 @@ function renderView() {
       ${row('Partner dog', s.partner_dog_id ? `<a href="dog.html?id=${encodeURIComponent(s.partner_dog_id)}">${esc(dogName(s.partner_dog_id) || '—')}</a>` : '')}
       ${row('Partner contact', s.partner_contact_id ? `<a href="contact.html?id=${encodeURIComponent(s.partner_contact_id)}">${esc(contactName(s.partner_contact_id) || '—')}</a>` : '')}
       ${row('Fee', esc(money(s.fee_amount)) + (s.fee_structure ? ` <span class="faint">(${esc((FEE_STRUCTURE.find(f => f.value === s.fee_structure) || {}).label || s.fee_structure)})</span>` : ''))}
+      ${studCoverRow(s)}
       ${feeHasPick(s.fee_structure) ? row('Pick status', s.pick_status ? esc(s.pick_status) : '') : ''}
       ${feeHasPick(s.fee_structure) ? row('Pick value', esc(money(s.pick_value_amount))) : ''}
       ${row('Linked pairing', pairingHtml)}
@@ -528,6 +532,27 @@ function renderTitle() {
   els.title.innerHTML = esc(label) + (s.is_archived ? ' <span class="badge badge-gray">Archived</span>' : '');
   els.subtitle.innerHTML = '';
 }
+
+// Covering payment costs on our stud's fee (Payment Methods plan §5.2), Pro: the
+// amount as a service fee or in the fee, changed with Change (assets/costCoverUI.js).
+function studCoverRow(s) {
+  if (!editionFlags.costCover || ourRole(s, ctx.dogsById) !== 'stud') return '';
+  const c = studCover(s);
+  const what = c && c.stud > 0 ? `${c.show === 'in_price' ? 'In the fee' : 'Service fee'}: ${money(c.stud)}${c.following.stud ? ` (${c.following.stud}%)` : ''}${c.show === 'in_price' ? ` · they pay ${money(Number(s.fee_amount) + c.stud)}` : ''}` : 'None';
+  return row('Payment costs', `${esc(what)} <button type="button" class="btn btn-sm" data-cc-edit>Change</button>`);
+}
+els.body.addEventListener('click', async (e) => {
+  if (!e.target.closest('[data-cc-edit]') || !ctx.original) return;
+  try {
+    const { openCoverDialog } = await import('../assets/costCoverUI.js');
+    const s = ctx.original;
+    const kennel = s.kennel_id ? await kennelRepo.getById(s.kennel_id) : null;
+    const next = await openCoverDialog({ record: s, kinds: ['stud'], cover: studCover(s), start: handCoverStart(kennel) });
+    if (!next) return;
+    ctx.original = await studServiceRepo.update(s.id, { cost_cover_amounts: next });
+    renderAll();
+  } catch (err) { showError(err.message || String(err)); }
+});
 
 function renderAll() {
   renderTitle();

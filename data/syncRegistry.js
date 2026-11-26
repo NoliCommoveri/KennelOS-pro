@@ -139,7 +139,15 @@ export const SYNC_REGISTRY = Object.freeze({
       'time_zone',
       // The Payment service account her online application fee is paid through
       // (Integrations plan §4): an id, like sales_channel_account_id.
-      'waitlist_fee_account_id'
+      'waitlist_fee_account_id',
+      // Which of her Payment service accounts families choose from for each payment
+      // (Payment Methods plan §2.2, §7): account ids only, a setting like the one above.
+      'pay_methods',
+      // What she takes for the final payment, in her words (Payment Schedule plan §3.4):
+      // her payment instructions for families, the same tier as the fee and deposit
+      // ones in waitlist_config, and sent to her website with them (Website Contract
+      // plan C13; owner decision 2026-11-26).
+      'final_payment_methods'
     ],
     // Her application form's key pairs (W2 Plan §7): the private halves open every
     // online application, so they ride the private vault and file backups only.
@@ -147,11 +155,17 @@ export const SYNC_REGISTRY = Object.freeze({
       // Her extra charges price list (guide §21.2): prices, private like a sale's,
       // and its groups' rules and payment plans.
       'extra_charge_list', 'extra_charge_groups',
+      // Covering payment costs (Payment Methods plan §5.1): her price terms, private
+      // like her price list.
+      'cost_cover',
       // Her pickup places (Family Requests plan §4): addresses, private.
       'pickup_locations',
-      // Her saved payment schedules and what she takes for the final payment
-      // (Payment Schedule plan §3.4, D5): private like her price list.
-      'payment_schedules', 'final_payment_methods'],
+      // Her saved payment schedules (Payment Schedule plan §3.4, D5): private like her
+      // price list.
+      'payment_schedules',
+      // Her discounts table (Payment Methods plan §5.4, §7): her price terms, private
+      // like her price list.
+      'discounts'],
     pending: []
   },
 
@@ -199,6 +213,8 @@ export const SYNC_REGISTRY = Object.freeze({
       'expected_price_male', 'expected_price_female', 'expected_deposit_male',
       'expected_deposit_female', 'full_reg_surcharge_male', 'full_reg_surcharge_female',
       'full_reg_deposit_surcharge_male', 'full_reg_deposit_surcharge_female',
+      // The litter's own payment-costs rule on its prices (Payment Methods plan §5.2).
+      'cost_cover',
       'foster_comp_model', 'foster_our_share_pct',
       'foster_split_basis', 'foster_flat_fee_per_pup', 'foster_split_notes',
       'feeding_schedule_override', 'notes',
@@ -262,11 +278,18 @@ export const SYNC_REGISTRY = Object.freeze({
       'payment_link_amount', 'processing_fee_reports',
       // Extra charges (guide §21.2): names and amounts, money like price.
       'extra_charges',
+      // What covers getting paid on this sale (Payment Methods plan §5.2): money.
+      'cost_cover_amounts',
       // Its payment schedule and the payments received (Payment Schedule plan §3.1,
       // §3.2, D5): money, private like price.
       'payment_schedule', 'payments',
+      // The order money pays its charges in (Payment Schedule plan §12, D40): private
+      // like its schedule.
+      'payment_priority',
       // A refund on a sale that ended (review K10-11, R4): money, private like price.
-      'refund_amount', 'refund_date'
+      'refund_amount', 'refund_date',
+      // The discounts she gave on it (Payment Methods plan §5.4, §7): money, beside payments.
+      'discounts'
     ],
     pending: []
   },
@@ -280,7 +303,9 @@ export const SYNC_REGISTRY = Object.freeze({
     ],
     private: [
       'fee_amount', 'pick_value_amount', 'result_notes', 'invoice_number',
-      'invoice_notes', 'payment_method', 'payment_reference', 'referred_by_contact_id'
+      'invoice_notes', 'payment_method', 'payment_reference', 'referred_by_contact_id',
+      // What covers getting paid on the stud fee (Payment Methods plan §5.2): money.
+      'cost_cover_amounts'
     ],
     pending: []
   },
@@ -377,7 +402,13 @@ export const SYNC_REGISTRY = Object.freeze({
       'esign_signs_default',
       // Her own payment link and payment instructions (Integrations plan §4,
       // Level 0; D9: payment-link refs are cloud): written to be sent to buyers.
-      'payment_link', 'payment_instructions'
+      'payment_link', 'payment_instructions',
+      // What families see the account as when they choose how to pay (Payment Methods
+      // plan §2.1, §7): written for families, like the instructions.
+      'family_label',
+      // Her Discounted payment method tick (Payment Methods plan §2.1, §7, D14): which
+      // methods the payment-method discount covers, a setting like pay_methods.
+      'discounted_method'
     ],
     // fee_charge_back (guide §21.2): her own choice to bill the fee back, private by
     // rule zero (unlike the vendor's published rate above).
@@ -401,6 +432,9 @@ export const SYNC_REGISTRY = Object.freeze({
       'off_list',
       // The Payment service account the application fee was paid via (plan §4): an id.
       'fee_paid_via_account_id',
+      // The methods she turned off for this family (Payment Methods plan §2.4, D4):
+      // account ids only, never why, so any of her devices publishes the same page.
+      'pay_methods_off',
       'pref_sex', 'pref_breed', 'pref_purposes', 'pref_colors',
       'listen_mode', 'listen_sire_ids', 'listen_dam_ids',
       'removed_reason', 'placed_sale_id',

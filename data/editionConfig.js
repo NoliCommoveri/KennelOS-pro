@@ -142,6 +142,13 @@ export const editionFlags = {
   // to another breeder's KennelOS, and add or update them from one. Pro only: Lite's dog
   // cap would make a bulk add half-fail, and Demo can't write.
   dogCards: true,
+  // Families choose how to pay on their status page, from her accounts per payment
+  // (Payment Methods plan §2, Phases 1–3 and 6). Pro only: Accounts and the waitlist are.
+  payMethods: true,
+  // Covering what getting paid costs her: service fees or payment-fee prices, per kind
+  // of charge, with a calculator (Payment Methods plan §5, Phases 4–5). Pro only (D20):
+  // Lite keeps one price per sale.
+  costCover: true,
 };
 
 // Full nav bar (Pro has every hub).

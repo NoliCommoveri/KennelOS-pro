@@ -38,21 +38,23 @@ import { litterRepo } from './litterRepo.js';
 import { eventRepo } from './eventRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { saleFeeEstimate } from './processingFees.js';
+import { pricedSale, serviceFeeCharges, pricedStud, serviceFeeLabel, COVER_USE } from './costCover.js';
 import { paymentStatement, chargePieces } from './paymentSchedule.js';
 import { expectedPickupDate } from './goHome.js';
 import { businessDays, waitlistConfig } from './waitlistRules.js';
 import { todayYMD } from './dateUtils.js';
-import { INCOME_COMPONENTS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES, isLostSale, canRecordRefund, descriptor } from './vocab.js';
+import { INCOME_COMPONENTS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES, isLostSale, canRecordRefund, descriptor, feeCreditToward } from './vocab.js';
 
 const num = (v) => (v == null || v === '' ? 0 : Number(v)) || 0;
 const round2 = (n) => Math.round(n * 100) / 100;
 
 // A credited application fee on a sale: { amount, toward } — 'balance' (the rest of
-// the price, the default) or 'deposit' (her waitlist setting fee_credit_toward). A
-// bare number is toward the balance.
+// the price, the default, off its first payment after the deposit), 'final' (off the
+// rest of the price at the final payment) or 'deposit' (her waitlist setting
+// fee_credit_toward). A bare number is toward the balance.
 export function feeCreditOf(fc) {
   return fc && typeof fc === 'object'
-    ? { amount: num(fc.amount), toward: fc.toward === 'deposit' ? 'deposit' : 'balance' }
+    ? { amount: num(fc.amount), toward: feeCreditToward(fc.toward) }
     : { amount: num(fc), toward: 'balance' };
 }
 export const feeCreditAmount = (fc) => feeCreditOf(fc).amount;
@@ -103,7 +105,11 @@ function balancePaid(s) {
 // The credited part of a component not yet paid is earned (on the credit's date);
 // the rest stays anticipated. Invoices never pass it: their lines stay whole, and
 // the credit prefills what's already collected instead.
-function saleComponents(s, feeCredit = 0, received = null) {
+// Covering payment costs (costCover.js): with payment-fee prices each part already
+// carries its share (pricedSale); service fees are their own `service_fee` parts
+// (keyed `service_fee_<kind>`), paid with the balance.
+function saleComponents(raw, feeCredit = 0, received = null) {
+  const s = pricedSale(raw);
   // Extras she kept when the family backed out (Family Requests plan §7.2) are still
   // owed whatever the sale's status: paid parts earned, the rest anticipated.
   const kept = saleExtraCharges(s).filter((x) => x.kept_after_cancel);
@@ -117,8 +123,10 @@ function saleComponents(s, feeCredit = 0, received = null) {
     { component: 'deposit', amount: deposit, paid: depositPaid(s) },
     { component: 'balance', amount: balance, paid: balancePaid(s) },
     { component: 'transport', amount: num(s.transport_fee), paid: balancePaid(s) },
-    { component: 'boarding', amount: num(s.deferred_boarding_amount) * boardingCount(s), paid: balancePaid(s) },
-    ...saleExtraCharges(s).flatMap(extraParts.bind(null, s))
+    { component: 'boarding', amount: round2(num(s.deferred_boarding_amount) * boardingCount(s) + num(s.__boarding_cover)), paid: balancePaid(s) },
+    ...saleExtraCharges(s).flatMap(extraParts.bind(null, s)),
+    // The puppy fee's share on the deposit (D30) is paid with the deposit.
+    ...serviceFeeCharges(raw).map((f) => ({ component: 'service_fee', key: f.key, label: f.label, amount: f.amount, paid: f.deposit ? depositPaid(s) : balancePaid(s) }))
   ];
   const out = [];
   if (dead && kept.length) return [...deadParts(parts.filter((p) => !(p.key && kept.some((x) => p.key === `extra:${x.id}` || p.key.startsWith(`extra:${x.id}:`))))), ...keptParts(s, kept)];
@@ -214,6 +222,19 @@ export function feeComponents(s, cash, { open = cash, depositPart = null, paid =
     if (paid.rest > 0 && restGross > 0) out.push({ component: 'processing_fee', amount: -round2(restFee * Math.min(paid.rest / restGross, 1)), state: 'earned', when: paid.restWhen || s.balance_paid_date || s.sale_date || String(s.created_at || '').slice(0, 10), due: '' });
   }
   return out.filter((c) => c.amount);
+}
+
+// Her discounts on a sale (Payment Methods plan §5.4, discounts.js) as NEGATIVE
+// `discount` lines: the statement counts each as money toward what's owed (so a
+// discounted payment pays its due date in full, and the charges it paid show earned),
+// and each comes back off here, on its date, so earned income is what she received.
+// None on a lost sale (it counts nothing) or a released one (only money paid survives).
+export function discountComponents(s, st) {
+  if (isLostSale(s) || RELEASED_SALE_STATUSES.includes(s.status)) return [];
+  const fallback = s.sale_date || s.deposit_date || s.balance_paid_date || String(s.created_at || '').slice(0, 10);
+  return (st?.received || []).filter((m) => m.kind === 'discount' && m.amount > 0).map((m) => ({
+    component: 'discount', label: m.discount_label, amount: -round2(m.amount), state: 'earned', when: m.date || fallback, due: '', ...(m.date ? { paid_date: m.date } : {})
+  }));
 }
 
 // A refund on a sale that ended and kept money (Sale.refund_amount / refund_date,
@@ -363,14 +384,15 @@ export function carriedOutBySale(entries) {
 // earned once completed, anticipated while arranged/in_progress, dropped when
 // failed/cancelled. `pick_value_amount` is a NON-CASH estimate: surfaced on its
 // own `pick` line (state 'noncash') and never mixed into cash totals (§21).
+// Covering payment costs (costCover.pricedStud): with payment-fee prices the fee
+// carries its share; a service fee is its own `service_fee` line beside it.
 function studComponents(s) {
   const out = [];
-  const fee = num(s.fee_amount);
-  if (fee) {
-    if (s.status === 'completed') out.push({ component: 'stud_fee', amount: fee, state: 'earned' });
-    else if (['arranged', 'in_progress'].includes(s.status)) out.push({ component: 'stud_fee', amount: fee, state: 'anticipated' });
-    // failed / cancelled → dropped
-  }
+  const { fee, serviceFee } = pricedStud(s);
+  const state = s.status === 'completed' ? 'earned' : ['arranged', 'in_progress'].includes(s.status) ? 'anticipated' : null;
+  // failed / cancelled → dropped
+  if (fee && state) out.push({ component: 'stud_fee', amount: fee, state });
+  if (serviceFee && state) out.push({ component: 'service_fee', key: 'service_fee_stud', label: serviceFeeLabel('stud', serviceFee.refundable), amount: serviceFee.amount, state });
   const pick = num(s.pick_value_amount);
   if (pick) out.push({ component: 'pick', amount: pick, state: 'noncash' });
   return out;
@@ -399,7 +421,7 @@ export function incomeLineItems(sourceType, record, { feeCredit = 0 } = {}) {
       ...c,
       key: c.key || c.component,
       label: descriptor(INCOME_COMPONENTS, c.component).label,
-      invoiceLabel: c.component === 'extra' ? c.label : (INVOICE_LINE_LABELS[c.component] || c.component)
+      invoiceLabel: c.component === 'extra' || c.component === 'service_fee' ? c.label : (INVOICE_LINE_LABELS[c.component] || c.component)
     }));
 }
 
@@ -461,7 +483,7 @@ const feeReceived = (e) => !e.is_archived && !!e.fee_received_date && num(e.fee_
 // comes off it before it's paid), `toward` from their kennel's setting.
 function feeCreditsBySale(entries, { sales = [], offers = [], kennels = [] } = {}) {
   const out = new Map();
-  const towardOf = (e) => (kennels.find((k) => k.id === e.kennel_id)?.waitlist_config?.fee_credit_toward === 'deposit' ? 'deposit' : 'balance');
+  const towardOf = (e) => feeCreditToward(kennels.find((k) => k.id === e.kennel_id)?.waitlist_config?.fee_credit_toward);
   for (const e of entries) {
     if (!feeReceived(e) || e.fee_credit_policy !== 'credited_to_purchase') continue;
     const saleId = e.placed_sale_id || creditSale(e, sales, offers, entries)?.id;
@@ -487,7 +509,8 @@ export async function getSaleFeeCredit(saleId) {
 
 // --- Credits for funds already received (receivedCredits.js) ----------------------
 
-const CREDIT_USE_OF = { deposit: 'deposit', balance: 'price', transport: 'extras', boarding: 'extras', extra: 'extras' };
+const CREDIT_USE_OF = { deposit: 'deposit', balance: 'price', transport: 'extras', boarding: 'extras', extra: 'extras', service_fee: 'extras' };
+const useOf = (c) => (c.component === 'service_fee' ? (c.key === 'service_fee_deposit' ? 'deposit' : COVER_USE[String(c.key).replace('service_fee_', '')] || 'extras') : CREDIT_USE_OF[c.component]);
 
 // A sale's charges a family's credit can pay, keyed like its invoice lines, at
 // their full amounts (paid or not: a credit's share of a charge doesn't move once
@@ -495,11 +518,14 @@ const CREDIT_USE_OF = { deposit: 'deposit', balance: 'price', transport: 'extras
 // In the order money pays them (Payment Schedule plan D16): deposit, price, boarding,
 // extras, transport last.
 const CREDIT_ORDER = { deposit: 0, balance: 1, boarding: 2, extra: 3, transport: 4 };
+// A service fee right after the charge it's on (paymentSchedule.saleCharges' order).
+const SERVICE_FEE_RANK = { service_fee_deposit: 0.5, service_fee_puppy: 1.5, service_fee_boarding: 2.5, service_fee_extras: 3.5, service_fee_transport: 4.5 };
+const rankOf = (c) => (c.component === 'service_fee' ? SERVICE_FEE_RANK[c.key] ?? 3.5 : CREDIT_ORDER[c.component]);
 export function saleCreditCharges(sale, feeCredit = 0) {
   if (!sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) return [];
   return saleComponents({ ...sale, status: 'deposit_pending', end_reason: null }, feeCredit)
-    .filter((c) => CREDIT_USE_OF[c.component])
-    .map((c, i) => ({ key: c.key || c.component, use: CREDIT_USE_OF[c.component], amount: c.amount, rank: CREDIT_ORDER[c.component] * 1000 + i }))
+    .filter((c) => useOf(c))
+    .map((c, i) => ({ key: c.key || c.component, use: useOf(c), amount: c.amount, rank: rankOf(c) * 1000 + i }))
     .sort((a, b) => a.rank - b.rank)
     .map(({ rank: _rank, ...c }) => c);
 }
@@ -673,7 +699,7 @@ export function priceTable(sale, { feeCredit = NO_FEE_CREDIT, received = null } 
     const recorded = round2(st.received.filter((r) => r.kind === 'payment')
       .reduce((t, r) => t + r.pays.filter((p) => p.key === 'balance').reduce((u, p) => u + p.amount, 0), 0));
     const unpaid = RELEASED_SALE_STATUSES.includes(s.status)
-      ? Math.max(round2(Math.max(round2(num(s.price) - num(s.deposit_amount) - split.balance), 0) - earned), 0)
+      ? Math.max(round2(Math.max(round2(num(pricedSale(s).price) - num(pricedSale(s).deposit_amount) - split.balance), 0) - earned), 0)
       : anticipated;
     paidByPayments = Math.min(recorded, unpaid);
   }
@@ -765,7 +791,8 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
       dog, litter: dog?.litter_id ? litterById.get(dog.litter_id) || null : null, events: dog ? pickupsByDog.get(dog.id) || [] : [],
       kennel: kennelById.get(s.kennel_id) || null, ctx: creditCtx, feeBySale: creditBySale, today
     });
-    const cash = ledgerComponents(s, paymentStatement(s, opts), { today, carriedOut: carriedOut.get(s.id) || 0 });
+    const saleSt = paymentStatement(s, opts);
+    const cash = ledgerComponents(s, saleSt, { today, carriedOut: carriedOut.get(s.id) || 0 });
     // The processing fee follows each part over the sale's full value while open, so a
     // released sale keeps the fee of what was paid (a lost sale too: a cost, K10-4).
     const released = RELEASED_SALE_STATUSES.includes(s.status);
@@ -781,8 +808,9 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
     }
     const fees = feeComponents(s, cash, { open, paid, depositPart: depositFeePart(s, accountsById) });
     const refunds = refundComponents(s, cash);
+    const discounts = discountComponents(s, saleSt);
     if (!cash.length && !fees.length) continue; // no money on this sale — nothing to show
-    const components = [...cash, ...fees, ...refunds];
+    const components = [...cash, ...fees, ...refunds, ...discounts];
     rows.push({
       source_type: 'sale',
       source_id: s.id,
@@ -804,7 +832,9 @@ export async function getIncomeRows({ includeArchived = false, kennelId = null, 
       // out of `earned` / `anticipated` by its negative components.
       processing_fee: components.filter((c) => c.component === 'processing_fee').reduce((t, c) => t - c.amount, 0),
       // Given back on a sale that ended (refundComponents), already off `earned`.
-      refunded: refunds.reduce((t, c) => t - c.amount, 0)
+      refunded: refunds.reduce((t, c) => t - c.amount, 0),
+      // Her discounts on it (discountComponents), already off `earned`.
+      discounted: discounts.reduce((t, c) => t - c.amount, 0)
     });
   }
   if (saleId) return rows;

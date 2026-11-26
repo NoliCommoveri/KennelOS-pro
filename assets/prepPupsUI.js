@@ -45,6 +45,7 @@ import { saleFeeEstimate } from '../data/processingFees.js';
 import { paymentAccounts } from '../data/paymentLinks.js';
 import { stripeConnection } from '../data/stripeLinks.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { finalMethodsText, offFor } from '../data/payMethods.js';
 import { getPrepChecks, setPrepChecks } from '../data/settings.js';
 import { SALE_STATUS, REGISTRATION_TYPE, CONTRACT_STATUS, DISPOSITION, PAYMENT_METHODS, isOpenSale as isOpen, descriptor } from '../data/vocab.js';
 import { expectedPricing } from '../data/saleDefaults.js';
@@ -803,7 +804,9 @@ class Prep {
         who: splitName(r.buyer.name)[0], pupName: pupName(r.pup), date: fmtDate(date), time: timeText(det.placement_time),
         location: det.location || '', dropoff,
         owed: owed.amount > 0 ? fmtMoney(owed.amount) : '', paidUp: Boolean(st && !(st.remaining > 0) && st.total > 0),
-        finalMethods: owed.amount > 0 && owed.final ? String(kennel?.final_payment_methods || '').trim() : '',
+        finalMethods: !(owed.amount > 0 && owed.final) ? ''
+          : editionFlags.payMethods ? finalMethodsText(kennel, await accountRepo.getAll({ includeArchived: true }), { off: offFor(await (await import('../data/familyMoney.js')).saleFamilyEntry(r.sale)) })
+            : String(kennel?.final_payment_methods || '').trim(),
         kennelName: kennel?.kennel_name || ''
       });
       if (!one) await this.chat.say(`<strong>${esc(pupName(r.pup))}</strong>, for ${esc(r.buyer.name)}.`, { typing: 300 });

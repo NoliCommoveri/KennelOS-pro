@@ -208,6 +208,18 @@ export const ACCOUNT_REFERENCES = [
   { table: 'sales', field: 'balance_paid_via_account_id', label: 'balance paid via, on a sale' },
   { table: 'waitlist_entries', field: 'fee_paid_via_account_id', label: 'application fee paid via, on a waitlist family' },
   { table: 'kennels', field: 'waitlist_fee_account_id', label: 'online application fee account of a kennel' },
+  // How families pay (Payment Methods plan §2.2): a list of account ids per payment.
+  { table: 'kennels', field: 'pay_methods.fee', label: 'application fee payment method of a kennel', scan: true },
+  { table: 'kennels', field: 'pay_methods.deposit', label: 'deposit payment method of a kennel', scan: true },
+  { table: 'kennels', field: 'pay_methods.payments', label: 'payment method of a kennel', scan: true },
+  { table: 'kennels', field: 'pay_methods.final', label: 'final payment method of a kennel', scan: true },
+  // What each method may pay (Payment Methods plan D25): a list of ids per kind of charge.
+  { table: 'kennels', field: 'pay_methods.charges.price', label: 'puppy price payment method of a kennel', scan: true },
+  { table: 'kennels', field: 'pay_methods.charges.boarding', label: 'boarding payment method of a kennel', scan: true },
+  { table: 'kennels', field: 'pay_methods.charges.transport', label: 'transport payment method of a kennel', scan: true },
+  { table: 'kennels', field: 'pay_methods.charges.extras', label: 'extras payment method of a kennel', scan: true },
+  // A method she turned off for one family (Payment Methods plan §2.4): a list of ids.
+  { table: 'waitlist_entries', field: 'pay_methods_off', label: 'payment method turned off for a waitlist family', scan: true },
   // Each payment recorded on a sale (Payment Schedule plan §3.2): the account it came
   // in through. Inside a list, so it's a scan.
   { table: 'sales', field: 'payments[].account_id', label: 'a payment received on a sale', scan: true }

@@ -1,6 +1,7 @@
 // sale.js — Sale Detail. Edit-in-place profile and a derived Contracts panel
 // (contracts.related_sale_id = this sale — canonical on Contract, never a
 // Sale.contract_id, Stage4 Revision v2 §5). Buyer is a Contact (no Buyer table).
+import { finalMethodsText, offFor } from '../data/payMethods.js';
 import { showDeleteBlockers } from '../assets/deleteBlockers.js';
 import { saleRepo, ReferenceBlockedError } from '../data/saleRepo.js';
 import { expectedPricing, priceForRegistrationChange, depositForRegistrationChange } from '../data/saleDefaults.js';
@@ -23,6 +24,7 @@ import { esc, badge, fmtDate, fmtMoney, todayYMD, param, confirmModal, alertModa
 import { openEventForm } from '../assets/eventForm.js';
 import { attachNewContactButton } from '../assets/contactPicker.js';
 import { editionFlags } from '../data/editionConfig.js';
+import { saleCover, coverRules, handCoverStart, SALE_KINDS } from '../data/costCover.js';
 import { earlyPortalState } from '../data/portalFeed.js';
 import { startPortalEarly } from '../assets/portalEarlyUI.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
@@ -250,11 +252,13 @@ function frequencyOptions(current) {
   return `<option value="">— select —</option>` + opts;
 }
 
-// Sales channels: every account (archived ones only when already chosen), by
-// name. Blank = sold directly, no channel.
+// Sales channels: her Puppy marketplace accounts (archived ones, and an account of
+// another type set before, only when already chosen), by name. Blank = sold
+// directly. Only a marketplace's price has its fee in it (Payment Methods plan D8).
+const isMarketplace = (a) => a?.account_type === 'marketplace';
 function channelOptions(current) {
   const opts = ctx.accounts
-    .filter((a) => !a.is_archived || a.id === current)
+    .filter((a) => (isMarketplace(a) && !a.is_archived) || a.id === current)
     .map((a) => {
       const rate = feeRate(a);
       return `<option value="${esc(a.id)}"${a.id === current ? ' selected' : ''}>${esc(a.name)}${rate ? ` (${esc(rateLabel(rate))})` : ''}${a.is_archived ? ' (archived)' : ''}</option>`;
@@ -278,6 +282,9 @@ function paidViaOptions(current) {
 function feeFields(s) {
   const rate = channelRate(s);
   const estimated = estimatedFee(s);
+  // The fee in the price, and the price that nets a set amount: only for a sale
+  // through a marketplace (D8). A sale already marked keeps its box, shown as is.
+  const viaMarketplace = isMarketplace(ctx.accountsById.get(s.sales_channel_account_id));
   const channel = editionFlags.accounts
     ? `${field('Sold through', `<select id="f-sales_channel_account_id">${channelOptions(s.sales_channel_account_id)}</select>`, { hint: 'A marketplace that handles the whole sale and keeps a fee (Good Dog…). Set its fee on the Accounts page.' })}
       ${field('Deposit paid via', `<select id="f-deposit_paid_via_account_id">${paidViaOptions(s.deposit_paid_via_account_id)}</select>`, { hint: 'The Payment service the deposit is paid through (Stripe, Zelle…).' })}
@@ -286,10 +293,10 @@ function feeFields(s) {
   return `${channel}
       ${field('Processing fee', `<input id="f-processing_fee_amount" type="number" min="0" step="0.01" value="${esc(s.processing_fee_amount)}">`, { hint: estimated != null ? `Estimated ${fmtMoney(estimated)} from each payment's account rate. Change it to what was actually charged.` : 'What the marketplace or payment service kept of this sale.' })}
       <div class="field field-wide">
-        <label class="check-inline"><input id="f-fee_passed_to_buyer" type="checkbox"${s.fee_passed_to_buyer ? ' checked' : ''}> The fee is passed to the buyer in the price</label>
+        ${viaMarketplace || s.fee_passed_to_buyer ? `<label class="check-inline"><input id="f-fee_passed_to_buyer" type="checkbox"${s.fee_passed_to_buyer ? ' checked' : ''}> My price there includes its fee</label>` : ''}
         <span class="field-hint" id="fee-net-line"></span>
       </div>
-      <details class="field field-wide" id="net-helper">
+      ${viaMarketplace ? `<details class="field field-wide" id="net-helper">
         <summary>Work out a price that nets you a set amount</summary>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px;">
           <span class="faint">Net</span>
@@ -301,7 +308,7 @@ function feeFields(s) {
           <button type="button" class="btn btn-sm" id="nh-apply" disabled>Set price</button>
         </div>
         <span class="field-hint" id="nh-preview">The fee is taken from the higher price, so adding the percentage on top isn't enough: at 6.25%, netting $3,000 takes a $3,200 price, not $3,187.50.</span>
-      </details>`;
+      </details>` : ''}`;
 }
 
 // "Price after the fee" under the fee, live as the price or fee changes. Not "You
@@ -348,7 +355,7 @@ function wireFeeFields() {
   document.getElementById('f-sales_channel_account_id')?.addEventListener('change', (e) => {
     ctx.draft = readForm();
     const account = ctx.accountsById.get(e.target.value);
-    if (account) ctx.draft.fee_passed_to_buyer = !!account.fee_passed_to_buyer_default;
+    if (account) ctx.draft.fee_passed_to_buyer = isMarketplace(account) && !!account.fee_passed_to_buyer_default;
     applySuggestedFee();
     renderEdit();
   });
@@ -538,7 +545,8 @@ function renderView() {
       ${s.end_reason ? row('Why it ended', esc(descriptor(SALE_END_REASON, s.end_reason).label)) : ''}
       ${s.end_note ? row('About it', esc(s.end_note).replace(/\n/g, '<br>')) : ''}
       ${canRecordRefund(s) && Number(s.refund_amount) > 0 ? row('Refunded', `${esc(money(s.refund_amount))}${s.refund_date ? ` <span class="muted">on ${esc(fmtDate(s.refund_date))}</span>` : ''}`) : ''}
-      ${row('Price', esc(money(s.price)))}
+      ${row('Price', `${esc(money(s.price))}${coverPriceNote(s)}`)}
+      ${coverRow(s)}
       ${editionFlags.accounts && s.sales_channel_account_id ? row('Sold through', esc(ctx.accountsById.get(s.sales_channel_account_id)?.name || '—')) : ''}
       ${editionFlags.accounts && s.deposit_paid_via_account_id ? row('Deposit paid via', esc(ctx.accountsById.get(s.deposit_paid_via_account_id)?.name || '—')) : ''}
       ${editionFlags.accounts && s.balance_paid_via_account_id ? row('Balance paid via', esc(ctx.accountsById.get(s.balance_paid_via_account_id)?.name || '—')) : ''}
@@ -1413,15 +1421,20 @@ async function renderPaymentsSection() {
   const mine = ++paymentsDraw;
   if (ctx.mode !== 'view' || !ctx.original) { sec.hidden = true; sec.innerHTML = ''; return; }
   try {
-    const [loaded, kennel] = await Promise.all([getSaleStatement(ctx.original), saleKennel(ctx.original)]);
+    // The family's turned-off methods (Payment Methods plan §2.4), when they have a page.
+    // Her sales (Pro, discounts): whether this buyer bought from her before.
+    const [loaded, kennel, entry, sales] = await Promise.all([getSaleStatement(ctx.original), saleKennel(ctx.original),
+      editionFlags.payMethods ? import('../data/familyMoney.js').then((m) => m.saleFamilyEntry(ctx.original)) : null,
+      editionFlags.costCover ? saleRepo.getAll({ includeArchived: false }) : []]);
     if (mine !== paymentsDraw || ctx.mode !== 'view' || !loaded) return;
     const firstDraw = !ctx.statement;
     ctx.statement = loaded.statement;
-    sec.innerHTML = paymentsCardHtml(loaded, { accountsById: ctx.accountsById, finalMethods: kennel?.final_payment_methods || '', editable: !ctx.original.is_archived });
+    sec.innerHTML = paymentsCardHtml(loaded, { accountsById: ctx.accountsById, finalMethods: finalMethodsText(kennel, ctx.accounts, { off: offFor(entry) }), editable: !ctx.original.is_archived, kennel, sales });
     sec.hidden = false;
     wirePaymentsCard(sec, {
       loaded, savedList: savedSchedules(kennel),
       accounts: ctx.accounts.filter((a) => a.account_type === 'payment_service'),
+      offIds: offFor(entry), kennel,
       onChanged: async () => { ctx.original = await saleRepo.getById(ctx.original.id); renderAll(); }
     });
     // The view's final payment date reads the statement: draw it again once it's known.
@@ -1480,6 +1493,36 @@ async function main() {
     showNotice('Marked Delivered below. Check the details, then tap Save.');
   }
 }
+
+// Covering payment costs (Payment Methods plan §5.2), Pro: with payment-fee prices, what
+// the family pays beside her price (for her only); and the amounts per kind, changed
+// with Payment costs… (assets/costCoverUI.js).
+function coverPriceNote(s) {
+  const c = editionFlags.costCover ? saleCover(s) : null;
+  return c?.show === 'in_price' && c.puppy > 0 ? ` <span class="muted">· families pay ${esc(money(Number(s.price) + c.puppy))}, includes ${esc(money(c.puppy))} to cover payment fees</span>` : '';
+}
+function coverRow(s) {
+  if (!editionFlags.costCover) return '';
+  const c = saleCover(s);
+  if (!c && !coverRules(priceKennel(s)).show) return '';
+  const parts = c ? SALE_KINDS.filter((k) => c[k] > 0).map((k) => `${COVER_WORDS[k]} ${money(c[k])}${c.following[k] ? ` (${c.following[k]}%)` : ''}`) : [];
+  const what = parts.length ? `${c.show === 'in_price' ? 'In the price' : 'Service fees'}: ${parts.join(' · ')}` : 'None';
+  return row('Payment costs', `${esc(what)} <button type="button" class="btn btn-sm" data-cc-edit>Change</button>`);
+}
+const COVER_WORDS = { puppy: 'Puppy', extras: 'Extras', transport: 'Transport', boarding: 'Boarding' };
+els.body.addEventListener('click', async (e) => {
+  if (!e.target.closest('[data-cc-edit]') || !ctx.original) return;
+  clearError();
+  try {
+    const { openCoverDialog } = await import('../assets/costCoverUI.js');
+    const s = ctx.original;
+    const kennel = priceKennel(s);
+    const next = await openCoverDialog({ record: s, kinds: SALE_KINDS, cover: saleCover(s), start: handCoverStart(kennel) });
+    if (!next) return;
+    ctx.original = await saleRepo.update(s.id, { cost_cover_amounts: next });
+    renderAll();
+  } catch (err) { showError(err.message || String(err)); }
+});
 
 // The open one-time Stripe link on the view (Integrations plan §4): Copy, and
 // Check now (asks Stripe about this sale, whatever the 15-minute wait).

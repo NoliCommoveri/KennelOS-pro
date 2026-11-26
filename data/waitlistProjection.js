@@ -20,6 +20,7 @@
 // in the same allow-listed way. A family's own notes on a request and every
 // message stay on her device: the page shows what was asked, never the note.
 import { expectedPricing } from './saleDefaults.js';
+import { listedPrice, listedDeposit } from './costCover.js';
 import {
   waitlistConfig, openDays, closedDates, liveClosedDates, entryName, publicList, publicWantsMore, overallPositions, litterQueue, isPupAvailable, passesUsed,
   isManuallyPaused, readyFromDate, isReadyHeld, feeForEntry, kennelBreeds, listenParentChoices,
@@ -31,12 +32,13 @@ import {
 import { addDaysToYMD } from './dateUtils.js';
 import { completedTestsByDog } from './healthTestLog.js';
 import { isWebsiteAddress } from './websiteAddress.js';
-import { WAITLIST_OPEN_STATUSES, isOpenSale } from './vocab.js';
+import { WAITLIST_OPEN_STATUSES, isOpenSale, feeCreditToward } from './vocab.js';
 import { formQuestions, formFaq, matchingPrefKeys, MATCHING_NOTICE, waitlistPolicies } from './waitlistForm.js';
 import { serverEmailTemplates } from './waitlistEmails.js';
 import { picksStanding } from './waitlistStanding.js';
 import { sharedReferrals, sharedTransport } from './referralShare.js';
 import { feePay, withClientRef } from './waitlistFeePay.js';
+import { hasOwnList, methodsFor, payOptions, stageOfNext, offFor, payGroups } from './payMethods.js';
 import { familySale, familyExtrasView, pupBirthDate, creditSale } from './familyExtras.js';
 import { familyCredit, feeCreditSplit } from './incomeView.js';
 import { creditsOf, allocateCredits, feeCharge } from './receivedCredits.js';
@@ -45,7 +47,8 @@ import { backOutReasons, backOutPolicyText } from './backOut.js';
 import { standardLocation } from './pickupSlots.js';
 import { EXTRAS_INTRO_DEFAULT, EXTRAS_INTRO_OLD_DEFAULT, FEATURED_LABEL_DEFAULT, FEATURED_LABEL_MAX, extrasInfoLink } from './waitlistRules.js';
 import { portalEntryView, portalOn } from './portalFeed.js';
-import { familyPaymentsView } from './paymentSchedule.js';
+import { familyPaymentsView, duePieces, depositTotal } from './paymentSchedule.js';
+import { methodSavings } from './discounts.js';
 import { titlesByDogId, titleAbbrs } from './dogTitles.js';
 import { litterCollars, keepsCollar } from './collarColor.js';
 
@@ -166,19 +169,28 @@ const collarsForLitter = (dogs, litterId) => litterCollars(dogs.filter((d) => d.
 // and a female.
 // Her listed prices only: never a sale's amount or anything a family owes. null
 // when she set none.
-function litterPrices(litter, pups) {
+// Covering payment costs (Payment Methods plan §5.5): each price is the total, with
+// her puppy rule on it (the litter's own first); with service fees, `fees` beside it
+// says how much of it is the service fee ("includes a $75 service fee").
+function litterPrices(litter, pups, kennel = null) {
   const regs = [...new Set(pups.flatMap((d) => (d.intended_registration ? [d.intended_registration] : ['limited', 'full'])))].sort();
   const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-  const by = Object.fromEntries(regs.map((reg) => [reg, {
-    male: num(expectedPricing({ sex: 'male' }, litter, reg).price),
-    female: num(expectedPricing({ sex: 'female' }, litter, reg).price)
-  }]));
-  const deposit = { male: num(litter.expected_deposit_male), female: num(litter.expected_deposit_female) };
+  const listed = (sex, reg) => listedPrice(num(expectedPricing({ sex }, litter, reg).price), kennel, litter);
+  const by = Object.fromEntries(regs.map((reg) => [reg, { male: listed('male', reg)?.total ?? null, female: listed('female', reg)?.total ?? null }]));
+  const feeBy = Object.fromEntries(regs.map((reg) => [reg, { male: listed('male', reg)?.serviceFee || null, female: listed('female', reg)?.serviceFee || null }]));
+  const fees = Object.values(feeBy).some((p) => p.male || p.female) ? { fees: feeBy } : {};
+  // Each deposit as families pay it (D30): with its share of her puppy rule on it.
+  const dep = (sex, reg) => {
+    const p = expectedPricing({ sex }, litter, reg);
+    const d = listedDeposit(num(p.deposit_amount), num(p.price), kennel, litter);
+    return d ? d.total : null;
+  };
+  const deposit = { male: dep('male', 'limited'), female: dep('female', 'limited') };
   // With a Full deposit surcharge, the deposit for a pup planned (or offered) Full.
-  const full = { male: num(expectedPricing({ sex: 'male' }, litter, 'full').deposit_amount), female: num(expectedPricing({ sex: 'female' }, litter, 'full').deposit_amount) };
+  const full = { male: dep('male', 'full'), female: dep('female', 'full') };
   const fullDiffers = regs.includes('full') && (full.male !== deposit.male || full.female !== deposit.female);
   const any = Object.values(by).some((p) => p.male != null || p.female != null) || deposit.male != null || deposit.female != null;
-  return any ? { by_registration: by, deposit, ...(fullDiffers ? { deposit_full: full } : {}) } : null;
+  return any ? { by_registration: by, ...fees, deposit, ...(fullDiffers ? { deposit_full: full } : {}) } : null;
 }
 
 // One family's status page (Plan §5). A family still in the pipeline gets the
@@ -306,10 +318,14 @@ function entryView(entry, ctx) {
     fee_due: entry.status === 'approved' && !entry.fee_received_date && fee !== null && fee > 0
       ? (() => {
           const credit = Math.min(ctx.creditFor(entry)?.byKey.fee || 0, fee);
+          const amount = Math.round((fee - credit) * 100) / 100;
+          // Her fee methods to choose from (Payment Methods plan §3), once she lists them.
+          const pay = ctx.payFor('fee', amount, entry);
           return {
-            amount: Math.round((fee - credit) * 100) / 100, due_date: orNull(entry.fee_due_date), instructions: ctx.config.payment_instructions || '', credit_policy: ctx.config.fee_credit_policy,
+            amount, due_date: orNull(entry.fee_due_date), instructions: ctx.config.payment_instructions || '', credit_policy: ctx.config.fee_credit_policy,
             ...(ctx.config.fee_credit_policy === 'credited_to_purchase' && ctx.config.fee_credit_toward === 'deposit' ? { credit_toward: 'deposit' } : {}),
-            ...(credit > 0 ? { credit } : (ctx.feePayFor(fee, entry.id) || {}))
+            ...(credit > 0 ? { credit } : pay ? {} : (ctx.feePayFor(fee, entry.id) || {})),
+            ...(pay ? { pay } : {})
           };
         })()
       : null,
@@ -357,6 +373,15 @@ function entryView(entry, ctx) {
         // the sale's payment statement, so it agrees with their Payments card.
         ...(o.chosen_dog_id && o.sale_id ? ctx.depositCreditsFor(entry, o) : {})
       }))
+      // Her deposit methods to choose from (Payment Methods plan §3), on every open
+      // turn: a pick sent while her device is off shows them too. The amount once
+      // her device knows what's left to send.
+      .map((o) => {
+        const toSend = o.picked_pup && o.deposit_amount != null
+          ? Math.round((o.deposit_amount - (o.deposit_credit || 0) - (o.deposit_fee_credit || 0)) * 100) / 100 : null;
+        const pay = ctx.payFor('deposit', toSend != null && toSend > 0 ? toSend : null, entry, ctx.depositSavings(o, toSend));
+        return pay ? { ...o, deposit_pay: pay } : o;
+      })
   });
   return view;
 }
@@ -583,7 +608,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       // server pushes her a reminder then. Only before they open, and only with a time.
       ...(!litter.picks_opened_date && plannedOpening(litter, config)?.time ? { planned_open: plannedOpening(litter, config) } : {}),
       ...litterLink(litter, kennel),
-      ...(config.turn_prices !== false ? { prices: litterPrices(litter, pups.filter((d) => isPupAvailable(d, sales))) } : {}),
+      ...(config.turn_prices !== false ? { prices: litterPrices(litter, pups.filter((d) => isPupAvailable(d, sales)), kennel) } : {}),
       pairing_id: orNull(litter.pairing_id),
       // Only available pups: what a turn is picked from (the turn card, the server's
       // automatic offers and the prices read this, never `reserved`).
@@ -678,10 +703,13 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     depositFor: (o) => {
       const sale = o.sale_id ? sales.find((x) => x.id === o.sale_id) : null;
       const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-      if (num(sale?.deposit_amount) != null) return num(sale.deposit_amount);
+      // With its share of her payment costs on it (D30).
+      if (num(sale?.deposit_amount) != null) return depositTotal(sale);
       const dog = dogsById.get(o.chosen_dog_id);
       const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) : null;
-      return num(expectedPricing(dog, litter).deposit_amount);
+      const p = expectedPricing(dog, litter);
+      const d = listedDeposit(num(p.deposit_amount), num(p.price), kennel, litter);
+      return d ? d.total : null;
     },
     // The pup this record is about: the one it was placed with (even once home),
     // else its own open sale's (a pick awaiting the deposit). A call name only.
@@ -724,7 +752,7 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
     // Their received application fee when it's credited toward the deposit (her
     // setting fee_credit_toward), as incomeView.feeCreditOf reads it; else none.
     feeCreditFor: (entry) => (entry.fee_received_date && Number(entry.fee_amount) > 0 && entry.fee_credit_policy === 'credited_to_purchase'
-      ? { amount: Number(entry.fee_amount), toward: config.fee_credit_toward === 'deposit' ? 'deposit' : 'balance' } : 0),
+      ? { amount: Number(entry.fee_amount), toward: feeCreditToward(config.fee_credit_toward) } : 0),
     creditFor: (entry) => {
       if (!creditMemo.has(entry.id)) creditMemo.set(entry.id, familyCredit(entry, creditSale(entry, sales, familyOffers, live), ctx.feeCreditFor(entry)));
       return creditMemo.get(entry.id);
@@ -766,11 +794,54 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       const sale = familySale(entry, sales, familyOffers, live);
       const view = sale ? familyPaymentsView(statements.get(sale.id)) : null;
       if (!view) return null;
+      // The next payment's methods to choose from (Payment Methods plan §3), split into
+      // parts when its charges take different methods (D25: `pay_parts`, each its own
+      // amount and choices; `pay` then empty).
+      const owed = view.next && view.next.owed > 0 ? view.next.owed : 0;
+      const stage = owed ? stageOfNext(view.next) : null;
+      const groups = stage ? payGroups(stage, duePieces(statements.get(sale.id)), kennel, accounts, { off: offFor(entry) }) : null;
+      // A discounted method's own amount and saving (§5.4): on what that part covers.
+      const st = statements.get(sale.id);
+      const pieces = stage ? duePieces(st) : [];
+      const savingsOn = (ps, amount) => (acct) => methodSavings({ kennel, account: acct, sale, st, pieces: ps, amount });
+      const parts = groups && groups.length > 1
+        ? groups.map((g) => ({ label: g.label, amount: g.amount, pay: payOptions(g.methods, g.amount, { savings: savingsOn(pieces.filter((p) => g.keys.includes(p.key)), g.amount) }) })) : null;
+      const pay = !stage ? null : parts ? [] : groups ? payOptions(groups[0]?.methods || methodsFor(stage, kennel, accounts, { off: offFor(entry) }) || [], owed, { savings: savingsOn(pieces, owed) }) : ctx.payFor(stage, owed, entry, savingsOn(pieces, owed));
       return {
         ...view,
         how_to_pay: config.payment_instructions || '',
-        final_methods: String(kennel.final_payment_methods || '').trim()
+        final_methods: String(kennel.final_payment_methods || '').trim(),
+        ...(pay ? { pay } : {}),
+        ...(parts ? { pay_parts: parts } : {})
       };
+    },
+    // The choices for one payment of `amount` (null: not known yet), from her list
+    // for that stage (Payment Methods plan §2.3, payMethods.payOptions); null when
+    // she hasn't set that list, so the page keeps her text as before. A Stripe
+    // fee link KennelOS made for exactly that amount is used for its account.
+    // `entry`: the family, whose turned-off methods are left out (Phase 2, §2.4);
+    // with every method off the list is empty and the page says to message her.
+    // `savings`: a discounted method's saving on it (§5.4; never on the fee, D29).
+    payFor: (stage, amount, entry = null, savings = null) => {
+      if (!hasOwnList(kennel, stage)) return null;
+      const made = (acct) => (stage === 'fee' && amount > 0 ? ((config.fee_links || []).find((l) => l && l.account_id === acct.id
+        && Number(l.amount) === Number(amount) && Number(l.charge) === Number(amount))?.url || null) : null);
+      return payOptions(methodsFor(stage, kennel, accounts, { off: offFor(entry) }) || [], amount, { madeLink: made, savings: stage === 'fee' ? null : savings });
+    },
+    // A discounted method's saving on a pick's deposit of `toSend` (D31): on the sale's
+    // deposit, else (a pick her device hasn't seen) the listed deposit's share of her
+    // payment costs.
+    depositSavings: (o, toSend) => {
+      if (!(toSend > 0)) return null;
+      const sale = o.sale_id ? sales.find((x) => x.id === o.sale_id) : null;
+      const st = sale ? statements.get(sale.id) : null;
+      if (st) return (acct) => methodSavings({ kennel, account: acct, sale, st, pieces: duePieces(st, 'deposit'), amount: toSend });
+      const dog = dogsById.get(o.chosen_dog_id);
+      const litter = dog?.litter_id ? litters.find((l) => l.id === dog.litter_id) : null;
+      const p = expectedPricing(dog, litter);
+      const d = listedDeposit(p.deposit_amount, p.price, kennel, litter);
+      const cost = d ? Math.round((d.total - Number(p.deposit_amount || 0)) * 100) / 100 : 0;
+      return (acct) => methodSavings({ kennel, account: acct, amount: toSend, cost });
     },
     // A family's own Pay link for a fee of `fee` (Integrations plan §4), or null.
     feePayFor: (fee, entryId) => {
@@ -780,7 +851,9 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
   };
   // The fee at the end of the online application (fee_link_when 'apply'): the base
   // link, the server adds each applicant's id when it's a Stripe link.
-  const applyPay = config.fee_link_when !== 'approved' ? feePay(kennel, accounts, feeForEntry(config, null)) : null;
+  const applyFee = Number(feeForEntry(config, null));
+  const applyList = config.fee_link_when !== 'approved' && applyFee > 0 ? ctx.payFor('fee', applyFee) : null;
+  const applyPay = config.fee_link_when !== 'approved' && !applyList ? feePay(kennel, accounts, feeForEntry(config, null)) : null;
   const entryViews = {};
   for (const e of [...live].sort(byId)) entryViews[e.id] = entryView(e, ctx);
 
@@ -859,7 +932,10 @@ export function buildProjection({ kennel, entries = [], offers = [], programsByI
       } : {}),
       // Her featured pup page, its own card on a waiting family's page (new tab).
       ...(extrasInfoLink(config.featured_url) ? { featured: { url: extrasInfoLink(config.featured_url), label: String(config.featured_label || '').trim().slice(0, FEATURED_LABEL_MAX) || FEATURED_LABEL_DEFAULT } } : {}),
-      ...(applyPay ? { fee_pay: { url: applyPay.url, amount: applyPay.amount, fee: Number(feeForEntry(config, null)), ref_param: applyPay.stripe, instructions: config.payment_instructions || '' } } : {})
+      ...(applyPay ? { fee_pay: { url: applyPay.url, amount: applyPay.amount, fee: Number(feeForEntry(config, null)), ref_param: applyPay.stripe, instructions: config.payment_instructions || '' } } : {}),
+      // With her fee methods listed (Payment Methods plan §3): the choices instead of
+      // one Pay link; the server adds each applicant's id to a Stripe link.
+      ...(applyList && applyList.length ? { fee_pay: { amount: applyFee, fee: applyFee, pay: applyList, instructions: config.payment_instructions || '' } } : {})
     },
     // Unmasked: the server shows "Currently deciding" for whoever holds a turn when
     // the page is served (publicList, familyPages.listView).

@@ -15,7 +15,8 @@
 // Pure: no db, no DOM. The callers read the records.
 import { CONTRACT_FORM_TYPE, CONTRACT_TYPE, REGISTRATION_TYPE, SEX, STUD_SERVICE_TYPE, WAITLIST_PREF_SEX, descriptor } from './vocab.js';
 import { extraFor, extraPayments } from './contractAddOns.js';
-import { finalDueDate } from './paymentSchedule.js';
+import { finalDueDate, chargePieces } from './paymentSchedule.js';
+import { pricedSale, saleCover, pricedStud } from './costCover.js';
 
 const text = (v) => String(v ?? '').trim();
 
@@ -226,6 +227,7 @@ export const PREFILL_FIELDS = {
     ['registrationType', 'Registration (Limited, Full…)'],
     ['pickupDate', 'Estimated pickup date (the pickup on your calendar, else the litter\'s ready date)'],
     ['price', 'Price (the total purchase price, with any Full registration surcharge)'],
+    ['serviceFee', 'Service fees on the sale (with service fees on, Covering payment costs)'],
     ['depositAmount', 'Deposit'],
     ['balanceDue', 'Balance still due (everything on the sale: with transport, boarding and extras)'],
     ['depositDue', 'Deposit still due (less the fee and credits counted toward it; 0 once received)'],
@@ -237,6 +239,10 @@ export const PREFILL_FIELDS = {
     ['payment1Due', 'First payment\'s due date'],
     ['payment2Amount', 'Second payment before the final one: what\'s still owed by it'],
     ['payment2Due', 'Second payment\'s due date'],
+    ['payment3Amount', 'Third payment before the final one: what\'s still owed by it'],
+    ['payment3Due', 'Third payment\'s due date'],
+    ['payment4Amount', 'Fourth payment before the final one: what\'s still owed by it'],
+    ['payment4Due', 'Fourth payment\'s due date'],
     ['finalPaymentAmount', 'Final payment: what\'s still owed by it'],
     ['finalPaymentDue', 'Final payment\'s due date']
   ],
@@ -297,6 +303,7 @@ export const PREFILL_FIELDS = {
     ['partnerPhone', 'The other party\'s phone'],
     ['partnerAddress', 'The other party\'s address'],
     ['studFee', 'Stud fee'],
+    ['studServiceFee', 'Service fee on the stud fee (with service fees on)'],
     ['serviceType', 'In person or AI / shipped']
   ],
   dog: [
@@ -333,12 +340,14 @@ export const FIRMA_LABELS = {
   puppyName: 'Pup · Call name', puppyRegisteredName: 'Pup · Registered name', puppySex: 'Pup · Sex',
   puppyColor: 'Pup · Color / markings', puppyDob: 'Pup · Date of birth', puppyMicrochip: 'Pup · Microchip',
   breed: 'Pup or dog · Breed', sireName: 'Sire · Name', damName: 'Dam · Name',
-  registrationType: 'Sale · Registration', pickupDate: 'Sale · Pickup date', price: 'Sale · Price',
+  registrationType: 'Sale · Registration', pickupDate: 'Sale · Pickup date', price: 'Sale · Price', serviceFee: 'Sale · Service fees',
   depositAmount: 'Sale · Deposit', balanceDue: 'Sale · Balance still due', depositDue: 'Sale · Deposit still due',
   otherPaymentsReceived: 'Sale · Other payments and credits', purchaseBalanceDue: 'Sale · Price balance due at pickup',
   totalCharges: 'Sale · Total charges', paidToDate: 'Sale · Paid to date',
   payment1Amount: 'Payment · 1st amount', payment1Due: 'Payment · 1st due date',
   payment2Amount: 'Payment · 2nd amount', payment2Due: 'Payment · 2nd due date',
+  payment3Amount: 'Payment · 3rd amount', payment3Due: 'Payment · 3rd due date',
+  payment4Amount: 'Payment · 4th amount', payment4Due: 'Payment · 4th due date',
   finalPaymentAmount: 'Payment · Final amount', finalPaymentDue: 'Payment · Final due date',
   litterName: 'Reservation · Litter', preferredSex: 'Reservation · Preferred sex',
   preferredColor: 'Reservation · Preferred color', reservationDeposit: 'Reservation · Deposit',
@@ -353,7 +362,7 @@ export const FIRMA_LABELS = {
   extraPayment4Amount: 'Extra · 4th payment', extraPayment4Due: 'Extra · 4th payment due',
   extraStayDays: 'Extra · Stay days', extraStayStart: 'Extra · Stay start', extraStayEnd: 'Extra · Stay end',
   studServiceRef: 'Stud service · Reference (hidden)', studName: 'Stud · Name', studRegisteredName: 'Stud · Registered name',
-  damRegisteredName: 'Dam · Registered name', studFee: 'Stud service · Fee', serviceType: 'Stud service · Type',
+  damRegisteredName: 'Dam · Registered name', studFee: 'Stud service · Fee', studServiceFee: 'Stud service · Service fee', serviceType: 'Stud service · Type',
   partnerName: 'Other party · Full name', partnerFirstName: 'Other party · First name', partnerLastName: 'Other party · Last name',
   partnerEmail: 'Other party · Email', partnerPhone: 'Other party · Phone', partnerAddress: 'Other party · Address',
   dogName: 'Dog · Call name', dogRegisteredName: 'Dog · Registered name', dogSex: 'Dog · Sex', dogDob: 'Dog · Date of birth',
@@ -403,15 +412,27 @@ function person(prefix, c) {
 // Payments card says. totalCharges / paidToDate: the statement's total and paid (the
 // sale's own charges; money on them from the deposit, payments, credits for funds
 // received and the application fee credited; a credit's leftover or the part that paid
-// the fee itself isn't on the sale). payment1 / payment2: the first two due dates before
-// the final one; finalPayment: the last. Each amount is what's still owed by that due
+// the fee itself isn't on the sale). payment1 … payment4: the first four due dates
+// before the final one (Payment Schedule plan D45; any beyond them aren't prefilled);
+// finalPayment: the last. Each amount is what's still owed by that due
 // date (its ask less the money it took, so 0.00 once met); its date, YYYY-MM-DD, is left
 // out while it can't be known. A returned, cancelled or voided sale has no due dates.
+export const PAYMENTS_PREFILLED = 4;
+
+// The date of the due date that finishes transport (by shares), else the final one's.
+function transportDueOf(st) {
+  if (st.byShares) {
+    const ids = new Set(chargePieces(st).filter((p) => p.key === 'transport' && p.amount > 0).map((p) => p.dueId));
+    const last = [...st.dueDates].reverse().find((d) => ids.has(d.id));
+    if (last) return last.date || '';
+  }
+  return finalDueDate(st);
+}
 function scheduleValues(st) {
   if (!st) return [];
   const out = [['totalCharges', money(st.total)], ['paidToDate', money(st.paid)]];
   const dueDates = st.dueDates || [];
-  dueDates.filter((d) => !d.isFinal).slice(0, 2).forEach((d, i) => out.push([`payment${i + 1}Amount`, money(d.owed)], [`payment${i + 1}Due`, text(d.date)]));
+  dueDates.filter((d) => !d.isFinal).slice(0, PAYMENTS_PREFILLED).forEach((d, i) => out.push([`payment${i + 1}Amount`, money(d.owed)], [`payment${i + 1}Due`, text(d.date)]));
   const last = dueDates.find((d) => d.isFinal);
   if (last) out.push(['finalPaymentAmount', money(last.owed)], ['finalPaymentDue', text(last.date)]);
   return out;
@@ -453,7 +474,10 @@ export function prefillValues(formOrType, facts = {}) {
       ['damName', text(f.dam?.call_name || f.dam?.registered_name)],
       ['registrationType', label(REGISTRATION_TYPE, s.registration_type)],
       ['pickupDate', text(f.pickupDate)],
-      ['price', money(s.price)], ['depositAmount', money(s.deposit_amount)], ['balanceDue', money(f.balanceDue)],
+      // With payment-fee prices the price carries its share; service fees are their own
+      // field (costCover.js, Payment Methods plan §5.2).
+      ['price', money(pricedSale(s).price)], ['serviceFee', saleCover(s)?.show === 'service_fee' ? money(saleCover(s).total) : ''],
+      ['depositAmount', money(s.deposit_amount)], ['balanceDue', money(f.balanceDue)],
       // Her contract's payment table (contractSend: incomeView.priceTable).
       ['depositDue', money(f.priceTable?.depositDue)],
       ['otherPaymentsReceived', money(f.priceTable?.otherPaid)], ['purchaseBalanceDue', money(f.priceTable?.balanceDue)],
@@ -477,11 +501,12 @@ export function prefillValues(formOrType, facts = {}) {
   // transport fee: its pickup date and place aren't a delivery otherwise.
   if (groups.includes('transport') && a && (formType === 'transport' || a.transport.fee)) {
     const t = a.transport;
-    // Transport is always paid last (D16), so with a schedule it's due with the final
-    // payment: that due date as it stands now, not the balance due date mirrored when
-    // the schedule was last saved.
+    // With a schedule, transport is due on the due date that finishes it (Payment
+    // Schedule plan D46): by shares, the last due date with transport on it; otherwise
+    // transport is paid last (D16), with the final payment. As the dates stand now, not
+    // the balance due date mirrored when the schedule was last saved.
     const st = f.statement;
-    const due = st?.hasSchedule && !st.ended ? text(finalDueDate(st)) : text(t.due);
+    const due = st?.hasSchedule && !st.ended ? text(transportDueOf(st)) : text(t.due);
     out.push(['transportFee', money(t.fee)], ['deliveryDate', text(t.date)],
       ['deliveryPlace', text(t.place)], ['transportDueDate', due]);
   }
@@ -509,7 +534,7 @@ export function prefillValues(formOrType, facts = {}) {
       ['studName', text(f.studDog?.call_name)], ['studRegisteredName', text(f.studDog?.registered_name)],
       ['damName', text(f.studDam?.call_name)], ['damRegisteredName', text(f.studDam?.registered_name)],
       ...person('partner', f.partner),
-      ['studFee', money(ss.fee_amount)], ['serviceType', label(STUD_SERVICE_TYPE, ss.type)]
+      ['studFee', money(pricedStud(ss).fee)], ['studServiceFee', money(pricedStud(ss).serviceFee?.amount)], ['serviceType', label(STUD_SERVICE_TYPE, ss.type)]
     );
   }
   if (groups.includes('dog')) {

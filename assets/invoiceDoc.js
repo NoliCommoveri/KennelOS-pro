@@ -22,6 +22,9 @@ import { todayYMD } from '../data/dateUtils.js';
 import { waitlistConfig, entryName } from '../data/waitlistRules.js';
 import { REGISTRATION_TYPE, FEE_STRUCTURE, INVOICE_LINE_LABELS, FEE_CREDIT_POLICY, descriptor } from '../data/vocab.js';
 import { fmtMoney } from './ui.js';
+import { accountRepo } from '../data/accountRepo.js';
+import { hasOwnList, methodsFor, methodLines, finalMethodsText, takesPayments, offFor, payGroups, moneyText, methodLabel } from '../data/payMethods.js';
+
 
 // The standing footnotes on a sale invoice (familyMoney.documentLines marks the
 // lines): the deposit's refundability (*), and the due-date note (**) on a sale
@@ -120,9 +123,38 @@ async function familyDoc(fam, { source, doc, cfg }) {
   // (Kennel.final_payment_methods, D9) for a final payment. A fee-only invoice gives
   // her waitlist payment instructions, as before.
   let pay = null;
-  const finalMethods = String(fam.kennel?.final_payment_methods || ownKennel?.final_payment_methods || '').trim();
+  const payKennel = fam.kennel || ownKennel;
+  const accounts = isReceipt ? [] : await accountRepo.getAll({ includeArchived: true });
+  const finalMethods = finalMethodsText(payKennel, accounts, { off: offFor(entry) }) || String(ownKennel?.final_payment_methods || '').trim();
   const feeOnly = !isReceipt && lines.length > 0 && dl.rows.every((r) => r.ref.startsWith(`${FEE_KEY}@`));
-  if (isReceipt) {
+  // Her payment methods for what this invoice asks for (Payment Methods plan §4), once
+  // she lists them: the fee's, the deposit's, the final payment's, else the payments'.
+  // A sale with a family page lists that family's (less what's off for them, Phase 2);
+  // a sale with none lists only the account set on the sale for that part, when
+  // there is one.
+  const stage = feeOnly ? 'fee' : dl.finalOnly ? 'final' : dl.depositOnly ? 'deposit' : 'payments';
+  const paidVia = !isReceipt && sale && !entry ? accounts.find((a) => a.id === (stage === 'deposit' ? sale.deposit_paid_via_account_id : (sale.balance_paid_via_account_id || sale.deposit_paid_via_account_id))) : null;
+  const viaOne = Boolean(paidVia && takesPayments(paidVia));
+  const listed = !isReceipt && hasOwnList(payKennel, stage)
+    ? (viaOne ? [paidVia] : methodsFor(stage, payKennel, accounts, { off: offFor(entry) })) : null;
+  // Her methods go in the payment box, drawn like her accepted methods (a tick box per
+  // method), one group per kind of charge the invoice covers after the deposit (D25):
+  // "Puppy price, $1,600" over the methods it takes, "Boarding and transport, $390"
+  // over its own. Kinds that take the same methods share a group. Each method's link
+  // and instructions follow once, in gray.
+  const groups = listed && !viaOne && ['payments', 'final'].includes(stage)
+    ? payGroups(stage, dl.pieces, payKennel, accounts, { off: offFor(entry) }) || [] : [];
+  if (listed && listed.length) {
+    const used = groups.length ? groups.flatMap((g) => g.methods) : listed;
+    const seen = new Set();
+    const details = methodLines(used.filter((a) => !seen.has(a.id) && seen.add(a.id)))
+      .filter((m) => m.link || m.note).map((m) => `${m.label}: ${[m.link, m.note].filter(Boolean).join(' · ')}`);
+    if (!groups.length && stage === 'payments' && dl.hasFinal && finalMethods) details.push(`The final payment: ${finalMethods}`);
+    pay = groups.length
+      ? { title: 'Payment may be made using the following methods:', rows: [], methods: [],
+        groups: groups.map((g) => ({ head: `${g.label}, ${moneyText(g.amount)}`, methods: g.methods.map(methodLabel) })), note: details.join('\n') }
+      : { title: 'Payment may be made using one of the following methods:', rows: [], methods: listed.map(methodLabel), note: details.join('\n') };
+  } else if (isReceipt) {
     const one = dl.items.length === 1 && !dl.items[0].credited ? dl.items[0] : null;
     const method = one?.method || (one && ['deposit', 'paid_in_full'].includes(one.kind) ? (c.payMethod ?? sale?.payment_method ?? '') : '');
     const reference = one?.reference || (one && ['deposit', 'paid_in_full'].includes(one.kind) ? (c.payReference ?? sale?.payment_reference ?? '') : '');

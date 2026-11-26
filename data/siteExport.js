@@ -48,11 +48,14 @@
 //    the website's own wording: `steps` and `payment` still go beside them.
 //    The worked-out values they replace (a puppy's `status`, a product's
 //    `transport`) keep going until KennelPort has moved.
+import { listedPrice, listedDeposit } from './costCover.js';
 import { titlesByDog } from './waitlistProjection.js';
 import { titlesByDogId, feedOrder, nameTitles } from './dogTitles.js';
 import { completedTestsByDog } from './healthTestLog.js';
 import { waitlistConfig, waitlistIsSetUp } from './waitlistRules.js';
 import { feePay } from './waitlistFeePay.js';
+import { hasOwnList, methodsFor, payOptions, websiteMethods } from './payMethods.js';
+import { methodDiscount } from './discounts.js';
 import { kennelChargeList } from './extraCharges.js';
 import { addDaysToYMD } from './dateUtils.js';
 import { DISPOSITION, ACCOUNT_TYPE } from './vocab.js';
@@ -125,13 +128,23 @@ const DISPOSITIONS = DISPOSITION.map((d) => d.value);
 const ACCOUNT_TYPES = ACCOUNT_TYPE.map((t) => t.value);
 export const LITTER_KEYS = ['id', 'pairing_id', 'name', 'dam_id', 'sire_id', 'dam_name', 'sire_name', 'expected_on', 'born_on', 'ready_on', 'deposits_on', 'prices', 'puppies'];
 export const PRICE_KEYS = ['price_female', 'price_male', 'full_reg_female', 'full_reg_male', 'deposit_female', 'deposit_male'];
+// With the site's `cost_cover` section (Website Contract plan C12): how much of each
+// price is her service fee, beside it, and how much of each deposit (D30).
+export const COVER_PRICE_KEYS = ['service_fee_female', 'service_fee_male', 'deposit_service_fee_female', 'deposit_service_fee_male'];
 export const PUPPY_KEYS = ['id', 'name', 'sex', 'color', 'registration', 'status'];
 export const PAIRING_KEYS = ['id', 'dam_id', 'sire_id', 'dam_name', 'sire_name', 'planned_on', 'expected_on'];
 export const HEAT_KEYS = ['id', 'dam_id', 'dam_name', 'month'];
 export const EXTRA_KEYS = ['id', 'name', 'group', 'description', 'price_from', 'price_to'];
 export const STEP_KEYS = ['id', 'heading', 'body'];
-export const PAYMENT_KEYS = ['application_fee'];
+export const PAYMENT_KEYS = ['application_fee', 'methods', 'notes'];
 export const PAY_KEYS = ['title', 'due_note', 'note', 'pay_url', 'pay_label'];
+// One fee method on her website (Payment Methods plan §4; Website Contract plan C11).
+export const PAY_METHOD_KEYS = ['label', 'url', 'note', 'stages'];
+// With the site's `pay_charges` section (C13): each method's key, what it may pay, and
+// her payment-method discount's name on a discounted one (Payment Methods §5.4).
+export const PAY_CHARGE_KEYS = ['key', 'pays', 'discount'];
+// Her own instructions under each stage's choices (C13): the stages families see them on.
+export const PAY_NOTE_KEYS = ['application_fee', 'deposit', 'payments', 'final_payment'];
 
 // Positive allow-list check: abort the send rather than emit a superset.
 function assertOnlyKeys(obj, allowed, ctx) {
@@ -354,18 +367,36 @@ export function websiteLitters(kennel, litters, pairingsById) {
   return litters.filter((l) => !l.is_archived && l.kennel_id === kennel.id && LIVE_LITTER_STATUSES.includes(l.status) && litterMarked(l, pairingsById));
 }
 
-function litterPrices(litter) {
+// Her prices as families pay them (Payment Methods plan §5.5): each price with her
+// puppy rule on it (costCover.listedPrice, the litter's own first), and the Full
+// surcharge as what Full adds to that total. With `coverFees` (C12), the service fee
+// in each price beside it.
+function litterPrices(litter, kennel = null, coverFees = false) {
+  const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const one = (sex) => {
+    const base = num(litter[`expected_price_${sex}`]);
+    const sur = num(litter[`full_reg_surcharge_${sex}`]);
+    const lp = listedPrice(base, kennel, litter);
+    const full = base != null && sur != null ? listedPrice(base + sur, kennel, litter) : null;
+    // The deposit with its share of her puppy rule (D30).
+    const dep = listedDeposit(num(litter[`expected_deposit_${sex}`]), base, kennel, litter);
+    return { price: lp ? lp.total : null, fullReg: full && lp ? full.total - lp.total : sur, fee: lp?.serviceFee || 0, deposit: dep ? dep.total : null, depositFee: dep?.serviceFee || 0 };
+  };
+  const f = one('female');
+  const m = one('male');
   return assertOnlyKeys({
-    price_female: money(litter.expected_price_female),
-    price_male: money(litter.expected_price_male),
-    full_reg_female: money(litter.full_reg_surcharge_female),
-    full_reg_male: money(litter.full_reg_surcharge_male),
-    deposit_female: money(litter.expected_deposit_female),
-    deposit_male: money(litter.expected_deposit_male)
-  }, PRICE_KEYS, 'prices');
+    price_female: money(f.price),
+    price_male: money(m.price),
+    full_reg_female: money(f.fullReg),
+    full_reg_male: money(m.fullReg),
+    deposit_female: money(f.deposit),
+    deposit_male: money(m.deposit),
+    ...(coverFees ? { service_fee_female: money(f.fee) || null, service_fee_male: money(m.fee) || null,
+      deposit_service_fee_female: money(f.depositFee) || null, deposit_service_fee_male: money(m.depositFee) || null } : {})
+  }, [...PRICE_KEYS, ...COVER_PRICE_KEYS], 'prices');
 }
 
-function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry, heatOf, litterStatus, rawDisposition }) {
+function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry, heatOf, litterStatus, rawDisposition, kennel, coverFees }) {
   const pairing = litter.pairing_id ? pairingsById.get(litter.pairing_id) : null;
   const born = litter.status !== 'expected';
   return assertOnlyKeys({
@@ -383,7 +414,7 @@ function litterEntry(litter, { dogsById, pairingsById, dogs, prices, registry, h
     deposits_on: ymd(litter.accept_deposits_date),
     // Its status as she set it (litter_status section): only live ones are sent.
     ...(litterStatus ? { status: litter.status } : {}),
-    prices: prices ? litterPrices(litter) : null,
+    prices: prices ? litterPrices(litter, kennel, coverFees) : null,
     puppies: puppyEntries(litter, dogs, registry, rawDisposition)
   }, plus(withHeat(LITTER_KEYS, Boolean(heatOf)), 'status', litterStatus), 'litter');
 }
@@ -498,10 +529,17 @@ export function waitlistFacts(kennel) {
 // read on their status pages. null when there's nothing to say. Instructions
 // longer than the website's note (200 characters) aren't cut, since a cut-off
 // payment detail is worse than none: she types them in KennelPort instead.
+// With her fee methods listed (Payment Methods plan §4), the Pay link is the first link
+// among them. Her methods for every stage go beside it as `payment.methods`
+// (paymentMethods, below).
 export function applicationFeePay(kennel, accounts = []) {
   const c = waitlistConfig(kennel);
   const note = line(c.payment_instructions, 1000);
-  const pay = feePay(kennel, accounts, c.fee_amount);
+  const listed = hasOwnList(kennel, 'fee')
+    ? payOptions(methodsFor('fee', kennel, accounts) || [], Number(c.fee_amount) > 0 ? Number(c.fee_amount) : null, {
+      madeLink: (a) => (c.fee_links || []).find((l) => l && l.account_id === a.id && Number(l.amount) === Number(c.fee_amount) && Number(l.charge) === Number(c.fee_amount))?.url || null
+    }) : null;
+  const pay = listed ? { url: (listed.find((o) => o.url) || {}).url || null } : feePay(kennel, accounts, c.fee_amount);
   const out = {
     title: 'Application fee',
     due_note: c.fee_due_days ? `Within ${plural(c.fee_due_days, 'day')} of approval.` : null,
@@ -511,6 +549,34 @@ export function applicationFeePay(kennel, accounts = []) {
   };
   if (!out.note && !out.pay_url) return null;
   return assertOnlyKeys(Object.fromEntries(Object.entries(out).filter(([, v]) => v != null)), PAY_KEYS, 'payment');
+}
+
+// The payment methods she accepts across the whole sale, for her website to advertise
+// (Payment Methods plan §4; Website Contract plan C11, section `pay_methods`): each
+// { label, url?, note?, stages } in her order (payMethods.websiteMethods). null when
+// she hasn't listed any.
+export function paymentMethods(kennel, accounts = [], { charges = false } = {}) {
+  const list = websiteMethods(kennel, accounts, { charges, discountLabel: methodDiscount(kennel)?.label || '' });
+  if (!list.length) return null;
+  return list.map((m) => assertOnlyKeys({
+    label: line(m.label, 60), ...(m.url ? { url: m.url } : {}), ...(m.note ? { note: para(m.note, 1000) } : {}), stages: [...m.stages],
+    ...(charges ? { key: m.key, pays: Object.fromEntries(Object.entries(m.pays).map(([st, kinds]) => [st, [...kinds]])) } : {}),
+    ...(charges && m.discount ? { discount: line(m.discount, 120) } : {})
+  }, charges ? [...PAY_METHOD_KEYS, ...PAY_CHARGE_KEYS] : PAY_METHOD_KEYS, 'payment method'));
+}
+
+// Her own words under each stage's choices, "Additional Payment Instructions" (Website
+// Contract plan C13, section pay_charges): her payment instructions for the application
+// fee, the deposit and the payments, and what she wrote for the final payment, as
+// families read them on their pages, up to 1,000 characters each. null when she wrote
+// none.
+export function paymentNotes(kennel) {
+  const c = waitlistConfig(kennel);
+  const general = para(c.payment_instructions, 1000);
+  const final = para(kennel?.final_payment_methods, 1000);
+  const out = { application_fee: general, deposit: general, payments: general, final_payment: final };
+  const kept = Object.fromEntries(Object.entries(out).filter(([, v]) => v));
+  return Object.keys(kept).length ? assertOnlyKeys(kept, PAY_NOTE_KEYS, 'payment notes') : null;
 }
 
 // --- extras -------------------------------------------------------------------
@@ -738,7 +804,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   const config = waitlistConfig(kennel);
   const registry = has(sections, 'registry');
   const heatOf = Array.isArray(sections) && sections.includes('heat_id') ? heatUse(kennel, { dogs, events, pairings, today }).heatOf : null;
-  const ctx = { dogsById, pairingsById, dogs, prices, registry, heatOf, litterStatus: has(sections, 'litter_status'), rawDisposition: has(sections, 'pup_disposition') };
+  const ctx = { dogsById, pairingsById, dogs, prices, registry, heatOf, litterStatus: has(sections, 'litter_status'), rawDisposition: has(sections, 'pup_disposition'), kennel, coverFees: has(sections, 'cost_cover') };
   const kennelsById = new Map(kennels.map((k) => [k.id, k]));
   const coOwned = Array.isArray(sections) && sections.includes('partner_kennels') ? { contactsById: new Map(contacts.map((c) => [c.id, c])), kennelsById } : null;
 
@@ -760,6 +826,11 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
 
   const steps = waitlistSteps(kennel);
   const fee = applicationFeePay(kennel, accounts);
+  // Her methods for every stage of a sale, only to a site Worker that takes them (C11).
+  // With pay_charges (C13): each method's key and what it may pay, and her words per stage.
+  const payCharges = has(sections, 'pay_charges');
+  const methods = has(sections, 'pay_methods') ? paymentMethods(kennel, accounts, { charges: payCharges }) : null;
+  const notes = payCharges ? paymentNotes(kennel) : null;
   const facts = has(sections, 'waitlist_facts') ? waitlistFacts(kennel) : null;
   const bundle = {
     format: SITE_BUNDLE_FORMAT,
@@ -774,7 +845,7 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
     ...(products ? { products } : {}),
     ...(partnerKennels ? { partner_kennels: partnerKennels } : {}),
     ...(steps.length ? { steps } : {}),
-    ...(fee ? { payment: assertOnlyKeys({ application_fee: fee }, PAYMENT_KEYS, 'payment') } : {}),
+    ...(fee || methods || notes ? { payment: assertOnlyKeys({ ...(fee ? { application_fee: fee } : {}), ...(methods ? { methods } : {}), ...(notes ? { notes } : {}) }, PAYMENT_KEYS, 'payment') } : {}),
     ...(facts ? { waitlist_facts: facts } : {})
   };
   return assertOnlyKeys(bundle, BUNDLE_KEYS, 'bundle');

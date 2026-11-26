@@ -27,6 +27,10 @@ import { paymentAccounts, salePaidVia, paidViaField, paymentOptions, paymentLink
 import { esc, fmtDate, fmtMoney, confirmModal, alertModal } from './ui.js';
 import { openComposer } from './messageComposer.js';
 import { stripeConnection, makeSaleLink } from '../data/stripeLinks.js';
+import { finalMethodsText, offFor } from '../data/payMethods.js';
+import { pickerOrder } from '../data/familyPayMethods.js';
+import { saleFamilyEntry } from '../data/familyMoney.js';
+import { editionFlags } from '../data/editionConfig.js';
 
 // The sale's changes when `part` is paid via `account`: the paid-via field(s), and
 // the fee estimate when the fee is still at the old one. → changes or null.
@@ -60,7 +64,9 @@ function noAccountsModal() {
 }
 
 // Pick what for and the account. → Promise<{ account, option, stripe } | null>.
-function chooseModal({ title, accounts, options, defaultFor, stripeIds }) {
+// `orderFor(optionKey)` (optional): the accounts in the order to show for that
+// payment (her methods for it first, Payment Methods plan §4).
+function chooseModal({ title, accounts, options, defaultFor, stripeIds, orderFor = null }) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -74,8 +80,8 @@ function chooseModal({ title, accounts, options, defaultFor, stripeIds }) {
         ? options.map((o, i) => radio('pr-what', o.key, i === 0, `${esc(o.label)} <strong>${esc(fmtMoney(o.amount))}</strong>`)).join('')
         : '<p class="muted" style="margin:0;">Nothing is owed on this sale. The message leaves the amount out; add it yourself.</p>'}
       <h3 style="font-size:15px; margin:10px 0 4px;">Paid via</h3>
-      ${accounts.map((a, i) => radio('pr-acct', a.id, defaultFor(first) ? a.id === defaultFor(first) : i === 0,
-        `${esc(a.name)} <span class="muted">${esc(stripeIds.has(a.id) ? 'one-time Stripe links' : paymentLink(a.payment_link) ? 'payment link' : 'instructions')}</span>`)).join('')}
+      <div id="pr-accts">${(orderFor ? orderFor(first) : accounts).map((a, i) => radio('pr-acct', a.id, defaultFor(first) ? a.id === defaultFor(first) : i === 0,
+        `${esc(a.name)} <span class="muted">${esc(stripeIds.has(a.id) ? 'one-time Stripe links' : paymentLink(a.payment_link) ? 'payment link' : 'instructions')}</span>`)).join('')}</div>
       <p class="field-hint" id="pr-via-hint"></p>
       <label class="check-inline" id="pr-stripe-row" style="display:flex; gap:8px; align-items:flex-start; margin-top:10px;">
         <input type="checkbox" id="pr-stripe" checked> <span>Make a one-time Stripe link for exactly this amount. KennelOS marks the payment received, with Stripe's fee, when they pay.</span></label>
@@ -102,6 +108,14 @@ function chooseModal({ title, accounts, options, defaultFor, stripeIds }) {
     };
     overlay.addEventListener('change', (e) => {
       if (e.target.name === 'pr-acct') touched = true;
+      if (e.target.name === 'pr-what' && orderFor) {
+        // That payment's methods first.
+        const box = overlay.querySelector('#pr-accts');
+        for (const a of orderFor(what())) {
+          const label = box.querySelector(`input[value="${CSS.escape(a.id)}"]`)?.closest('label');
+          if (label) box.appendChild(label);
+        }
+      }
       if (e.target.name === 'pr-what' && !touched) {
         const d = defaultFor(what());
         const r = d && overlay.querySelector(`input[name="pr-acct"][value="${CSS.escape(d)}"]`);
@@ -132,23 +146,37 @@ export async function openPaymentRequest({ saleId }) {
   for (const a of all) {
     if (a.account_type === 'payment_service' && (!a.is_archived || own.has(a.id)) && await stripeConnection(a.id)) stripeIds.add(a.id);
   }
-  const accounts = paymentAccounts(all);
+  let accounts = paymentAccounts(all);
   for (const a of all) if ((stripeIds.has(a.id) || own.has(a.id)) && !accounts.some((x) => x.id === a.id)) accounts.push(a);
   if (!accounts.length) return noAccountsModal();
 
-  const [dog, buyer, kennel, stmt] = await Promise.all([
+  const [dog, buyer, kennel, stmt, entry] = await Promise.all([
     sale.dog_id ? dogRepo.getById(sale.dog_id) : null,
     sale.buyer_contact_id ? contactRepo.getById(sale.buyer_contact_id) : null,
     sale.kennel_id ? kennelRepo.getById(sale.kennel_id) : null,
-    getSaleStatement(sale)
+    getSaleStatement(sale),
+    editionFlags.payMethods ? saleFamilyEntry(sale) : null
   ]);
   // What's still owed, after the deposit, payments, credits and a credited fee.
   const options = paymentOptions(stmt?.statement);
+  // Her methods for the payment picked come first; ones off for this family are
+  // left out (Payment Methods plan §4).
+  const stageOf = (key) => {
+    const o = options.find((x) => x.key === key);
+    if (!o) return null;
+    if (o.key === 'deposit' || (o.key === 'all' && options.some((x) => x.key === 'deposit'))) return 'deposit';
+    return o.final ? 'final' : 'payments';
+  };
+  if (editionFlags.payMethods) accounts = pickerOrder(accounts, null, kennel, entry);
+  const orderFor = editionFlags.payMethods && kennel ? (key) => pickerOrder(accounts, stageOf(key), kennel, null) : null;
   const pupName = dog?.call_name || dog?.registered_name || '';
   const picked = await chooseModal({
     title: `Send payment link${pupName ? `: ${pupName}` : ''}`,
-    accounts, options, stripeIds,
-    defaultFor: (part) => salePaidVia(sale, all, part)?.id || null
+    accounts, options, stripeIds, orderFor,
+    defaultFor: (part) => {
+      const id = salePaidVia(sale, all, part)?.id || null;
+      return id && accounts.some((a) => a.id === id) ? id : null;
+    }
   });
   if (!picked) return false;
   const { option } = picked;
@@ -197,7 +225,7 @@ export async function openPaymentRequest({ saleId }) {
     }
   }
 
-  const finalMethods = option?.final ? String(kennel?.final_payment_methods || '').trim() : '';
+  const finalMethods = !option?.final ? '' : editionFlags.payMethods ? finalMethodsText(kennel, all, { off: offFor(entry) }) : String(kennel?.final_payment_methods || '').trim();
   const what = !option ? 'all' : option.key === 'next' ? (option.final ? (option.label === 'Balance' ? 'balance' : 'final') : 'next')
     : option.key === 'all' && viaPart === 'balance' ? 'balance' : option.key;
   const msg = paymentRequestMessage({

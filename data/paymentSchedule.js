@@ -24,6 +24,8 @@
 //     fee, the deposit, credits (D18). "Remaining" is measured against what the
 //     earlier due dates asked for, so paying early never shrinks it (D19).
 import { saleExtraCharges, stepLabel, stepDueDate } from './extraCharges.js';
+import { pricedSale, serviceFeeCharges, COVER_SCHEDULE, COVER_USE } from './costCover.js';
+import { saleDiscounts } from './discounts.js';
 import { addDaysToYMD, addOpenDays } from './dateUtils.js';
 import { SCHEDULE_DUE, SCHEDULE_COVERS, INVOICE_LINE_LABELS, RELEASED_SALE_STATUSES } from './vocab.js';
 
@@ -94,6 +96,42 @@ function cleanCovers(covers) {
 
 const isFinalStep = (st) => st.covers.length === 1 && st.covers[0] === 'all' && st.percent === 100 && st.basis === 'total';
 
+// --- What each due date collects, charge by charge (§12, D39) ------------------------
+// A due date with `shares` lists what it collects per kind of charge (or one extra):
+//   { charge: 'price'|'boarding'|'extras'|'transport'|'extra:<id>',
+//     how: 'full'|'percent'|'amount'|'rest', value? }
+// 'full' / 'rest': all of it by this date; 'percent': at least that percent of it paid
+// by this date (what's paid on it counts: the deposit toward the price); 'amount': $X
+// more of it than the earlier due dates asked. `new_money: true` on the due date: only
+// payments recorded fill it, never the fee credit, the deposit or credits (D10, D18),
+// and a percent is of what the earlier due dates left.
+export const SHARE_HOWS = ['full', 'percent', 'amount', 'rest'];
+export const CHARGE_KIND_ORDER = ['price', 'boarding', 'extras', 'transport'];
+// At most this many due dates on a schedule, the final one included (D43).
+export const SCHEDULE_MAX = 10;
+
+function cleanShares(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (const sh of raw) {
+    const charge = typeof sh?.charge === 'string' ? sh.charge : '';
+    if (!(COVER_VALUES.includes(charge) || /^extra:.+/.test(charge)) || out.some((x) => x.charge === charge)) continue;
+    if (!SHARE_HOWS.includes(sh.how)) continue;
+    const value = cents(num(sh.value));
+    if (sh.how === 'percent' && !(value > 0)) continue;
+    if (sh.how === 'amount' && !(value > 0)) continue;
+    out.push({ charge, how: sh.how, ...(sh.how === 'percent' ? { value: Math.min(value, 100) } : sh.how === 'amount' ? { value } : {}) });
+  }
+  return out.length ? out : null;
+}
+
+// Her order for money no due date names, and for a dollar amount across several kinds
+// of charge (D40): the sale's, else price, boarding, extras, transport.
+export function cleanPriority(raw) {
+  const list = Array.isArray(raw) ? raw.filter((k) => CHARGE_KIND_ORDER.includes(k)) : [];
+  return [...new Set([...list, ...CHARGE_KIND_ORDER])];
+}
+
 // The sale's due dates as stored, cleaned; the last always covers everything at 100%
 // (one is added at pickup if it's missing). null = no schedule stored.
 export function cleanSchedule(raw) {
@@ -101,7 +139,8 @@ export function cleanSchedule(raw) {
   const steps = [];
   for (const [i, st] of raw.entries()) {
     if (!st || typeof st !== 'object' || !DUE_VALUES.includes(st.due)) continue;
-    const covers = cleanCovers(st.covers);
+    const shares = cleanShares(st.shares);
+    const covers = cleanCovers(st.covers) || (shares ? shares.map((x) => x.charge) : null);
     if (!covers) continue;
     const row = { id: text(st.id) || `due${i}`, due: st.due, covers };
     if (text(st.label)) row.label = text(st.label);
@@ -109,9 +148,16 @@ export function cleanSchedule(raw) {
     if (ymd(st.due_date)) row.due_date = st.due_date;
     const percent = cents(num(st.percent));
     const amount = cents(num(st.amount));
+    // A due date with shares keeps its percent or amount too, for older builds.
     if (percent > 0) Object.assign(row, { percent: Math.min(percent, 100), basis: st.basis === 'remaining' ? 'remaining' : 'total' });
     else if (amount > 0) Object.assign(row, { amount, prior_funds: st.prior_funds === 'dont_count' ? 'dont_count' : 'count' });
-    else continue;
+    else if (!shares) continue;
+    // One dollar amount across what it covers, paid in her priority order (§12.3).
+    if (!shares && row.amount != null && st.pooled === true) row.pooled = true;
+    if (shares) {
+      row.shares = shares;
+      if (st.new_money === true) row.new_money = true;
+    }
     steps.push(row);
   }
   if (!steps.length) return null;
@@ -143,9 +189,10 @@ export function dueDateOf(step, { birthDate = null, pickupDate = null, openDays 
 // --- The sale's charges ---------------------------------------------------------------
 
 // Deferred boarding: amount × a count of frequency units (as incomeView reads it).
+// With payment-fee prices, its cost-cover share rides on it (costCover.pricedSale).
 function boardingTotal(sale) {
   const n = parseInt(sale.deferred_boarding_duration_days, 10);
-  return cents(num(sale.deferred_boarding_amount) * (Number.isFinite(n) && n > 0 ? n : 1));
+  return cents(num(sale.deferred_boarding_amount) * (Number.isFinite(n) && n > 0 ? n : 1) + num(sale.__boarding_cover));
 }
 
 // The sale's charges in the order money pays them: deposit, price, boarding, extras on
@@ -159,16 +206,32 @@ function boardingTotal(sale) {
 // A fee charged back (`fee_for`, extraCharges.isFeeChargeBack) is always on the
 // schedule and owed only on the LAST due date (`finalOnly`; coveredTotal), after the
 // other extras and before transport: every payment's fee is collected at the end.
-export function saleCharges(sale, schedule = scheduleOf(sale)) {
+// Covering payment costs (costCover.js, Payment Methods plan §5.2): with payment-fee
+// prices each charge already carries its share (pricedSale); with service fees each
+// kind's fee is its own charge right after the charge it's on, owed with it
+// (component 'service_fee', key `service_fee_<kind>`, its covers the charge's).
+// The puppy fee's share on the deposit (D30, `service_fee_deposit`) is part of the
+// deposit: owed with it, paid by the deposit.
+export function saleCharges(raw, schedule = scheduleOf(raw)) {
+  const sale = pricedSale(raw);
+  const feeRows = serviceFeeCharges(raw);
+  const asCharge = (f) => ({ key: f.key, component: 'service_fee', kind: f.kind, label: f.label, amount: f.amount, part: f.deposit ? 'deposit' : 'schedule', use: f.deposit ? 'deposit' : COVER_USE[f.kind], covers: COVER_SCHEDULE[f.kind], ...(f.refundable ? {} : { nonrefundable: true }) });
+  const fees = new Map(feeRows.filter((f) => !f.deposit).map((f) => [f.kind, asCharge(f)]));
+  const depositFee = feeRows.filter((f) => f.deposit).map(asCharge);
+  const fee = (kind) => (fees.has(kind) ? [fees.get(kind)] : []);
   const scheduled = hasSchedule(sale);
   const price = num(sale?.price);
   const deposit = cents(num(sale?.deposit_amount));
   const out = [];
-  if (deposit > 0) out.push({ key: 'deposit', component: 'deposit', label: INVOICE_LINE_LABELS.deposit, amount: deposit, part: 'deposit', use: 'deposit', covers: 'price' });
+  if (deposit > 0) out.push({ key: 'deposit', component: 'deposit', label: INVOICE_LINE_LABELS.deposit, amount: deposit, part: 'deposit', use: 'deposit', covers: 'price' }, ...depositFee);
+  // With payment-fee prices the deposit already carries its share (pricedSale), so the
+  // rest of the price is what's left.
   const balance = cents(Math.max(price - deposit, 0));
   if (balance > 0) out.push({ key: 'balance', component: 'balance', label: INVOICE_LINE_LABELS.balance, amount: balance, part: 'schedule', use: 'price', covers: 'price' });
+  out.push(...fee('puppy'));
   const boarding = boardingTotal(sale || {});
   if (boarding > 0) out.push({ key: 'boarding', component: 'boarding', label: INVOICE_LINE_LABELS.boarding, amount: boarding, part: 'schedule', use: 'extras', covers: 'boarding' });
+  out.push(...fee('boarding'));
   const own = [];
   const feesBack = [];
   for (const x of saleExtraCharges(sale)) {
@@ -185,10 +248,18 @@ export function saleCharges(sale, schedule = scheduleOf(sale)) {
       own.push({ key: `extra:${x.id}`, component: 'extra', label: x.label, amount: x.amount, part: 'own', use: 'extras', extraId: x.id });
     }
   }
-  out.push(...feesBack, ...own);
+  out.push(...fee('extras'), ...feesBack, ...own);
   const transport = cents(num(sale?.transport_fee));
   if (transport > 0) out.push({ key: 'transport', component: 'transport', label: INVOICE_LINE_LABELS.transport, amount: transport, part: 'schedule', use: 'extras', covers: 'transport' });
+  out.push(...fee('transport'));
   return out;
+}
+
+// The deposit a sale asks for (D30): the deposit with its share of her payment costs
+// (raised, or its service fee beside it). null when the sale has no deposit set.
+export function depositTotal(sale) {
+  if (sale?.deposit_amount === '' || sale?.deposit_amount == null || !Number.isFinite(Number(sale.deposit_amount))) return null;
+  return cents(saleCharges(sale).filter((c) => c.part === 'deposit').reduce((t, c) => t + c.amount, 0)) || cents(num(sale.deposit_amount));
 }
 
 // What a due date's covers add up to, from the sale's deposit and schedule charges.
@@ -234,8 +305,12 @@ function statusOf(owed, date, today) {
 // →
 // { ended, hasSchedule, charges, total, paid, remaining,
 //   fee: { charged, credited } | null,
-//   received: [{ kind: 'fee'|'credit'|'deposit'|'step'|'payment'|'paid_in_full', id, date,
-//                amount, unapplied, method?, pays: [{ key, amount, label }] }],
+//   received: [{ kind: 'fee'|'credit'|'discount'|'deposit'|'step'|'payment'|'paid_in_full', id,
+//                date, amount, unapplied, method?, discount_label?, pays: [{ key, amount, label }] }],
+//             A discount (Sale.discounts, discounts.js) is money toward what's owed: one
+//             with a payment goes with it (the same date and toward, just before it), one
+//             with the deposit pays the deposit's service fee first, and her own come off
+//             the final payment (D27). Each labelled as she named it.
 //   deposit: { amount, paid, owed, date, asked, status } | null,
 //   dueDates: [{ id, label, step, date, coveredTotal, threshold, ask, filled, owed,
 //                fresh, isFinal, status, from: [{ i, amount }] }],   (i: index in received)
@@ -249,13 +324,27 @@ export function paymentStatement(sale, opts = {}) {
   const schedule = stored || defaultSchedule(s);
   const charges = saleCharges(s, schedule);
   const byKey = new Map(charges.map((c) => [c.key, c]));
+  // What each due date collects, charge by charge (§12): a schedule with shares, or a
+  // stored one whose old math asks $0 where its charges still ask for money (D41).
+  const priority = cleanPriority(s.payment_priority);
+  const byShares = !ended && stored && (stored.some((st) => st.shares || st.pooled) || zeroCase(schedule, charges, priority));
+  const targets = byShares ? shareTargets(schedule, charges, priority) : null;
   const labelOf = (key) => (key === 'fee' ? 'Application fee' : byKey.get(key)?.label || key);
   const ledger = moneyLedger([...feeCharges.map((c) => ({ ...c, use: 'fee' })), ...charges]);
   const received = [];
   const record = (item, pays, credited = false) => {
     const applied = cents(pays.reduce((t, p) => t + p.amount, 0));
     received.push({ ...item, amount: applied, unapplied: cents(Math.max(num(item.offered) - applied, 0)),
-      pays: pays.map((p) => ({ ...p, label: `${labelOf(p.key)}${credited ? ' (credited)' : ''}` })) });
+      pays: pays.map((p) => ({ ...p, label: item.discount_label || `${labelOf(p.key)}${credited ? ' (credited)' : ''}` })) });
+  };
+  // Her discounts (Payment Methods plan §5.4): with a payment, with the deposit, or her own.
+  const payIds = new Set(cleanPayments(s.payments).map((p) => p.id));
+  const discounts = saleDiscounts(s);
+  // A discount pays its charges' service fees first (what it takes back), then the rest.
+  const payDiscount = (amount, accepts) => {
+    const fees = ledger.pay(amount, (ch) => ch.component === 'service_fee' && accepts(ch));
+    const done = cents(fees.reduce((t, p) => t + p.amount, 0));
+    return [...fees, ...ledger.pay(cents(amount - done), accepts)];
   };
 
   // 1. The application fee credited toward the purchase: the deposit first when her
@@ -264,31 +353,58 @@ export function paymentStatement(sale, opts = {}) {
   if (fc) {
     const keys = fc.toward === 'deposit' ? ['deposit', 'balance'] : ['balance'];
     const pays = ledger.pay(fc.amount, (ch) => keys.includes(ch.key));
-    record({ kind: 'fee', id: 'fee', date: ymd(fc.date), offered: num(fc.amount) }, pays, true);
+    // Toward the final payment (owner, 2026-11-26): it fills the due dates from the last.
+    record({ kind: 'fee', id: 'fee', date: ymd(fc.date), offered: num(fc.amount), ...(fc.toward === 'final' ? { last: true } : {}) }, pays, true);
   }
   // 2. Credits for funds received, oldest first, toward what each is ticked for.
   for (const cr of credits) {
     const pays = ledger.pay(cr.amount, (ch) => (cr.applies_to || []).includes(ch.use));
     record({ kind: 'credit', id: cr.id, date: ymd(cr.date), offered: num(cr.amount), ...(cr.note ? { note: cr.note } : {}) }, pays, true);
   }
-  // 3. The deposit she marked received: the whole deposit, less what the fee and
-  //    credits already paid of it.
+  // 2b. Her own discounts (no payment, or one no longer on the sale): off the final
+  //     payment (D27), filling the due dates from the last.
+  for (const d of discounts.filter((x) => !x.payment_id || (x.payment_id !== 'deposit' && !payIds.has(x.payment_id)))) {
+    record({ kind: 'discount', id: d.id, date: null, offered: d.amount, discount_label: d.label, last: true }, payDiscount(d.amount, (ch) => ch.part === 'schedule'));
+  }
+  // 3. The deposit she marked received: the whole deposit (its service fee with it,
+  //    D30), less what the fee and credits already paid of it, and less the discount
+  //    she gave with it (D31).
+  const depKeys = charges.filter((c) => c.part === 'deposit').map((c) => c.key);
+  const depLeft = () => cents(depKeys.reduce((t, k) => t + ledger.left(k), 0));
+  const depDiscount = discounts.find((x) => x.payment_id === 'deposit');
+  if (depDiscount && depositPaid(s) && byKey.has('deposit')) {
+    record({ kind: 'discount', id: depDiscount.id, date: ymd(s.deposit_date), offered: depDiscount.amount, discount_label: depDiscount.label }, payDiscount(Math.min(depDiscount.amount, depLeft()), (ch) => depKeys.includes(ch.key)));
+  }
   if (depositPaid(s) && byKey.has('deposit')) {
-    const left = ledger.left('deposit');
-    const pays = ledger.pay(left, (ch) => ch.key === 'deposit');
+    const left = depLeft();
+    const pays = ledger.pay(left, (ch) => depKeys.includes(ch.key));
     if (pays.length) record({ kind: 'deposit', id: 'deposit', date: ymd(s.deposit_date), offered: left }, pays);
   }
   // 4. Payments recorded toward one own-dated extra (or one of its steps), then each
   //    step marked paid covers whatever of it is left (a step marked paid is paid in
   //    full on its date; a payment that paid it also marks it, for older readers).
-  const payments = cleanPayments(s.payments);
-  const recordPayment = (p, accepts) => record({ kind: 'payment', id: p.id, date: p.date, offered: p.amount,
-    ...(p.method ? { method: p.method } : {}), ...(p.account_id ? { account_id: p.account_id } : {}), ...(text(p.toward) ? { toward: text(p.toward) } : {}) }, ledger.pay(p.amount, accepts));
+  // A discount with a payment rides with it, just before it (the same date and toward),
+  // so it pays the service fees it takes back and the payment the rest.
+  const withDiscounts = (list) => list.flatMap((p) => {
+    const d = discounts.find((x) => x.payment_id === p.id);
+    return d ? [{ id: d.id, amount: d.amount, date: p.date, ...(text(p.toward) ? { toward: text(p.toward) } : {}), discount: d }, p] : [p];
+  });
+  const payments = withDiscounts(cleanPayments(s.payments));
+  const moneyItem = (p) => (p.discount
+    ? { kind: 'discount', id: p.id, date: p.date, offered: p.amount, discount_label: p.discount.label, payment_id: p.discount.payment_id }
+    : { kind: 'payment', id: p.id, date: p.date, offered: p.amount, ...(p.method ? { method: p.method } : {}), ...(p.account_id ? { account_id: p.account_id } : {}) });
+  const recordPayment = (p, accepts) => record({ ...moneyItem(p), ...(text(p.toward) ? { toward: text(p.toward) } : {}) }, p.discount ? payDiscount(p.amount, accepts) : ledger.pay(p.amount, accepts));
   //    An extra now on the schedule keeps what was paid toward its old steps: a payment
   //    toward one of them pays the extra, and a step marked paid covers what's left
   //    of that step's share.
   const towardSteps = {};
-  for (const p of payments.filter((x) => text(x.toward))) {
+  // A part of a payment split by method (Payment Methods plan D25): toward the charges
+  // it names, `charges:<key>,<key>…`, before the rest of the schedule's money.
+  for (const p of payments.filter((x) => text(x.toward).startsWith(CHARGES_TOWARD))) {
+    const keys = towardKeys(p.toward);
+    recordPayment(p, (ch) => ch.part === 'schedule' && keys.includes(ch.key));
+  }
+  for (const p of payments.filter((x) => text(x.toward) && !text(x.toward).startsWith(CHARGES_TOWARD) && !text(x.toward).startsWith(DUE_TOWARD))) {
     const toward = text(p.toward);
     const onSched = charges.find((ch) => ch.part === 'schedule' && ch.steps && toward.startsWith(`${ch.key}:`));
     recordPayment(p, (ch) => ch.key === toward || ch === onSched);
@@ -308,13 +424,41 @@ export function paymentStatement(sale, opts = {}) {
     }
   }
   // 5. Payments recorded on the sale toward the schedule, in date order (never the
-  //    deposit, never an own-dated extra).
-  for (const p of payments.filter((x) => !text(x.toward))) recordPayment(p, (ch) => ch.part === 'schedule');
+  //    deposit, never an own-dated extra). By shares (§12, D42): what a payment pays is
+  //    the charges its due date asks for (`due:<id>`), else the earliest due date still
+  //    owed, each due date's charges in her priority order.
+  const toSchedule = payments.filter((x) => !text(x.toward) || text(x.toward).startsWith(DUE_TOWARD));
+  const cells = targets ? shareCells(targets, received, charges, priority) : null;
+  if (!cells) for (const p of toSchedule) recordPayment(p, (ch) => ch.part === 'schedule');
+  else {
+    for (const p of toSchedule) {
+      const i = received.length;
+      const dueId = text(p.toward).startsWith(DUE_TOWARD) ? text(p.toward).slice(DUE_TOWARD.length) : '';
+      let have = p.amount;
+      const pays = [];
+      const take = (cell) => {
+        const amt = cents(Math.min(have, cell.ask - cell.filled, ledger.left(cell.key)));
+        if (!(amt > 0)) return;
+        pays.push(...ledger.pay(amt, (ch) => ch.key === cell.key));
+        fillCell(cell, i, amt);
+        have = cents(have - amt);
+      };
+      const at = schedule.findIndex((st) => st.id === dueId);
+      if (at >= 0) cells.filter((c) => c.due === at).forEach(take);
+      cells.forEach(take);
+      // More than every due date asks: whatever is left, in her order.
+      if (have > 0) pays.push(...ledger.pay(have, (ch) => ch.part === 'schedule'));
+      record({ ...moneyItem(p), ...(text(p.toward) ? { toward: text(p.toward) } : {}) }, mergePays(pays));
+    }
+  }
   // 6. Marked paid in full: whatever is left of everything.
   if (balancePaid(s)) {
     const owedAll = cents(charges.reduce((t, c) => t + ledger.left(c.key), 0));
     const pays = ledger.pay(owedAll, (ch) => ch.key !== 'fee');
-    if (pays.length) record({ kind: 'paid_in_full', id: 'paid_in_full', date: ymd(s.balance_paid_date), offered: owedAll }, pays);
+    if (pays.length) {
+      record({ kind: 'paid_in_full', id: 'paid_in_full', date: ymd(s.balance_paid_date), offered: owedAll }, pays);
+      if (cells) for (const p of pays) fillKey(cells, received.length - 1, p.key, p.amount, true);
+    }
   }
 
   const total = cents(charges.reduce((t, c) => t + c.amount, 0));
@@ -326,19 +470,20 @@ export function paymentStatement(sale, opts = {}) {
 
   // The deposit: asked for on its own, before the schedule.
   const depCharge = byKey.get('deposit');
+  const depAmount = cents(charges.filter((c) => c.part === 'deposit').reduce((t, c) => t + c.amount, 0));
   const deposit = depCharge ? (() => {
-    const owed = ledger.left('deposit');
+    const owed = depLeft();
     const date = owed > 0 ? ymd(depositDueDate) : ymd(s.deposit_date);
     // `asked`: when it was asked for, kept once it's paid (a credit covering it is
-    // earned then, D21).
-    return { amount: depCharge.amount, paid: cents(depCharge.amount - owed), owed, date, asked: ymd(depositDueDate), status: statusOf(owed, date, today) };
+    // earned then, D21). `amount`: the deposit with its service fee (D30).
+    return { amount: depAmount, paid: cents(depAmount - owed), owed, date, asked: ymd(depositDueDate), status: statusOf(owed, date, today) };
   })() : null;
 
   // 2nd pass: the due dates' slices of the schedule's money (deposit asked first).
   const dated = { birthDate, pickupDate, openDays };
   const finalTotal = coveredTotal(['all'], charges, { final: true });
-  let prev = depCharge ? depCharge.amount : 0;
-  const dueDates = schedule.map((st, i) => {
+  let prev = depCharge ? depAmount : 0;
+  const dueDates = cells ? shareDueDates(schedule, targets, cells, { dated, prev, label: dueLabel }) : schedule.map((st, i) => {
     const covered = coveredTotal(st.covers, charges, { final: i === schedule.length - 1 });
     let threshold;
     let fresh = false;
@@ -355,7 +500,7 @@ export function paymentStatement(sale, opts = {}) {
     const ask = cents(threshold - prev);
     prev = threshold;
     const isFinal = i === schedule.length - 1;
-    return { id: st.id, label: st.label || (isFinal ? 'Final payment' : `Payment ${i + 1}`), step: st, date: dueDateOf(st, dated),
+    return { id: st.id, label: dueLabel(st, i, isFinal), step: st, date: dueDateOf(st, dated),
       coveredTotal: covered, threshold, ask, filled: 0, owed: 0, fresh, isFinal, status: 'met', from: [] };
   });
   // Money toward the schedule (not the deposit, not own-dated extras), each piece
@@ -363,11 +508,11 @@ export function paymentStatement(sale, opts = {}) {
   // `from` on each due date: which money filled it ({ i: index in received, amount }).
   const schedKeys = new Set(charges.filter((c) => c.part === 'schedule').map((c) => c.key));
   const pool = received
-    .map((r, i) => ({ i, amount: cents(r.pays.filter((p) => schedKeys.has(p.key)).reduce((t, p) => t + p.amount, 0)), earlier: ['fee', 'credit', 'deposit'].includes(r.kind) }))
+    .map((r, i) => ({ i, amount: cents(r.pays.filter((p) => schedKeys.has(p.key)).reduce((t, p) => t + p.amount, 0)), earlier: ['fee', 'credit', 'deposit'].includes(r.kind), last: r.last === true }))
     .filter((m) => m.amount > 0)
     .sort((a, b) => Number(b.earlier) - Number(a.earlier));
   const fill = (m, mayFresh) => {
-    for (const d of dueDates) {
+    for (const d of m.last ? [...dueDates].reverse() : dueDates) {
       if (!(m.amount > 0)) return;
       if (d.fresh && !mayFresh) continue;
       const take = cents(Math.min(m.amount, d.ask - d.filled));
@@ -380,10 +525,12 @@ export function paymentStatement(sale, opts = {}) {
       }
     }
   };
-  for (const m of pool) fill(m, !m.earlier);
-  // Earlier money with nowhere else to go (everything it may cover is met) covers the
-  // "doesn't count" due dates last, so nothing is ever shown owed that's been paid.
-  for (const m of pool) fill(m, true);
+  if (!cells) {
+    for (const m of pool) fill(m, !m.earlier);
+    // Earlier money with nowhere else to go (everything it may cover is met) covers the
+    // "doesn't count" due dates last, so nothing is ever shown owed that's been paid.
+    for (const m of pool) fill(m, true);
+  }
   for (const d of dueDates) {
     d.owed = cents(Math.max(d.ask - d.filled, 0));
     d.status = statusOf(d.owed, d.date, today);
@@ -401,10 +548,193 @@ export function paymentStatement(sale, opts = {}) {
     ...dueDates.filter((d) => d.owed > 0).map((d) => ({ kind: 'schedule', id: d.id, label: d.label, date: d.date, owed: d.owed, isFinal: d.isFinal })),
     ...ownDated.filter((o) => o.owed > 0).map((o) => ({ kind: 'own', id: o.key, label: o.label, date: o.date, owed: o.owed, isFinal: false }))
   ];
-  const next = open.find((o) => o.kind === 'deposit')
+  const first = open.find((o) => o.kind === 'deposit')
     || open.filter((o) => o.date).sort((a, b) => a.date.localeCompare(b.date))[0]
     || open[0] || null;
-  return { ...base, remaining: cents(total - paid), deposit, dueDates, ownDated, next };
+  // Due dates on the same day are one payment to the family (§12.5, D44): the next one
+  // takes in every schedule due date still owed on its date (`ids`), owed together.
+  const sameDay = first?.kind === 'schedule' && first.date ? open.filter((o) => o.kind === 'schedule' && o.date === first.date) : [];
+  const next = sameDay.length > 1 ? {
+    ...first, ids: sameDay.map((o) => o.id), owed: cents(sameDay.reduce((t, o) => t + o.owed, 0)),
+    isFinal: sameDay.some((o) => o.isFinal), label: listWords(sameDay.map((o) => o.label))
+  } : first;
+  return { ...base, remaining: cents(total - paid), deposit, dueDates, ownDated, next,
+    ...(cells ? { byShares: true, priority, cells } : {}) };
+}
+
+const listWords = (words) => (words.length < 2 ? words[0] || '' : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
+const dueLabel = (st, i, isFinal) => st.label || (isFinal ? 'Final payment' : `Payment ${i + 1}`);
+
+// --- By shares (§12): each due date's ask, charge by charge ---------------------------
+
+const mergePays = (pays) => {
+  const out = [];
+  for (const p of pays) {
+    const had = out.find((x) => x.key === p.key);
+    if (had) had.amount = cents(had.amount + p.amount);
+    else out.push({ ...p });
+  }
+  return out;
+};
+
+// The charges in her priority order (kind, then the sale's charge order). A fee
+// charged back ('fees') comes last.
+function inPriority(charges, priority) {
+  const rank = (c) => { const i = priority.indexOf(c.covers); return i < 0 ? priority.length : i; };
+  return charges.map((c, n) => ({ c, n })).sort((a, b) => rank(a.c) - rank(b.c) || a.n - b.n).map((x) => x.c);
+}
+
+// Each due date's ask per charge: [{ fresh, final, asks: Map(key → amount) }]. Targets
+// are cumulative per charge (what of it is asked by then): the deposit's start at the
+// deposit (it's asked first), so a percent of the price counts it. A share raises its
+// charges' targets in her order; the final due date asks the rest of everything. A due
+// date without shares (a stored one, D41) is one share over what it covers.
+export function shareTargets(schedule, charges, priority = CHARGE_KIND_ORDER) {
+  const ordered = inPriority(charges, cleanPriority(priority));
+  let T = new Map(charges.filter((c) => c.part !== 'own').map((c) => [c.key, c.part === 'deposit' ? c.amount : 0]));
+  return schedule.map((st, i) => {
+    const final = i === schedule.length - 1;
+    const prev = T;
+    T = new Map(prev);
+    const setOf = (match) => ordered.filter((c) => c.part !== 'own' && (final || !c.finalOnly) && match(c));
+    const matches = (ch) => (ch === 'all' ? () => true
+      : ch.startsWith('extra:') ? (c) => Boolean(c.extraId) && `extra:${c.extraId}` === ch : (c) => c.covers === ch);
+    const covered = (c) => st.covers.includes('all') || st.covers.includes(c.covers) || (c.extraId && st.covers.includes(`extra:${c.extraId}`));
+    const fresh = !final && (st.shares ? st.new_money === true : (st.basis === 'remaining' || st.prior_funds === 'dont_count'));
+    const shares = final ? [{ set: setOf(() => true), how: 'rest' }]
+      : st.shares ? st.shares.map((sh) => ({ set: setOf(matches(sh.charge)), how: sh.how, value: sh.value }))
+        : [{ set: setOf(covered), how: st.percent != null ? 'percent' : 'amount', value: st.percent ?? st.amount }];
+    for (const sh of shares) {
+      const sum = (m) => cents(sh.set.reduce((t, c) => t + (m ? m.get(c.key) || 0 : c.amount), 0));
+      const total = sum(null);
+      const before = sum(prev);
+      let want = total;
+      if (sh.how === 'percent') want = fresh ? before + (sh.value / 100) * (total - before) : (sh.value / 100) * total;
+      else if (sh.how === 'amount') want = before + sh.value;
+      let need = cents(Math.min(cents(want), total) - sum(T));
+      for (const c of sh.set) {
+        if (!(need > 0)) break;
+        const give = cents(Math.min(need, c.amount - (T.get(c.key) || 0)));
+        if (give > 0) { T.set(c.key, cents((T.get(c.key) || 0) + give)); need = cents(need - give); }
+      }
+    }
+    const asks = new Map();
+    for (const c of charges.filter((x) => x.part === 'schedule')) {
+      const a = cents((T.get(c.key) || 0) - (prev.get(c.key) || 0));
+      if (a > 0) asks.set(c.key, a);
+    }
+    return { fresh, final, asks };
+  });
+}
+
+// The old math's asks (by thresholds over everything the due dates cover). Only to spot
+// the $0 case.
+function thresholdAsks(schedule, charges) {
+  const finalTotal = coveredTotal(['all'], charges, { final: true });
+  let prev = cents(charges.filter((c) => c.part === 'deposit').reduce((t, c) => t + c.amount, 0));
+  return schedule.map((st, i) => {
+    const covered = coveredTotal(st.covers, charges, { final: i === schedule.length - 1 });
+    let threshold;
+    if (st.percent != null && st.basis === 'remaining') threshold = prev + (st.percent / 100) * Math.max(0, covered - Math.min(prev, covered));
+    else if (st.percent != null) threshold = Math.max(prev, (st.percent / 100) * covered);
+    else threshold = prev + st.amount;
+    threshold = Math.max(prev, Math.min(cents(threshold), finalTotal));
+    const ask = cents(threshold - prev);
+    prev = threshold;
+    return ask;
+  });
+}
+
+// A stored schedule whose old math asks $0 on a due date (before the final) that,
+// charge by charge, asks for money: "100% of boarding and transport" after a deposit
+// bigger than both (§12.1). It's worked out by shares instead (D41).
+export function zeroCase(schedule, charges, priority) {
+  if (schedule.length < 2) return false;
+  const old = thresholdAsks(schedule, charges);
+  const now = shareTargets(schedule, charges, priority);
+  return old.some((a, i) => i < schedule.length - 1 && a === 0 && [...now[i].asks.values()].some((v) => v > 0));
+}
+
+function fillCell(cell, i, amount) {
+  cell.filled = cents(cell.filled + amount);
+  const had = cell.from.find((f) => f.i === i);
+  if (had) had.amount = cents(had.amount + amount);
+  else cell.from.push({ i, amount });
+}
+// Money already on a charge fills that charge's cells, earliest due date first; a "new
+// money only" due date only when `mayFresh`. → what's left.
+function fillKey(cells, i, key, amount, mayFresh, last = false) {
+  let have = cents(amount);
+  for (const c of last ? [...cells].reverse() : cells) {
+    if (!(have > 0)) break;
+    if (c.key !== key || (c.fresh && !mayFresh)) continue;
+    const take = cents(Math.min(have, c.ask - c.filled));
+    if (take > 0) { fillCell(c, i, take); have = cents(have - take); }
+  }
+  return have;
+}
+
+// The due dates' cells, one per due date and charge it asks for, in due-date order and
+// her priority within each; filled with the money received so far (each on the charge
+// it paid): payments first wherever they can go, the fee credit, credits and the deposit
+// ("earlier money") never into a "new money only" due date unless nothing else is left.
+function shareCells(targets, received, charges, priority) {
+  const ordered = inPriority(charges, priority);
+  const cells = [];
+  targets.forEach((t, due) => {
+    for (const c of ordered) if (t.asks.has(c.key)) cells.push({ due, key: c.key, ask: t.asks.get(c.key), filled: 0, fresh: t.fresh, from: [] });
+  });
+  const sched = new Set(charges.filter((c) => c.part === 'schedule').map((c) => c.key));
+  const earlier = (r) => ['fee', 'credit', 'deposit'].includes(r.kind);
+  const left = [];
+  received.forEach((r, i) => {
+    for (const p of r.pays.filter((x) => sched.has(x.key))) {
+      const rest = fillKey(cells, i, p.key, p.amount, !earlier(r), r.last === true);
+      if (rest > 0) left.push({ i, key: p.key, amount: rest, last: r.last === true });
+    }
+  });
+  for (const m of left) fillKey(cells, m.i, m.key, m.amount, true, m.last);
+  return cells;
+}
+
+// The due dates when worked out by shares: each one's ask, what filled it and what's
+// owed, from its cells.
+function shareDueDates(schedule, targets, cells, { dated, prev, label }) {
+  let threshold = prev;
+  return schedule.map((st, i) => {
+    const mine = cells.filter((c) => c.due === i);
+    const ask = cents(mine.reduce((t, c) => t + c.ask, 0));
+    const filled = cents(mine.reduce((t, c) => t + c.filled, 0));
+    const from = [];
+    for (const c of mine) for (const f of c.from) {
+      const had = from.find((x) => x.i === f.i);
+      if (had) had.amount = cents(had.amount + f.amount);
+      else from.push({ ...f });
+    }
+    threshold = cents(threshold + ask);
+    const isFinal = i === schedule.length - 1;
+    return { id: st.id, label: label(st, i, isFinal), step: st, date: dueDateOf(st, dated),
+      coveredTotal: ask, threshold, ask, filled, owed: 0, fresh: targets[i].fresh, isFinal, status: 'met', from };
+  });
+}
+
+// A payment toward some of the schedule's charges (a part paid by its own method):
+// `toward` as `charges:<key>,<key>…`.
+export const CHARGES_TOWARD = 'charges:';
+export const chargesToward = (keys) => `${CHARGES_TOWARD}${[...new Set(keys)].join(',')}`;
+// A payment toward one due date (§12, D42): `toward` as `due:<due date id>`.
+export const DUE_TOWARD = 'due:';
+export const dueToward = (id) => `${DUE_TOWARD}${id}`;
+export const towardKeys = (toward) => (text(toward).startsWith(CHARGES_TOWARD) ? text(toward).slice(CHARGES_TOWARD.length).split(',').filter(Boolean) : []);
+
+// What one due date still asks for, charge by charge (from chargePieces): `dueId` is a
+// schedule due date's id, 'deposit', or an own-dated charge's key; none = the next
+// payment's (every due date on its day, D44). → [{ key, component, label, owed }]
+export function duePieces(st, dueId = null) {
+  const n = st?.next;
+  const ids = dueId != null ? [dueId] : n ? (n.kind === 'deposit' ? ['deposit'] : n.ids || [n.id]) : [];
+  if (!ids.length) return [];
+  return chargePieces(st).filter((p) => ids.includes(p.dueId) && p.owed > 0).map((p) => ({ key: p.key, component: p.component, label: p.label, owed: p.owed }));
 }
 
 // --- Pieces: each charge split by the due date it falls in ------------------------------
@@ -440,7 +770,7 @@ export function chargePieces(st) {
     const credited = r.kind === 'fee' || r.kind === 'credit';
     const had = c.paid.find((x) => x.ref === `${r.kind}:${r.id}`);
     if (had) had.amount = cents(had.amount + amount);
-    else c.paid.push({ ref: `${r.kind}:${r.id}`, kind: r.kind, id: r.id, date: r.date || null, amount, credited, label: `${c.label}${credited ? ' (credited)' : ''}`,
+    else c.paid.push({ ref: `${r.kind}:${r.id}`, kind: r.kind, id: r.id, date: r.date || null, amount, credited, label: r.kind === 'discount' ? r.discount_label : `${c.label}${credited ? ' (credited)' : ''}`,
       ...(r.method ? { method: r.method } : {}), ...(r.account_id ? { account_id: r.account_id } : {}) });
     c.amount = cents(c.amount + amount);
   };
@@ -474,6 +804,7 @@ export function chargePieces(st) {
       else if (c.part === 'own') addPaid(p, r, p.amount, p.key, ownMeta(p.key));
       else sched.push({ p, left: p.amount });
     }
+    if (st.cells) return;
     const fills = st.dueDates.map((d, j) => ({ j, left: d.from.filter((f) => f.i === i).reduce((t, f) => t + f.amount, 0) })).filter((f) => f.left > 0);
     zip(sched, fills, (a, b, amount) => addPaid(a.p, r, amount, st.dueDates[b.j].id, dueMeta[b.j]));
   });
@@ -486,6 +817,15 @@ export function chargePieces(st) {
     if (c.part === 'deposit') addOwed(c.key, left, 'deposit', depMeta);
     else if (c.part === 'own') addOwed(c.key, left, c.key, ownMeta(c.key));
     else if (left > 0) sched.push({ key: c.key, left });
+  }
+  if (st.cells) {
+    // By shares (§12): each due date's cells say which charge its money paid and what's
+    // still owed on it.
+    for (const c of st.cells) {
+      for (const f of c.from) addPaid({ key: c.key }, st.received[f.i], f.amount, st.dueDates[c.due].id, dueMeta[c.due]);
+      addOwed(c.key, cents(c.ask - c.filled), st.dueDates[c.due].id, dueMeta[c.due]);
+    }
+    return order(cells);
   }
   const owedDue = st.dueDates.map((d, j) => ({ j, left: d.owed })).filter((d) => d.left > 0);
   zip(sched, owedDue, (a, b, amount) => addOwed(a.key, amount, st.dueDates[b.j].id, dueMeta[b.j]));
@@ -518,6 +858,7 @@ const order = (cells) => [...cells.values()]
 // `saved`: a saved schedule's steps (no typed dates, no single extras).
 export function scheduleProblem(rows, { saved = false } = {}) {
   if (!Array.isArray(rows) || !rows.length) return 'Add at least the final payment.';
+  if (rows.length > SCHEDULE_MAX) return `A schedule holds up to ${SCHEDULE_MAX} payments, the final one included.`;
   for (const [i, r] of rows.entries()) {
     const name = i === rows.length - 1 ? 'The final payment' : `Payment ${i + 1}`;
     const due = SCHEDULE_DUE.find((d) => d.value === r?.due);
@@ -526,6 +867,15 @@ export function scheduleProblem(rows, { saved = false } = {}) {
     if (due.needsN && count(r.n) == null) return `${name}: say how many ${due.unit.split(' ')[0]}.`;
     if (r.due === 'at_weeks' && count(r.n) === 0) return `${name}: an age of at least 1 week.`;
     if (r.due === 'on_date' && !ymd(r.due_date)) return `${name}: choose the date.`;
+    if (i < rows.length - 1 && Array.isArray(r.shares)) {
+      if (!r.shares.length) return `${name}: tick what it collects.`;
+      for (const sh of r.shares) {
+        if (saved && String(sh.charge).startsWith('extra:')) return `${name}: a saved schedule can cover extras, not one extra.`;
+        if (sh.how === 'percent' && !(num(sh.value) > 0 && num(sh.value) <= 100)) return `${name}: a percent from 1 to 100.`;
+        if (sh.how === 'amount' && !(num(sh.value) > 0)) return `${name}: an amount above 0.`;
+      }
+      continue;
+    }
     const covers = cleanCovers(r.covers);
     if (!covers) return `${name}: tick what it covers.`;
     if (saved && covers.some((c) => c.startsWith('extra:'))) return `${name}: a saved schedule can cover extras, not one extra.`;
@@ -557,7 +907,7 @@ export function savedSchedules(kennel) {
     const name = text(x?.name);
     const steps = cleanSchedule(Array.isArray(x?.steps) ? x.steps.map(({ due_date: _d, ...st }) => st) : null);
     if (!name || !x?.id || !steps || steps.some((st) => st.due === 'on_date' || st.covers.some((c) => c.startsWith('extra:')))) continue;
-    out.push({ id: x.id, name, steps });
+    out.push({ id: x.id, name, steps, priority: cleanPriority(x.priority) });
   }
   return out;
 }
@@ -573,10 +923,86 @@ export function readSavedSchedules(rows = []) {
     names.add(name.toLowerCase());
     const error = scheduleProblem(r.steps, { saved: true });
     if (error) return { list: [], error: `"${name}": ${error}` };
-    out.push({ id: text(r.id) || crypto.randomUUID(), name, steps: cleanSchedule(r.steps.map((st, i) => ({ ...st, id: text(st.id) || `due${i}` }))) });
+    out.push({ id: text(r.id) || crypto.randomUUID(), name, steps: cleanSchedule(r.steps.map((st, i) => ({ ...st, id: text(st.id) || `due${i}` }))),
+      priority: cleanPriority(r.priority) });
   }
   return { list: out, error: '' };
 }
+
+// --- Tidying a schedule up (§12.5, D44, D48) -------------------------------------------
+// People build a schedule by trial, so due dates may be out of order or on the same day.
+// The editor offers to put them in date order and to combine same-day ones, then
+// renumbers. `rows`: the editor's steps (the last is the final payment). `dates`: each
+// row's date on a sale (null where it can't be known); none for a saved schedule, which
+// compares rules instead (D48).
+
+// A rule's place, where two rules can be compared without a sale: by age (weeks up),
+// days before pickup (days down), at pickup. → [group, n] or null.
+const ruleRank = (r) => (r.due === 'at_weeks' ? [0, num(r.n)] : r.due === 'before_pickup' ? [1, -num(r.n)] : r.due === 'at_pickup' ? [2, 0] : null);
+const sameRule = (a, b) => a.due === b.due && (a.due === 'on_date' ? Boolean(a.due_date) && a.due_date === b.due_date : !NEEDS_N.has(a.due) || num(a.n) === num(b.n));
+
+// Rows before the final one, in pairs that fall on the same day. → [[i, j]] (i < j)
+export function sameDayPairs(rows, dates = null) {
+  const out = [];
+  for (let i = 0; i < rows.length - 1; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const same = dates ? Boolean(dates[i]) && dates[i] === dates[j] : sameRule(rows[i], rows[j]);
+      if (same) out.push([i, j]);
+    }
+  }
+  return out;
+}
+
+// The first row (before the final one) that falls before the row above it. → index or -1
+export function outOfOrderAt(rows, dates = null) {
+  for (let i = 1; i < rows.length - 1; i++) {
+    if (dates) {
+      if (dates[i] && dates[i - 1] && dates[i] < dates[i - 1]) return i;
+    } else {
+      const a = ruleRank(rows[i - 1]);
+      const b = ruleRank(rows[i]);
+      if (a && b && (b[0] < a[0] || (b[0] === a[0] && b[1] < a[1]))) return i;
+    }
+  }
+  return -1;
+}
+
+// The rows before the final one in date order (one whose date can't be known keeps its
+// place), the final one last.
+export function inDateOrder(rows, dates = null) {
+  const body = rows.slice(0, -1).map((r, i) => ({ r, i, key: dates ? dates[i] : ruleRank(r) }));
+  const known = body.filter((x) => x.key).sort((a, b) => (dates ? a.key.localeCompare(b.key) : a.key[0] - b.key[0] || a.key[1] - b.key[1]) || a.i - b.i);
+  let k = 0;
+  return [...body.map((x) => (x.key ? known[k++].r : x.r)), rows[rows.length - 1]];
+}
+
+// Two rows on the same day as one, from the settings she used. → { row } or { why }.
+// The final payment asks everything left, so a row joining it simply goes.
+export function combineRows(a, b, { final = false } = {}) {
+  if (final) return { row: b };
+  const newMoney = (r) => (r.shares ? r.new_money === true : r.prior_funds === 'dont_count' || r.basis === 'remaining');
+  if (newMoney(a) !== newMoney(b)) return { why: 'one counts earlier money and the other only new payments' };
+  const label = text(a.label) || text(b.label);
+  const base = { id: a.id, due: a.due, ...(a.n != null ? { n: a.n } : {}), ...(a.due_date ? { due_date: a.due_date } : {}), ...(label ? { label } : {}) };
+  const pooled = (r) => !r.shares && r.amount != null && r.percent == null;
+  if (pooled(a) || pooled(b)) {
+    if (!(pooled(a) && pooled(b))) return { why: 'one is a single amount across several charges and the other sets each charge' };
+    const covers = cleanCovers([...(a.covers || []), ...(b.covers || [])]);
+    return { row: { ...base, covers, amount: cents(num(a.amount) + num(b.amount)), prior_funds: a.prior_funds || 'count', pooled: true } };
+  }
+  const sharesOf = (r) => r.shares || (r.covers || []).map((c) => ({ charge: c, how: 'percent', value: num(r.percent) }));
+  const out = sharesOf(a).map((x) => ({ ...x }));
+  for (const sh of sharesOf(b)) {
+    const had = out.find((x) => x.charge === sh.charge);
+    if (!had) { out.push({ ...sh }); continue; }
+    const whole = (x) => x.how === 'full' || x.how === 'rest';
+    if (whole(had) || whole(sh)) { Object.assign(had, { how: whole(had) ? had.how : sh.how }); delete had.value; continue; }
+    if (had.how !== sh.how) return { why: `one asks a percent of ${coverWord(sh.charge)} and the other an amount` };
+    had.value = had.how === 'percent' ? Math.min(cents(num(had.value) + num(sh.value)), 100) : cents(num(had.value) + num(sh.value));
+  }
+  return { row: { ...base, covers: out.map((x) => x.charge), shares: out, ...(newMoney(a) ? { new_money: true } : {}) } };
+}
+const coverWord = (c) => (SCHEDULE_COVERS.find((x) => x.value === c)?.label || 'that extra').toLowerCase();
 
 // A saved schedule copied onto a sale: its steps with ids of their own (dates follow
 // the pup and pickup until she types one).
@@ -667,6 +1093,18 @@ export function coversText(covers, charges = []) {
   return words.length < 2 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
 
+// What a due date with shares collects, in words (§12): "transport in full, at least 50%
+// of purchase price and $200 of boarding". `money` formats the figures.
+export function sharesText(step, charges = [], { money = (n) => `$${n}` } = {}) {
+  const words = (step.shares || []).map((sh) => {
+    const what = coversText([sh.charge], charges);
+    if (sh.how === 'percent') return `at least ${sh.value}% of ${what}`;
+    if (sh.how === 'amount') return `${money(sh.value)} of ${what}`;
+    return sh.how === 'rest' ? `the rest of ${what}` : `${what} in full`;
+  });
+  return `${words.length < 2 ? words[0] || '' : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`}${step.new_money ? ', new payments only' : ''}`;
+}
+
 // The schedule in one line, for the "adjust the schedule?" prompt and messages:
 // "$1,150 by Dec 4 (50% of purchase price and Puppy training); the rest at pickup".
 // `money` and `date` format the figures (the page's own helpers).
@@ -678,7 +1116,9 @@ export function scheduleSummary(statement, { money = (n) => `$${n}`, date = (d) 
       return d.date ? `everything due ${date(d.date)}` : `everything due ${when}`;
     }
     const st = d.step;
-    const what = st.percent != null
+    const what = st.shares ? sharesText(st, statement.charges, { money })
+      : st.pooled ? coversText(st.covers, statement.charges)
+      : st.percent != null
       ? `${st.percent}% of ${st.basis === 'remaining' ? 'what remains of ' : ''}${coversText(st.covers, statement.charges)}`
       : (st.prior_funds === 'dont_count' ? 'a new payment' : '');
     return `${money(d.ask)} ${when}${what ? ` (${what})` : ''}`;
@@ -719,7 +1159,7 @@ export function nextPaymentText(statement, { money = (n) => `$${n}`, date = (d) 
 export function familyPaymentsView(st) {
   if (!st || st.ended || !(st.total > 0)) return null;
   const next = st.next;
-  const isNext = (kind, id) => Boolean(next && next.kind === kind && next.id === id);
+  const isNext = (kind, id) => Boolean(next && next.kind === kind && (next.ids || [next.id]).includes(id));
   const stateOf = (owed, status, kind, id) => (!(owed > 0) ? 'met' : isNext(kind, id) ? 'next' : status === 'not_received' ? 'past' : 'later');
   const saleKeys = new Set(st.charges.map((c) => c.key));
   const received = [];
