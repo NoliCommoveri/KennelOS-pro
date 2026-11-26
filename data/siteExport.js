@@ -828,9 +828,11 @@ export function buildSiteBundle({ kennel, dogs = [], litters = [], pairings = []
   const fee = applicationFeePay(kennel, accounts);
   // Her methods for every stage of a sale, only to a site Worker that takes them (C11).
   // With pay_charges (C13): each method's key and what it may pay, and her words per stage.
+  // Always sent to a Worker that asks, [] / {} when she has none: KennelPort replaces
+  // its list only when the key comes, so an older build that sends no key can't wipe it.
   const payCharges = has(sections, 'pay_charges');
-  const methods = has(sections, 'pay_methods') ? paymentMethods(kennel, accounts, { charges: payCharges }) : null;
-  const notes = payCharges ? paymentNotes(kennel) : null;
+  const methods = has(sections, 'pay_methods') ? paymentMethods(kennel, accounts, { charges: payCharges }) || [] : null;
+  const notes = payCharges ? paymentNotes(kennel) || {} : null;
   const facts = has(sections, 'waitlist_facts') ? waitlistFacts(kennel) : null;
   const bundle = {
     format: SITE_BUNDLE_FORMAT,

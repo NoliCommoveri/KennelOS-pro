@@ -78,6 +78,14 @@ export function doneReminderChanges(e) {
   return e.reminder_date <= e.event_date ? { reminder_dismissed: true } : {};
 }
 
+// A new instant event's is_done when the caller set none: dated today or earlier
+// is done (she's recording what happened), ahead is a to-do. Spans carry none.
+// Every way a new event comes in uses it: create() and the helper-app import.
+export function withDefaultDone(data) {
+  if (data.is_done != null || !isInstant(data)) return data;
+  return { ...data, is_done: String(data.event_date || '') <= todayYMD() };
+}
+
 function validateEvent(candidate) {
   for (const f of REQUIRED_FIELDS) {
     if (candidate[f] == null || candidate[f] === '') {
@@ -99,13 +107,11 @@ function validateEvent(candidate) {
 export const HistoryEvent = {
   ...base,
 
-  // An instant event logged for today or earlier is done (she's recording what
-  // happened); one dated ahead is a to-do until she marks it done. A caller may
-  // pass is_done to say otherwise (the event form's Done toggle). Spans carry none.
+  // A new event's is_done follows its date (withDefaultDone) unless the caller
+  // passes one (the event form's Done box).
   async create(data) {
     validateEvent(data);
-    if (data.is_done == null && isInstant(data)) data = { ...data, is_done: data.event_date <= todayYMD() };
-    return base.create(data);
+    return base.create(withDefaultDone(data));
   },
 
   // Mark a to-do done: it leaves Upcoming/Overdue, and its heads-up reminder

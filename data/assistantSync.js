@@ -25,6 +25,7 @@ import { dropboxUploadJson, dropboxDownloadJson, dropboxDownloadWithRev, remembe
 import { setLastBackupDate, setAssistantFeedPushedAt, markDataChanged, getAssistantImportedIds, addAssistantImportedIds } from './settings.js';
 import { assertWritable } from './demoMode.js';
 import { EVENT_TYPES, ASSISTANT_EVENT_TYPES, descriptor } from './vocab.js';
+import { withDefaultDone } from './eventRepo.js';
 
 // Bumped only if the feed/outbox shapes ever change incompatibly.
 export const ASSISTANT_FORMAT_VERSION = 1;
@@ -183,14 +184,15 @@ export async function importAssistantEvents(rows) {
     // An update keeps what only she has on the record (an archive, her notes when
     // the helper sent none): the helper edits the entry, not her side of it.
     const mine = status === 'update' ? await db.events.get(rest.id) : null;
-    records.push({
+    // A new entry is done or to do by its date, as if she'd logged it herself.
+    records.push((mine ? (x) => x : withDefaultDone)({
       ...(mine || {}),
       ...rest,
       notes: rest.notes || mine?.notes || null,
       is_archived: mine ? mine.is_archived === true : (rest.is_archived ?? false),
       created_at: mine?.created_at || rest.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
-    });
+    }));
   }
   if (records.length) {
     await db.events.bulkPut(records);
