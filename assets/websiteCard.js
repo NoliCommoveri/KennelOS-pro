@@ -7,10 +7,12 @@
 import { esc, fmtDate, confirmModal } from './ui.js';
 import { ownKennels, getActiveKennelId } from '../data/kennelScope.js';
 import { kennelRepo } from '../data/kennelRepo.js';
+import { contactRepo } from '../data/contactRepo.js';
 import {
   connectWebsite, disconnectWebsite, updateWebsite, getWebsiteLink, websiteSummary, KennelportError, LicenseLapsedError,
   pendingWebsiteOffer, useSiteAsKennelWebsite, keepKennelWebsite
 } from '../data/kennelportLink.js';
+import { portalLastLine } from '../data/portalFeedSync.js';
 import { SiteExportError } from '../data/siteExport.js';
 import { getWebsitePublishOnSend, setWebsitePublishOnSend } from '../data/settings.js';
 
@@ -84,12 +86,20 @@ export async function mountWebsiteCard(el) {
             <button class="btn" id="web-offer-keep">Keep mine</button>
           </div>
         </div>` : '';
+      let portalLine = '';
+      if (link.portal_last) {
+        const ids = (link.portal_last.failed || []).map((f) => f.family).filter(Boolean);
+        const names = new Map();
+        for (const id of new Set(ids)) { try { const c = await contactRepo.getById(id); if (c?.name) names.set(id, c.name); } catch { /* name only */ } }
+        portalLine = esc(portalLastLine(link.portal_last, { nameOf: (id) => names.get(id), fmtDay: fmtDate }));
+      }
       const last = link.last_sent_at ? `Last update ${fmtDate(link.last_sent_at.slice(0, 10))}: ${esc(link.last_summary?.text || 'sent')}` : 'Not updated from this device yet.';
       body = `
         ${ask}
         <p>Connected to <a href="${esc(site.website || '#')}" target="_blank" rel="noopener noreferrer">${esc(site.name || site.website || 'your website')}</a> on this device${link.device_label ? ` (“${esc(link.device_label)}”)` : ''}.</p>
         <p class="muted">Marked Show on website: ${esc(marked)}. ${site.kennelos_prices ? 'Your litter and extras prices go too (Use my KennelOS prices is on in KennelPort).' : 'Your prices stay here: Use my KennelOS prices is off in KennelPort.'}</p>
         <p class="muted">${last}</p>
+        ${portalLine ? `<p class="muted">${portalLine}</p>` : ''}
         <label class="check-inline" style="margin:6px 0 10px;"><input type="checkbox" id="web-publish"${getWebsitePublishOnSend() ? ' checked' : ''}> Publish what I send straight away</label>
         <p class="field-hint" style="margin-top:0;">${getWebsitePublishOnSend() ? 'Each update goes live at once, along with any changes you made in KennelPort Site Manager that weren\'t published yet. Undo publish in Site Manager steps it back.' : 'What you send lands in your website\'s draft: check it in KennelPort Site Manager, then press Publish there.'}</p>
         <div class="pill-row">

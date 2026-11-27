@@ -37,7 +37,7 @@ import { pickupEvent } from './goHome.js';
 import { statusPageLink } from './cloud/cloudConfig.js';
 import { buildPortalFeed, portalTakes, feedCopy, pickupEventFor, zonedParts, clockText, FEED_EVENT_TYPES } from './portalFeed.js';
 import { sendFamilyFeed, linkStatus, websiteLinkOffered, KennelportError } from './kennelportApi.js';
-import { getWebsiteLink, notePortalSent, noteWebsiteAnswer, clearWebsiteLink } from './kennelportLinkStore.js';
+import { getWebsiteLink, notePortalSent, noteWebsiteAnswer, clearWebsiteLink, notePortalResult } from './kennelportLinkStore.js';
 import { licenseOk, turnPortalOff } from './kennelportLink.js';
 import { isCloudAvailable } from './cloud/cloudConfig.js';
 import { addDaysToYMD } from './dateUtils.js';
@@ -206,7 +206,7 @@ export async function mayFeedHere() {
 // 'sent' | 'skipped' | 'error', reason?, summary?, applied? }.
 // `opening`: a page load; force and refresh then when the last check is over
 // FEED_OPEN_EVERY_MS old.
-export async function sendPortalFeed(kennel, { force = false, refresh = false, opening = false, today = todayYMD(), feedId = crypto.randomUUID(), mayFeed = mayFeedHere } = {}) {
+async function sendPortalFeedOnce(kennel, { force = false, refresh = false, opening = false, today = todayYMD(), feedId = crypto.randomUUID(), mayFeed = mayFeedHere } = {}) {
   if (!websiteLinkOffered() || !kennel?.id) return { status: 'skipped', reason: 'unavailable' };
   const link = await getWebsiteLink(kennel.id);
   if (!link) return { status: 'skipped', reason: 'not_linked' };
@@ -265,10 +265,49 @@ export async function sendPortalFeed(kennel, { force = false, refresh = false, o
       applied = done.applied;
       if (!same(done.portal, fresh.kennelport_portal)) await kennelRepo.update(kennel.id, { kennelport_portal: done.portal });
     }
-    return { status: 'sent', summary: answer?.summary || {}, applied };
+    const failed = Array.isArray(answer?.failed) ? answer.failed.slice(0, 20).map((f) => ({ family: String(f?.family || ''), placement: f?.placement ? String(f.placement) : null, message: String(f?.message || '').slice(0, 200) })) : [];
+    return { status: 'sent', summary: answer?.summary || {}, applied, families: feed.families.length, ...(failed.length ? { failed } : {}) };
   } catch (err) {
     return { status: 'error', reason: err?.kind || 'other', message: err?.message || String(err) };
   }
+}
+
+// The same, keeping how it went on this device's link (notePortalResult), so the
+// Your website card can show her what went and what didn't. An unchanged feed
+// leaves the last result as it was.
+export async function sendPortalFeed(kennel, opts = {}) {
+  const out = await sendPortalFeedOnce(kennel, opts);
+  if (kennel?.id && out.reason !== 'unchanged' && out.reason !== 'not_linked' && out.reason !== 'unavailable') {
+    try {
+      await notePortalResult(kennel.id, {
+        status: out.status, reason: out.reason || null, message: out.message || null,
+        families: out.families ?? null, summary: out.summary || null, failed: out.failed || null
+      });
+    } catch { /* only a note */ }
+  }
+  return out;
+}
+
+// How the puppy portal's last send from this device went (link.portal_last), as
+// Settings' Your website card says it: what went, what the portal couldn't take in
+// (by family name), or why nothing went. Plain text ('' when nothing is known);
+// the card escapes it. `fmtDay(ymd)`: the app's date format.
+export function portalLastLine(last, { nameOf = () => null, fmtDay = (d) => d } = {}) {
+  if (!last?.at) return '';
+  const when = fmtDay(String(last.at).slice(0, 10));
+  if (last.status === 'sent') {
+    const failed = Array.isArray(last.failed) ? last.failed : [];
+    const who = [...new Set(failed.map((f) => nameOf(f.family) || 'a family'))];
+    const n = Number(last.families) || 0;
+    return `Puppy portal, ${when}: ${n} ${n === 1 ? 'family' : 'families'} sent.${failed.length ? ` Not taken in: ${who.join(', ')} (${failed[0].message || 'no reason given'}). It tries again on the next send.` : ''}`;
+  }
+  if (last.status === 'error') return `Puppy portal, ${when}: not sent. ${last.message || 'KennelPort didn\'t answer.'}`;
+  const why = {
+    other_device: 'another of your devices sends your families now. Open KennelOS there, or close it there and reopen it here.',
+    license: 'not sent while your Pro license has lapsed.',
+    portal_off: 'the puppy portal is off in KennelPort.'
+  }[last.reason];
+  return why ? `Puppy portal, ${when}: ${why}` : '';
 }
 
 // Every own kennel linked on this device, one after the other.

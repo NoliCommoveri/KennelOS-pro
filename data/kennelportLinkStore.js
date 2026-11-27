@@ -69,6 +69,16 @@ export async function notePortalSent(kennelId, { sent, known, site, checked = fa
   });
 }
 
+// How the puppy portal's last send went (portalFeedSync.js), for Settings' Your
+// website card: { at, status: 'sent' | 'error' | 'skipped', reason, message,
+// families (how many went), summary (KennelPort's counts), failed (what it couldn't
+// take in, by KennelOS id) }.
+export async function notePortalResult(kennelId, result) {
+  const row = await getWebsiteLink(kennelId);
+  if (!row) return;
+  await db.device_secrets.put({ ...row, portal_last: { at: new Date().toISOString(), ...result } });
+}
+
 export async function clearWebsiteLink(kennelId) {
   if (kennelId) await db.device_secrets.delete(rowId(kennelId));
   forgetStrip();
