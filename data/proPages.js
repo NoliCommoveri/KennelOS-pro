@@ -83,7 +83,7 @@ export const PRO_ONLY_STANDALONE = [
   // Waitlist page before Open picks. Its rules, data/picksPreview.js, stay shared.
   'assets/picksPreviewModal.js',
   // Side sales (Side Sale Spec): the family page and the picks panel.
-  'assets/sideSaleUI.js',
+  'assets/saleBuyers.js',
   // The Litter page's pickup times (Family Requests plan §4), imported the same way.
   'assets/pickupTimesPanel.js',
   'assets/setPickupDialog.js',

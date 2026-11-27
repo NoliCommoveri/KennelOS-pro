@@ -60,9 +60,11 @@ import {
   prefChangeLines, turnIdOf, turnOffers, openTurns, nextTurn, nextTurns, turnLittersFor, joinsOpenTurn, joinsOpenTurns, aheadInTheWay, undoPassHolders,
   splitPrepassed, prepassFor, prepassTargets, passReasonOf, passedBefore, lostSaleFamily, isSideSalePending, sideSaleOf, sideSaleBlocker, sideSaleIssues, answersToFit, sideSaleInOrderAt,
   turnIsEmpty, emptiedTurns, turnRespondBy, turnDeadline, joinRespondBy, onOpenDay, holdsTurn, PREPASSED_NOTE, isPrepassedRow, offerBlocker, nextOfferedTurn, entryName, isFamilyPageOnly, familyPageBlocker, familyPagePlan,
-  FAMILY_DETAIL_KEYS, isHeldPick
+  FAMILY_DETAIL_KEYS, isHeldPick, saleBuyerPath
 } from './waitlistRules.js';
 import { contactFromApplication, saleKennelId } from './waitlistFamilyRules.js';
+import { pulledFrom, saleBlocker } from './saleChecks.js';
+import { restoreHeldPup } from './pendingSale.js';
 
 // Every action here is one transaction over her data tables (K6-13): a deposit, a pass
 // across a turn's litters, a back-out — each makes several writes, and a phone that
@@ -982,11 +984,14 @@ async function releasePick(offer, { date, why, strict = true }) {
     }
     return;
   }
-  await saleRepo.update(sale.id, {
+  const cancelled = await saleRepo.update(sale.id, {
     status: 'cancelled',
     notes: appendNote(sale.notes, `Cancelled ${date}: the waitlist pick lapsed (${why}).`)
   });
   if (isHeldPick(offer)) await unreserveHeldPup(sale.dog_id, sale.id);
+  // A pup the Sale page pulled from Undecided / Keeping / Health hold for this pick
+  // goes back to what it was (recordSale, Unified Sale plan §2.2).
+  await restoreHeldPup(cancelled);
 }
 
 // A held pick's pup is shown reserved (Placed) while it's held. When the pick lapses,
@@ -1361,6 +1366,153 @@ export const cancelSideSale = atomic(async function cancelSideSale(saleId, { dat
     await addFamilyActivity(entry.id, [{ id: `side-sale-cancel-${sale.id}`, kind: 'action', body: `The side sale was cancelled (${why}).${leaving ? '' : ' They keep their place on the list.'}` }]);
   }
   return { sale: saved, restored };
+});
+
+// --- One sale, whoever's buying (Unified Sale plan Phase 2, §2.3) -----------------
+// The Sale page saves a new sale to a family on her list through here; how it goes
+// follows from where they stand (waitlistRules.saleBuyerPath), never from a button:
+//   'turn'    they hold the current turn: the sale is their turn pick, whatever pup
+//             she chose (U2). A pup from a litter not in their turn joins the turn.
+//   'list'    on the list without the turn: linked to their place (side_entry_id),
+//             shown to them as a pick, their place and passes unchanged.
+//   'applied' applied or owes the fee: the sale places them (U1); a fee paid later is
+//             still theirs to credit.
+// `draft` is the Sale page's sale (dog_id, registration_type, status, price, deposit,
+// dates and the rest); what she typed there is kept on the sale. A draft past Deposit
+// Pending records the deposit too (the family placed, other claims on the pup ended).
+// `updateAnswers` writes their answers to fit the pup; `updateRegistration` sets the
+// pup's intended registration to the sale's.
+// → { path, sale, entry, issues, depositDone, result } (`result`: what recording the
+// deposit did: turns ended or moved on, other claims ended).
+const DRAFT_KEPT_BY_PATH = new Set(['id', 'dog_id', 'buyer_contact_id', 'status', 'kennel_id', 'deposit_date', 'deposit_due_date',
+  'side_entry_id', 'side_deposit_due', 'side_holds_pup', 'side_prior_disposition', 'side_in_order', 'entry_id', 'set_dog_registration',
+  'created_at', 'updated_at', 'is_archived']);
+const draftFields = (draft) => Object.fromEntries(Object.entries(draft || {})
+  .filter(([k, v]) => !DRAFT_KEPT_BY_PATH.has(k) && v !== '' && v !== null && v !== undefined));
+
+export const recordSale = atomic(async function recordSale(draft, { entryId, updateAnswers = false, updateRegistration = false, date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  const dog = await dogRepo.getById(draft?.dog_id);
+  if (!dog) throw new Error('Pick the pup this sale is for.');
+  if (!dog.litter_id) throw new Error(`${dog.call_name} isn't in one of your litters, so this can't be a sale to a family on your list. Choose them as a contact instead.`);
+  if (!draft.registration_type) throw new Error('Pick the registration you\'re selling at.');
+  if (RELEASED_SALE_STATUSES.includes(draft.status)) throw new Error('A new sale to a family on your list starts open. Record it, then end it if you need to.');
+  const c = await kennelContext(entry.kennel_id);
+  const path = saleBuyerPath(entry, c.offers);
+  if (!path) throw new Error('This family isn\'t on your list or applying now. Choose them as a contact instead.');
+  const depositIn = draft.status && draft.status !== 'deposit_pending';
+  const deposit = { date: draft.deposit_date || date, paidDate: draft.deposit_date || date, amount: draft.deposit_amount, paidVia: draft.deposit_paid_via_account_id || null };
+  const litter = c.litters.find((l) => l.id === dog.litter_id) || await litterRepo.getById(dog.litter_id);
+  const issues = sideSaleIssues(entry, dog, litter, { sales: c.sales, offers: c.offers, today: date, config: c.config });
+  const keep = draftFields(draft);
+  let sale; let result = null; let depositDone = false;
+
+  if (path === 'list') {
+    const res = await recordSideSale(entry.id, {
+      dogId: dog.id, registration: draft.registration_type, depositDue: draft.deposit_due_date || null,
+      updateAnswers, updateRegistration, date
+    });
+    sale = await saleRepo.update(res.sale.id, keep);
+    depositDone = res.depositDone;
+    if (depositDone) result = res;
+    else if (depositIn) { result = await confirmSideDeposit(sale.id, deposit); depositDone = true; }
+  } else if (path === 'turn') {
+    const rows = openTurns(c.offers, null, { includeHeld: true }).find((t) => t.entry_id === entry.id).offers;
+    const picked = rows.find((o) => o.chosen_dog_id);
+    if (picked) {
+      const name = c.pups.find((p) => p.id === picked.chosen_dog_id)?.call_name || 'a pup';
+      throw new Error(`They already picked ${name} in their turn. Change their pick on their page, or record that deposit there.`);
+    }
+    if (sideSaleBlocker(dog)) throw new Error(sideSaleBlocker(dog));
+    if (updateAnswers && issues.fields.length) {
+      const fit = answersToFit(entry, dog, draft.registration_type, issues.fields);
+      if (Object.keys(fit).length) await waitlistEntryRepo.update(entry.id, fit);
+    }
+    // A pup pulled from Undecided / Keeping / Health hold is Available and held for
+    // them; it goes back if the pick lapses (releasePick) or the sale is cancelled.
+    const prior = pulledFrom(dog);
+    if (!isPupAvailable({ ...dog, disposition: prior ? 'available' : dog.disposition }, c.sales)) {
+      throw new Error(`${dog.call_name} already has a sale on it, so it can't be their turn pick. End that sale first, or record this one once it's free.`);
+    }
+    const dogChanges = {};
+    if (prior) dogChanges.disposition = 'available';
+    if (updateRegistration && dog.intended_registration !== draft.registration_type) dogChanges.intended_registration = draft.registration_type;
+    if (Object.keys(dogChanges).length) await dogRepo.update(dog.id, dogChanges);
+    // Their turn row for the pup's litter; a litter not in their turn joins it, on
+    // the turn's own deadline.
+    let row = rows.find((o) => o.litter_id === dog.litter_id);
+    if (!row) {
+      const due = turnDeadline(rows);
+      row = await waitlistOfferRepo.create({
+        entry_id: entry.id, litter_id: dog.litter_id, kennel_id: litter?.kennel_id || entry.kennel_id,
+        turn_id: turnIdOf(rows[0]), offered_date: date, ...dueFields(due),
+        eligible_dog_ids: [dog.id], outcome: 'open',
+        notes: `Added ${date}: you recorded a sale of ${dog.call_name} to them in their turn.`
+      });
+    }
+    const res = await recordPick(row.id, { chosenDogId: dog.id, date });
+    const holdFields = prior ? { side_holds_pup: true, side_prior_disposition: prior } : {};
+    sale = await saleRepo.update(res.sale.id, { ...keep, ...holdFields });
+    depositDone = res.depositDone;
+    if (depositDone) result = res;
+    else if (depositIn) { result = await confirmDeposit(row.id, deposit); depositDone = true; }
+  } else {
+    // Applied or owes the fee (U1): an ordinary sale, and the sale places them.
+    if (saleBlocker(dog)) throw new Error(saleBlocker(dog));
+    let contactId = entry.contact_id || null;
+    if (!contactId) contactId = (await contactRepo.create(contactFromApplication(entry.application))).id;
+    const prior = !depositIn ? pulledFrom(dog) : null;
+    if (updateAnswers && issues.fields.length) {
+      const fit = answersToFit(entry, dog, draft.registration_type, issues.fields);
+      if (Object.keys(fit).length) await waitlistEntryRepo.update(entry.id, fit);
+    }
+    if (updateRegistration && dog.intended_registration !== draft.registration_type) await dogRepo.update(dog.id, { intended_registration: draft.registration_type });
+    sale = await saleRepo.create({
+      ...expectedPricing(dog, litter, draft.registration_type),
+      lead_source: 'Waitlist',
+      ...keep,
+      dog_id: dog.id, buyer_contact_id: contactId, status: draft.status || 'deposit_pending',
+      kennel_id: dog.kennel_id || litter?.kennel_id || entry.kennel_id, sale_date: draft.sale_date || date,
+      ...(depositIn ? { deposit_date: deposit.paidDate } : { deposit_due_date: draft.deposit_due_date || null }),
+      ...(prior ? { side_holds_pup: true, side_prior_disposition: prior } : {})
+    });
+    await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, contact_id: contactId });
+    await addFamilyActivity(entry.id, [{ id: `sale-${sale.id}`, kind: 'action', body: `You recorded a sale of ${dog.call_name} to them while their application was open. Their application is closed as placed with this sale.` }]);
+    if (depositIn) {
+      await dogRepo.update(dog.id, { disposition: 'placed' });
+      result = { resolved: await resolveOtherClaims(dog.id, { keepSaleId: sale.id, date, who: 'another buyer\'s deposit arrived first' }) };
+      depositDone = true;
+    }
+  }
+  // A deposit recorded past Deposit Paid (paid in full, delivered): the sale takes
+  // the status she chose.
+  if (depositDone && draft.status && !['deposit_pending', 'deposit_paid'].includes(draft.status)) {
+    sale = await saleRepo.update(sale.id, { status: draft.status });
+  } else {
+    sale = await saleRepo.getById(sale.id);
+  }
+  return { path, sale, entry: await waitlistEntryRepo.getById(entry.id), issues, depositDone, result };
+});
+
+// Link an old sale to its family (Unified Sale plan Phase 3, U7; Today's "bought X and
+// is still on the list"): the family is placed with that sale, as if it had been
+// recorded for them. Any turn or pick they hold ends (never a pass) and the turn moves
+// on; a sale off their turn still waiting on its deposit is cancelled. Refused when
+// the sale isn't theirs or no longer live, or they're no longer on the list or applying.
+// → { entry, sale, released } (`released`: releaseOpenOffers' result).
+export const linkSaleToFamily = atomic(async function linkSaleToFamily(entryId, saleId, { date } = {}) {
+  const entry = await load(entryId);
+  date ??= await kennelDay(entry.kennel_id);
+  const sale = await saleRepo.getById(saleId);
+  if (!sale || sale.is_archived || RELEASED_SALE_STATUSES.includes(sale.status)) throw new Error('That sale was ended or archived.');
+  if (!entry.contact_id || sale.buyer_contact_id !== entry.contact_id) throw new Error('That sale isn\'t to this family.');
+  if (entry.is_archived || !['active', 'applied', 'approved'].includes(entry.status)) throw new Error('This family is no longer on the list or applying.');
+  const released = await releaseOpenOffers(entry.id, { date, why: 'the family bought a pup' });
+  const placed = await waitlistEntryRepo.update(entry.id, { status: 'placed', placed_sale_id: sale.id, ...(entry.carried_payment ? { received_credits: creditsWithCarried(entry), carried_payment: null } : {}) });
+  const dog = sale.dog_id ? await dogRepo.getById(sale.dog_id) : null;
+  await addFamilyActivity(entry.id, [{ id: `sale-linked-${sale.id}`, kind: 'action', body: `You linked their sale${dog ? ` of ${dog.call_name}` : ''} to their place: they're placed with it.` }]);
+  return { entry: placed, sale, released };
 });
 
 // Two claims on one pup, one deposit in (§5; Unified Sale plan §2, for every sale):

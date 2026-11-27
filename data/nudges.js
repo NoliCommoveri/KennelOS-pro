@@ -56,7 +56,7 @@ import { showRecordFrom } from './showPoints.js';
 import { waitlistEntryRepo } from './waitlistEntryRepo.js';
 import { waitlistOfferRepo } from './waitlistOfferRepo.js';
 import { duplicateApplicationPairs, duplicateDismissKeys, matchReasonText } from './applicationDuplicates.js';
-import { isDismissed } from './nudgeState.js';
+import { isDismissed, dismiss } from './nudgeState.js';
 import { contactRepo } from './contactRepo.js';
 import { accountRepo } from './accountRepo.js';
 import { goHomeDate, daysBetween, followUpMessage, sharedReferrals, FOLLOW_UP_DAYS, FOLLOW_UP_WINDOW_DAYS } from './referralShare.js';
@@ -65,7 +65,7 @@ import { hasSchedule } from './paymentSchedule.js';
 import { getSaleStatements } from './incomeView.js';
 import { waitlistProgramRepo } from './waitlistProgramRepo.js';
 import {
-  overdueTurns, overdueFees, deadlineLabel, timeLabel, plannedOpening, canUndoRemoval, entryName, describeOfferChanges, waitlistConfig, businessDays, autoOffers, closingTrigger,
+  overdueTurns, overdueFees, deadlineLabel, timeLabel, plannedOpening, canUndoRemoval, entryName, describeOfferChanges, unlinkedListSales, waitlistConfig, businessDays, autoOffers, closingTrigger,
   prefChangeSummary, prefChangeEffect, PREF_FIELD_LABEL, depositsDueLitters,
   readyCheck, readyCheckOverdue, isSideSalePending, pupClaims, waitlistLitters, listenChangeKind, isListenOnly, changePhase, familyChanges
 } from './waitlistRules.js';
@@ -1285,6 +1285,33 @@ async function waitlistNudges(today, litters, dogsById, { dogs = [], sales = [] 
       detail: `${name(p.b)} (applied ${p.b.applied_date || 'undated'}) and ${name(p.a)} (applied ${p.a.applied_date || 'undated'}) have ${matchReasonText(p)} on one waitlist. If they're one family, merge them and keep one. Dismiss if they're not the same.`,
       subjectHref: `waitlist-entry.html?id=${encodeURIComponent(p.b.id)}`,
       actions: [{ label: 'Compare', run: go(`waitlist-entry.html?id=${encodeURIComponent(p.b.id)}`) }]
+    });
+  }
+
+  // A sale made to a family still on the list or applying, never linked to their place
+  // (Unified Sale plan Phase 3, U7): raised once per sale. Link them places the family
+  // with it; Not the same family puts it away. Nothing changes by itself.
+  for (const { entry: e, sale: s } of unlinkedListSales(entries, sales, offersAll)) {
+    const key = `waitlist-unlinked-sale:${e.id}:${s.id}`;
+    const pup = dogsById.get(s.dog_id)?.call_name || 'a pup';
+    const who = name(e);
+    const where = e.status === 'active' ? 'is still on the list' : 'still has an application open';
+    out.push({
+      key,
+      title: `${who} bought ${pup} and ${where}`,
+      detail: `If it's the same family, link them: they're placed with this sale and stop being offered turns.`,
+      subjectHref: `waitlist-entry.html?id=${encodeURIComponent(e.id)}`,
+      actions: [
+        { label: 'Link them', confirm: true,
+          ask: { title: `Link ${who} to ${pup}'s sale?`, message: `${who} is placed with this sale.${e.status === 'active' ? ' Any turn they hold ends (never a pass) and moves on.' : ' Their application is closed as placed.'}`, confirmLabel: 'Link them' },
+          run: async () => {
+            const { linkSaleToFamily } = await import('./waitlistActions.js');
+            const r = await linkSaleToFamily(e.id, s.id, { date: dayOf(e.kennel_id) });
+            const next = (r.released.offered || []).map((t) => entriesById.get(t.entry_id)).filter(Boolean).map(name);
+            return { title: `${who} is placed`, message: `${who} is placed with ${pup}'s sale.${r.released.voided.length ? ' Their turn ended.' : ''}${next.length ? ` The turn moved to ${next.join(', ')}; let them know.` : ''}` };
+          } },
+        { label: 'Not the same family', run: async () => { dismiss(key); } }
+      ]
     });
   }
 

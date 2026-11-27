@@ -61,7 +61,7 @@ import {
   PREF_FIELD_LABEL, prefValueText, prefChangeSummary, lostSaleFamily, listedName, privateName, publicName, prefPlaces,
   sideSaleOf, sideSaleInOrder, boughtOutOfOrder, pupClaims, isFamilyPageOnly, offerBlocker, nextOfferedTurn, aheadInTheWay, undoPassHolders, turnRespondBy, isTurnOverdue, holdsTurn, isPrepassedRow, turnLengthText,
   familyDetails, contactForEmail, deadlineLabel, isHeldPick, turnDeadline, prepassTargets, passReasons, passedBefore, nextTurnPrepassNote } from '../data/waitlistRules.js';
-import { sideSaleDialog, sideDepositDialog, cancelSideSaleDialog } from '../assets/sideSaleUI.js';
+import { sideDepositDialog, cancelSideSaleDialog } from '../assets/waitlistUI.js';
 import { canShareFiles, shareOrDownload, shareFailText } from '../assets/pdfShare.js';
 import {
   formQuestions, entryQuestions, snapshotQuestions, answerText, isAnswerQuestion, missingRequired, formFaq
@@ -2552,13 +2552,13 @@ function sideSaleHtml(e) {
   const dog = ctx.dogsById.get(sale.dog_id);
   const litter = dog ? ctx.litters.find((l) => l.id === dog.litter_id) : null;
   const send = canPickToSend();
-  return `<section class="card"><h2 style="margin-top:0;">Side sale</h2>
+  return `<section class="card"><h2 style="margin-top:0;">Sale waiting on the deposit</h2>
     <div><strong>${litter ? litterLink(litter.id) : none}</strong> · <span class="badge badge-purple">Picked ${esc(dogName(sale.dog_id))}</span> <span class="faint">deposit pending · <a href="sale.html?id=${encodeURIComponent(sale.id)}">sale</a></span>${sale.side_request_sent_date ? ` <span class="badge badge-blue">Deposit request sent ${esc(fmtDate(sale.side_request_sent_date))}</span>` : ''}${claims.length > 1 ? ' <span class="badge badge-red">Two sales on this pup</span>' : ''}</div>
     <div class="faint">Recorded ${esc(fmtDate(sale.sale_date))} · deposit due ${esc(fmtDate(sale.side_deposit_due))}${overdue ? ' <span class="badge badge-red">Deposit overdue</span>' : ''} · ${esc(dogName(sale.dog_id))} is held for them</div>
     <div class="pill-row" style="margin-top:6px;">
       ${send ? `<button class="btn btn-primary btn-sm" data-side="send">${sale.side_request_sent_date ? 'Review sale & send again…' : 'Review sale & send…'}</button>` : ''}
       <button class="btn btn-sm${send ? '' : ' btn-primary'}" data-side="deposit">Deposit received…</button>
-      <button class="btn btn-sm" data-side="cancel">Cancel side sale…</button>
+      <button class="btn btn-sm" data-side="cancel">Cancel the sale…</button>
     </div>
     <p class="field-hint" style="margin-bottom:0;">Outside the turn order: no turn moves on for it and it never counts as a pass. Their status page shows it like a pick on their turn. ${sideSaleInOrder(sale) ? 'Nobody waiting was ahead of them, so the public list shows them as Pup selected, as for a turn sale.' : 'The public list shows them as a plain row with their answers, so nobody can tell it was out of order.'} <span class="faint">Change it in ⋯.</span></p>
   </section>`;
@@ -2594,33 +2594,15 @@ function wireSideSale(root) {
       const res = await cancelSideSaleDialog({ sale, name, pupName });
       if (!res) return;
       await afterAction();
-      await alertModal({ title: 'Side sale cancelled', message: `${name} keeps their place on the list.${res.restored ? ` ${pupName} is back to ${res.restored.replace('_', ' ')}.` : ''} Let them know.` });
+      await alertModal({ title: 'Sale cancelled', message: `${name} keeps their place on the list.${res.restored ? ` ${pupName} is back to ${res.restored.replace('_', ' ')}.` : ''} Let them know.` });
     } catch (err) { fail(err); }
   });
 }
 
-async function onSideSale() {
-  const res = await sideSaleDialog({ kennelId: ctx.entry.kennel_id, entryId: ctx.entry.id });
-  if (!res) return;
-  await afterAction();
-  const name = entryName(ctx.entry, ctx.contact);
-  if (res.depositDone) {
-    await alertModal({ title: `${name} is placed`, message: `Their deposit carried over from the pup they lost is recorded as paid for ${res.dog.call_name}.` });
-    return;
-  }
-  const held = `${res.dog.call_name} is held for ${name} until ${fmtDate(res.sale.side_deposit_due)}, off every other family's turn.`;
-  if (canPickToSend()) {
-    if (await confirmModal({ title: 'Side sale recorded', message: `${held}\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' })) {
-      const fresh = await saleRepo.getById(res.sale.id);
-      const { openPickToSend } = await import('../assets/pickToSend.js');
-      const litter = ctx.litters.find((l) => l.id === res.dog.litter_id);
-      if (await openPickToSend({ offer: sideSaleOffer(fresh), entry: ctx.entry, contact: ctx.contact, litterLabel: litter ? litterLabel(litter) : '', paymentText: ctx.config.payment_instructions || '', kennelName: ctx.kennel?.kennel_name || '' })) await afterAction();
-    }
-    return;
-  }
-  if (await confirmModal({ title: 'Side sale recorded', message: `${held} Send them the deposit details, and record "Deposit received" when it arrives.\n\nOpen the sale?`, confirmLabel: 'Open the sale', cancelLabel: 'Stay here' })) {
-    location.href = `sale.html?id=${encodeURIComponent(res.sale.id)}`;
-  }
+// Sell them a pup (Unified Sale plan Phase 2): the Sale page with them chosen. Holding
+// the turn, it's their turn pick; otherwise it's linked to their place.
+function onSideSale() {
+  location.href = `sale.html?new=1&entry=${encodeURIComponent(ctx.entry.id)}`;
 }
 
 // Interact: what waits on her first, then what she can start for their status.
@@ -2632,8 +2614,9 @@ function interactButtons(e) {
     case 'applied': main = b('approve', 'Approve…', 'btn-primary') + b('decline', 'Decline…'); break;
     case 'approved': main = b('fee', e.fee_amount == null ? 'Add to the list…' : 'Fee received…', 'btn-primary'); break;
     case 'active': main = b('offer', 'Offer pups…', lost ? '' : 'btn-primary')
-      // A side sale (Side Sale Spec): outside the turn order; not while they hold the turn or already buy one.
-      + (!holdsTurn(ctx.offers, e.id) && !sideSaleOf(e, ctx.sales) ? b('side', 'Record a side sale…') : '')
+      // Sell them a pup on the Sale page: their turn pick while they hold the turn,
+      // linked to their place otherwise. Not while a sale already waits on their deposit.
+      + (!sideSaleOf(e, ctx.sales) ? b('side', 'Sell them a pup…') : '')
       // "Not this litter" for them (Spec §16.2), when they told her instead of tapping it.
       + (hasPrepassTargets(e) ? b('prepass', 'Record "Not this litter"…') : '')
       + b('move', 'Move place…') + (canUndoFeeReceived(e, ctx.offers, kennelToday(ctx.kennel), ctx.sales) ? b('undofee', 'Undo fee received…') : ''); break;

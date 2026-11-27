@@ -28,7 +28,7 @@ import { saleCover, coverRules, handCoverStart, SALE_KINDS } from '../data/costC
 import { earlyPortalState } from '../data/portalFeed.js';
 import { startPortalEarly } from '../assets/portalEarlyUI.js';
 import { doNotSellRepo } from '../data/doNotSellRepo.js';
-import { doNotSellMatches, doNotSellWarning } from '../data/doNotSell.js';
+import { doNotSellMatches, doNotSellWarning, entryDoNotSellMatches } from '../data/doNotSell.js';
 import { resolveKennelIdForWrite, dogInScope, isScoped } from '../data/kennelScope.js';
 import { renderScopeNotice } from '../assets/kennelScopeUI.js';
 import { deliveredOwnershipChanges, addedStays } from '../data/goHome.js';
@@ -80,7 +80,13 @@ const ctx = {
   statement: null,
   // What the form's checks read (Unified Sale plan §2.2), loaded when the form opens:
   // every sale, and the open turns and families with the waitlist.
-  claimRefs: null
+  claimRefs: null,
+  // The buyer list with the waitlist (Unified Sale plan Phase 2, assets/saleBuyers.js),
+  // loaded for a new sale: { mod, refs }. Null in Lite and while loading.
+  buyers: null,
+  // The deposit due date the form filled in for a family (their answer window), so a
+  // change of buyer can replace it while she hasn't typed her own.
+  autoDue: null
 };
 
 // Loaded once per form: the live sales, and (waitlist) the offers and families.
@@ -96,6 +102,11 @@ async function loadClaimRefs() {
   ]);
   ctx.claimRefs = { sales, offers, entriesById: new Map(entries.map((e) => [e.id, e])) };
 }
+
+// The family on her list the new sale's buyer stands for ({ entry, path }), or null:
+// a sale to them saves through waitlistActions.recordSale.
+const draftFamily = (draft = ctx.draft) => (ctx.mode === 'new' && ctx.buyers && draft.entry_id
+  ? ctx.buyers.refs.entries.find((x) => x.entry.id === draft.entry_id) || null : null);
 
 // A turn pick's sale (an open turn holds it): its deposit is due by the turn's
 // deadline, so the form gives it no Deposit due of its own. False until the claims load.
@@ -237,6 +248,34 @@ function dogOptions(current) {
 
 // NOT scoped, deliberately (§7): buyers are program-wide — one person who may
 // have bought from more than one of your kennels.
+// The Buyer list: for a new sale with the waitlist, everyone she has with the
+// families on her list first (saleBuyers.buyerOptionsHtml); otherwise her contacts.
+function buyerOptions(s) {
+  if (ctx.mode !== 'new' || !ctx.buyers) return contactOptions(s.buyer_contact_id);
+  const current = s.buyer_contact_id || (s.entry_id ? `entry:${s.entry_id}` : '');
+  return ctx.buyers.mod.buyerOptionsHtml(ctx.buyers.refs, ctx.allContacts, { current, includeArchived: ctx.pickerArchived, esc });
+}
+
+// A buyer with a place on her list (Unified Sale plan §2.3): what saving does for
+// them, what doesn't fit their answers (with Update their answers to match), and her
+// do-not-sell list for an applicant with no contact yet.
+function familyHtml(s) {
+  const x = draftFamily(s);
+  if (!x) return '';
+  const { mod, refs } = ctx.buyers;
+  const dog = ctx.dogsById.get(s.dog_id);
+  const litter = dog?.litter_id ? ctx.littersById.get(dog.litter_id) : null;
+  const fit = dog ? mod.familyFitLines(x, dog, litter, refs, todayYMD()) : { lines: [], fields: [] };
+  const dns = !s.buyer_contact_id && ctx.doNotSell.length ? doNotSellWarning(entryDoNotSellMatches(x.entry, ctx.doNotSell)) : '';
+  const noLitter = dog && !dog.litter_id ? `${dog.call_name} isn't in one of your litters: choose a pup from a litter to sell to a family on your list.` : '';
+  const warn = [dns, noLitter, ...fit.lines].filter(Boolean);
+  return `<div class="field-wide" style="margin:-4px 0 4px;">
+    <p class="field-hint" style="margin:0 0 4px;">${esc(mod.pathLine(x, refs))}</p>
+    ${warn.length ? `<div class="inline-warn" role="status">${warn.map((l) => esc(l)).join('<br>')}<br><span class="faint">You can still record the sale.</span></div>` : ''}
+    ${fit.fields.length ? `<label class="check-inline" style="display:block;margin-top:6px;"><input id="f-update-answers" type="checkbox"${s.update_answers ? ' checked' : ''}> Update their answers to match</label>` : ''}
+  </div>`;
+}
+
 function contactOptions(current) {
   const opts = ctx.allContacts
     .filter((c) => ctx.pickerArchived || !c.is_archived || c.id === current)
@@ -635,8 +674,9 @@ function renderEdit() {
   els.body.innerHTML = `
     <div class="form-grid" id="sale-form" style="margin-top:14px;">
       ${field('Dog', `<select id="f-dog_id">${dogOptions(s.dog_id)}</select>`, { required: true })}
-      ${field('Buyer', `<select id="f-buyer_contact_id">${contactOptions(s.buyer_contact_id)}</select>`, { required: true })}
+      ${field('Buyer', `<select id="f-buyer_contact_id">${buyerOptions(s)}</select>`, { required: true })}
       ${buyerDoNotSellHtml(s.buyer_contact_id)}
+      ${familyHtml(s)}
       <div id="sale-checks" class="field-wide" style="display:contents;">${saleChecksHtml(s)}</div>
       ${field('Registration', `<select id="f-registration_type">${vocabOptions(REGISTRATION_TYPE, s.registration_type, 'Select…')}</select>${setRegistrationHtml(s)}`, { required: true, hint: 'Full adds the litter\'s Full-registration surcharge to a prefilled price.' })}
       ${field('Status', `<select id="f-status">${vocabOptions(SALE_STATUS, s.status, 'Select…')}</select>`, { required: true })}
@@ -655,7 +695,7 @@ function renderEdit() {
         </div>`, { hint: 'A boarding rate for a buyer who delayed pickup — the count is the number of frequency units (e.g. 2 = 2 weeks). A plain rate, not a Financials cost.' })}
       ${extraChargesField(s)}
       ${field('Sale date', `<input id="f-sale_date" type="date" value="${esc(s.sale_date)}">`)}
-      ${s.status === 'deposit_pending' && !isTurnPickSale(ctx.original) ? `<div id="deposit-due-field" style="display:contents;">${field('Deposit due', `<input id="f-deposit_due_date" type="date" value="${esc(depositDueOf(s) || '')}">`, { hint: 'When the deposit is due, if it isn\'t in yet. Today tells you if it\'s late.' })}</div>` : ''}
+      ${s.status === 'deposit_pending' && !isTurnPickSale(ctx.original) && draftFamily(s)?.path !== 'turn' ? `<div id="deposit-due-field" style="display:contents;">${field('Deposit due', `<input id="f-deposit_due_date" type="date" value="${esc(depositDueOf(s) || '')}">`, { hint: 'When the deposit is due, if it isn\'t in yet. Today tells you if it\'s late.' })}</div>` : ''}
       ${field('Deposit date', `<input id="f-deposit_date" type="date" value="${esc(s.deposit_date)}">`)}
       ${hasSchedule(s)
         ? field('Final payment due', `<div style="padding:8px 0;">${(finalDueDate(ctx.statement) || s.balance_due_date) ? esc(fmtDate(finalDueDate(ctx.statement) || s.balance_due_date)) : 'Not known yet'}</div>`, { hint: 'This sale has a payment schedule: change its dates with Edit the schedule, under Payments.' })
@@ -727,6 +767,12 @@ function renderEdit() {
   // Stage4 Revision v2 §3.
   document.getElementById('f-buyer_contact_id').addEventListener('change', (e) => {
     ctx.draft = readForm();
+    // A family on her list starts with their answer window as the deposit due date,
+    // replacing one the form filled in, never one she typed.
+    if (ctx.buyers && (!ctx.draft.deposit_due_date || ctx.draft.deposit_due_date === ctx.autoDue)) {
+      ctx.autoDue = ctx.buyers.mod.familyDepositDue(draftFamily(), ctx.buyers.refs, todayYMD());
+      ctx.draft.deposit_due_date = ctx.autoDue;
+    }
     const c = ctx.contactsById.get(e.target.value);
     if (c && c.first_contact_source && !ctx.draft.lead_source) {
       ctx.draft.lead_source = c.first_contact_source;
@@ -742,12 +788,21 @@ function renderEdit() {
   if (referredByEl) attachNewContactButton(referredByEl, { onCreated: onNewContact });
 }
 
+// The Buyer value: a contact, or `entry:<id>` (an applicant with no contact yet). A
+// new sale's buyer who is a family on her list carries entry_id (never saved).
+function readBuyer(v) {
+  if (ctx.mode !== 'new' || !ctx.buyers) return { buyer_contact_id: v || '' };
+  if (v && v.startsWith('entry:')) return { buyer_contact_id: '', entry_id: v.slice(6) };
+  return { buyer_contact_id: v || '', entry_id: ctx.buyers.mod.familyFor(ctx.buyers.refs, v)?.entry.id || null };
+}
+
 function readForm() {
   const val = (id) => document.getElementById(id)?.value ?? '';
   return {
     ...ctx.draft,
     dog_id: val('f-dog_id') || '',
-    buyer_contact_id: val('f-buyer_contact_id') || '',
+    ...readBuyer(val('f-buyer_contact_id')),
+    update_answers: !!document.getElementById('f-update-answers')?.checked,
     registration_type: val('f-registration_type'),
     status: val('f-status'),
     sale_date: val('f-sale_date'),
@@ -932,7 +987,10 @@ async function familyPageFor(s) {
     import('../data/waitlistEntryRepo.js'), import('../data/waitlistOfferRepo.js'), import('../data/waitlistRules.js')
   ]);
   const [entries, offers] = await Promise.all([waitlistEntryRepo.getByKennel(kennelId), waitlistOfferRepo.getByKennel(kennelId)]);
-  const entry = entries.find((e) => !e.is_archived && e.placed_sale_id === s.id);
+  // Placed with this sale, buying it off their turn (side_entry_id), or picking it in
+  // their turn: their page is a tap away.
+  const pickEntry = offers.find((o) => !o.is_archived && o.outcome === 'open' && o.sale_id === s.id)?.entry_id;
+  const entry = entries.find((e) => !e.is_archived && (e.placed_sale_id === s.id || e.id === s.side_entry_id || e.id === pickEntry));
   if (entry) return { entry };
   return familyPageBlocker(s, entries, offers) ? null : { can: true };
 }
@@ -1125,9 +1183,17 @@ async function doSave() {
   if (candidate.side_entry_id && candidate.deposit_due_date) candidate.side_deposit_due = candidate.deposit_due_date;
   const setDogRegistration = candidate.set_dog_registration;
   delete candidate.set_dog_registration;
+  // A new sale to a family on her list saves through waitlistActions.recordSale
+  // (Unified Sale plan Phase 2): their turn pick, linked to their place, or placing an
+  // applicant. It holds a pulled pup and ends other claims itself.
+  const family = isNew ? draftFamily(candidate) : null;
+  const updateAnswers = Boolean(candidate.update_answers);
+  delete candidate.update_answers;
+  delete candidate.entry_id;
+  if (!family && !candidate.buyer_contact_id) { showError('Choose the buyer.'); return; }
   // A pup pulled from Undecided / Keeping / Health hold by a new sale still waiting on
   // its deposit: remembered, so a cancel puts it back.
-  if (isNew && candidate.status === 'deposit_pending') {
+  if (isNew && !family && candidate.status === 'deposit_pending') {
     const prior = pulledFrom(ctx.dogsById.get(candidate.dog_id));
     if (prior) { candidate.side_holds_pup = true; candidate.side_prior_disposition = prior; }
   }
@@ -1169,15 +1235,20 @@ async function doSave() {
         inheritFrom: ctx.dogsById.get(candidate.dog_id)
       });
     }
-    let saved = isNew
-      ? await saleRepo.create(candidate)
+    let listed = null;
+    if (family) {
+      const { recordSale } = await import('../data/waitlistActions.js');
+      listed = await recordSale(candidate, { entryId: family.entry.id, updateAnswers, updateRegistration: setDogRegistration, date: todayYMD() });
+    }
+    let saved = listed ? listed.sale
+      : isNew ? await saleRepo.create(candidate)
       : await saleRepo.update(ctx.original.id, candidate);
 
-    if (settle) {
+    if (settle && !listed) {
       const { settleOtherClaims } = await import('../data/waitlistActions.js');
       await settleOtherClaims(saved.id, { date: todayYMD() });
     }
-    if (setDogRegistration && saved.registration_type) {
+    if (!listed && setDogRegistration && saved.registration_type) {
       await dogRepo.update(saved.dog_id, { intended_registration: saved.registration_type });
     }
 
@@ -1219,8 +1290,11 @@ async function doSave() {
       else await promptDepartOnDelivery(saved);
     }
 
-    // Any new sale → offer to update the dog's disposition, defaulting to Placed.
-    if (isNew) {
+    // A family on her list: say what it did for them, and offer Review sale & send.
+    if (listed) await afterListedSale(listed);
+
+    // Any other new sale → offer to update the dog's disposition, defaulting to Placed.
+    if (isNew && !listed) {
       await promptDisposition(saved, {
         title: 'Update this dog’s disposition?',
         message: 'A sale was just recorded for this dog.',
@@ -1303,6 +1377,42 @@ async function doSave() {
   } catch (e) {
     showError(e.message || String(e));
   }
+}
+
+// After a new sale to a family on her list (recordSale's result): what it did, and
+// for one still waiting on the deposit, Review sale & send (contracts and invoices,
+// Pro) with the invoice and contract, as from their page.
+async function afterListedSale(res) {
+  const name = contactName(res.sale.buyer_contact_id) || res.entry?.application?.name || 'They';
+  const pup = ctx.dogsById.get(res.sale.dog_id)?.call_name || 'The pup';
+  const others = (res.result?.resolved || []).length;
+  const ended = others ? ` The other ${others === 1 ? 'claim' : 'claims'} on ${pup} ended; let them know.` : '';
+  if (res.path === 'applied') {
+    await alertModal({ title: `${name} is placed`, message: `${pup} is theirs. Their application is closed as placed with this sale.${ended}` });
+    return;
+  }
+  if (res.depositDone) {
+    await alertModal({ title: `${name} is placed`, message: `Deposit recorded for ${pup}.${ended}` });
+    return;
+  }
+  const { waitlistOfferRepo } = await import('../data/waitlistOfferRepo.js');
+  const turnRow = res.path === 'turn' ? (await waitlistOfferRepo.getByEntry(res.entry.id)).find((o) => o.outcome === 'open' && o.sale_id === res.sale.id) : null;
+  const due = turnRow ? turnRow.respond_by_date : depositDueOf(res.sale);
+  const held = `${pup} is held for ${name}${due ? ` until ${fmtDate(due)}` : ''}, off every other family's turn. Their status page shows it.`;
+  if (!(editionFlags.contracts && editionFlags.invoicing)) {
+    await alertModal({ title: 'Sale recorded', message: `${held} Send them the deposit details, and record the deposit when it arrives.` });
+    return;
+  }
+  if (!(await confirmModal({ title: 'Sale recorded', message: `${held}\n\nReview the sale and send them the deposit request (with the invoice and contract) now?`, confirmLabel: 'Review sale & send', cancelLabel: 'Later' }))) return;
+  const offer = turnRow || { side: true, id: res.sale.id, sale_id: res.sale.id, respond_by_date: due, deposit_request_sent_date: null };
+  const [{ openPickToSend }, kennel] = await Promise.all([import('../assets/pickToSend.js'), kennelRepo.getById(res.entry.kennel_id)]);
+  const dog = ctx.dogsById.get(res.sale.dog_id);
+  const litter = dog?.litter_id ? ctx.littersById.get(dog.litter_id) : null;
+  await openPickToSend({
+    offer, entry: res.entry, contact: ctx.contactsById.get(res.sale.buyer_contact_id) || await contactRepo.getById(res.sale.buyer_contact_id),
+    litterLabel: litter ? litterLabel(litter, ctx.dogsById) : '',
+    paymentText: waitlistConfig(kennel).payment_instructions || '', kennelName: kennel?.kennel_name || ''
+  });
 }
 
 async function promptCloseLitter(sale) {
@@ -1445,6 +1555,34 @@ async function renderPaymentsSection() {
   }
 }
 
+// The buyer list (assets/saleBuyers.js), loaded after the form's first paint; the
+// form redraws with it. `entryId`: a family to choose.
+async function loadBuyers(entryId) {
+  try {
+    const [mod, sales] = await Promise.all([import('../assets/saleBuyers.js'), saleRepo.getAll({ includeArchived: false })]);
+    const refs = await mod.loadSaleBuyers({ contacts: ctx.allContacts, sales, dogs: ctx.allDogs });
+    if (ctx.mode !== 'new') return;
+    ctx.draft = readForm();
+    ctx.buyers = { mod, refs };
+    const x = entryId ? refs.entries.find((e) => e.entry.id === entryId) : null;
+    if (x) {
+      ctx.draft.buyer_contact_id = x.entry.contact_id || '';
+      ctx.draft.entry_id = x.entry.id;
+      const c = x.entry.contact_id ? ctx.contactsById.get(x.entry.contact_id) : null;
+      if (c?.first_contact_source && !ctx.draft.lead_source) ctx.draft.lead_source = c.first_contact_source;
+    } else if (ctx.draft.buyer_contact_id) {
+      ctx.draft.entry_id = mod.familyFor(refs, ctx.draft.buyer_contact_id)?.entry.id || null;
+    }
+    if (!ctx.draft.deposit_due_date) {
+      ctx.autoDue = mod.familyDepositDue(draftFamily(), refs, todayYMD());
+      ctx.draft.deposit_due_date = ctx.autoDue;
+    }
+    renderEdit();
+  } catch (err) {
+    showError(err.message || String(err));
+  }
+}
+
 async function main() {
   await loadRefs();
   const id = param('id');
@@ -1463,6 +1601,9 @@ async function main() {
     renderEdit();
     renderProfileActions();
     renderHeaderActions();
+    // With the waitlist, the buyer list puts the families on her list first, and a
+    // family's page opens it with them chosen (`&entry=`).
+    if (editionFlags.waitlist) await loadBuyers(param('entry'));
     return;
   }
 

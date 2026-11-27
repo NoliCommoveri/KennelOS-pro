@@ -31,7 +31,6 @@ import { openSoonNotice, pickDialog, depositDialog, changePickDialog, undoPassDi
 import { offerEmails } from './waitlistEmailUI.js';
 import { offerSpecs, closedTurnExtra, midTurn } from '../data/waitlistOutbox.js';
 import { openPicksPreview, previewParam } from './picksPreviewModal.js';
-import { sideSaleDialog } from './sideSaleUI.js';
 
 const none = '<span class="faint">—</span>';
 const QUEUE_PREVIEW = 5;
@@ -278,7 +277,7 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
     <section class="card" style="margin-top:16px;">
       <div class="row-between">
         <h2 style="margin:0;">Waitlist picks</h2>
-        <div class="pill-row">${soldBeforeBtn}${soon.some((r) => !r.inFlight) ? '<button class="btn btn-sm" data-pk="soon" title="Tell the families whose turn is coming up for these pups">Almost your turn…</button>' : ''}<button class="btn btn-sm" data-pk="side" title="Sell a pup to a family on your list outside the turn order">Sell to a waitlist family…</button>${picksOpen
+        <div class="pill-row">${soldBeforeBtn}${soon.some((r) => !r.inFlight) ? '<button class="btn btn-sm" data-pk="soon" title="Tell the families whose turn is coming up for these pups">Almost your turn…</button>' : ''}<button class="btn btn-sm" data-pk="side" title="Record a sale to any family, on your list or not">Sell a pup…</button>${picksOpen
           ? '<button class="btn btn-sm" data-pk="preview" title="Who\'s in line across your open litters, who\'s left out and why">Who\'s in line…</button><button class="btn btn-sm" data-pk="close">Close picks</button>'
           : `<button class="btn btn-primary btn-sm" data-pk="open"${available.length ? '' : ' disabled title="No pups available to offer."'}>Open picks</button>`}</div>
       </div>
@@ -312,15 +311,9 @@ export async function renderWaitlistPicksPanel({ mount, litter, onChange = async
         : 'Nobody on the list is eligible for the available pups yet. A family is offered as soon as one becomes eligible and you tap "Offer to them".' });
     if (turn && !turn.none) await offerEmails(offerSpecs({ next: turn, offered: (turn.more || []).filter((t) => !t.joined) }));
   });
-  // A side sale (Side Sale Spec): a pup of this litter to a family on the list.
-  on('side', async () => {
-    const res = await sideSaleDialog({ kennelId: litter.kennel_id, litterId: litter.id });
-    if (!res) return;
-    const name = familyName(res.entry);
-    await alertModal({ title: res.depositDone ? `${name} is placed` : 'Side sale recorded', message: res.depositDone
-      ? `The money they carried over from an earlier sale covers the deposit for ${res.dog.call_name}, so it's recorded as received today.`
-      : `${res.dog.call_name} is held for ${name} until ${fmtDate(res.sale.side_deposit_due)}, off every other family's turn. Their page shows it like a pick on their turn. Send them the deposit details from their page (Review sale & send).` });
-  });
+  // A pup of this litter to anyone (Unified Sale plan Phase 2): the Sale page, whose
+  // buyer list has the families on her list first.
+  on('side', () => { location.href = 'sale.html?new=1'; });
   on('sold-before', async () => { await soldBeforeDialog(litter); });
   // "Who's in line…" may save settings or a pup, so it re-renders after.
   on('preview', async () => { await openPicksPreview({ litterId: litter.id }); });

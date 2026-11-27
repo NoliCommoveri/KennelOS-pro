@@ -1583,6 +1583,43 @@ export function turnDeadline(rows) {
 // respond_by_time) past its deadline at `now` (the kennel's { date, time }, or a date)?
 export const isTurnOverdue = (turn, now) => Boolean(turn) && isPastDeadline(turn.respond_by_date, turn.respond_by_time, now);
 
+// How a sale she records on the Sale page goes for a family (Unified Sale plan §2.3,
+// Phase 2): 'turn' (they hold the current turn: the sale is their turn pick, U2),
+// 'list' (on the list without the turn: linked to their place, shown to them as a
+// pick), 'applied' (applied or owes the fee: the sale places them, U1), or null (any
+// other record: an ordinary sale).
+export function saleBuyerPath(entry, offers = []) {
+  if (!entry || entry.is_archived || entry.off_list) return null;
+  if (entry.status === 'active') return holdsTurn(offers, entry.id) ? 'turn' : 'list';
+  if (entry.status === 'applied' || entry.status === 'approved') return 'applied';
+  return null;
+}
+
+// Old sales (Unified Sale plan Phase 3, U7): a sale made to a family while they were
+// on the list or applying, never linked to their place, so they're still offered
+// turns and picks. A live sale (not archived, returned, cancelled or voided) whose
+// buyer is the family's contact, dated on or after they applied (a sale before is an
+// earlier pup: a repeat buyer back on the list), not their own (side_entry_id, a
+// turn pick of theirs, placed_sale_id) and not claimed by another family.
+// → [{ entry, sale }]
+export function unlinkedListSales(entries = [], sales = [], offers = []) {
+  const claimed = new Set();
+  for (const e of entries) if (e.placed_sale_id) claimed.add(e.placed_sale_id);
+  for (const s of sales) if (s.side_entry_id) claimed.add(s.id);
+  for (const o of offers) if (!o.is_archived && o.sale_id) claimed.add(o.sale_id);
+  const out = [];
+  for (const e of entries) {
+    if (e.is_archived || e.off_list || !e.contact_id || !['active', 'applied', 'approved'].includes(e.status)) continue;
+    const since = e.applied_date || String(e.created_at || '').slice(0, 10) || '';
+    for (const s of sales) {
+      if (s.is_archived || RELEASED_SALE_STATUSES.includes(s.status) || s.buyer_contact_id !== e.contact_id || claimed.has(s.id)) continue;
+      if (since && (s.sale_date || String(s.created_at || '').slice(0, 10)) < since) continue;
+      out.push({ entry: e, sale: s });
+    }
+  }
+  return out;
+}
+
 // Does this family hold an open turn? `offers` may be the kennel's or the family's.
 export function holdsTurn(offers, entryId) {
   return openTurns(offers || [], null, { includeHeld: true }).some((t) => t.entry_id === entryId);

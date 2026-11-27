@@ -37,7 +37,8 @@ import { duePieces } from '../data/paymentSchedule.js';
 import { methodSavings, discountForPayment, methodDiscount } from '../data/discounts.js';
 import { newCredit, CREDIT_USE_VALUES, carriedCreditsOf } from '../data/receivedCredits.js';
 import { CREDIT_USES, PAYMENT_METHODS } from '../data/vocab.js';
-import { saveCredit } from '../data/waitlistActions.js';
+import { saveCredit, confirmSideDeposit, cancelSideSale } from '../data/waitlistActions.js';
+import { DISPOSITION } from '../data/vocab.js';
 import { DemoModeError } from '../data/demoMode.js';
 import { kennelEmailsOn, queueEmail, salePupPhotos } from '../data/waitlistOutbox.js';
 import { pupPhotosLine } from '../data/waitlistEmails.js';
@@ -976,3 +977,44 @@ export async function afterPickupApproval(res) {
   })) await clearTransportFee(res.sale.id);
 }
 
+// --- A sale off their turn, waiting on its deposit (Side Sale Spec; recorded on the
+// Sale page, Unified Sale plan Phase 2) -----------------------------------------------
+
+// Its deposit arrived. Warns first when another claim on the pup will be ended.
+// Resolves confirmSideDeposit's result, or null.
+export async function sideDepositDialog({ sale, name, pupName }) {
+  const [sales, offers] = await Promise.all([saleRepo.getByDog(sale.dog_id), waitlistOfferRepo.getAll()]);
+  const others = pupClaims(sale.dog_id, { sales, offers }).filter((c) => c.sale_id !== sale.id);
+  let res = null;
+  // How it was paid, and the discount with it (Payment Methods plan D31).
+  const entry = sale.side_entry_id ? await waitlistEntryRepo.getById(sale.side_entry_id) : null;
+  const via = await depositViaContext(sale, sale.kennel_id || entry?.kennel_id);
+  let readVia = () => ({});
+  const ok = await formModal({
+    title: `Deposit from ${name}`,
+    confirmLabel: 'Record the deposit',
+    bodyHtml: `<div class="form-grid">
+        <div class="field"><label>Deposit received</label><input id="sd-date" type="date" value="${esc(todayYMD())}"></div>
+        <div class="field"><label>Amount</label><input id="sd-amount" type="number" min="0" step="0.01" value="${sale.deposit_amount != null ? esc(sale.deposit_amount) : ''}"></div>
+        ${depositViaHtml(via)}
+      </div>
+      ${others.length ? `<div class="inline-warn">${others.length === 1 ? 'Another family also has a claim' : 'Other families also have claims'} on ${esc(pupName)}. Recording this deposit ends ${others.length === 1 ? 'it' : 'them'}: a sale waiting on its deposit is cancelled (they keep their place), a turn pick is let go (their turn stays open on the pups left).</div>` : ''}
+      <p class="field-hint">${esc(pupName)} becomes theirs and ${esc(name)} is placed. No turn moves on.${depositExpectedText(via)}</p>`,
+    onConfirm: async (o) => {
+      const date = o.querySelector('#sd-date').value || todayYMD();
+      res = await confirmSideDeposit(sale.id, { date, paidDate: date, amount: o.querySelector('#sd-amount').value, ...readVia() });
+    }
+  }, (o) => { readVia = wireDepositVia(o, via); });
+  return ok ? res : null;
+}
+
+// Cancel it. Resolves cancelSideSale's result, or null.
+export async function cancelSideSaleDialog({ sale, name, pupName }) {
+  const restore = sale.side_holds_pup && sale.side_prior_disposition && sale.side_prior_disposition !== 'available';
+  const ok = await confirmModal({
+    title: 'Cancel the sale?',
+    message: `${pupName}'s sale to ${name} is cancelled. ${name} keeps their place on the list, and it never counts as a pass.${restore ? ` ${pupName} goes back to ${descriptor(DISPOSITION, sale.side_prior_disposition)?.label || sale.side_prior_disposition}.` : ''}`,
+    confirmLabel: 'Cancel the sale', cancelLabel: 'Keep it', danger: true
+  });
+  return ok ? cancelSideSale(sale.id, { date: todayYMD() }) : null;
+}
